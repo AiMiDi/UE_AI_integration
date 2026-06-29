@@ -8,3 +8,6 @@ DerivedDataCache/
 Saved/
 BuiltPlugin/
 Config/
+
+# Packaged release artifacts (publish to GitHub Releases, not the repo tree)
+*.zip

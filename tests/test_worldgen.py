@@ -62,24 +62,23 @@ def call_tool(tool_name, params=None):
 def spawn_cube(label, x, y, z, scale_x=1.0, scale_y=1.0, scale_z=1.0):
     """Spawn a static mesh cube at the given location with scale."""
     result = call_tool("spawn_actor", {
-        "actor_class": "StaticMeshActor",
-        "location": {"x": x, "y": y, "z": z},
-        "scale": {"x": scale_x, "y": scale_y, "z": scale_z},
-        "label": label,
+        "type": "StaticMeshActor",
+        "name": label,
+        "location": [x, y, z],
+        "scale": [scale_x, scale_y, scale_z],
+        "static_mesh": "/Engine/BasicShapes/Cube",
     })
     return result
 
 
 def get_all_actors():
     """Get all actors in the level."""
-    result = call_tool("get_level_actors")
+    result = call_tool("get_actors_in_level")
     if not result.get("success", False):
         return []
-    data = result.get("data", result)
-    if isinstance(data, list):
-        return data
+    data = result.get("result", {})
     if isinstance(data, dict):
-        return data.get("actors", data.get("items", []))
+        return data.get("actors", [])
     return []
 
 
@@ -89,28 +88,20 @@ def find_actors_by_prefix(prefix, actors=None):
         actors = get_all_actors()
     matched = []
     for actor in actors:
-        name = ""
+        names = []
         if isinstance(actor, dict):
-            name = actor.get("label", actor.get("name", actor.get("actor_name", "")))
+            names = [actor.get("name", ""), actor.get("label", ""), actor.get("actor_name", "")]
         elif isinstance(actor, str):
-            name = actor
-        if name.startswith(prefix):
+            names = [actor]
+        if any(n.startswith(prefix) for n in names):
             matched.append(actor)
     return matched
 
 
 def delete_actor(label):
     """Delete an actor by label/name."""
-    # Try delete_actor (singular) first, then delete_actors (plural)
-    for tool_name in ["delete_actor", "delete_actors"]:
-        result = call_tool(tool_name, {"actor_name": label})
-        if result.get("success", False):
-            return True
-        # Some servers use "actors" as list param
-        result = call_tool(tool_name, {"actors": [label]})
-        if result.get("success", False):
-            return True
-    return False
+    result = call_tool("delete_actor", {"name": label})
+    return result.get("success", False)
 
 
 def print_result(name, passed, detail=""):
@@ -192,7 +183,7 @@ def main():
 
     # Pre-check: server health
     print("\n[0] Health check...")
-    health = api_post("/api/tool", {"tool": "get_level_actors"})
+    health = api_post("/api/tool", {"tool": "get_actors_in_level"})
     if not health.get("success", False) and "_error" in health:
         print(f"  Server unreachable: {health['_error']}")
         print("  Make sure UE5 editor is running with the plugin loaded.")

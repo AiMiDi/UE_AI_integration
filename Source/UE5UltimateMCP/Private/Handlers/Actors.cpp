@@ -185,6 +185,16 @@ public:
 		FActorSpawnParameters SpawnParams;
 		SpawnParams.Name = *ActorName;
 
+		// Robustness: SpawnActor() fatal-asserts if an object with this exact name still
+		// exists in the level package -- e.g. an actor that was just deleted and is pending
+		// garbage collection. Reusing such a name (spawn -> delete -> spawn same name) would
+		// otherwise crash the editor. Rename any stale same-named object into the transient
+		// package so the name is free and the spawn keeps the exact requested name.
+		if (UObject* Stale = StaticFindObject(AActor::StaticClass(), World->GetCurrentLevel(), *ActorName))
+		{
+			Stale->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional | REN_ForceNoResetLoaders);
+		}
+
 		AActor* NewActor = nullptr;
 
 		if (ActorType == TEXT("StaticMeshActor"))

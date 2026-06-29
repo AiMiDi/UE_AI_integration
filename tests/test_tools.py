@@ -86,7 +86,7 @@ def test_health():
         return print_result(
             "health",
             status in ("ok", "ready", "healthy"),
-            f"status={status}, tools={result.get('toolCount', '?')}",
+            f"status={status}, tools={result.get('tools', '?')}",
         )
     return print_result("health", False, str(result.get("_error", "no response")))
 
@@ -94,18 +94,21 @@ def test_health():
 def test_spawn_actor():
     """Spawn a PointLight at (0, 0, 200)."""
     result = call_tool("spawn_actor", {
-        "actor_class": "PointLight",
-        "location": {"x": 0, "y": 0, "z": 200},
-        "label": "TestLight_IntegrationTest",
+        "type": "PointLight",
+        "name": "TestLight_IntegrationTest",
+        "location": [0, 0, 200],
     })
     success = result.get("success", False)
     actor_name = ""
     if success:
-        data = result.get("data", result)
+        data = result.get("result", {})
         if isinstance(data, dict):
-            actor_name = data.get("actor_name", data.get("label", data.get("name", "")))
+            actor_name = data.get("label", data.get("name", ""))
         else:
             actor_name = str(data)
+    # clean up the spawned actor so reruns don't hit name collision
+    if success:
+        call_tool("delete_actor", {"name": "TestLight_IntegrationTest"})
     return print_result(
         "spawn_actor (PointLight at 0,0,200)",
         success,
@@ -115,18 +118,15 @@ def test_spawn_actor():
 
 def test_get_actors_in_level():
     """List actors in the current level."""
-    result = call_tool("get_level_actors")
+    result = call_tool("get_actors_in_level")
     success = result.get("success", False)
     count = 0
     if success:
-        data = result.get("data", result)
-        if isinstance(data, list):
-            count = len(data)
-        elif isinstance(data, dict):
-            actors = data.get("actors", data.get("items", []))
-            count = len(actors) if isinstance(actors, list) else 0
+        data = result.get("result", {})
+        if isinstance(data, dict):
+            count = data.get("count", len(data.get("actors", [])))
     return print_result(
-        "get_level_actors",
+        "get_actors_in_level",
         success,
         f"actors={count}" if success else str(result.get("error", "unknown")),
     )
@@ -134,21 +134,16 @@ def test_get_actors_in_level():
 
 def test_list_blueprints():
     """Search for blueprint assets."""
-    result = call_tool("asset_search", {
-        "query": "Blueprint",
-        "class_filter": "Blueprint",
-    })
+    result = call_tool("list_blueprints")
     success = result.get("success", False)
     count = 0
     if success:
-        data = result.get("data", result)
-        if isinstance(data, list):
-            count = len(data)
-        elif isinstance(data, dict):
-            items = data.get("assets", data.get("results", data.get("items", [])))
-            count = len(items) if isinstance(items, list) else 0
+        data = result.get("result", {})
+        if isinstance(data, dict):
+            items = data.get("blueprints", data.get("assets", data.get("items", [])))
+            count = data.get("count", len(items) if isinstance(items, list) else 0)
     return print_result(
-        "asset_search (Blueprints)",
+        "list_blueprints",
         success,
         f"found={count}" if success else str(result.get("error", "unknown")),
     )
@@ -163,12 +158,12 @@ def test_capture_viewport():
     success = result.get("success", False)
     detail = ""
     if success:
-        data = result.get("data", result)
-        if isinstance(data, dict) and "image_base64" in data:
-            b64_len = len(data["image_base64"])
-            detail = f"image_base64={b64_len} chars"
+        data = result.get("result", {})
+        if isinstance(data, dict) and data.get("image_base64"):
+            detail = f"image_base64={len(data['image_base64'])} chars"
         else:
             detail = "no image data in response"
+            success = False
     else:
         detail = str(result.get("error", result.get("message", "unknown")))
     return print_result("capture_viewport (640x480)", success, detail)
@@ -177,10 +172,10 @@ def test_capture_viewport():
 def test_get_level_info():
     """Get info about the current level."""
     # Try common tool names for level info
-    for tool_name in ["get_level_info", "get_level_actors"]:
+    for tool_name in ["get_level_info", "get_actors_in_level"]:
         result = call_tool(tool_name)
         if result.get("success", False):
-            data = result.get("data", result)
+            data = result.get("result", {})
             if isinstance(data, dict):
                 level = data.get("level_name", data.get("map_name", data.get("name", "?")))
                 return print_result(
