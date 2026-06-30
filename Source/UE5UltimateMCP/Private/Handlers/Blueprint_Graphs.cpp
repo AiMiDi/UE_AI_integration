@@ -13,6 +13,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "UObject/UObjectIterator.h"
+#include "Misc/PackageName.h"
 
 // ============================================================
 // create_blueprint
@@ -87,6 +88,14 @@ public:
 			ParentClass = UInterface::StaticClass();
 
 		FString FullPackagePath = PackagePath / BlueprintName;
+
+		// Crash-safety: bail gracefully if the asset already exists instead of letting
+		// the engine creation path fatal-assert and take down the editor.
+		if (FPackageName::DoesPackageExist(FullPackagePath))
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("An asset already exists at '%s'. Delete it first or use a different name."), *FullPackagePath));
+		}
+
 		UPackage* Package = CreatePackage(*FullPackagePath);
 		if (!Package)
 			return FMCPToolResult::Error(FString::Printf(TEXT("Failed to create package at '%s'"), *FullPackagePath));

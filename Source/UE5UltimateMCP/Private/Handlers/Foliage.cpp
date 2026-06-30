@@ -52,8 +52,14 @@ public:
 		FString MeshPath = Params->GetStringField(TEXT("mesh"));
 		int32 Count = (int32)Params->GetNumberField(TEXT("count"));
 
-		const TSharedPtr<FJsonObject>& MinObj = Params->GetObjectField(TEXT("bounds_min"));
-		const TSharedPtr<FJsonObject>& MaxObj = Params->GetObjectField(TEXT("bounds_max"));
+		const TSharedPtr<FJsonObject>* MinObjPtr = nullptr;
+		const TSharedPtr<FJsonObject>* MaxObjPtr = nullptr;
+		if (!Params->TryGetObjectField(TEXT("bounds_min"), MinObjPtr) || !Params->TryGetObjectField(TEXT("bounds_max"), MaxObjPtr))
+		{
+			return FMCPToolResult::Error(TEXT("Both 'bounds_min' and 'bounds_max' { x, y, z } objects are required."));
+		}
+		const TSharedPtr<FJsonObject>& MinObj = *MinObjPtr;
+		const TSharedPtr<FJsonObject>& MaxObj = *MaxObjPtr;
 		FVector BoundsMin(MinObj->GetNumberField(TEXT("x")), MinObj->GetNumberField(TEXT("y")), MinObj->GetNumberField(TEXT("z")));
 		FVector BoundsMax(MaxObj->GetNumberField(TEXT("x")), MaxObj->GetNumberField(TEXT("y")), MaxObj->GetNumberField(TEXT("z")));
 
@@ -212,6 +218,13 @@ public:
 		FString PackagePath = FString::Printf(TEXT("/Game/Foliage/%s"), *AssetName);
 		FString PackageName = FPackageName::ObjectPathToPackageName(PackagePath);
 
+		// Crash-safety: re-saving an already-on-disk (partially loaded) asset fatal-asserts
+		// ("cannot be saved as it has only been partially loaded"). Bail gracefully instead.
+		if (FPackageName::DoesPackageExist(PackageName))
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("A foliage type already exists at '%s'. Delete it first or use a different name."), *PackagePath));
+		}
+
 		UPackage* Package = CreatePackage(*PackageName);
 		if (!Package)
 		{
@@ -279,8 +292,14 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		const TSharedPtr<FJsonObject>& MinObj = Params->GetObjectField(TEXT("bounds_min"));
-		const TSharedPtr<FJsonObject>& MaxObj = Params->GetObjectField(TEXT("bounds_max"));
+		const TSharedPtr<FJsonObject>* MinObjPtr = nullptr;
+		const TSharedPtr<FJsonObject>* MaxObjPtr = nullptr;
+		if (!Params->TryGetObjectField(TEXT("bounds_min"), MinObjPtr) || !Params->TryGetObjectField(TEXT("bounds_max"), MaxObjPtr))
+		{
+			return FMCPToolResult::Error(TEXT("Both 'bounds_min' and 'bounds_max' { x, y, z } objects are required."));
+		}
+		const TSharedPtr<FJsonObject>& MinObj = *MinObjPtr;
+		const TSharedPtr<FJsonObject>& MaxObj = *MaxObjPtr;
 		FVector BoundsMin(MinObj->GetNumberField(TEXT("x")), MinObj->GetNumberField(TEXT("y")), MinObj->GetNumberField(TEXT("z")));
 		FVector BoundsMax(MaxObj->GetNumberField(TEXT("x")), MaxObj->GetNumberField(TEXT("y")), MaxObj->GetNumberField(TEXT("z")));
 

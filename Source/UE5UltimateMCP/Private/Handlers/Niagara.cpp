@@ -8,6 +8,7 @@
 #include "NiagaraEmitter.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraEditorModule.h"
+#include "NiagaraSystemFactoryNew.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -51,13 +52,27 @@ public:
 		FString PackagePath = FString::Printf(TEXT("/Game/Effects/%s"), *Name);
 		FString PackageName = FPackageName::ObjectPathToPackageName(PackagePath);
 
+		// Crash-safety: bail gracefully if the asset already exists instead of letting
+		// the engine creation path fatal-assert and take down the editor.
+		if (FPackageName::DoesPackageExist(PackageName))
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("An asset already exists at '%s'. Delete it first or use a different name."), *PackagePath));
+		}
+
 		UPackage* Package = CreatePackage(*PackageName);
 		if (!Package)
 		{
 			return FMCPToolResult::Error(FString::Printf(TEXT("Failed to create package at '%s'."), *PackageName));
 		}
 
-		UNiagaraSystem* System = NewObject<UNiagaraSystem>(Package, *Name, RF_Public | RF_Standalone);
+		// Use the Niagara editor factory so the system is created with valid default
+		// system spawn/update scripts and an emitter handle. A raw NewObject<UNiagaraSystem>
+		// leaves those arrays empty, and SavePackage then asserts (Index out of bounds,
+		// Array.h:1095) inside the Niagara module -- an engine check() that SEH cannot
+		// catch, so it takes down the whole editor.
+		UNiagaraSystemFactoryNew* Factory = NewObject<UNiagaraSystemFactoryNew>();
+		UNiagaraSystem* System = Cast<UNiagaraSystem>(Factory->FactoryCreateNew(
+			UNiagaraSystem::StaticClass(), Package, *Name, RF_Public | RF_Standalone, nullptr, GWarn));
 		if (!System)
 		{
 			return FMCPToolResult::Error(TEXT("Failed to create UNiagaraSystem."));

@@ -3,12 +3,60 @@
 #include "Tools/MCPToolRegistry.h"
 
 #include "Engine/DataTable.h"
+#include "StructUtils/UserDefinedStruct.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/SavePackage.h"
 #include "Misc/PackageName.h"
 #include "Misc/FileHelper.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
 #include "Editor.h"
+
+// ─────────────────────────────────────────────────────────────
+// Shared helper: resolve a Data Table from a name or content path.
+// Accepts a bare asset name (resolved against /Game/Data/<Name>) or a
+// full content path / object path, then loads via LoadObject<UDataTable>.
+// ─────────────────────────────────────────────────────────────
+static UDataTable* ResolveDataTable(const FString& Identifier)
+{
+	if (Identifier.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	// Direct attempt: works for object paths and content paths.
+	UDataTable* DataTable = LoadObject<UDataTable>(nullptr, *Identifier);
+	if (DataTable)
+	{
+		return DataTable;
+	}
+
+	// Bare name: resolve against the location create_data_table writes to.
+	if (!Identifier.Contains(TEXT("/")))
+	{
+		const FString DefaultPath = FString::Printf(TEXT("/Game/Data/%s.%s"), *Identifier, *Identifier);
+		DataTable = LoadObject<UDataTable>(nullptr, *DefaultPath);
+		if (DataTable)
+		{
+			return DataTable;
+		}
+	}
+
+	// Content path lacking the ".AssetName" object suffix: append it and retry.
+	if (Identifier.StartsWith(TEXT("/")) && !Identifier.Contains(TEXT(".")))
+	{
+		FString AssetName;
+		Identifier.Split(TEXT("/"), nullptr, &AssetName, ESearchCase::IgnoreCase, ESearchDir::FromEnd);
+		const FString ObjectPath = FString::Printf(TEXT("%s.%s"), *Identifier, *AssetName);
+		DataTable = LoadObject<UDataTable>(nullptr, *ObjectPath);
+		if (DataTable)
+		{
+			return DataTable;
+		}
+	}
+
+	return nullptr;
+}
 
 // ─────────────────────────────────────────────────────────────
 // create_data_table
@@ -47,8 +95,18 @@ public:
 			return FMCPToolResult::Error(TEXT("Both 'name' and 'row_struct' are required."));
 		}
 
-		// Find the struct
+		// Find the struct.
+		// Handles three cases:
+		//   1. Native struct object path (e.g. "/Script/Engine.SomeRow") via FindObject.
+		//   2. Content-path UserDefinedStruct asset (e.g. "/Game/MCPTest/S_MCPTest.S_MCPTest")
+		//      via LoadObject, which resolves both UScriptStruct and UUserDefinedStruct.
+		//   3. Short / ambiguous names via FindFirstObject and the asset registry.
 		UScriptStruct* RowStruct = FindObject<UScriptStruct>(nullptr, *RowStructName);
+		if (!RowStruct)
+		{
+			// Works for native UScriptStruct as well as content-path UUserDefinedStruct assets.
+			RowStruct = LoadObject<UScriptStruct>(nullptr, *RowStructName);
+		}
 		if (!RowStruct)
 		{
 			// Try common short names
@@ -56,7 +114,35 @@ public:
 		}
 		if (!RowStruct)
 		{
-			return FMCPToolResult::Error(FString::Printf(TEXT("Row struct '%s' not found. Use the full path (e.g. '/Script/ModuleName.FMyStruct')."), *RowStructName));
+			// Last resort: consult the asset registry for a matching struct asset.
+			FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+			IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+			FAssetData StructAsset = AssetRegistry.GetAssetByObjectPath(FSoftObjectPath(RowStructName));
+			if (!StructAsset.IsValid())
+			{
+				// Match by asset name across UserDefinedStruct assets.
+				TArray<FAssetData> StructAssets;
+				AssetRegistry.GetAssetsByClass(UUserDefinedStruct::StaticClass()->GetClassPathName(), StructAssets);
+				for (const FAssetData& Candidate : StructAssets)
+				{
+					if (Candidate.AssetName.ToString() == RowStructName
+						|| Candidate.GetObjectPathString() == RowStructName)
+					{
+						StructAsset = Candidate;
+						break;
+					}
+				}
+			}
+
+			if (StructAsset.IsValid())
+			{
+				RowStruct = Cast<UScriptStruct>(StructAsset.GetAsset());
+			}
+		}
+		if (!RowStruct)
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("Row struct '%s' not found. Use the full path (e.g. '/Script/ModuleName.FMyStruct' or '/Game/Path/S_MyStruct.S_MyStruct')."), *RowStructName));
 		}
 
 		// Verify it derives from FTableRowBase
@@ -78,6 +164,11 @@ public:
 
 		FString PackagePath = FString::Printf(TEXT("/Game/Data/%s"), *Name);
 		FString PackageName = FPackageName::ObjectPathToPackageName(PackagePath);
+
+		if (FPackageName::DoesPackageExist(PackageName))
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("An asset already exists at '%s'. Delete it first or use a different name."), *PackagePath));
+		}
 
 		UPackage* Package = CreatePackage(*PackageName);
 		if (!Package)
@@ -143,7 +234,7 @@ public:
 		FString RowName = Params->GetStringField(TEXT("row_name"));
 		const TSharedPtr<FJsonObject>& Values = Params->GetObjectField(TEXT("values"));
 
-		UDataTable* DataTable = LoadObject<UDataTable>(nullptr, *TablePath);
+		UDataTable* DataTable = ResolveDataTable(TablePath);
 		if (!DataTable)
 		{
 			return FMCPToolResult::Error(FString::Printf(TEXT("Data Table not found at '%s'."), *TablePath));
@@ -275,9 +366,19 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
+		// Accept the table identifier under "table", "name", or "path" so it
+		// matches however create_data_table reported the created asset.
 		FString TablePath = Params->GetStringField(TEXT("table"));
+		if (TablePath.IsEmpty())
+		{
+			TablePath = Params->GetStringField(TEXT("path"));
+		}
+		if (TablePath.IsEmpty())
+		{
+			TablePath = Params->GetStringField(TEXT("name"));
+		}
 
-		UDataTable* DataTable = LoadObject<UDataTable>(nullptr, *TablePath);
+		UDataTable* DataTable = ResolveDataTable(TablePath);
 		if (!DataTable)
 		{
 			return FMCPToolResult::Error(FString::Printf(TEXT("Data Table not found at '%s'."), *TablePath));
@@ -355,7 +456,7 @@ public:
 		FString TablePath = Params->GetStringField(TEXT("table"));
 		FString RowName = Params->GetStringField(TEXT("row_name"));
 
-		UDataTable* DataTable = LoadObject<UDataTable>(nullptr, *TablePath);
+		UDataTable* DataTable = ResolveDataTable(TablePath);
 		if (!DataTable)
 		{
 			return FMCPToolResult::Error(FString::Printf(TEXT("Data Table not found at '%s'."), *TablePath));
@@ -408,7 +509,7 @@ public:
 		FString TablePath = Params->GetStringField(TEXT("table"));
 		FString CSVPath = Params->GetStringField(TEXT("csv_path"));
 
-		UDataTable* DataTable = LoadObject<UDataTable>(nullptr, *TablePath);
+		UDataTable* DataTable = ResolveDataTable(TablePath);
 		if (!DataTable)
 		{
 			return FMCPToolResult::Error(FString::Printf(TEXT("Data Table not found at '%s'."), *TablePath));

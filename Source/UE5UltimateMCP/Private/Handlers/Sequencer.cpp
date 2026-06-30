@@ -15,6 +15,7 @@
 #include "Channels/MovieSceneFloatChannel.h"
 #include "Channels/MovieSceneChannelProxy.h"
 #include "MovieSceneBinding.h"
+#include "MovieScenePossessable.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetToolsModule.h"
@@ -67,6 +68,13 @@ public:
 
 		FString PackagePath = FString::Printf(TEXT("/Game/Cinematics/%s"), *Name);
 		FString PackageName = FPackageName::ObjectPathToPackageName(PackagePath);
+
+		// Crash-safety: bail gracefully if the asset already exists instead of letting
+		// the engine creation path fatal-assert and take down the editor.
+		if (FPackageName::DoesPackageExist(PackageName))
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("An asset already exists at '%s'. Delete it first or use a different name."), *PackagePath));
+		}
 
 		UPackage* Package = CreatePackage(*PackageName);
 		if (!Package)
@@ -242,7 +250,9 @@ public:
 			return FMCPToolResult::Error(TEXT("Level Sequence has no MovieScene."));
 		}
 
-		// Find the binding for this actor
+		// Find the binding for this actor. Check GetBindings() (bindings that already have
+		// tracks) first, then fall back to the possessables list -- a freshly-bound actor with
+		// no track yet exists as a possessable but does not appear in GetBindings().
 		FGuid BindingGuid;
 		bool bFound = false;
 		for (const FMovieSceneBinding& Binding : MovieScene->GetBindings())
@@ -252,6 +262,19 @@ public:
 				BindingGuid = Binding.GetObjectGuid();
 				bFound = true;
 				break;
+			}
+		}
+		if (!bFound)
+		{
+			for (int32 i = 0; i < MovieScene->GetPossessableCount(); ++i)
+			{
+				const FMovieScenePossessable& Possessable = MovieScene->GetPossessable(i);
+				if (Possessable.GetName() == ActorName)
+				{
+					BindingGuid = Possessable.GetGuid();
+					bFound = true;
+					break;
+				}
 			}
 		}
 		if (!bFound)

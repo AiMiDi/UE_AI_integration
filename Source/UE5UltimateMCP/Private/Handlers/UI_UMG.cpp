@@ -128,6 +128,13 @@ public:
 		FString PackagePath = FString::Printf(TEXT("/Game/UI/%s"), *Name);
 		FString PackageName = FPackageName::ObjectPathToPackageName(PackagePath);
 
+		// Crash-safety: bail gracefully if the asset already exists instead of letting
+		// the engine creation path fatal-assert and take down the editor.
+		if (FPackageName::DoesPackageExist(PackageName))
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("An asset already exists at '%s'. Delete it first or use a different name."), *PackagePath));
+		}
+
 		UPackage* Package = CreatePackage(*PackageName);
 		if (!Package)
 		{

@@ -163,6 +163,15 @@ public:
 		if (!PackagePath.StartsWith(TEXT("/Game")))
 			return FMCPToolResult::Error(TEXT("packagePath must start with '/Game'"));
 
+		const FString FullObjectPath = PackagePath / Name;
+		const FString FullPackageName = FPackageName::ObjectPathToPackageName(FullObjectPath);
+		// Crash-safety: bail gracefully if the asset already exists instead of letting
+		// the engine creation path fatal-assert and take down the editor.
+		if (FPackageName::DoesPackageExist(FullPackageName))
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("An asset already exists at '%s'. Delete it first or use a different name."), *FullObjectPath));
+		}
+
 		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 		UMaterialFactoryNew* Factory = NewObject<UMaterialFactoryNew>();
 		UObject* NewAsset = AssetTools.CreateAsset(Name, PackagePath, UMaterial::StaticClass(), Factory);
@@ -1028,6 +1037,12 @@ public:
 		if (!Parent) return FMCPToolResult::Error(LoadError);
 
 		FString FullPath = PackagePath / Name;
+		// Crash-safety: bail gracefully if the asset already exists instead of letting
+		// the engine creation path fatal-assert and take down the editor.
+		if (FPackageName::DoesPackageExist(FullPath))
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("An asset already exists at '%s'. Delete it first or use a different name."), *FullPath));
+		}
 		UPackage* Package = CreatePackage(*FullPath);
 		if (!Package) return FMCPToolResult::Error(TEXT("Failed to create package"));
 

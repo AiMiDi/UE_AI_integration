@@ -161,6 +161,14 @@ public:
 		}
 
 		FString FullPackagePath = PackagePath / Name;
+
+		// Crash-safety: bail gracefully if the asset already exists instead of letting
+		// the engine creation path fatal-assert and take down the editor.
+		if (FPackageName::DoesPackageExist(FullPackagePath))
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("An asset already exists at '%s'. Delete it first or use a different name."), *FullPackagePath));
+		}
+
 		UPackage* Package = CreatePackage(*FullPackagePath);
 		if (!Package) return FMCPToolResult::Error(TEXT("Failed to create package"));
 
@@ -820,6 +828,14 @@ public:
 		if (!Skeleton) return FMCPToolResult::Error(SkelError);
 
 		FString FullPackagePath = PackagePath / Name;
+
+		// Crash-safety: bail gracefully if the asset already exists instead of letting
+		// the engine creation path fatal-assert and take down the editor.
+		if (FPackageName::DoesPackageExist(FullPackagePath))
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("An asset already exists at '%s'. Delete it first or use a different name."), *FullPackagePath));
+		}
+
 		UPackage* Package = CreatePackage(*FullPackagePath);
 		if (!Package) return FMCPToolResult::Error(TEXT("Failed to create package"));
 

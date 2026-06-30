@@ -2,11 +2,13 @@
 #include "Tools/MCPToolBase.h"
 #include "Tools/MCPToolRegistry.h"
 #include "Tools/MCPToolHelpers.h"
-#include "Engine/UserDefinedStruct.h"
+#include "StructUtils/UserDefinedStruct.h"
 #include "Engine/UserDefinedEnum.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "UserDefinedStructure/UserDefinedStructEditorData.h"
+#include "Kismet2/StructureEditorUtils.h"
 #include "Kismet2/EnumEditorUtils.h"
+#include "UObject/Package.h"
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "Factories/StructureFactory.h"
@@ -48,15 +50,23 @@ public:
 		if (AssetName.IsEmpty())
 			return FMCPToolResult::Error(TEXT("Invalid asset name in assetPath"));
 
-		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-		UStructureFactory* Factory = NewObject<UStructureFactory>();
-		UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UUserDefinedStruct::StaticClass(), Factory);
-		if (!NewAsset)
+		// AssetPath is the full package name (e.g. /Game/DataTypes/S_MyStruct)
+		if (FPackageName::DoesPackageExist(AssetPath))
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("An asset already exists at '%s'. Delete it first or use a different name."), *AssetPath));
+		}
+
+		UPackage* NewPackage = CreatePackage(*AssetPath);
+		if (!NewPackage)
+			return FMCPToolResult::Error(TEXT("Failed to create package for UserDefinedStruct"));
+
+		UUserDefinedStruct* NewStruct = FStructureEditorUtils::CreateUserDefinedStruct(
+			NewPackage, FName(*AssetName), RF_Public | RF_Standalone | RF_Transactional);
+		if (!NewStruct)
 			return FMCPToolResult::Error(TEXT("Failed to create UserDefinedStruct asset"));
 
-		UUserDefinedStruct* NewStruct = Cast<UUserDefinedStruct>(NewAsset);
-		if (!NewStruct)
-			return FMCPToolResult::Error(TEXT("Created asset is not a UserDefinedStruct"));
+		FAssetRegistryModule::AssetCreated(NewStruct);
+		NewPackage->MarkPackageDirty();
 
 		// Add properties
 		int32 PropsAdded = 0;
@@ -156,15 +166,23 @@ public:
 		if (EnumValues.Num() == 0)
 			return FMCPToolResult::Error(TEXT("No valid enum values provided"));
 
-		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-		UEnumFactory* Factory = NewObject<UEnumFactory>();
-		UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UUserDefinedEnum::StaticClass(), Factory);
-		if (!NewAsset)
+		// AssetPath is the full package name (e.g. /Game/DataTypes/E_MyEnum)
+		if (FPackageName::DoesPackageExist(AssetPath))
+		{
+			return FMCPToolResult::Error(FString::Printf(TEXT("An asset already exists at '%s'. Delete it first or use a different name."), *AssetPath));
+		}
+
+		UPackage* NewPackage = CreatePackage(*AssetPath);
+		if (!NewPackage)
+			return FMCPToolResult::Error(TEXT("Failed to create package for UserDefinedEnum"));
+
+		UUserDefinedEnum* NewEnum = Cast<UUserDefinedEnum>(FEnumEditorUtils::CreateUserDefinedEnum(
+			NewPackage, FName(*AssetName), RF_Public | RF_Standalone | RF_Transactional));
+		if (!NewEnum)
 			return FMCPToolResult::Error(TEXT("Failed to create UserDefinedEnum asset"));
 
-		UUserDefinedEnum* NewEnum = Cast<UUserDefinedEnum>(NewAsset);
-		if (!NewEnum)
-			return FMCPToolResult::Error(TEXT("Created asset is not a UserDefinedEnum"));
+		FAssetRegistryModule::AssetCreated(NewEnum);
+		NewPackage->MarkPackageDirty();
 
 		for (int32 i = 0; i < EnumValues.Num(); ++i)
 		{
