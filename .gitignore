@@ -1,5 +1,5 @@
 reference/
-MCP/node_modules/
+node_modules/
 *.o
 *.obj
 Binaries/
@@ -7,7 +7,19 @@ Intermediate/
 DerivedDataCache/
 Saved/
 BuiltPlugin/
+staging/
+build/
+build-*/
+cmake-build-*/
+.ua/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+coverage/
 Config/
+!Config/
+Config/*
+!Config/FilterPlugin.ini
 
 # Packaged release artifacts (publish to GitHub Releases, not the repo tree)
 *.zip
