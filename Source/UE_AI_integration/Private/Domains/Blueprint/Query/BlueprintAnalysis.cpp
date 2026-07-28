@@ -5,6 +5,7 @@
 
 #include "Infrastructure/EngineeringContractUtils.h"
 #include "Infrastructure/MCPToolHelpers.h"
+#include "Infrastructure/Runtime/BlueprintDebugService.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -796,6 +797,13 @@ public:
 class FTool_BlueprintFindingsCorrelate final : public FMCPToolBase
 {
 public:
+	explicit FTool_BlueprintFindingsCorrelate(
+		UEAIIntegration::Infrastructure::FBlueprintDebugService*
+			InDebugService = nullptr)
+		: DebugService(InDebugService)
+	{
+	}
+
 	FString GetCapabilityId() const override
 	{
 		return TEXT("blueprint.findings.correlate");
@@ -824,10 +832,12 @@ public:
 		}
 
 		TSet<FString> ObservedNodeIds;
+		bool bHasManualEvidence = false;
 		const TArray<TSharedPtr<FJsonValue>>* ObservedValues = nullptr;
 		if (Params->TryGetArrayField(TEXT("observedNodeIds"), ObservedValues)
 			&& ObservedValues)
 		{
+			bHasManualEvidence = !ObservedValues->IsEmpty();
 			for (const TSharedPtr<FJsonValue>& Value : *ObservedValues)
 			{
 				if (Value.IsValid() && Value->Type == EJson::String)
@@ -835,6 +845,44 @@ public:
 					ObservedNodeIds.Add(Value->AsString());
 				}
 			}
+		}
+
+		FString DebugSessionId;
+		bool bHasDebugTrace = false;
+		FString CursorStart;
+		FString CursorEnd;
+		if (Params->TryGetStringField(TEXT("debugSessionId"), DebugSessionId)
+			&& !DebugSessionId.IsEmpty())
+		{
+			if (!DebugService)
+			{
+				return FMCPToolResult::Error(
+					TEXT("The Blueprint runtime debug provider is unavailable."),
+					TEXT("debug_provider_unavailable"),
+					503);
+			}
+			const TSharedPtr<FJsonObject>* TraceRange = nullptr;
+			if (Params->TryGetObjectField(TEXT("traceRange"), TraceRange)
+				&& TraceRange
+				&& TraceRange->IsValid())
+			{
+				(*TraceRange)->TryGetStringField(TEXT("cursorStart"), CursorStart);
+				(*TraceRange)->TryGetStringField(TEXT("cursorEnd"), CursorEnd);
+			}
+			const UEAIIntegration::Infrastructure::FBlueprintDebugResult
+				TraceResult = DebugService->CollectObservedNodeIds(
+					DebugSessionId,
+					CursorStart,
+					CursorEnd,
+					ObservedNodeIds);
+			if (!TraceResult.bSuccess)
+			{
+				return FMCPToolResult::Error(
+					TraceResult.ErrorMessage,
+					TraceResult.ErrorCode,
+					TraceResult.HttpStatus);
+			}
+			bHasDebugTrace = true;
 		}
 
 		const int32 Limit =
@@ -866,10 +914,30 @@ public:
 			RuntimeEvidence->SetStringField(TEXT("runId"), RunId);
 			RuntimeEvidence->SetStringField(
 				TEXT("source"),
-				ObservedNodeIds.IsEmpty()
-					? TEXT("runtimeProviderUnavailable")
-					: TEXT("observedNodeIds"));
+				bHasDebugTrace && bHasManualEvidence
+					? TEXT("kismetTrace+observedNodeIds")
+					: (bHasDebugTrace
+						? TEXT("kismetTrace")
+						: (bHasManualEvidence
+							? TEXT("observedNodeIds")
+							: TEXT("runtimeProviderUnavailable"))));
 			RuntimeEvidence->SetBoolField(TEXT("observed"), bObserved);
+			if (bHasDebugTrace)
+			{
+				RuntimeEvidence->SetStringField(
+					TEXT("debugSessionId"),
+					DebugSessionId);
+				TSharedRef<FJsonObject> Range = MakeShared<FJsonObject>();
+				if (!CursorStart.IsEmpty())
+				{
+					Range->SetStringField(TEXT("cursorStart"), CursorStart);
+				}
+				if (!CursorEnd.IsEmpty())
+				{
+					Range->SetStringField(TEXT("cursorEnd"), CursorEnd);
+				}
+				RuntimeEvidence->SetObjectField(TEXT("traceRange"), Range);
+			}
 			Finding->SetObjectField(TEXT("runtimeEvidence"), RuntimeEvidence);
 			Correlated.Add(MakeShared<FJsonValueObject>(Finding));
 		}
@@ -881,7 +949,9 @@ public:
 		Result->SetNumberField(TEXT("observedCount"), ObservedCount);
 		Result->SetStringField(
 			TEXT("status"),
-			ObservedNodeIds.IsEmpty() ? TEXT("unavailable") : TEXT("correlated"));
+			!bHasDebugTrace && !bHasManualEvidence
+				? TEXT("unavailable")
+				: TEXT("correlated"));
 		SetBoundedArray(
 			Result,
 			TEXT("findings"),
@@ -890,15 +960,26 @@ public:
 			Limit);
 		return FMCPToolResult::Ok(Result);
 	}
+
+private:
+	UEAIIntegration::Infrastructure::FBlueprintDebugService* DebugService;
 };
 }
 
 namespace UEAIIntegrationTools
 {
-void RegisterBlueprintAnalysisTools(FMCPToolRegistry& Registry)
+void RegisterBlueprintAnalysisTools(
+	FMCPToolRegistry& Registry,
+	UEAIIntegration::Infrastructure::FBlueprintDebugService* DebugService)
 {
 	Registry.Register(MakeShared<FTool_BlueprintScan>());
 	Registry.Register(MakeShared<FTool_BlueprintCallGraph>());
-	Registry.Register(MakeShared<FTool_BlueprintFindingsCorrelate>());
+	Registry.Register(
+		MakeShared<FTool_BlueprintFindingsCorrelate>(DebugService));
+}
+
+void RegisterBlueprintAnalysisTools(FMCPToolRegistry& Registry)
+{
+	RegisterBlueprintAnalysisTools(Registry, nullptr);
 }
 }

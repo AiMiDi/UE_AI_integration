@@ -2207,7 +2207,7 @@
             "minLength": 1,
             "description": "Blueprint asset package or object path"
           },
-          "only_if_dirty": {
+          "onlyIfDirty": {
             "type": "boolean",
             "description": "If true, skip saving an already clean package"
           }
@@ -2380,7 +2380,7 @@
       "id": "blueprint.findings.correlate",
       "domain": "blueprint",
       "kind": "validation",
-      "description": "Correlate a prior Blueprint scan with explicitly supplied runtime node evidence; absent providers remain unavailable rather than being treated as clean.",
+      "description": "Correlate a prior Blueprint scan with retained Kismet trace evidence and/or explicitly supplied runtime node IDs.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2399,6 +2399,24 @@
               "minLength": 1
             },
             "maxItems": 5000
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "traceRange": {
+            "type": "object",
+            "properties": {
+              "cursorStart": {
+                "type": "string",
+                "pattern": "^[0-9]+$"
+              },
+              "cursorEnd": {
+                "type": "string",
+                "pattern": "^[0-9]+$"
+              }
+            },
+            "additionalProperties": false
           },
           "limit": {
             "type": "integer",
@@ -2426,6 +2444,563 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      }
+    },
+    {
+      "id": "blueprint.debug.session.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Read the immutable Blueprint debugger snapshot for the current PIE generation, including pause state, current instruction and recent command status.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "blueprint.debug.trace.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Read a bounded, cursor-paged Kismet execution trace mapped to Blueprint asset, graph and source node identities.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cursor": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "blueprint.debug.breakpoint.list",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "List Blueprint debugger breakpoints from the latest immutable PIE debug snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "blueprint.debug.breakpoint.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Queue creation or enable-state update of a Blueprint node breakpoint for Slate pre-tick execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nodeGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint",
+          "nodeGuid"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "blueprint.debug.breakpoint.remove",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Queue removal of a Blueprint node breakpoint for Slate pre-tick execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nodeGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint",
+          "nodeGuid"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "blueprint.debug.watch.list",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "List pin watches for a Blueprint from the latest immutable PIE debug snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "blueprint.debug.watch.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Queue creation of a Blueprint pin or nested-property watch for Slate pre-tick execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nodeGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "pinGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "propertyPath": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint",
+          "nodeGuid",
+          "pinGuid"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "blueprint.debug.watch.remove",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Queue removal of a Blueprint pin or nested-property watch for Slate pre-tick execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nodeGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "pinGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "propertyPath": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint",
+          "nodeGuid",
+          "pinGuid"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "blueprint.debug.watch.value.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Read a watched Blueprint pin value captured from the immutable paused-debug snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nodeGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "pinGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "propertyPath": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint",
+          "nodeGuid",
+          "pinGuid"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "blueprint.debug.control",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Queue continue, step or abort control for consumption by Slate pre-tick while Kismet has the Game Thread paused.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "continue",
+              "stepInto",
+              "stepOver",
+              "stepOut",
+              "abort"
+            ]
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
       }
     }
   ]

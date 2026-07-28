@@ -11,6 +11,7 @@ class FMCPToolRegistry;
 class FMCPExecutor;
 namespace UEAIIntegration::Infrastructure
 {
+class FBlueprintDebugService;
 class FPIESessionController;
 class FProductionRuntimeController;
 }
@@ -37,9 +38,18 @@ public:
 
 	FUEAIIntegrationServer* GetServer() const { return Server.Get(); }
 	FMCPToolRegistry* GetRegistry() const { return Registry.Get(); }
+#if WITH_DEV_AUTOMATION_TESTS
+	UEAIIntegration::Infrastructure::FBlueprintDebugService*
+	GetBlueprintDebugServiceForTesting() const
+	{
+		return BlueprintDebugService.Get();
+	}
+#endif
 
 private:
 	TSharedPtr<UEAIIntegration::Infrastructure::FPIESessionController> PIEController;
+	TSharedPtr<UEAIIntegration::Infrastructure::FBlueprintDebugService>
+		BlueprintDebugService;
 	TSharedPtr<UEAIIntegration::Infrastructure::FProductionRuntimeController>
 		ProductionController;
 	TUniquePtr<FMCPToolRegistry> Registry;

@@ -3,6 +3,7 @@
 #include "Core/MCPExecutor.h"
 #include "Infrastructure/PIESessionController.h"
 #include "Infrastructure/ProductionRuntimeController.h"
+#include "Infrastructure/Runtime/BlueprintDebugService.h"
 #include "Tools/MCPToolRegistry.h"
 #include "UEAIIntegrationServer.h"
 #include "HAL/PlatformMisc.h"
@@ -29,7 +30,15 @@ namespace UEAIIntegrationTools
 	void RegisterSnapshotTools(FMCPToolRegistry& Registry);
 	void RegisterValidationTools(FMCPToolRegistry& Registry);
 	void RegisterDiscoveryTools(FMCPToolRegistry& Registry);
-	void RegisterBlueprintAnalysisTools(FMCPToolRegistry& Registry);
+	void RegisterBlueprintAnalysisTools(
+		FMCPToolRegistry& Registry,
+		UEAIIntegration::Infrastructure::FBlueprintDebugService* DebugService);
+	void RegisterBlueprintDebugQueryTools(
+		FMCPToolRegistry& Registry,
+		UEAIIntegration::Infrastructure::FBlueprintDebugService& Service);
+	void RegisterBlueprintDebugCommandTools(
+		FMCPToolRegistry& Registry,
+		UEAIIntegration::Infrastructure::FBlueprintDebugService& Service);
 	void RegisterUserTypeTools(FMCPToolRegistry& Registry);
 	void RegisterDiffTools(FMCPToolRegistry& Registry);
 	void RegisterContentAssetReadTools(FMCPToolRegistry& Registry);
@@ -64,6 +73,9 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	PIEController =
 		MakeShared<UEAIIntegration::Infrastructure::FPIESessionController>();
+	BlueprintDebugService =
+		MakeShared<UEAIIntegration::Infrastructure::FBlueprintDebugService>(
+			*PIEController);
 	Registry = MakeUnique<FMCPToolRegistry>();
 	ProductionController =
 		MakeShared<UEAIIntegration::Infrastructure::FProductionRuntimeController>(
@@ -84,7 +96,15 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	UEAIIntegrationTools::RegisterSnapshotTools(*Registry);
 	UEAIIntegrationTools::RegisterValidationTools(*Registry);
 	UEAIIntegrationTools::RegisterDiscoveryTools(*Registry);
-	UEAIIntegrationTools::RegisterBlueprintAnalysisTools(*Registry);
+	UEAIIntegrationTools::RegisterBlueprintAnalysisTools(
+		*Registry,
+		BlueprintDebugService.Get());
+	UEAIIntegrationTools::RegisterBlueprintDebugQueryTools(
+		*Registry,
+		*BlueprintDebugService);
+	UEAIIntegrationTools::RegisterBlueprintDebugCommandTools(
+		*Registry,
+		*BlueprintDebugService);
 	UEAIIntegrationTools::RegisterDiffTools(*Registry);
 	Registry->EndDomainRegistration();
 
@@ -149,7 +169,10 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		}
 	}
 
-	Server = MakeUnique<FUEAIIntegrationServer>(*Registry, *Executor);
+	Server = MakeUnique<FUEAIIntegrationServer>(
+		*Registry,
+		*Executor,
+		BlueprintDebugService.Get());
 	if (Server->Start(ServerPort))
 	{
 		UE_LOG(
@@ -181,6 +204,7 @@ void UUEAIIntegrationSubsystem::Deinitialize()
 	Executor.Reset();
 	ProductionController.Reset();
 	Registry.Reset();
+	BlueprintDebugService.Reset();
 	PIEController.Reset();
 	Super::Deinitialize();
 }
@@ -194,6 +218,10 @@ void UUEAIIntegrationSubsystem::Tick(float DeltaTime)
 	if (ProductionController.IsValid())
 	{
 		ProductionController->Tick(DeltaTime);
+	}
+	if (BlueprintDebugService.IsValid())
+	{
+		BlueprintDebugService->Tick();
 	}
 	if (Server.IsValid())
 	{

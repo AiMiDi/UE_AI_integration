@@ -16,6 +16,10 @@ namespace UEAIIntegration::Workflow
 {
 class FWorkflowRuntime;
 }
+namespace UEAIIntegration::Infrastructure
+{
+class FBlueprintDebugService;
+}
 
 enum class EUEAIIntegrationRequestKind : uint8
 {
@@ -38,7 +42,11 @@ struct FPendingMCPExecuteRequest
 class FUEAIIntegrationServer
 {
 public:
-	FUEAIIntegrationServer(FMCPToolRegistry& InRegistry, FMCPExecutor& InExecutor);
+	FUEAIIntegrationServer(
+		FMCPToolRegistry& InRegistry,
+		FMCPExecutor& InExecutor,
+		UEAIIntegration::Infrastructure::FBlueprintDebugService*
+			InBlueprintDebugService = nullptr);
 	~FUEAIIntegrationServer();
 
 	/** Bind the legacy and versioned workflow routes and begin listening. */
@@ -62,6 +70,12 @@ public:
 		TFunction<void()> InObserver)
 	{
 		WorkflowDispatchObserverForTesting = MoveTemp(InObserver);
+	}
+
+	UEAIIntegration::Workflow::FWorkflowRuntime*
+	GetWorkflowRuntimeForTesting() const
+	{
+		return WorkflowRuntime.Get();
 	}
 #endif
 
@@ -107,6 +121,8 @@ private:
 
 	FMCPToolRegistry& Registry;
 	FMCPExecutor& Executor;
+	UEAIIntegration::Infrastructure::FBlueprintDebugService*
+		BlueprintDebugService = nullptr;
 	TUniquePtr<UEAIIntegration::Workflow::FWorkflowRuntime> WorkflowRuntime;
 	TSharedPtr<IHttpRouter> Router;
 	TArray<FHttpRouteHandle> RouteHandles;

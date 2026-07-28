@@ -4,6 +4,7 @@
 #include "Dom/JsonValue.h"
 #include "HttpServerModule.h"
 #include "Interfaces/IPluginManager.h"
+#include "Infrastructure/Runtime/BlueprintDebugService.h"
 #include "HAL/PlatformProperties.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
@@ -234,13 +235,33 @@ TSharedPtr<FJsonObject> MakeCapabilitySummary(const TSharedPtr<FJsonObject>& Des
 	}
 	return Summary;
 }
+
+bool IsBlueprintDebugCapability(const FString& Capability)
+{
+	static const TSet<FString> Capabilities = {
+		TEXT("blueprint.debug.session.get"),
+		TEXT("blueprint.debug.trace.get"),
+		TEXT("blueprint.debug.breakpoint.list"),
+		TEXT("blueprint.debug.breakpoint.set"),
+		TEXT("blueprint.debug.breakpoint.remove"),
+		TEXT("blueprint.debug.watch.list"),
+		TEXT("blueprint.debug.watch.set"),
+		TEXT("blueprint.debug.watch.remove"),
+		TEXT("blueprint.debug.watch.value.get"),
+		TEXT("blueprint.debug.control"),
+	};
+	return Capabilities.Contains(Capability);
+}
 } // namespace
 
 FUEAIIntegrationServer::FUEAIIntegrationServer(
 	FMCPToolRegistry& InRegistry,
-	FMCPExecutor& InExecutor)
+	FMCPExecutor& InExecutor,
+	UEAIIntegration::Infrastructure::FBlueprintDebugService*
+		InBlueprintDebugService)
 	: Registry(InRegistry)
 	, Executor(InExecutor)
+	, BlueprintDebugService(InBlueprintDebugService)
 	, WorkflowRuntime(
 		MakeUnique<UEAIIntegration::Workflow::FWorkflowRuntime>(InRegistry))
 {
@@ -816,6 +837,140 @@ bool FUEAIIntegrationServer::HandleExecute(
 	const FHttpServerRequest& Request,
 	const FHttpResultCallback& OnComplete)
 {
+	// A Kismet breakpoint blocks the normal subsystem Tick inside Slate's
+	// intra-frame debugging loop. Only Blueprint debug operations are allowed
+	// to bypass that queue, and the service guarantees this path never touches
+	// UObject state: it reads a copied snapshot or enqueues a value-only command
+	// consumed by Slate pre-tick.
+	if (BlueprintDebugService
+		&& BlueprintDebugService->IsPausedTransportActive())
+	{
+		FString Body;
+		if (Request.Body.Num() > 0)
+		{
+			const FUTF8ToTCHAR Converter(
+				reinterpret_cast<const ANSICHAR*>(Request.Body.GetData()),
+				Request.Body.Num());
+			Body = FString(Converter.Length(), Converter.Get());
+		}
+		TSharedPtr<FJsonObject> RequestObject;
+		const TSharedRef<TJsonReader<>> Reader =
+			TJsonReaderFactory<>::Create(Body);
+		if (!FJsonSerializer::Deserialize(Reader, RequestObject)
+			|| !RequestObject.IsValid())
+		{
+			SendError(
+				OnComplete,
+				400,
+				TEXT("invalid_json"),
+				TEXT("Request body contains invalid JSON."));
+			return true;
+		}
+
+		FString Capability;
+		if (RequestObject->TryGetStringField(TEXT("capability"), Capability)
+			&& IsBlueprintDebugCapability(Capability))
+		{
+			if (!Registry.IsReady())
+			{
+				SendError(
+					OnComplete,
+					503,
+					TEXT("service_degraded"),
+					TEXT("Capability bindings failed validation."),
+					MakeValidationDetails(Registry.GetValidationErrors()));
+				return true;
+			}
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field :
+				RequestObject->Values)
+			{
+				if (Field.Key != TEXT("capability")
+					&& Field.Key != TEXT("params")
+					&& Field.Key != TEXT("requestId"))
+				{
+					SendError(
+						OnComplete,
+						422,
+						TEXT("invalid_params"),
+						FString::Printf(
+							TEXT("Unknown request field '%s'."),
+							*Field.Key));
+					return true;
+				}
+			}
+
+			TSharedPtr<FJsonObject> Params = MakeShared<FJsonObject>();
+			if (RequestObject->HasField(TEXT("params")))
+			{
+				if (!RequestObject->HasTypedField<EJson::Object>(TEXT("params")))
+				{
+					SendError(
+						OnComplete,
+						422,
+						TEXT("invalid_params"),
+						TEXT("Field 'params' must be a JSON object."));
+					return true;
+				}
+				Params = RequestObject->GetObjectField(TEXT("params"));
+			}
+			TArray<FString> ValidationErrors;
+			if (!Registry.ValidateParams(Capability, Params, ValidationErrors))
+			{
+				SendError(
+					OnComplete,
+					422,
+					TEXT("invalid_params"),
+					TEXT("Capability parameters failed manifest schema validation."),
+					MakeValidationDetails(ValidationErrors));
+				return true;
+			}
+
+			FString RequestId;
+			if (RequestObject->HasField(TEXT("requestId"))
+				&& (!RequestObject->TryGetStringField(TEXT("requestId"), RequestId)
+					|| RequestId.IsEmpty()
+					|| RequestId.Len() > 200))
+			{
+				SendError(
+					OnComplete,
+					422,
+					TEXT("invalid_params"),
+					TEXT(
+						"Field 'requestId' must be a non-empty string of at most 200 characters."));
+				return true;
+			}
+
+			UEAIIntegration::Infrastructure::FBlueprintDebugResult Result;
+			if (BlueprintDebugService->TryHandlePausedRequest(
+					Capability,
+					Params,
+					RequestId,
+					Result))
+			{
+				if (Result.bSuccess)
+				{
+					SendSuccess(OnComplete, Result.Data);
+				}
+				else
+				{
+					SendError(
+						OnComplete,
+						Result.HttpStatus,
+						Result.ErrorCode,
+						Result.ErrorMessage);
+				}
+				return true;
+			}
+		}
+		SendError(
+			OnComplete,
+			423,
+			TEXT("debug_session_paused"),
+			TEXT(
+				"Only Blueprint debug snapshot queries and POD control commands "
+				"are available while Kismet is paused."));
+		return true;
+	}
 	return QueueRequest(
 		EUEAIIntegrationRequestKind::LegacyExecute,
 		Request,
@@ -826,6 +981,16 @@ bool FUEAIIntegrationServer::HandleWorkflowHandshake(
 	const FHttpServerRequest& Request,
 	const FHttpResultCallback& OnComplete)
 {
+	if (BlueprintDebugService
+		&& BlueprintDebugService->IsPausedTransportActive())
+	{
+		SendError(
+			OnComplete,
+			423,
+			TEXT("debug_session_paused"),
+			TEXT("Workflow routes are unavailable while Kismet is paused."));
+		return true;
+	}
 	return QueueRequest(
 		EUEAIIntegrationRequestKind::WorkflowHandshake,
 		Request,
@@ -836,6 +1001,16 @@ bool FUEAIIntegrationServer::HandleWorkflow(
 	const FHttpServerRequest& Request,
 	const FHttpResultCallback& OnComplete)
 {
+	if (BlueprintDebugService
+		&& BlueprintDebugService->IsPausedTransportActive())
+	{
+		SendError(
+			OnComplete,
+			423,
+			TEXT("debug_session_paused"),
+			TEXT("Workflow routes are unavailable while Kismet is paused."));
+		return true;
+	}
 	return QueueRequest(
 		EUEAIIntegrationRequestKind::WorkflowAction,
 		Request,
