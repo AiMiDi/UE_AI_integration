@@ -97,7 +97,6 @@ TSharedPtr<FJsonObject> MakeWorkflowExecuteEnvelope(
 	Envelope->SetObjectField(TEXT("workflow"), Workflow);
 	Envelope->SetStringField(TEXT("approvePlanDigest"), PlanDigest);
 	Envelope->SetBoolField(TEXT("saveOnSuccess"), false);
-	Envelope->SetBoolField(TEXT("details"), true);
 	return Envelope;
 }
 

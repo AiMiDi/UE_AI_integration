@@ -1547,11 +1547,16 @@ bool FUEWorkflowMaterialConnectionFailureRollbackTest::RunTest(
 		TEXT("Connection failure rollback is verified"),
 		Result.Error.Details.IsValid()
 			&& Result.Error.Details->GetBoolField(TEXT("rollbackVerified")));
+	const TSharedPtr<FJsonObject>* RollbackSection = nullptr;
 	TestTrue(
 		TEXT("Existing-scope execution captured an in-memory fallback"),
 		Result.Error.Details.IsValid()
-			&& Result.Error.Details->GetBoolField(
-				TEXT("memorySnapshotCaptured")));
+			&& TryGetResultObject(
+				Result.Error.Details,
+				TEXT("rollback"),
+				RollbackSection)
+			&& (*RollbackSection)->GetBoolField(
+				TEXT("executionMemorySnapshotCaptured")));
 
 	UMaterial* Material = Cast<UMaterial>(
 		UEditorAssetLibrary::LoadAsset(MaterialPath));
