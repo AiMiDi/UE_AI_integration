@@ -1,8 +1,9 @@
 # UE Workflow DSL / CLI
 
-`UE Workflow DSL` 用于把围绕同一个 Unreal 资产的连续编辑合并为一次确定、
-可审批、可回滚的执行。命令行程序名为 `ue-workflow`，MCP 工具名为
-`ue_workflow`，HTTP 入口为 `/api/v1/workflow`。
+`UE Workflow DSL` 用于把围绕一个或一组 Unreal 资产的连续编辑合并为一次确定、
+可审批、可恢复、可回滚的执行。命令行程序名为 `ue-workflow`，MCP 工具名为
+`ue_workflow`，HTTP 入口继续为 `/api/v1/workflow`；路由版本与 DSL 版本彼此
+独立。
 
 ## 适用边界
 
@@ -72,20 +73,87 @@ typed object；绑定目标 JSON Pointer 相对于目标 operation 的 `params`�
 
 v1 没有循环、条件、字符串插值、脚本、事件等待和人工分支。
 
+## Workflow v2：多资产执行
+
+`dslVersion: "2.0"` 将单个 `scope` 改为最多 16 个具名 `scopes`，每个 operation
+必须显式选择一个 scope。最多允许 256 个 operation；`dependsOn` 与 typed JSON
+Pointer binding 共同形成确定 DAG。
+
+```json
+{
+  "dsl": "ue.workflow",
+  "dslVersion": "2.0",
+  "workflowKind": "assetEdit",
+  "workflowId": "add-shared-state",
+  "scopes": {
+    "controller": {
+      "kind": "blueprint",
+      "asset": "/Game/Automation/BP_Controller",
+      "createIfMissing": false
+    },
+    "view": {
+      "kind": "widgetBlueprint",
+      "asset": "/Game/Automation/WBP_View",
+      "createIfMissing": false
+    }
+  },
+  "persistence": "dirtyOnly",
+  "operations": [
+    {
+      "id": "addState",
+      "scope": "controller",
+      "type": "blueprint.variable.add",
+      "params": {
+        "variableName": "SharedState",
+        "variableType": "String"
+      }
+    },
+    {
+      "id": "addLabel",
+      "scope": "view",
+      "type": "content.widget.child.add",
+      "dependsOn": ["addState"],
+      "params": {
+        "parent": "RootCanvas",
+        "class": "TextBlock",
+        "name": "StateLabel"
+      }
+    }
+  ]
+}
+```
+
+v2 planner 会：
+
+- 将资产路径规范化后排序，执行前锁定完整集合。
+- 为每个 scope 生成 initializer、一次最终 compile/read-back/diff 和结构 hash。
+- 按拓扑顺序执行跨 scope operation；binding 只能引用已声明输出，且目标参数
+  必须通过类型校验。
+- 在所有资产验证通过后才执行显式请求的统一保存。
+
+v1 与 v2 并存。v1 planner 和 `planDigest` 算法保持不变；Editor 校验 v1 digest
+后把执行映射为单 scope v2 模型，不要求调用方迁移已有 Workflow。
+
+v2 仍然不支持循环、条件、事件等待、调试、性能采样、Cook 或其他长任务。
+
 ## Plan 与审批
 
 ```powershell
 ue-workflow validate --file .\workflow.json
-ue-workflow plan --file .\workflow.json
+ue-workflow plan --connect --file .\workflow.json
 ue-workflow execute --file .\workflow.json `
   --approve-plan sha256:<64-hex-digest> `
   --receipt .\workflow.receipt.json
 ```
 
-`plan` 会规范化 AST、解析依赖和 typed binding、计算风险，并自动添加 initializer
+离线 `plan` 会规范化 AST、解析依赖和 typed binding、计算风险，并自动添加 initializer
 （仅在 `createIfMissing` 需要时）、一次 compile、read-back 和结构 diff。
-`planDigest` 覆盖规范化计划和 contract digest。Editor 在 `execute` 前使用同一
-套 `UEWorkflowCore` 重新规划，digest 不一致时拒绝写入。
+该结果明确标记 `executionReady=false`，不能用于执行审批。`plan --connect`
+还会让 Editor 解析目标资产，并把 Package GUID、磁盘 SHA-256、完整可写对象
+内存摘要、结构 hash、Dirty 状态和生成类版本绑定进新的审批 digest。既有目标
+资产必须是 Clean；否则返回 `asset_dirty`，要求先保存或还原。Editor 在
+`execute` 前重新核对 Core contract 与全部资产前置条件；任一变化都在零写入
+状态返回 `asset_precondition_failed`。
 
 `verify` 只用于选择 read-back 的详细内容，不能关闭 v1 的自动 finalizer。为兼容
 已有 AST，schema 仍接受布尔型 `compile` 和数组型 `readBack`，但 planner 会把
@@ -106,15 +174,35 @@ ue-workflow execute --file .\workflow.json `
 默认成功后只保持 Dirty。只有显式 `--save-on-success` 才会在全部验证通过后保存
 一次。
 
+## Journal、恢复与回滚
+
+Editor 将完整恢复数据写入项目 `Saved/UEWorkflow/`，对外 receipt 只保留稳定的
+`runId`、digest、scope/hash 摘要和 rollback 状态。
+
+- v2 在 operation 或 segment 边界落盘，可在 Editor 重启后通过现有
+  `status`/`resume` action 重附着并从安全边界继续。
+- Handler 内部执行不是检查点；进程在单个 Handler 中断时，会从上一个已完成
+  segment 恢复，而不宣称恢复 Handler 的内部状态。
+- `resume` 会重新核对插件版本、contract digest、当前 package hash 与 Journal
+  记录。同一 Editor 实例还会比较完整可写对象内存摘要；重启后的 Editor 拒绝
+  已加载为 Dirty 的目标。任一资产被外部修改时返回 `resume_conflict`，绝不
+  覆盖外部变化。
+- 失败或显式 `rollback` 会从持久快照恢复所有既有资产、删除本次新建资产，
+  然后重新 compile、read-back 并校验结构 hash。
+
 ## CLI
 
 ```text
 ue-workflow --help|--version [--json]
 ue-workflow doctor [--connect] --json
+ue-workflow capabilities [--connect] [--query <text>] [--domain <domain>]
+                         [--kind <kind>] [--risk <risk>] [--available-only]
+                         [--offset <n>] [--limit <n>]
+                         [--detail summary|full]
 ue-workflow help composable [blueprint|widget|material] --json
 ue-workflow help operation <type> --json
 ue-workflow validate --file <workflow.json|->
-ue-workflow plan --file <workflow.json|->
+ue-workflow plan [--connect] --file <workflow.json|->
 ue-workflow execute --file <workflow.json|-> --approve-plan <digest>
                     --receipt <path> [--save-on-success] [--confirm-write]
                     [--detail-level summary|standard|full]
@@ -126,8 +214,10 @@ ue-workflow operation run <type> ...
 ue-workflow shell
 ```
 
-机器可读结果写 stdout；连接进度和日志写 stderr。`validate`、`plan` 和 help
-可离线使用。`execute`、run 状态与 rollback 需要正在运行的 Unreal Editor。
+机器可读结果写 stdout；连接进度和日志写 stderr。`validate`、离线 `plan` 和
+help 可离线使用，但可执行审批必须来自 `plan --connect`。`execute`、run 状态
+与 rollback 需要正在运行的 Unreal Editor。`capabilities --available-only`
+同样要求 `--connect`。
 `--section` 可重复使用；`--details` 暂作为 `--detail-level full` 的兼容别名。
 
 ### 构建与安装
@@ -207,9 +297,10 @@ editStep 中使用 `deferCompile=true` 和 `dirtyOnly=true`，最后统一编译
 恢复并再次验证。仍不能安全证明已恢复时，receipt 会标记 `manualReview`，不会
 覆盖用户在 Workflow 之前已有的未保存修改。
 
-run journal 位于项目的 `Saved/UEWorkflow/`。`status` 可以读取 journal；
-`resume` 不能借 journal 跨 Editor 实例恢复执行。rollback 只对同一 Editor
-实例且仍位于 Undo 栈顶的未保存 run 可用。
+run journal 位于项目的 `Saved/UEWorkflow/`。`status` 可以读取 journal。v2
+会在确定的 operation/segment 边界持久化进度；Editor 重启后从已校验的 staged
+package baseline 重放未完成部分。显式 rollback 优先使用同实例 Undo/内存快照，
+跨实例则使用持久 package 快照，并在覆盖前重新检查外部修改冲突。
 
 已存在的 Blueprint、Widget Blueprint 和 Material 连续编辑只执行一次最终
 compile。UE 5.3 的 Blueprint/Widget Blueprint 创建工厂会在创建时同步生成

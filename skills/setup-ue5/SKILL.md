@@ -59,11 +59,13 @@ If it responds, the plugin is already running. If not, tell the user to:
 Once the server responds, check the capability catalog:
 
 ```bash
-curl -s http://localhost:9847/api/capabilities | python -c "import sys,json; d=json.load(sys.stdin); print(f'{len(d[\"data\"][\"capabilities\"])} capabilities available')"
+curl -s http://localhost:9847/api/capabilities | python -c "import sys,json; d=json.load(sys.stdin); print(f'{d[\"data\"][\"total\"]} capabilities available')"
 ```
 
-Expected: 212 capabilities across six domains. The stdio bridge exposes ten
-stable MCP tools and routes domain operations through this catalog.
+Expected for release 0.5.0: 303 capabilities across six domains. The stdio
+bridge exposes eleven stable MCP tools and routes domain operations through
+this catalog. Treat the manifest-derived total as authoritative for later
+releases.
 
 ### 7. Report success
 

@@ -40,8 +40,12 @@ names, MCP routing and documentation must agree with it.
   `/api/v1/workflow`.
 - CMake and UBT compile the same `Workflow/src/WorkflowCore.cpp`; TypeScript
   must not duplicate validation or planning.
-- Workflow v1 admits deterministic, single-asset edit steps only. Interactive
-  debugging and long-running jobs remain single operations or separate jobs.
+- Workflow v1 preserves deterministic single-asset planning and digest
+  compatibility. Workflow v2 admits deterministic multi-asset edit DAGs with
+  named scopes and durable journals. Interactive debugging and long-running
+  jobs remain single operations or separate jobs.
+- Public capability input fields use lower camelCase. Capability IDs remain
+  lower-case dotted contracts and are never camel-cased.
 
 ## Adding or moving a capability
 

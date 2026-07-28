@@ -1,7 +1,7 @@
 # UE Engineering Copilot
 
 `UE Engineering Copilot` 在现有 UE MCP 与 `ue-workflow` 之上补齐工程分析和
-生产验证闭环。它不把所有能力塞进 Workflow：单资产、可预先规划的连续编辑
+生产验证闭环。它不把所有能力塞进 Workflow：单资产或确定的多资产连续编辑
 使用 UE Workflow DSL；性能采样、Trace、测试、Cook、Package、BuildGraph
 等长任务使用 Durable Job；查询和交互式调试继续使用单次 capability。
 
@@ -10,9 +10,11 @@
 - MCP 的十一个稳定工具负责发现、查询、执行和 Workflow 入口。
 - `ue-workflow operation run <capability>` 通过同一 `/api/execute` 合同调用
   Editor，因此单次 capability 的能力范围与 MCP 相同。
-- `ue-workflow validate|plan` 可离线运行；`execute`、单次 capability 和 Job
-  都要求连接 Editor。
-- UE Workflow 只接纳 manifest 中声明为 `editStep` 的单资产连续编辑。
+- `ue-workflow validate` 与非执行型 Core plan 可离线运行；用于审批执行的计划
+  必须由 `plan --connect` 绑定 Editor 资产基线。`execute`、单次 capability
+  和 Job 都要求连接 Editor。
+- UE Workflow 只接纳 manifest 中声明为 `editStep` 的确定资产连续编辑；v1
+  为单 scope，v2 最多为 16 个具名 scope。
   Trace、性能、测试、Blueprint 分析、Cook/Package、Source Control、
   DDC、BuildGraph、HLOD 和 PCG 均不会被伪装成 Workflow。
 
@@ -20,13 +22,22 @@
 
 - `production.trace.start/status/stop/analyze`
 - `production.performance.run/result.get/compare`
-- 支持 warmup、采样窗口、帧预算、p50/p95/p99、峰值、超预算帧，以及
-  Game/Render/RHI/GPU 指标。
+- `performance.run` 支持 `mode=window|scenario`、warmup、采样窗口、
+  `repeatCount`、帧预算和可选自动 Trace。
+- Scenario 可用 `metrics.begin/metrics.end` 标记测量区间；未标记的准备和清理
+  步骤不计入性能统计。
+- 结果包含环境指纹、各次重复采样、p50/p95/p99、峰值、超预算帧，以及
+  Game/Render/RHI/GPU 聚合；Scenario 日志从启动 cursor 起读取，不混入 Editor
+  历史日志。
 - Trace 文件作为 `ue.artifact.v1` 分块读取；CLI 可用 `--output` 原子导出。
 
-`trace.analyze` v1 返回受约束的采集元数据和 trace artifact，不宣称已经代替
-Unreal Insights 的完整 Timing、Memory、Network 或 Asset Loading provider
-语义分析。
+`trace.analyze` 使用 UE 5.3 TraceServices 读取 Frame、Timing、Counter 等
+provider，返回受约束的 CPU scope、Counter、Game/Render/RHI/GPU 聚合和 artifact
+引用。它不返回原始事件洪流，也不宣称代替 Unreal Insights 的完整交互式
+Timing、Memory、Network 或 Asset Loading 分析界面。
+
+`performance.compare` 可同时检查多个指标阈值；环境指纹不兼容时返回
+`inconclusive`，证据兼容时返回结构化 `pass` 或 `regression`。
 
 ## 2. 自动化测试
 
@@ -42,10 +53,55 @@ Unreal Insights 的完整 Timing、Memory、Network 或 Asset Loading provider
 - `blueprint.findings.correlate`
 
 Finding 使用 `ue.finding.v1`，包含稳定 ID、严重度、证据位置、置信度和运行时
-关联状态。当前运行时关联接受调用方提供的已观察 Node ID；直接解析 Trace
-provider 属于后续增强。
+关联状态。`blueprint.findings.correlate` 优先使用真实
+`debugSessionId/traceRange`，也保留 `observedNodeIds` 作为明确的手工证据输入。
 
-## 4. 通用资产与 Mesh/Texture 审计
+## 4. Blueprint 运行时调试
+
+- `blueprint.debug.session.get`
+- `blueprint.debug.trace.get`
+- `blueprint.debug.breakpoint.list/set/remove`
+- `blueprint.debug.watch.list/set/remove/value.get`
+- `blueprint.debug.control`
+
+调试引用绑定当前 PIE 的 `sessionId + generation`；PIE 重启后旧引用返回
+`stale_session_handle`。Trace 使用 cursor 分页，`debug.control` 支持
+`continue/stepInto/stepOver/stepOut/abort` 并立即返回 `commandId + accepted`。
+
+蓝图暂停时 Game Thread 处在 Kismet/Slate 内部循环，普通 Tick 队列无法处理
+continue。UE 5.3 的 HttpServer ticker 同样位于 Game Thread，因此服务在 Slate
+pre-tick 中先发布不可变暂停快照，再主动泵送同一个 listener。暂停路由只读取
+快照或写入 POD 命令队列，不访问 UObject；非调试与 Workflow 请求立即返回
+`423 debug_session_paused`，控制命令随后在同一次 pre-tick 中消费。调用方通过
+`session.get` 的 `recentCommands` 和状态快照确认最终结果。
+
+这些能力为 `interactiveOnly`，不能加入 Workflow DSL。
+
+## 5. Runtime 输入、等待与可信视觉证据
+
+- `scene.runtime.input.pointer_sequence/get`
+- `scene.runtime.wait.until/get`
+- `scene.runtime.viewport.capture`
+- `content.widget.event.ensure_handler`
+
+Pointer Sequence 由 Editor Tick 驱动，支持多点轨迹、
+`screenAbsolute/window/widgetLocal/widgetNormalized/viewportNormalized`
+坐标空间，以及 `requireTargetHit`。每步证据包含解析后位置、Hit Path、handled
+Widget、焦点和 Capture owner；失败、取消或 PIE 结束都会释放鼠标按钮、键盘键
+和 Capture。
+
+Runtime Wait 用 Job ID 等待 PIE Ready、Widget 出现、属性值、Session generation
+或有界日志谓词，不用固定 Sleep 伪装 GPU readback 等异步完成。
+
+可信截图只接受当前 `sessionId + generation` 对应的真实 PIE `SViewport`，返回
+原生窗口句柄、Viewport Rect、Capture Source、像素尺寸与 raw-pixel SHA-256。
+无法取得目标窗口（包括 NullRHI）时返回失败，不会回退到活动窗口或桌面截图。
+
+UMG `ensure_handler` 使用 Delegate 的真实 UFunction 签名创建或修复 Function
+Graph、Component-Bound Event、调用执行边和动态 Binding；最终编译后同时验证
+GeneratedClass 函数、签名与生成绑定。重复执行保持幂等。
+
+## 6. 通用资产与 Mesh/Texture 审计
 
 - `content.asset.search/get/dependencies/referencers/audit`
 - `content.static_mesh.inspect`
@@ -56,7 +112,7 @@ provider 属于后续增强。
 `confirmWrite=true` 和顶层 `requestId`；Delete 有 Referencer 门禁。无法可靠
 逆转的 Reimport 与 Fix Redirectors 会明确返回 `rollbackAvailable=false`。
 
-## 5. World Partition、Data Layer、HLOD、PCG
+## 7. World Partition、Data Layer、HLOD、PCG
 
 - World Partition 状态、Cell、Streaming Source 和审计。
 - Data Layer 列表与详情。
@@ -68,7 +124,7 @@ HLOD 是长任务，不进入资产 Workflow；PCG 只在可用插件/模块满�
 `requires` 时暴露为可执行能力。PCG Generate/Cleanup 使用同一 Editor 实例内的
 `requestId` 回执做幂等重放；其异步图执行仍由 PCG 自身调度，不伪报为已经完成。
 
-## 6. 渲染配置与诊断
+## 8. 渲染配置与诊断
 
 - `scene.render.context.get`
 - `scene.render.feature.audit`
@@ -78,7 +134,7 @@ HLOD 是长任务，不进入资产 Workflow；PCG 只在可用插件/模块满�
 写入仅覆盖 allowlist 内的 Session CVar，带精确 digest 和读回；不会静默修改
 项目 DefaultEngine.ini 或平台配置。
 
-## 7. Animation 与 AI 只读闭环
+## 9. Animation 与 AI 只读闭环
 
 - Animation Blueprint、状态机与 BlendSpace 的 list/get/validate/diff。
 - Behavior Tree 与 Blackboard 的 list/get/references/validate/diff。
@@ -86,7 +142,7 @@ HLOD 是长任务，不进入资产 Workflow；PCG 只在可用插件/模块满�
 这些能力补齐已有创建型操作的检查闭环，但不宣称覆盖 Control Rig、IK Rig、
 StateTree、Mass、EQS 或运行时 AI Debugger。
 
-## 8. Cook、Package 与生产 Job
+## 10. Cook、Package 与生产 Job
 
 - `production.job.status/cancel/result.get/log.get/artifact.get`
 - 现有 Cook、Package 与 Commandlet 已迁移到 Durable Job。
@@ -103,7 +159,7 @@ StateTree、Mass、EQS 或运行时 AI Debugger。
   offset、总大小和已有 receipt SHA-256。Deferred artifact 导出完成后由 CLI
   计算并返回本地 SHA-256，供后续持久化或外部验签。
 
-## 9. Source Control、DDC、BuildGraph 与 Horde
+## 11. Source Control、DDC、BuildGraph 与 Horde
 
 - Source Control repository/status/diff，以及 change plan/execute。
 - DDC 状态与受约束清理/填充 Job。

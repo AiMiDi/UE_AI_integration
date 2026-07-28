@@ -7,14 +7,16 @@ a single Editor Module with a TypeScript stdio bridge so MCP clients such as
 Codex CLI and Claude Code can inspect or modify Blueprints, scenes, content
 assets, animation, AI, and production workflows.
 
-The current plugin version is `0.3.1`. Unreal Engine 5.3 is the verified build
+The current plugin version is `0.5.0`. Unreal Engine 5.3 is the verified build
 baseline. Differences for UE 5.4–5.7 are isolated in the compatibility layer,
 but those versions have not all been compiled locally.
 
 ## Highlights
 
-- 287 manifest-driven Editor and PIE runtime capabilities.
-- Eleven stable MCP tools instead of exposing all 287 capabilities as tools.
+- The current release snapshot contains 303 manifest-driven Editor and PIE
+  runtime capabilities; the service derives the count from the manifests at
+  startup.
+- Eleven stable MCP tools instead of exposing every capability as a tool.
 - Six domain routers: Blueprint, Scene, Content, Animation, AI, and Production.
 - Dedicated PIE lifecycle, runtime object/widget/delegate, real input, and
   scenario operations.
@@ -26,12 +28,28 @@ but those versions have not all been compiled locally.
   starts or terminates the Editor.
 - The server listens on `127.0.0.1:9847` by default. The Editor, CLI, and MCP
   bridge use the same `UE_PORT` environment override.
-- [UE Workflow DSL/CLI](docs/UE_WORKFLOW_DSL.md) combines deterministic
-  single-asset edits into one planned, approved, and reversible execution;
+- [UE Workflow DSL/CLI](docs/UE_WORKFLOW_DSL.md) keeps the v1 single-asset
+  contract and adds v2 workflows with up to 16 named asset scopes, a
+  deterministic DAG, durable journals, restart recovery, and all-asset rollback;
   debugging sessions and long-running jobs stay outside Workflow.
 - [UE Engineering Copilot](docs/UE_ENGINEERING_COPILOT.md) adds performance and
   trace evidence, automated tests, Blueprint analysis, asset auditing,
   world/rendering diagnostics, and durable production jobs.
+- Performance jobs support window or Scenario repeats, explicit measurement
+  intervals, bounded TraceServices aggregation, environment fingerprints, and
+  structured regression verdicts.
+- Blueprint debugging supports PIE sessions, trace cursors, breakpoints,
+  watches, and continue/step/abort. Slate pre-tick publishes an immutable pause
+  snapshot before pumping the same HTTP listener and consumes only POD control
+  commands.
+- Runtime evidence includes multi-point pointer sequences, explicit coordinate
+  spaces and target-hit checks, Tick-driven predicate waits, and PIE viewport
+  capture strictly bound to `sessionId + generation`. Capture fails when the
+  requested live PIE window cannot be resolved and never falls back to a
+  desktop screenshot.
+- `content.widget.event.ensure_handler` creates or repairs an exact
+  delegate-signature UMG handler, event node, execution edge, and generated
+  dynamic binding, then verifies the compiled result.
 - Workflow returns compact summaries by default; readback, diff, and structure
   snapshots are retrieved as explicit sections.
 - Capability discovery supports search, trait filters, and pagination, with at
@@ -60,9 +78,9 @@ manifests and does not infer categories from operation names.
 
 | Domain | Count | Scope |
 |---|---:|---|
-| Blueprint | 61 | Asset lifecycle, graphs, variables, components, call graphs, rule scans, diff, validation |
-| Scene | 74 | Actors, PIE runtime, World Partition, Data Layers, HLOD, PCG, rendering diagnostics |
-| Content | 69 | Asset query/dependency/audit, safe changes, materials, Niagara, and UMG |
+| Blueprint | 71 | Asset lifecycle, graphs, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
+| Scene | 79 | Actors, PIE runtime, trusted input/waits/capture, World Partition, Data Layers, HLOD, PCG, rendering diagnostics |
+| Content | 70 | Asset query/dependency/audit, safe changes, materials, Niagara, UMG, and event-handler verification |
 | Animation | 19 | Animation Blueprint, state machine, and BlendSpace authoring, inspection, validation, and diff |
 | AI | 17 | Behavior Tree and Blackboard authoring, inspection, references, validation, and diff |
 | Production | 47 | Durable jobs, trace, performance, tests, cook/package, source control, DDC, and BuildGraph |
@@ -173,6 +191,20 @@ All six domain tools accept the same input shape:
 Use `ue_capabilities` for paged summaries and `ue_context` for full schemas.
 An exact `operation` returns one full descriptor. A domain tool rejects
 operations owned by another domain.
+
+The CLI uses the same catalog query contract:
+
+```powershell
+ue-workflow capabilities --query debug --domain blueprint --risk interactive --limit 10
+ue-workflow capabilities --connect --available-only --domain scene --limit 25
+ue-workflow capabilities --connect --operation blueprint.debug.session.get --detail full
+```
+
+Without `--connect`, the command reads the manifests packaged with the CLI.
+With `--connect`, it forwards filtering, risk, availability, paging, and detail
+options to the running Editor. `--available-only` requires a live query because
+an offline catalog cannot know which plugins and modules the target project
+loads.
 
 ### PIE Lifecycle
 

@@ -6,13 +6,14 @@
 Editor Module 和 TypeScript stdio bridge，让 Codex CLI、Claude Code 等
 MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与生产流程。
 
-当前插件版本为 `0.3.1`，以 Unreal Engine 5.3 为实际构建基线；UE
+当前插件版本为 `0.5.0`，以 Unreal Engine 5.3 为实际构建基线；UE
 5.4–5.7 的差异集中在兼容层，但尚未全部完成本地编译验证。
 
 ## 核心特性
 
-- 287 项 manifest 驱动的 Editor 与 PIE Runtime 能力。
-- 十一个稳定的 MCP 工具，不把 287 项能力直接展开成工具列表。
+- 当前发布快照包含 303 项 manifest 驱动的 Editor 与 PIE Runtime 能力；
+  服务启动时从 manifest 动态计算数量。
+- 十一个稳定的 MCP 工具，不把全部能力直接展开成工具列表。
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
 - 专用 PIE 生命周期、Runtime 对象/Widget/Delegate/真实输入与 Scenario 能力。
 - Blueprint/UMG 写入返回编译、保存、重载和读回验证证据。
@@ -21,10 +22,21 @@ MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与
 - MCP 只连接已经运行的 Unreal Editor，不负责启动或关闭 Editor。
 - 默认监听 `127.0.0.1:9847`；启动 Editor、CLI 与 MCP 时可通过同一个
   `UE_PORT` 覆盖端口。
-- [UE Workflow DSL/CLI](docs/UE_WORKFLOW_DSL.md) 将单资产连续编辑合并为一次
-  可规划、可审批、可回滚的执行；调试和长任务不进入 Workflow。
+- [UE Workflow DSL/CLI](docs/UE_WORKFLOW_DSL.md) 的 v1 保留单资产连续编辑，
+  v2 支持最多 16 个具名资产 scope、确定 DAG、持久 Journal、重启恢复和全量回滚；
+  调试和长任务不进入 Workflow。
 - [UE Engineering Copilot](docs/UE_ENGINEERING_COPILOT.md) 提供性能/Trace、
   自动化测试、Blueprint 分析、资产审计、大世界/渲染诊断以及生产任务闭环。
+- 性能 Job 支持窗口或 Scenario 重复采样、测量区间、TraceServices 聚合、
+  环境指纹和结构化回归判定。
+- Blueprint 调试支持 PIE 会话、Trace、断点、Watch 与
+  continue/step/abort；暂停期间由 Slate pre-tick 先发布不可变快照，再主动泵送
+  同一 HTTP listener，并只消费 POD 控制命令。
+- Runtime Evidence 支持多点 Pointer Sequence、坐标空间与目标命中校验、
+  Tick 驱动的条件等待，以及严格绑定 `sessionId + generation` 的 PIE Viewport
+  截图；无法解析目标 PIE 窗口时会失败，不会退化为桌面截图。
+- `content.widget.event.ensure_handler` 可按 Delegate 精确签名创建或修复 UMG
+  Handler、Event Node、调用边和动态绑定，并在编译后验证。
 - Workflow 默认返回压缩摘要；完整 ReadBack、Diff 与结构快照按 section 获取。
 - capability 目录支持搜索、trait 过滤与分页，默认最多返回 25 项摘要。
 
@@ -49,9 +61,9 @@ UE_AI_integration Editor Module
 
 | Domain | 数量 | 能力范围 |
 |---|---:|---|
-| Blueprint | 61 | 资产生命周期、Graph、变量、组件、调用图、规则扫描、Diff、Validation |
-| Scene | 74 | Actor、PIE Runtime、World Partition、Data Layer、HLOD、PCG、渲染诊断 |
-| Content | 69 | 资产查询/依赖/审计、安全变更、Material、Niagara、UMG |
+| Blueprint | 71 | 资产生命周期、Graph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
+| Scene | 79 | Actor、PIE Runtime、可信输入/等待/截图、World Partition、Data Layer、HLOD、PCG、渲染诊断 |
+| Content | 70 | 资产查询/依赖/审计、安全变更、Material、Niagara、UMG 与事件 Handler 验证 |
 | Animation | 19 | AnimBlueprint、状态机与 BlendSpace 的创建、读取、校验和 Diff |
 | AI | 17 | Behavior Tree 与 Blackboard 的创建、读取、引用、校验和 Diff |
 | Production | 47 | Durable Job、Trace、性能、测试、Cook/Package、Source Control、DDC、BuildGraph |
@@ -159,6 +171,18 @@ bridge 始终注册以下十一个工具，即使 Unreal Editor 暂时离线：
 先用 `ue_capabilities` 搜索分页摘要，或用 `ue_context` 按域读取完整 schema。
 精确指定 `operation` 会返回单项完整描述符。领域工具会拒绝调用其他领域的
 operation。
+
+CLI 使用相同目录查询合同：
+
+```powershell
+ue-workflow capabilities --query debug --domain blueprint --risk interactive --limit 10
+ue-workflow capabilities --connect --available-only --domain scene --limit 25
+ue-workflow capabilities --connect --operation blueprint.debug.session.get --detail full
+```
+
+未加 `--connect` 时直接读取随 CLI 分发的 manifest；加上后把过滤、risk、
+availability、分页和详情参数透传给当前 Editor。`--available-only` 需要在线
+查询，因为离线目录无法判定目标工程的插件与模块可用性。
 
 ### PIE 生命周期
 
