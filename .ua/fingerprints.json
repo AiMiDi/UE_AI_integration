@@ -1,11 +1,11 @@
 {
   "version": "1.0.0",
-  "gitCommitHash": "40d9c23d4125fc805f0cb669429a652318adaf37",
-  "generatedAt": "2026-07-27T09:46:01.510Z",
+  "gitCommitHash": "6e38c2b30ee7acffc20586278781651f2fd503ad",
+  "generatedAt": "2026-07-28T09:35:59.244Z",
   "files": {
     ".claude-plugin/plugin.json": {
       "filePath": ".claude-plugin/plugin.json",
-      "contentHash": "7e0d604288acff5562297a65134c77a1bde0dcb720ffb427610cd9a0eb7006b2",
+      "contentHash": "054c52634074f8cf1f932d0435e1fab850585e4d99d41aa216e7606ad2e0662a",
       "functions": [],
       "classes": [],
       "imports": [],
@@ -25,22 +25,22 @@
     },
     "CLAUDE.md": {
       "filePath": "CLAUDE.md",
-      "contentHash": "fc314e171ed7782954f89a632ec9fda3bb6ba3ef34fded41b0c2706b8100cb22",
+      "contentHash": "e4a669635c444799a3be58d5aeab81cd7c3e5eb110adf5a60800241bb2da78f0",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 65,
+      "totalLines": 72,
       "hasStructuralAnalysis": true
     },
     "Config/FilterPlugin.ini": {
       "filePath": "Config/FilterPlugin.ini",
-      "contentHash": "1a5fda3d9b516f5b6638707326faf180e30b2706aec3dc9db15e4c6ab420c5f9",
+      "contentHash": "d33b0cec13404388c5f033a7a96c739875d1004d5e7f1d1c1e95a47fc4200885",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 16,
+      "totalLines": 22,
       "hasStructuralAnalysis": false
     },
     "MCP/.mcp.json": {
@@ -55,7 +55,7 @@
     },
     "MCP/package.json": {
       "filePath": "MCP/package.json",
-      "contentHash": "20cf9f89fbe235e6248cd9af4bb49b766adb032c97b61830ac80579f2dce2e84",
+      "contentHash": "4c048b4a2ae8f777fbb985d3c677e3be95c01501337e4d638fd83c85ae75a2bd",
       "functions": [],
       "classes": [],
       "imports": [],
@@ -65,7 +65,7 @@
     },
     "MCP/src/__tests__/capability-catalog.test.ts": {
       "filePath": "MCP/src/__tests__/capability-catalog.test.ts",
-      "contentHash": "f8d0d956bb674455f5d607a1d54b3e634c53b2002631d465b80395218647d1ea",
+      "contentHash": "2f07deaccc3841dc8af1854f893d2196e4e930f1a1307a06c056b680081c3014",
       "functions": [
         {
           "name": "createTemporaryDirectory",
@@ -120,12 +120,12 @@
         }
       ],
       "exports": [],
-      "totalLines": 88,
+      "totalLines": 241,
       "hasStructuralAnalysis": true
     },
     "MCP/src/__tests__/mcp-contract.test.ts": {
       "filePath": "MCP/src/__tests__/mcp-contract.test.ts",
-      "contentHash": "27606a5ad0ed756a251c9f27c42d7674e6006f803b68bec4c8aa5ec9dee22cc8",
+      "contentHash": "e8f082c77cff69befb9c7146aee39d952ae6bfc9ca3b279357f8c5165023467f",
       "functions": [],
       "classes": [],
       "imports": [
@@ -163,6 +163,8 @@
           "source": "../mcp-server.js",
           "specifiers": [
             "createMcpServer",
+            "handleCapabilities",
+            "handleContext",
             "MCP_TOOL_NAMES",
             "UEConnectionClient"
           ]
@@ -172,7 +174,9 @@
           "specifiers": [
             "UEApiError",
             "UEClient",
-            "UEExecuteData"
+            "UECapabilityQuery",
+            "UEExecuteData",
+            "UEWorkflowRequest"
           ]
         },
         {
@@ -180,15 +184,25 @@
           "specifiers": [
             "safeStringify"
           ]
+        },
+        {
+          "source": "../workflow-router.js",
+          "specifiers": [
+            "handleWorkflowInput",
+            "parseWorkflowInput",
+            "runWorkflowAction",
+            "UE_WORKFLOW_INPUT_SCHEMA",
+            "UE_WORKFLOW_TOOL_SCHEMA"
+          ]
         }
       ],
       "exports": [],
-      "totalLines": 331,
+      "totalLines": 899,
       "hasStructuralAnalysis": true
     },
     "MCP/src/capability-catalog.ts": {
       "filePath": "MCP/src/capability-catalog.ts",
-      "contentHash": "3d4d8cf8812c46bcef8ca80f8d9a4aa5e06564c3bdb672c394e9aa536db70cb5",
+      "contentHash": "e9da18d53542daab17a500ab70d446abb45b8ac9880ea23ad93e41078d362a78",
       "functions": [
         {
           "name": "isRecord",
@@ -220,6 +234,27 @@
           "lineCount": 10
         },
         {
+          "name": "requireString",
+          "params": [
+            "record",
+            "key",
+            "location"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "parseDslMetadata",
+          "params": [
+            "value",
+            "location"
+          ],
+          "returnType": "CapabilityDslMetadata | undefined",
+          "exported": false,
+          "lineCount": 64
+        },
+        {
           "name": "parseCapability",
           "params": [
             "value",
@@ -229,7 +264,7 @@
           ],
           "returnType": "CapabilityDescriptor",
           "exported": false,
-          "lineCount": 93
+          "lineCount": 103
         },
         {
           "name": "parseManifest",
@@ -307,12 +342,12 @@
         "CapabilityCatalog",
         "loadCapabilityCatalog"
       ],
-      "totalLines": 316,
+      "totalLines": 426,
       "hasStructuralAnalysis": true
     },
     "MCP/src/domain-router.ts": {
       "filePath": "MCP/src/domain-router.ts",
-      "contentHash": "115d132365af7ff3490b1fa1c1c1078c8884fd313d915aa9580d5672196fdfce",
+      "contentHash": "87fc8974cb908114bf5303ce466752e956a45d187b22f706d486c7bb81c36091",
       "functions": [
         {
           "name": "validateDomainOperation",
@@ -332,11 +367,12 @@
             "executor",
             "domain",
             "operation",
-            "params"
+            "params",
+            "requestId"
           ],
           "returnType": "Promise<MCPResponse>",
           "exported": true,
-          "lineCount": 15
+          "lineCount": 16
         }
       ],
       "classes": [],
@@ -371,7 +407,7 @@
         "validateDomainOperation",
         "runDomainOperation"
       ],
-      "totalLines": 86,
+      "totalLines": 88,
       "hasStructuralAnalysis": true
     },
     "MCP/src/helpers.ts": {
@@ -453,7 +489,7 @@
     },
     "MCP/src/index.ts": {
       "filePath": "MCP/src/index.ts",
-      "contentHash": "04da82814c7b58269d632893bb99ac8fd551b70b3c4db3a87392650d11c9afd7",
+      "contentHash": "6568f3760619e20fe7700f756cf75166a0ab6a7d5dae1077fc9ab9bb1e443ff3",
       "functions": [
         {
           "name": "createLocalShutdownHandler",
@@ -516,29 +552,47 @@
     },
     "MCP/src/mcp-server.ts": {
       "filePath": "MCP/src/mcp-server.ts",
-      "contentHash": "3baeee8ba2acac2601c3dc8959cdf739aef4d084488e9969cf7eb0c60e92aad7",
+      "contentHash": "a6bc1379bfd005e96e7f9dc6222c087ba528c57643fdb8eb81f9eded3790f831",
       "functions": [
         {
           "name": "resolveLocalCapabilities",
           "params": [
             "catalog",
-            "domain",
-            "operation"
+            "args"
           ],
           "returnType": "CapabilityDescriptor[]",
           "exported": false,
-          "lineCount": 21
+          "lineCount": 20
         },
         {
-          "name": "filterLiveCapabilities",
+          "name": "capabilityMatches",
           "params": [
-            "capabilities",
-            "domain",
-            "operation"
+            "capability",
+            "args"
           ],
-          "returnType": "CapabilityDescriptor[]",
+          "returnType": "boolean",
           "exported": false,
-          "lineCount": 11
+          "lineCount": 23
+        },
+        {
+          "name": "summarizeCapability",
+          "params": [
+            "capability"
+          ],
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "pageLocalCapabilities",
+          "params": [
+            "catalog",
+            "args",
+            "detail",
+            "defaultLimit",
+            "maxLimit"
+          ],
+          "exported": false,
+          "lineCount": 25
         },
         {
           "name": "handleCapabilities",
@@ -548,8 +602,8 @@
             "args"
           ],
           "returnType": "Promise<MCPResponse>",
-          "exported": false,
-          "lineCount": 39
+          "exported": true,
+          "lineCount": 54
         },
         {
           "name": "handleContext",
@@ -558,8 +612,8 @@
             "args"
           ],
           "returnType": "MCPResponse",
-          "exported": false,
-          "lineCount": 31
+          "exported": true,
+          "lineCount": 34
         },
         {
           "name": "createMcpServer",
@@ -568,7 +622,7 @@
           ],
           "returnType": "UEAIIntegrationMcpServer",
           "exported": true,
-          "lineCount": 96
+          "lineCount": 161
         }
       ],
       "classes": [],
@@ -592,6 +646,8 @@
             "CapabilityCatalog",
             "CapabilityDescriptor",
             "CapabilityDomain",
+            "CapabilityKind",
+            "CapabilityOutputKind",
             "loadCapabilityCatalog"
           ]
         },
@@ -617,22 +673,34 @@
           "specifiers": [
             "UEApiError",
             "UECapabilitiesData",
+            "UECapabilityQuery",
             "UEClient",
             "UEHealthData",
+            "UEWorkflowData",
+            "UEWorkflowRequest",
             "ueClient"
+          ]
+        },
+        {
+          "source": "./workflow-router.js",
+          "specifiers": [
+            "handleWorkflowInput",
+            "UE_WORKFLOW_TOOL_SCHEMA"
           ]
         }
       ],
       "exports": [
         "MCP_TOOL_NAMES",
+        "handleCapabilities",
+        "handleContext",
         "createMcpServer"
       ],
-      "totalLines": 266,
+      "totalLines": 424,
       "hasStructuralAnalysis": true
     },
     "MCP/src/ue-bridge.ts": {
       "filePath": "MCP/src/ue-bridge.ts",
-      "contentHash": "9ecaced1bb6f160ffc13ab6bcec8d1545e326b52bc168e73bfe05fa90f64aa3c",
+      "contentHash": "27f32742010beb8d34c38a05f896dd698037ffea8f7b7b25887d6a320fac5cd0",
       "functions": [
         {
           "name": "parsePositiveInteger",
@@ -684,6 +752,8 @@
             "getHealth",
             "getCapabilities",
             "execute",
+            "getWorkflowHandshake",
+            "workflow",
             "request"
           ],
           "properties": [
@@ -692,14 +762,17 @@
             "fetchImpl"
           ],
           "exported": true,
-          "lineCount": 97
+          "lineCount": 127
         }
       ],
       "imports": [
         {
           "source": "./capability-catalog.js",
           "specifiers": [
-            "CapabilityDescriptor"
+            "CapabilityDescriptor",
+            "CapabilityDomain",
+            "CapabilityKind",
+            "CapabilityOutputKind"
           ]
         }
       ],
@@ -708,11 +781,12 @@
         "UE_BASE_URL",
         "REQUEST_TIMEOUT_MS",
         "log",
+        "UE_WORKFLOW_ACTIONS",
         "UEApiError",
         "UEClient",
         "ueClient"
       ],
-      "totalLines": 229,
+      "totalLines": 328,
       "hasStructuralAnalysis": true
     },
     "MCP/tsconfig.json": {
@@ -727,22 +801,22 @@
     },
     "README_EN.md": {
       "filePath": "README_EN.md",
-      "contentHash": "37253807ed3c03112486badeb73a499a403321d6a07b3b0b11282cfbe82537bd",
+      "contentHash": "9a281ee2bfa704ffd6d193ff6a37f087280f09aeeabd577b7d2acf6700b70c3c",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 279,
+      "totalLines": 302,
       "hasStructuralAnalysis": true
     },
     "README.md": {
       "filePath": "README.md",
-      "contentHash": "15c68defccb0c71499f74d072fa2126f5d1fe79a82c7bbbbdcbfedf94c5104e2",
+      "contentHash": "f590ce4ca71757df2726ff9ae6626c95be01c6ed5f54b9dbbf0c30c09b1011c1",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 264,
+      "totalLines": 282,
       "hasStructuralAnalysis": true
     },
     "Resources/Capabilities/ai.json": {
@@ -767,52 +841,52 @@
     },
     "Resources/Capabilities/blueprint.json": {
       "filePath": "Resources/Capabilities/blueprint.json",
-      "contentHash": "c63d5670ca5246af9691b082d7f1d254da8025615394877826beee3cee2bb0d8",
+      "contentHash": "abd5915e191a77cf4fd63f4ee98fdcac00a613fcd9ad4983136a26481b8eae0c",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 1978,
+      "totalLines": 2291,
       "hasStructuralAnalysis": true
     },
     "Resources/Capabilities/content.json": {
       "filePath": "Resources/Capabilities/content.json",
-      "contentHash": "be4ef0df19d35d515f64c623c56d0b64c5d0189c9b41f11fe6df62ee76c939ce",
+      "contentHash": "c7d979a3ae6b4b70468a8abfddb169378c12ba2a663688aea51584186eeca20e",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 1404,
+      "totalLines": 2842,
       "hasStructuralAnalysis": true
     },
     "Resources/Capabilities/production.json": {
       "filePath": "Resources/Capabilities/production.json",
-      "contentHash": "cc4b1a65eb32d17af82c06e496b9c8b9ff06c19ca0d2a096d9022b9883efc59d",
+      "contentHash": "d2a2ccb68f1ac8e4a0951f233c1ddc37e6785bf4c41ea74375e7295a8a42f67e",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 405,
+      "totalLines": 941,
       "hasStructuralAnalysis": true
     },
     "Resources/Capabilities/scene.json": {
       "filePath": "Resources/Capabilities/scene.json",
-      "contentHash": "00c7381871270d2d866586020b2d4e4ebfc2b75d8a470dccca5a4ac4031ea663",
+      "contentHash": "ca1c8ac83b0b131910d25730839db861a20e3c072ea8e746dc2982292569bdcb",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 1102,
+      "totalLines": 2315,
       "hasStructuralAnalysis": true
     },
     "scripts/build_plugin.bat": {
       "filePath": "scripts/build_plugin.bat",
-      "contentHash": "c239988a5b78d2195ce32b9ac5666b5657b5cb4dd07b04d2ba3629c8e60bf027",
+      "contentHash": "72ee90d5ea4f05b8c14afdbfcfdf8e4ccc0a3ae4ca36dbd5f40eb1383a76aa27",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 77,
+      "totalLines": 80,
       "hasStructuralAnalysis": false
     },
     "scripts/setup.sh": {
@@ -827,7 +901,7 @@
     },
     "scripts/validate_capabilities.mjs": {
       "filePath": "scripts/validate_capabilities.mjs",
-      "contentHash": "74b8df9cbb8cfccedbc1c8a4811a0680bf1a8b1ae557f530520913288807522f",
+      "contentHash": "fc8caa9c44ad716e79de027422272f9e0c0b96d346f33105163e9c53ba824d3a",
       "functions": [
         {
           "name": "fail",
@@ -877,12 +951,12 @@
         }
       ],
       "exports": [],
-      "totalLines": 290,
+      "totalLines": 361,
       "hasStructuralAnalysis": true
     },
     "skills/setup-ue5/SKILL.md": {
       "filePath": "skills/setup-ue5/SKILL.md",
-      "contentHash": "54d34c6da29e65a6e8f5dd571f75a9496fc58240b8d2340524ba9f43da378bb1",
+      "contentHash": "00a0b70278525cb7135c420c9c029847328c7a701386fd8089ab4db943f42ef6",
       "functions": [],
       "classes": [],
       "imports": [],
@@ -892,7 +966,7 @@
     },
     "Source/UE_AI_integration/Private/Core/MCPCapabilityCatalog.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Core/MCPCapabilityCatalog.cpp",
-      "contentHash": "07fd8fc088b0b547dda5238ba1b4892d2509ca610b0333db606d08cb3e67256c",
+      "contentHash": "d8b679d77087f241b9732ab799794dc41c4e216257856a00f1d799345ccd75fa",
       "functions": [
         {
           "name": "AddError",
@@ -950,7 +1024,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 21
+          "lineCount": 6
         },
         {
           "name": "MatchesType",
@@ -984,7 +1058,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 72
+          "lineCount": 205
         },
         {
           "name": "ValidateDescriptor",
@@ -1027,7 +1101,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 18
+          "lineCount": 22
         }
       ],
       "classes": [
@@ -1060,6 +1134,12 @@
           "source": "HAL/FileManager.h",
           "specifiers": [
             "HAL/FileManager.h"
+          ]
+        },
+        {
+          "source": "Internationalization/Regex.h",
+          "specifiers": [
+            "Internationalization/Regex.h"
           ]
         },
         {
@@ -1102,7 +1182,7 @@
         "LoadCapabilityCatalog",
         "ValidateCapabilityParams"
       ],
-      "totalLines": 545,
+      "totalLines": 668,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Core/MCPCapabilityCatalog.h": {
@@ -1150,7 +1230,7 @@
     },
     "Source/UE_AI_integration/Private/Core/MCPExecutionTypes.h": {
       "filePath": "Source/UE_AI_integration/Private/Core/MCPExecutionTypes.h",
-      "contentHash": "d212cbc13f08d93c417f945041c5ba37c222acbbb431b77c11622296616ed662",
+      "contentHash": "b1d16a6e16820c9399a42437794bfaa8b385e8c35973076144bfedcf4f1509be",
       "functions": [
         {
           "name": "Ok",
@@ -1197,10 +1277,11 @@
           "methods": [],
           "properties": [
             "Capability",
-            "Params"
+            "Params",
+            "RequestId"
           ],
           "exported": true,
-          "lineCount": 5
+          "lineCount": 7
         },
         {
           "name": "FMCPError",
@@ -1251,13 +1332,22 @@
         "Fail",
         "FMCPResult"
       ],
-      "totalLines": 67,
+      "totalLines": 69,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Core/MCPExecutor.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Core/MCPExecutor.cpp",
-      "contentHash": "3c0095d5a6837b55cd8ebb1e7f4c10ece833bd38e1382c68285bf577f494135a",
+      "contentHash": "1f2f4f9901e126bab4cd748739764ad0bbb412e967dc8f6bbe9a910b0b1e691a",
       "functions": [
+        {
+          "name": "CanonicalizeJsonValue",
+          "params": [
+            "Value"
+          ],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 61
+        },
         {
           "name": "FMCPExecutor",
           "params": [
@@ -1273,7 +1363,25 @@
           ],
           "returnType": "FMCPResult",
           "exported": true,
+          "lineCount": 54
+        },
+        {
+          "name": "ExecuteUncached",
+          "params": [
+            "Context"
+          ],
+          "returnType": "FMCPResult",
+          "exported": true,
           "lineCount": 44
+        },
+        {
+          "name": "MakePayloadKey",
+          "params": [
+            "Context"
+          ],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 12
         },
         {
           "name": "MakeValidationDetails",
@@ -1283,6 +1391,15 @@
           "returnType": "TSharedPtr<FJsonObject>",
           "exported": true,
           "lineCount": 14
+        },
+        {
+          "name": "PruneIdempotencyCache",
+          "params": [
+            "NowUtc"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 11
         }
       ],
       "classes": [],
@@ -1307,16 +1424,20 @@
         }
       ],
       "exports": [
+        "CanonicalizeJsonValue",
         "FMCPExecutor",
         "Execute",
-        "MakeValidationDetails"
+        "ExecuteUncached",
+        "MakePayloadKey",
+        "MakeValidationDetails",
+        "PruneIdempotencyCache"
       ],
-      "totalLines": 70,
+      "totalLines": 217,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Core/MCPExecutor.h": {
       "filePath": "Source/UE_AI_integration/Private/Core/MCPExecutor.h",
-      "contentHash": "1097ceb7011346deccff3db3f0b624b97d37508ea1400d1514886f7200ff38d8",
+      "contentHash": "250e7873b63a27782232d4cc2b583dfeb1bf4eb83d85c569eabdf72f8f0570c8",
       "functions": [],
       "classes": [
         {
@@ -1330,13 +1451,17 @@
           "name": "FMCPExecutor",
           "methods": [
             "Execute",
-            "MakeValidationDetails"
+            "ExecuteUncached",
+            "MakePayloadKey",
+            "MakeValidationDetails",
+            "PruneIdempotencyCache"
           ],
           "properties": [
-            "Registry"
+            "Registry",
+            "IdempotencyCache"
           ],
           "exported": true,
-          "lineCount": 12
+          "lineCount": 23
         }
       ],
       "imports": [
@@ -1358,7 +1483,7 @@
         "Execute",
         "FMCPExecutor"
       ],
-      "totalLines": 21,
+      "totalLines": 32,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Core/MCPToolRegistry.cpp": {
@@ -2400,7 +2525,7 @@
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Graphs.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Graphs.cpp",
-      "contentHash": "43e059323ac168a18b1e8e3e44fff6d7336924504b39f1faa39d5c836384aa78",
+      "contentHash": "445a02a19e6b6ea8c4c8727cb484f673871aed1e30529ccefb5053f650fd76c3",
       "functions": [
         {
           "name": "GetCapabilityId",
@@ -2416,7 +2541,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 91
+          "lineCount": 102
         },
         {
           "name": "GetCapabilityId",
@@ -2432,7 +2557,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 87
+          "lineCount": 146
         },
         {
           "name": "GetCapabilityId",
@@ -2501,7 +2626,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 100
+          "lineCount": 111
         },
         {
           "name": "FTool_CreateGraph",
@@ -2511,7 +2636,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 96
+          "lineCount": 155
         },
         {
           "name": "FTool_DeleteGraph",
@@ -2561,6 +2686,12 @@
           "source": "Infrastructure/MCPToolHelpers.h",
           "specifiers": [
             "Infrastructure/MCPToolHelpers.h"
+          ]
+        },
+        {
+          "source": "Workflow/UEWorkflowExecutionContext.h",
+          "specifiers": [
+            "Workflow/UEWorkflowExecutionContext.h"
           ]
         },
         {
@@ -2654,12 +2785,12 @@
         "FTool_ReparentBlueprint",
         "RegisterBlueprintGraphTools"
       ],
-      "totalLines": 452,
+      "totalLines": 523,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Mutation.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Mutation.cpp",
-      "contentHash": "2970e5443d70b6f17f7780be6564158fa48f6f0d505f62f24e55d9529493e1a4",
+      "contentHash": "0185b3826aa9cb15238033830a5c854cbc7c2865e17d9f59840c1e163891ebf0",
       "functions": [
         {
           "name": "GetCapabilityId",
@@ -2707,7 +2838,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 43
+          "lineCount": 48
         },
         {
           "name": "GetCapabilityId",
@@ -2726,6 +2857,49 @@
           "lineCount": 44
         },
         {
+          "name": "SetReflectedObjectProperty",
+          "params": [
+            "Object",
+            "PropertyName",
+            "Value"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "SetReflectedNameProperty",
+          "params": [
+            "Object",
+            "PropertyName",
+            "Value"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "HasUnresolvedWildcardPins",
+          "params": [
+            "Node"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "RollbackAddedGraphNodes",
+          "params": [
+            "Graph",
+            "NodesBefore",
+            "Package",
+            "bPackageWasDirty"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 23
+        },
+        {
           "name": "GetCapabilityId",
           "params": [],
           "returnType": "FString",
@@ -2739,39 +2913,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 178
-        },
-        {
-          "name": "GetCapabilityId",
-          "params": [],
-          "returnType": "FString",
-          "exported": true,
-          "lineCount": 4
-        },
-        {
-          "name": "Execute",
-          "params": [
-            "Params"
-          ],
-          "returnType": "FMCPToolResult",
-          "exported": true,
-          "lineCount": 35
-        },
-        {
-          "name": "GetCapabilityId",
-          "params": [],
-          "returnType": "FString",
-          "exported": true,
-          "lineCount": 4
-        },
-        {
-          "name": "Execute",
-          "params": [
-            "Params"
-          ],
-          "returnType": "FMCPToolResult",
-          "exported": true,
-          "lineCount": 25
+          "lineCount": 753
         },
         {
           "name": "GetCapabilityId",
@@ -2803,6 +2945,38 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
+          "lineCount": 29
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "Execute",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 44
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "Execute",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
           "lineCount": 5
         },
         {
@@ -2819,7 +2993,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 26
+          "lineCount": 30
         },
         {
           "name": "GetCapabilityId",
@@ -2908,7 +3082,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 52
+          "lineCount": 57
         },
         {
           "name": "FTool_DisconnectPin",
@@ -2928,7 +3102,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 187
+          "lineCount": 762
         },
         {
           "name": "FTool_DeleteNode",
@@ -2938,7 +3112,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 44
+          "lineCount": 46
         },
         {
           "name": "FTool_MoveNode",
@@ -2948,7 +3122,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 34
+          "lineCount": 38
         },
         {
           "name": "FTool_SetPinDefault",
@@ -2958,7 +3132,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 46
+          "lineCount": 53
         },
         {
           "name": "FTool_DuplicateNodes",
@@ -2978,7 +3152,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 35
+          "lineCount": 39
         },
         {
           "name": "FTool_RefreshAllNodes",
@@ -3031,6 +3205,12 @@
           ]
         },
         {
+          "source": "Workflow/UEWorkflowExecutionContext.h",
+          "specifiers": [
+            "Workflow/UEWorkflowExecutionContext.h"
+          ]
+        },
+        {
           "source": "Engine/Blueprint.h",
           "specifiers": [
             "Engine/Blueprint.h"
@@ -3061,15 +3241,69 @@
           ]
         },
         {
+          "source": "EdGraphSchema_K2_Actions.h",
+          "specifiers": [
+            "EdGraphSchema_K2_Actions.h"
+          ]
+        },
+        {
           "source": "K2Node.h",
           "specifiers": [
             "K2Node.h"
           ]
         },
         {
+          "source": "K2Node_ActorBoundEvent.h",
+          "specifiers": [
+            "K2Node_ActorBoundEvent.h"
+          ]
+        },
+        {
+          "source": "K2Node_AddDelegate.h",
+          "specifiers": [
+            "K2Node_AddDelegate.h"
+          ]
+        },
+        {
+          "source": "K2Node_AssignDelegate.h",
+          "specifiers": [
+            "K2Node_AssignDelegate.h"
+          ]
+        },
+        {
+          "source": "K2Node_AsyncAction.h",
+          "specifiers": [
+            "K2Node_AsyncAction.h"
+          ]
+        },
+        {
           "source": "K2Node_CallFunction.h",
           "specifiers": [
             "K2Node_CallFunction.h"
+          ]
+        },
+        {
+          "source": "K2Node_CallDelegate.h",
+          "specifiers": [
+            "K2Node_CallDelegate.h"
+          ]
+        },
+        {
+          "source": "K2Node_ClearDelegate.h",
+          "specifiers": [
+            "K2Node_ClearDelegate.h"
+          ]
+        },
+        {
+          "source": "K2Node_ComponentBoundEvent.h",
+          "specifiers": [
+            "K2Node_ComponentBoundEvent.h"
+          ]
+        },
+        {
+          "source": "K2Node_CreateDelegate.h",
+          "specifiers": [
+            "K2Node_CreateDelegate.h"
           ]
         },
         {
@@ -3082,6 +3316,18 @@
           "source": "K2Node_CustomEvent.h",
           "specifiers": [
             "K2Node_CustomEvent.h"
+          ]
+        },
+        {
+          "source": "K2Node_InputAction.h",
+          "specifiers": [
+            "K2Node_InputAction.h"
+          ]
+        },
+        {
+          "source": "K2Node_RemoveDelegate.h",
+          "specifiers": [
+            "K2Node_RemoveDelegate.h"
           ]
         },
         {
@@ -3175,15 +3421,33 @@
           ]
         },
         {
+          "source": "Kismet/BlueprintAsyncActionBase.h",
+          "specifiers": [
+            "Kismet/BlueprintAsyncActionBase.h"
+          ]
+        },
+        {
           "source": "Kismet2/BlueprintEditorUtils.h",
           "specifiers": [
             "Kismet2/BlueprintEditorUtils.h"
           ]
         },
         {
+          "source": "Kismet2/CompilerResultsLog.h",
+          "specifiers": [
+            "Kismet2/CompilerResultsLog.h"
+          ]
+        },
+        {
           "source": "Kismet2/KismetEditorUtilities.h",
           "specifiers": [
             "Kismet2/KismetEditorUtilities.h"
+          ]
+        },
+        {
+          "source": "Logging/TokenizedMessage.h",
+          "specifiers": [
+            "Logging/TokenizedMessage.h"
           ]
         },
         {
@@ -3215,6 +3479,18 @@
           "specifiers": [
             "Misc/PackageName.h"
           ]
+        },
+        {
+          "source": "Modules/ModuleManager.h",
+          "specifiers": [
+            "Modules/ModuleManager.h"
+          ]
+        },
+        {
+          "source": "UObject/UnrealType.h",
+          "specifiers": [
+            "UObject/UnrealType.h"
+          ]
         }
       ],
       "exports": [
@@ -3230,6 +3506,10 @@
         "GetCapabilityId",
         "Execute",
         "FTool_DisconnectPin",
+        "SetReflectedObjectProperty",
+        "SetReflectedNameProperty",
+        "HasUnresolvedWildcardPins",
+        "RollbackAddedGraphNodes",
         "GetCapabilityId",
         "Execute",
         "FTool_AddNode",
@@ -3259,12 +3539,12 @@
         "FTool_SetBlueprintDefault",
         "RegisterBlueprintMutationTools"
       ],
-      "totalLines": 796,
+      "totalLines": 1633,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Components.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Components.cpp",
-      "contentHash": "7017b73f422fab55aa4a42079848f9884f4bd73b79ad7842050d5f032ca169bd",
+      "contentHash": "34156fb7e2d64285bdc0eca2567f645feb22598023b32b31195602a6b1c81028",
       "functions": [
         {
           "name": "GetCapabilityId",
@@ -3296,7 +3576,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 92
+          "lineCount": 94
         },
         {
           "name": "GetCapabilityId",
@@ -3343,7 +3623,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 101
+          "lineCount": 103
         },
         {
           "name": "FTool_RemoveComponent",
@@ -3373,6 +3653,12 @@
           "source": "Infrastructure/MCPToolHelpers.h",
           "specifiers": [
             "Infrastructure/MCPToolHelpers.h"
+          ]
+        },
+        {
+          "source": "Workflow/UEWorkflowExecutionContext.h",
+          "specifiers": [
+            "Workflow/UEWorkflowExecutionContext.h"
           ]
         },
         {
@@ -3424,12 +3710,12 @@
         "FTool_RemoveComponent",
         "RegisterComponentTools"
       ],
-      "totalLines": 248,
+      "totalLines": 251,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Dispatchers.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Dispatchers.cpp",
-      "contentHash": "6578ae47dceee3299ef396f2c38afbf3d8b0dbd06b99dc883f4a14e338f220d1",
+      "contentHash": "6e6dd57e53ad608a6421c56c4f452f9b9112b7369537cc1cae11530e1d1507d8",
       "functions": [
         {
           "name": "GetCapabilityId",
@@ -3445,7 +3731,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 93
+          "lineCount": 112
         },
         {
           "name": "GetCapabilityId",
@@ -3482,7 +3768,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 102
+          "lineCount": 121
         },
         {
           "name": "FTool_ListEventDispatchers",
@@ -3512,6 +3798,12 @@
           "source": "Infrastructure/MCPToolHelpers.h",
           "specifiers": [
             "Infrastructure/MCPToolHelpers.h"
+          ]
+        },
+        {
+          "source": "Workflow/UEWorkflowExecutionContext.h",
+          "specifiers": [
+            "Workflow/UEWorkflowExecutionContext.h"
           ]
         },
         {
@@ -3572,7 +3864,7 @@
         "FTool_ListEventDispatchers",
         "RegisterDispatcherTools"
       ],
-      "totalLines": 195,
+      "totalLines": 215,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Interfaces.cpp": {
@@ -3736,7 +4028,7 @@
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Params.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Params.cpp",
-      "contentHash": "a63bbe0ddde36a42f0b45cd711f84bb3cd52edbf66912f5e2310848d97edf4bf",
+      "contentHash": "6a88261b3817dfd6fe5d56e8c681a50912ac1de191d6fb84ab589b88d6862ff3",
       "functions": [
         {
           "name": "GetCapabilityId",
@@ -3752,7 +4044,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 45
+          "lineCount": 48
         },
         {
           "name": "GetCapabilityId",
@@ -3805,7 +4097,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 54
+          "lineCount": 57
         },
         {
           "name": "FTool_RemoveFunctionParameter",
@@ -3845,6 +4137,12 @@
           "source": "Infrastructure/MCPToolHelpers.h",
           "specifiers": [
             "Infrastructure/MCPToolHelpers.h"
+          ]
+        },
+        {
+          "source": "Workflow/UEWorkflowExecutionContext.h",
+          "specifiers": [
+            "Workflow/UEWorkflowExecutionContext.h"
           ]
         },
         {
@@ -3914,12 +4212,12 @@
         "FTool_ChangeFunctionParameterType",
         "RegisterParamTools"
       ],
-      "totalLines": 295,
+      "totalLines": 299,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Variables.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Variables.cpp",
-      "contentHash": "6b69ad9a29006baf90d520574bd0996cefd9ac9c7632c4806f8b4ba180263fad",
+      "contentHash": "4ce222df9c25ebae3f1e8949e48a1d60d950e28de4c8408aa4ab1327275e47ff",
       "functions": [
         {
           "name": "GetCapabilityId",
@@ -3935,7 +4233,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 55
+          "lineCount": 83
         },
         {
           "name": "GetCapabilityId",
@@ -3951,7 +4249,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 47
+          "lineCount": 49
         },
         {
           "name": "GetCapabilityId",
@@ -3983,7 +4281,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 127
+          "lineCount": 165
         },
         {
           "name": "RegisterVariableTools",
@@ -4004,7 +4302,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 64
+          "lineCount": 92
         },
         {
           "name": "FTool_RemoveVariable",
@@ -4014,7 +4312,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 56
+          "lineCount": 58
         },
         {
           "name": "FTool_ChangeVariableType",
@@ -4034,7 +4332,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 136
+          "lineCount": 174
         }
       ],
       "imports": [
@@ -4054,6 +4352,12 @@
           "source": "Infrastructure/MCPToolHelpers.h",
           "specifiers": [
             "Infrastructure/MCPToolHelpers.h"
+          ]
+        },
+        {
+          "source": "Workflow/UEWorkflowExecutionContext.h",
+          "specifiers": [
+            "Workflow/UEWorkflowExecutionContext.h"
           ]
         },
         {
@@ -4120,7 +4424,7 @@
         "FTool_SetVariableMetadata",
         "RegisterVariableTools"
       ],
-      "totalLines": 414,
+      "totalLines": 483,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Query/Blueprint_Read.cpp": {
@@ -5502,9 +5806,49 @@
     },
     "Source/UE_AI_integration/Private/Domains/Content/Command/Material_Mutation.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Content/Command/Material_Mutation.cpp",
-      "contentHash": "bda9fd19adbdec59a0924a8c83012ef4dc9d585bab320c73890a16f85c3a101e",
+      "contentHash": "bb128d422c901112a4020bf02365c24754e1ee826948d43237993e42ded5de0b",
       "functions": [
         {
+          "name": "BeginMaterialMutation",
+          "params": [
+            "Asset",
+            "Params"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "FinalizeMaterialMutation",
+          "params": [
+            "Asset",
+            "Params"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 17
+        },
+        {
+          "name": "SaveMaterialForExecution",
+          "params": [
+            "Asset",
+            "Params"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "CancelMaterialMutation",
+          "params": [
+            "Asset",
+            "Params"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
           "name": "GetCapabilityId",
           "params": [],
           "returnType": "FString",
@@ -5534,7 +5878,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 97
+          "lineCount": 113
         },
         {
           "name": "GetCapabilityId",
@@ -5550,7 +5894,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 112
+          "lineCount": 154
         },
         {
           "name": "GetCapabilityId",
@@ -5566,7 +5910,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 68
+          "lineCount": 69
         },
         {
           "name": "GetCapabilityId",
@@ -5582,7 +5926,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 76
+          "lineCount": 81
         },
         {
           "name": "GetCapabilityId",
@@ -5598,7 +5942,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 59
+          "lineCount": 69
         },
         {
           "name": "GetCapabilityId",
@@ -5614,7 +5958,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 153
+          "lineCount": 156
         },
         {
           "name": "GetCapabilityId",
@@ -5630,7 +5974,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 63
+          "lineCount": 67
         },
         {
           "name": "GetCapabilityId",
@@ -5726,7 +6070,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 50
+          "lineCount": 53
         },
         {
           "name": "RegisterMaterialMutationTools",
@@ -5757,7 +6101,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 106
+          "lineCount": 122
         },
         {
           "name": "FTool_AddMaterialExpression",
@@ -5767,7 +6111,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 121
+          "lineCount": 163
         },
         {
           "name": "FTool_DeleteMaterialExpression",
@@ -5777,7 +6121,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 77
+          "lineCount": 78
         },
         {
           "name": "FTool_ConnectMaterialPins",
@@ -5787,7 +6131,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 85
+          "lineCount": 90
         },
         {
           "name": "FTool_DisconnectMaterialPin",
@@ -5797,7 +6141,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 68
+          "lineCount": 78
         },
         {
           "name": "FTool_SetExpressionValue",
@@ -5807,7 +6151,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 162
+          "lineCount": 165
         },
         {
           "name": "FTool_MoveMaterialExpression",
@@ -5817,7 +6161,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 72
+          "lineCount": 76
         },
         {
           "name": "FTool_CreateMaterialInstance",
@@ -5877,7 +6221,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 59
+          "lineCount": 62
         }
       ],
       "imports": [
@@ -5903,6 +6247,12 @@
           "source": "Infrastructure/MCPToolHelpers.h",
           "specifiers": [
             "Infrastructure/MCPToolHelpers.h"
+          ]
+        },
+        {
+          "source": "Workflow/UEWorkflowExecutionContext.h",
+          "specifiers": [
+            "Workflow/UEWorkflowExecutionContext.h"
           ]
         },
         {
@@ -6155,7 +6505,7 @@
         "FTool_ValidateMaterial",
         "RegisterMaterialMutationTools"
       ],
-      "totalLines": 1272,
+      "totalLines": 1409,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Content/Command/Niagara.cpp": {
@@ -6425,9 +6775,97 @@
     },
     "Source/UE_AI_integration/Private/Domains/Content/Command/UI_UMG.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Content/Command/UI_UMG.cpp",
-      "contentHash": "c9e48a0ebaad317c06251f4deeed6d1f25c17d5ec56c4875a7532b03a3ae028e",
+      "contentHash": "be0f88c4fb6e9b08604dd729ca3af6c98682c4a02ce4a1e3cd69bd444b4682d0",
       "functions": [
         {
+          "name": "MakeWidgetRef",
+          "params": [
+            "WidgetBlueprintPath",
+            "Widget"
+          ],
+          "returnType": "TSharedPtr<FJsonObject>",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "Vector2ToJson",
+          "params": [
+            "Value"
+          ],
+          "returnType": "TArray<TSharedPtr<FJsonValue>>",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "AnchorsToJson",
+          "params": [
+            "Anchors"
+          ],
+          "returnType": "TArray<TSharedPtr<FJsonValue>>",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "MarginToJson",
+          "params": [
+            "Margin"
+          ],
+          "returnType": "TArray<TSharedPtr<FJsonValue>>",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "TryReadNumberArray",
+          "params": [
+            "Params",
+            "Field",
+            "ExpectedCount",
+            "OutValues"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 25
+        },
+        {
+          "name": "IsDeferredWorkflowExecution",
+          "params": [
+            "Params"
+          ],
+          "returnType": "bool",
+          "exported": false,
+          "lineCount": 17
+        },
+        {
+          "name": "MarkWidgetBlueprintEdited",
+          "params": [
+            "WidgetBlueprint",
+            "Params"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 22
+        },
+        {
+          "name": "AddExecutionMetadata",
+          "params": [
+            "Result",
+            "Params"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "SerializeWidgetTreeNode",
+          "params": [
+            "WidgetBlueprintPath",
+            "Widget"
+          ],
+          "returnType": "TSharedPtr<FJsonObject>",
+          "exported": false,
+          "lineCount": 52
+        },
+        {
           "name": "GetCapabilityId",
           "params": [],
           "returnType": "FString",
@@ -6441,7 +6879,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 74
+          "lineCount": 93
         },
         {
           "name": "GetCapabilityId",
@@ -6457,7 +6895,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 67
+          "lineCount": 127
         },
         {
           "name": "GetCapabilityId",
@@ -6473,7 +6911,71 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 89
+          "lineCount": 95
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "Execute",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 160
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "Execute",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 66
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "Execute",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 66
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "Execute",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 50
         },
         {
           "name": "GetCapabilityId",
@@ -6505,7 +7007,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 69
+          "lineCount": 179
         },
         {
           "name": "RegisterUITools",
@@ -6514,7 +7016,7 @@
           ],
           "returnType": "void",
           "exported": true,
-          "lineCount": 8
+          "lineCount": 13
         }
       ],
       "classes": [
@@ -6526,7 +7028,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 83
+          "lineCount": 102
         },
         {
           "name": "FTool_AddWidgetChild",
@@ -6536,7 +7038,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 76
+          "lineCount": 136
         },
         {
           "name": "FTool_SetWidgetProperty",
@@ -6546,7 +7048,47 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 98
+          "lineCount": 104
+        },
+        {
+          "name": "FTool_SetWidgetSlotLayout",
+          "methods": [
+            "GetCapabilityId",
+            "Execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 169
+        },
+        {
+          "name": "FTool_RemoveWidgetChild",
+          "methods": [
+            "GetCapabilityId",
+            "Execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 75
+        },
+        {
+          "name": "FTool_ReorderWidgetChild",
+          "methods": [
+            "GetCapabilityId",
+            "Execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 75
+        },
+        {
+          "name": "FTool_GetWidgetHierarchy",
+          "methods": [
+            "GetCapabilityId",
+            "Execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 59
         },
         {
           "name": "FTool_ListWidgetBlueprints",
@@ -6566,7 +7108,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 78
+          "lineCount": 188
         }
       ],
       "imports": [
@@ -6583,6 +7125,24 @@
           ]
         },
         {
+          "source": "Domains/Content/Command/WidgetEventBindingSupport.h",
+          "specifiers": [
+            "Domains/Content/Command/WidgetEventBindingSupport.h"
+          ]
+        },
+        {
+          "source": "Workflow/UEWorkflowRuntime.h",
+          "specifiers": [
+            "Workflow/UEWorkflowRuntime.h"
+          ]
+        },
+        {
+          "source": "Dom/JsonValue.h",
+          "specifiers": [
+            "Dom/JsonValue.h"
+          ]
+        },
+        {
           "source": "WidgetBlueprint.h",
           "specifiers": [
             "WidgetBlueprint.h"
@@ -6592,6 +7152,12 @@
           "source": "Blueprint/WidgetTree.h",
           "specifiers": [
             "Blueprint/WidgetTree.h"
+          ]
+        },
+        {
+          "source": "Blueprint/WidgetBlueprintGeneratedClass.h",
+          "specifiers": [
+            "Blueprint/WidgetBlueprintGeneratedClass.h"
           ]
         },
         {
@@ -6610,6 +7176,18 @@
           "source": "Components/CanvasPanelSlot.h",
           "specifiers": [
             "Components/CanvasPanelSlot.h"
+          ]
+        },
+        {
+          "source": "Components/PanelSlot.h",
+          "specifiers": [
+            "Components/PanelSlot.h"
+          ]
+        },
+        {
+          "source": "Components/PanelWidget.h",
+          "specifiers": [
+            "Components/PanelWidget.h"
           ]
         },
         {
@@ -6755,6 +7333,18 @@
           "specifiers": [
             "Kismet2/BlueprintEditorUtils.h"
           ]
+        },
+        {
+          "source": "K2Node_CallFunction.h",
+          "specifiers": [
+            "K2Node_CallFunction.h"
+          ]
+        },
+        {
+          "source": "K2Node_ComponentBoundEvent.h",
+          "specifiers": [
+            "K2Node_ComponentBoundEvent.h"
+          ]
         }
       ],
       "exports": [
@@ -6769,13 +7359,25 @@
         "FTool_SetWidgetProperty",
         "GetCapabilityId",
         "Execute",
+        "FTool_SetWidgetSlotLayout",
+        "GetCapabilityId",
+        "Execute",
+        "FTool_RemoveWidgetChild",
+        "GetCapabilityId",
+        "Execute",
+        "FTool_ReorderWidgetChild",
+        "GetCapabilityId",
+        "Execute",
+        "FTool_GetWidgetHierarchy",
+        "GetCapabilityId",
+        "Execute",
         "FTool_ListWidgetBlueprints",
         "GetCapabilityId",
         "Execute",
         "FTool_BindWidgetEvent",
         "RegisterUITools"
       ],
-      "totalLines": 490,
+      "totalLines": 1308,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Content/Command/UserTypes.cpp": {
@@ -8982,7 +9584,7 @@
     },
     "Source/UE_AI_integration/Private/Domains/Scene/Command/PIE.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Scene/Command/PIE.cpp",
-      "contentHash": "54e4f82420118fd309d5fb608de0a31ea36437b10e95a9635a3eba195ee5e662",
+      "contentHash": "a1f3705a980bda4e76d055ca50c321d578d0cbf36fd6aba28299c9bc08649e75",
       "functions": [
         {
           "name": "ToToolResult",
@@ -8992,7 +9594,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 16
+          "lineCount": 21
         },
         {
           "name": "FTool_StartPIE",
@@ -9067,6 +9669,78 @@
           "lineCount": 4
         },
         {
+          "name": "FTool_GetPIEStatus",
+          "params": [
+            "InController"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Execute",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "FTool_PausePIE",
+          "params": [
+            "InController"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Execute",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "FTool_ResumePIE",
+          "params": [
+            "InController"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Execute",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
           "name": "RegisterPIETools",
           "params": [
             "Registry",
@@ -9074,7 +9748,7 @@
           ],
           "returnType": "void",
           "exported": true,
-          "lineCount": 8
+          "lineCount": 13
         }
       ],
       "classes": [
@@ -9108,6 +9782,45 @@
           "name": "FTool_RestartPIE",
           "methods": [
             "FTool_RestartPIE",
+            "GetCapabilityId",
+            "Execute"
+          ],
+          "properties": [
+            "Controller"
+          ],
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "FTool_GetPIEStatus",
+          "methods": [
+            "FTool_GetPIEStatus",
+            "GetCapabilityId",
+            "Execute"
+          ],
+          "properties": [
+            "Controller"
+          ],
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "FTool_PausePIE",
+          "methods": [
+            "FTool_PausePIE",
+            "GetCapabilityId",
+            "Execute"
+          ],
+          "properties": [
+            "Controller"
+          ],
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "FTool_ResumePIE",
+          "methods": [
+            "FTool_ResumePIE",
             "GetCapabilityId",
             "Execute"
           ],
@@ -9152,9 +9865,21 @@
         "GetCapabilityId",
         "Execute",
         "FTool_RestartPIE",
+        "FTool_GetPIEStatus",
+        "GetCapabilityId",
+        "Execute",
+        "FTool_GetPIEStatus",
+        "FTool_PausePIE",
+        "GetCapabilityId",
+        "Execute",
+        "FTool_PausePIE",
+        "FTool_ResumePIE",
+        "GetCapabilityId",
+        "Execute",
+        "FTool_ResumePIE",
         "RegisterPIETools"
       ],
-      "totalLines": 96,
+      "totalLines": 170,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Scene/Command/WorldGen.cpp": {
@@ -9538,7 +10263,7 @@
     },
     "Source/UE_AI_integration/Private/Domains/Scene/Query/Viewport.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Scene/Query/Viewport.cpp",
-      "contentHash": "f71678ad652158435f71b3427913380a360bdc44b0d97d735d8293d76c13a118",
+      "contentHash": "9fe7ed2a1f178309da3a2890a09116164c2708cb4221fafa1684f6980f300e75",
       "functions": [
         {
           "name": "ResizePixels",
@@ -9568,7 +10293,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 65
+          "lineCount": 210
         },
         {
           "name": "GetCapabilityId",
@@ -9660,7 +10385,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 74
+          "lineCount": 219
         },
         {
           "name": "FTool_GetOutputLog",
@@ -9783,6 +10508,24 @@
           ]
         },
         {
+          "source": "Framework/Application/SlateApplication.h",
+          "specifiers": [
+            "Framework/Application/SlateApplication.h"
+          ]
+        },
+        {
+          "source": "Widgets/SViewport.h",
+          "specifiers": [
+            "Widgets/SViewport.h"
+          ]
+        },
+        {
+          "source": "Widgets/SWindow.h",
+          "specifiers": [
+            "Widgets/SWindow.h"
+          ]
+        },
+        {
           "source": "Kismet/GameplayStatics.h",
           "specifiers": [
             "Kismet/GameplayStatics.h"
@@ -9875,7 +10618,7 @@
         "FTool_GetLevelInfo",
         "RegisterViewportTools"
       ],
-      "totalLines": 436,
+      "totalLines": 693,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Infrastructure/Compatibility/UEVersionCompat.h": {
@@ -10363,7 +11106,7 @@
     },
     "Source/UE_AI_integration/Private/Infrastructure/PIESessionController.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Infrastructure/PIESessionController.cpp",
-      "contentHash": "f2acf629f7d9515a4dca8a972201f3be6cbb01a66a97d7a6c7934002c5cfae90",
+      "contentHash": "0a51ca19ac4d6424ea75bff7850956eafd2397e50e5ceea7fdfb8c253f8fc66a",
       "functions": [
         {
           "name": "MakeSuccess",
@@ -10376,25 +11119,58 @@
           "lineCount": 7
         },
         {
+          "name": "FPIESessionController",
+          "params": [],
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "~FPIESessionController",
+          "params": [],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
           "name": "Start",
           "params": [],
           "returnType": "FPIEControlResult",
           "exported": true,
-          "lineCount": 18
+          "lineCount": 22
         },
         {
           "name": "Stop",
           "params": [],
           "returnType": "FPIEControlResult",
           "exported": true,
-          "lineCount": 28
+          "lineCount": 37
         },
         {
           "name": "Restart",
           "params": [],
           "returnType": "FPIEControlResult",
           "exported": true,
-          "lineCount": 32
+          "lineCount": 41
+        },
+        {
+          "name": "Status",
+          "params": [],
+          "returnType": "FPIEControlResult",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "Pause",
+          "params": [],
+          "returnType": "FPIEControlResult",
+          "exported": true,
+          "lineCount": 30
+        },
+        {
+          "name": "Resume",
+          "params": [],
+          "returnType": "FPIEControlResult",
+          "exported": true,
+          "lineCount": 30
         },
         {
           "name": "Tick",
@@ -10402,6 +11178,60 @@
           "returnType": "void",
           "exported": true,
           "lineCount": 17
+        },
+        {
+          "name": "HandleBeginPIE",
+          "params": [
+            "bIsSimulating"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "HandlePostPIEStarted",
+          "params": [
+            "bIsSimulating"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "HandleEndPIE",
+          "params": [
+            "bIsSimulating"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "HandlePausePIE",
+          "params": [
+            "bIsSimulating"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "HandleResumePIE",
+          "params": [
+            "bIsSimulating"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "PopulateSession",
+          "params": [
+            "Result"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 6
         },
         {
           "name": "MakeUnavailableResult",
@@ -10415,14 +11245,14 @@
           "params": [],
           "returnType": "FString",
           "exported": true,
-          "lineCount": 24
+          "lineCount": 28
         },
         {
           "name": "RequestStart",
           "params": [],
           "returnType": "void",
           "exported": true,
-          "lineCount": 15
+          "lineCount": 17
         }
       ],
       "classes": [],
@@ -10440,9 +11270,21 @@
           ]
         },
         {
+          "source": "Infrastructure/Runtime/RuntimeSceneService.h",
+          "specifiers": [
+            "Infrastructure/Runtime/RuntimeSceneService.h"
+          ]
+        },
+        {
           "source": "IAssetViewport.h",
           "specifiers": [
             "IAssetViewport.h"
+          ]
+        },
+        {
+          "source": "Kismet2/DebuggerCommands.h",
+          "specifiers": [
+            "Kismet2/DebuggerCommands.h"
           ]
         },
         {
@@ -10466,22 +11308,40 @@
       ],
       "exports": [
         "MakeSuccess",
+        "FPIESessionController",
+        "~FPIESessionController",
         "Start",
         "Stop",
         "Restart",
+        "Status",
+        "Pause",
+        "Resume",
         "Tick",
+        "HandleBeginPIE",
+        "HandlePostPIEStarted",
+        "HandleEndPIE",
+        "HandlePausePIE",
+        "HandleResumePIE",
+        "PopulateSession",
         "MakeUnavailableResult",
         "GetState",
         "RequestStart"
       ],
-      "totalLines": 173,
+      "totalLines": 366,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Infrastructure/PIESessionController.h": {
       "filePath": "Source/UE_AI_integration/Private/Infrastructure/PIESessionController.h",
-      "contentHash": "c320bc1078cd93275c73c2462df73003a5e45332c5eab70d2859bc66b3d69fdb",
+      "contentHash": "089639af36aa3e26e05835bc907aed5b3bfb5c62f4d3fd438f2ecc8a428c32da",
       "functions": [],
       "classes": [
+        {
+          "name": "FRuntimeSceneService",
+          "methods": [],
+          "properties": [],
+          "exported": true,
+          "lineCount": 1
+        },
         {
           "name": "FPIEControlResult",
           "methods": [],
@@ -10489,12 +11349,15 @@
             "bSuccess",
             "bRequested",
             "State",
+            "SessionId",
+            "Generation",
+            "bPaused",
             "ErrorCode",
             "ErrorMessage",
             "HttpStatus"
           ],
           "exported": true,
-          "lineCount": 9
+          "lineCount": 12
         },
         {
           "name": "FPIESessionController",
@@ -10502,16 +11365,32 @@
             "Start",
             "Stop",
             "Restart",
+            "Status",
+            "Pause",
+            "Resume",
             "Tick",
+            "HandleBeginPIE",
+            "HandlePostPIEStarted",
+            "HandleEndPIE",
+            "HandlePausePIE",
+            "HandleResumePIE",
+            "PopulateSession",
             "MakeUnavailableResult",
             "GetState",
             "RequestStart"
           ],
           "properties": [
-            "bRestartPending"
+            "RuntimeService",
+            "BeginPIEHandle",
+            "PostPIEStartedHandle",
+            "EndPIEHandle",
+            "PausePIEHandle",
+            "ResumePIEHandle",
+            "bRestartPending",
+            "bPaused"
           ],
           "exported": true,
-          "lineCount": 16
+          "lineCount": 38
         }
       ],
       "imports": [
@@ -10523,14 +11402,18 @@
         }
       ],
       "exports": [
+        "FRuntimeSceneService",
         "FPIEControlResult",
         "Start",
         "Stop",
         "Restart",
+        "Status",
+        "Pause",
+        "Resume",
         "Tick",
         "FPIESessionController"
       ],
-      "totalLines": 41,
+      "totalLines": 68,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Infrastructure/SEHWrappers.cpp": {
@@ -10552,32 +11435,32 @@
     },
     "Source/UE_AI_integration/Private/Tests/MCPExecutorTests.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Tests/MCPExecutorTests.cpp",
-      "contentHash": "52479c0136518e047bfc69534a2db320ac2c5fa54c77642719cf96cf634077c0",
+      "contentHash": "821cb339a2a59ba35caaea5c70c0c72f387888d4948a783c4d8c7ddacd1334ee",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 112,
+      "totalLines": 150,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Tests/MCPHttpContractTests.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Tests/MCPHttpContractTests.cpp",
-      "contentHash": "f1f9c2430ab33ba967300c8794a17a80168b874c45155cfce305c0785c3b8d36",
+      "contentHash": "8ff1347d8d856f75bce9fe666f7116ba659d11d9a7e3170bcebe2ac93214ddaf",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 74,
+      "totalLines": 472,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Tests/MCPRegistryTests.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Tests/MCPRegistryTests.cpp",
-      "contentHash": "03d7ea11155c5f62072c2099f2af2f308321872f4dfe7c58d753b6a503b1d8e8",
+      "contentHash": "ee35418aebe1a02f4e50bdc3cc4986e059448345324d113253bec11098bd17b2",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 137,
+      "totalLines": 181,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Transport/MCPHttpContract.cpp": {
@@ -10675,8 +11558,55 @@
     },
     "Source/UE_AI_integration/Private/Transport/UEAIIntegrationServer.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Transport/UEAIIntegrationServer.cpp",
-      "contentHash": "f82022513495a691ad4855f24101a6f4a7d1f016601476fe1d64ec720fd275c4",
+      "contentHash": "43bad57e0a4138bcbd25d2b9b0f0b7b6829b7029824ced93cc6296ee99408cbe",
       "functions": [
+        {
+          "name": "TryParseQueryBool",
+          "params": [
+            "QueryParams",
+            "Name",
+            "OutValue",
+            "OutError"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 21
+        },
+        {
+          "name": "TryParseQueryInteger",
+          "params": [
+            "QueryParams",
+            "Name",
+            "DefaultValue",
+            "MinValue",
+            "MaxValue",
+            "OutValue",
+            "OutError"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "DescriptorMatchesTrait",
+          "params": [
+            "Descriptor",
+            "TraitName",
+            "Expected"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "MakeCapabilitySummary",
+          "params": [
+            "Descriptor"
+          ],
+          "returnType": "TSharedPtr<FJsonObject>",
+          "exported": true,
+          "lineCount": 16
+        },
         {
           "name": "FUEAIIntegrationServer",
           "params": [
@@ -10684,7 +11614,7 @@
             "InExecutor"
           ],
           "exported": true,
-          "lineCount": 7
+          "lineCount": 9
         },
         {
           "name": "~FUEAIIntegrationServer",
@@ -10699,7 +11629,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 78
+          "lineCount": 116
         },
         {
           "name": "Stop",
@@ -10722,7 +11652,7 @@
           "params": [],
           "returnType": "void",
           "exported": true,
-          "lineCount": 88
+          "lineCount": 149
         },
         {
           "name": "HandleHealth",
@@ -10732,7 +11662,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 37
+          "lineCount": 41
         },
         {
           "name": "HandleCapabilities",
@@ -10742,7 +11672,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 36
+          "lineCount": 176
         },
         {
           "name": "HandleExecute",
@@ -10752,7 +11682,38 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 19
+          "lineCount": 9
+        },
+        {
+          "name": "HandleWorkflowHandshake",
+          "params": [
+            "Request",
+            "OnComplete"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "HandleWorkflow",
+          "params": [
+            "Request",
+            "OnComplete"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "QueueRequest",
+          "params": [
+            "Kind",
+            "Request",
+            "OnComplete"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 21
         },
         {
           "name": "UnbindRoutes",
@@ -10873,9 +11834,19 @@
           "specifiers": [
             "Transport/MCPHttpContract.h"
           ]
+        },
+        {
+          "source": "Workflow/UEWorkflowRuntime.h",
+          "specifiers": [
+            "Workflow/UEWorkflowRuntime.h"
+          ]
         }
       ],
       "exports": [
+        "TryParseQueryBool",
+        "TryParseQueryInteger",
+        "DescriptorMatchesTrait",
+        "MakeCapabilitySummary",
         "FUEAIIntegrationServer",
         "~FUEAIIntegrationServer",
         "Start",
@@ -10885,13 +11856,16 @@
         "HandleHealth",
         "HandleCapabilities",
         "HandleExecute",
+        "HandleWorkflowHandshake",
+        "HandleWorkflow",
+        "QueueRequest",
         "UnbindRoutes",
         "SendJsonResponse",
         "SendSuccess",
         "SendError",
         "MakeValidationDetails"
       ],
-      "totalLines": 389,
+      "totalLines": 749,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/UEAIIntegrationModule.cpp": {
@@ -10931,8 +11905,14 @@
     },
     "Source/UE_AI_integration/Private/UEAIIntegrationSubsystem.cpp": {
       "filePath": "Source/UE_AI_integration/Private/UEAIIntegrationSubsystem.cpp",
-      "contentHash": "18e53314b8ad1c579fbdadace201d5eba0d1e9a364fc0e1f94198c66012f0fb4",
+      "contentHash": "02ad3a5e05095361f0adb4597857d2aee0f52a2973de0ce3c35e2a8a570baaff",
       "functions": [
+        {
+          "name": "UUEAIIntegrationSubsystem",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
         {
           "name": "~UUEAIIntegrationSubsystem",
           "params": [],
@@ -10946,14 +11926,14 @@
           ],
           "returnType": "void",
           "exported": true,
-          "lineCount": 76
+          "lineCount": 86
         },
         {
           "name": "Deinitialize",
           "params": [],
           "returnType": "void",
           "exported": true,
-          "lineCount": 12
+          "lineCount": 13
         },
         {
           "name": "Tick",
@@ -10962,7 +11942,7 @@
           ],
           "returnType": "void",
           "exported": true,
-          "lineCount": 11
+          "lineCount": 15
         },
         {
           "name": "GetStatId",
@@ -10993,6 +11973,12 @@
           ]
         },
         {
+          "source": "Infrastructure/ProductionRuntimeController.h",
+          "specifiers": [
+            "Infrastructure/ProductionRuntimeController.h"
+          ]
+        },
+        {
           "source": "Tools/MCPToolRegistry.h",
           "specifiers": [
             "Tools/MCPToolRegistry.h"
@@ -11006,13 +11992,14 @@
         }
       ],
       "exports": [
+        "UUEAIIntegrationSubsystem",
         "~UUEAIIntegrationSubsystem",
         "Initialize",
         "Deinitialize",
         "Tick",
         "GetStatId"
       ],
-      "totalLines": 151,
+      "totalLines": 176,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Public/Tools/MCPToolBase.h": {
@@ -11220,7 +12207,7 @@
     },
     "Source/UE_AI_integration/Public/UEAIIntegrationServer.h": {
       "filePath": "Source/UE_AI_integration/Public/UEAIIntegrationServer.h",
-      "contentHash": "899e538797bc21f618d8138bbbbc927d8e7fda6c00b0f5c5401d2f2ed4198bbe",
+      "contentHash": "d353278c45b291c33b44820a582e6d031618bdff4f54fa41775370d9d1d5a55a",
       "functions": [
         {
           "name": "IsRunning",
@@ -11260,14 +12247,22 @@
           "lineCount": 1
         },
         {
+          "name": "FWorkflowRuntime",
+          "methods": [],
+          "properties": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
           "name": "FPendingMCPExecuteRequest",
           "methods": [],
           "properties": [
+            "Kind",
             "Body",
             "OnComplete"
           ],
           "exported": true,
-          "lineCount": 5
+          "lineCount": 6
         },
         {
           "name": "FUEAIIntegrationServer",
@@ -11280,7 +12275,10 @@
             "HandleHealth",
             "HandleCapabilities",
             "HandleExecute",
+            "HandleWorkflowHandshake",
+            "HandleWorkflow",
             "ProcessOneRequest",
+            "QueueRequest",
             "UnbindRoutes",
             "SendJsonResponse",
             "SendSuccess",
@@ -11290,6 +12288,7 @@
           "properties": [
             "Registry",
             "Executor",
+            "WorkflowRuntime",
             "Router",
             "RouteHandles",
             "RequestQueue",
@@ -11297,7 +12296,7 @@
             "bIsRunning"
           ],
           "exported": true,
-          "lineCount": 56
+          "lineCount": 82
         }
       ],
       "imports": [
@@ -11348,6 +12347,7 @@
         "FMCPToolRegistry",
         "FMCPExecutor",
         "FJsonObject",
+        "FWorkflowRuntime",
         "FPendingMCPExecuteRequest",
         "Start",
         "Stop",
@@ -11356,12 +12356,12 @@
         "GetPort",
         "FUEAIIntegrationServer"
       ],
-      "totalLines": 82,
+      "totalLines": 120,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Public/UEAIIntegrationSubsystem.h": {
       "filePath": "Source/UE_AI_integration/Public/UEAIIntegrationSubsystem.h",
-      "contentHash": "6c4d606cc6b3954d274eed99eab9fefc495a5c1612b8e231c8e507385df29101",
+      "contentHash": "b054f4a82b354b33f461221bfc8a1d62e96296ddaf33167af0d5e42a7a77633c",
       "functions": [
         {
           "name": "IsTickable",
@@ -11394,6 +12394,13 @@
           "lineCount": 1
         },
         {
+          "name": "FProductionRuntimeController",
+          "methods": [],
+          "properties": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
           "name": "UUEAIIntegrationSubsystem",
           "methods": [
             "Initialize",
@@ -11404,12 +12411,13 @@
           ],
           "properties": [
             "PIEController",
+            "ProductionController",
             "Registry",
             "Executor",
             "Server"
           ],
           "exported": true,
-          "lineCount": 27
+          "lineCount": 30
         }
       ],
       "imports": [
@@ -11448,6 +12456,7 @@
         "FMCPToolRegistry",
         "FMCPExecutor",
         "FPIESessionController",
+        "FProductionRuntimeController",
         "Initialize",
         "Deinitialize",
         "Tick",
@@ -11455,12 +12464,12 @@
         "IsTickable",
         "UUEAIIntegrationSubsystem"
       ],
-      "totalLines": 45,
+      "totalLines": 49,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/UE_AI_integration.Build.cs": {
       "filePath": "Source/UE_AI_integration/UE_AI_integration.Build.cs",
-      "contentHash": "9972613faa615027e7da7896434c4654e14734a24491b84a56c49bad89729ebb",
+      "contentHash": "1e58248bf5d7b7f3634df2a8a578d9c68cb07bb3d1164772aa373fbcbbdd72b6",
       "functions": [
         {
           "name": "UE_AI_integration",
@@ -11468,7 +12477,7 @@
             "Target"
           ],
           "exported": true,
-          "lineCount": 95
+          "lineCount": 114
         }
       ],
       "classes": [
@@ -11479,7 +12488,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 98
+          "lineCount": 117
         }
       ],
       "imports": [
@@ -11488,18 +12497,24 @@
           "specifiers": [
             "UnrealBuildTool"
           ]
+        },
+        {
+          "source": "System.IO",
+          "specifiers": [
+            "IO"
+          ]
         }
       ],
       "exports": [
         "UE_AI_integration",
         "UE_AI_integration"
       ],
-      "totalLines": 101,
+      "totalLines": 121,
       "hasStructuralAnalysis": true
     },
     "tests/mcp_client.py": {
       "filePath": "tests/mcp_client.py",
-      "contentHash": "f19486a8831146b2a76870e5404d197a2e4773292312b2d0be6d62a235cccea5",
+      "contentHash": "d2d1337bff6951ea78bbce3860d8f7c121aa8650bc99c26df863818683d153f3",
       "functions": [],
       "classes": [
         {
@@ -11528,7 +12543,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 95
+          "lineCount": 99
         }
       ],
       "imports": [
@@ -11573,7 +12588,7 @@
         "MCPApiError",
         "UEAIIntegrationClient"
       ],
-      "totalLines": 120,
+      "totalLines": 124,
       "hasStructuralAnalysis": true
     },
     "tests/test_e2e.py": {
@@ -11618,7 +12633,7 @@
     },
     "tests/test_full.py": {
       "filePath": "tests/test_full.py",
-      "contentHash": "4a4e2cfefee86974c61729ff9afce331743db1f0a04a79e5a556bbc2d674cea1",
+      "contentHash": "99c945a6164e6dcdad7845dac742c1942a6f30f3441925c262b8dfbe7d9ea16b",
       "functions": [
         {
           "name": "main",
@@ -11658,14 +12673,14 @@
     },
     "tests/test_health.py": {
       "filePath": "tests/test_health.py",
-      "contentHash": "e1e455917475225ac14c6e98e32ea501f99e1875c8fb9fd552912ed6ae5cb9eb",
+      "contentHash": "e4715515047e89ca7e5816aba5ffefc6d151167c3b8ff9194007d908c170b6fb",
       "functions": [
         {
           "name": "main",
           "params": [],
           "returnType": "int",
           "exported": true,
-          "lineCount": 43
+          "lineCount": 52
         }
       ],
       "classes": [],
@@ -11699,7 +12714,7 @@
       "exports": [
         "main"
       ],
-      "totalLines": 70,
+      "totalLines": 79,
       "hasStructuralAnalysis": true
     },
     "tests/test_mcp.sh": {
@@ -11733,7 +12748,7 @@
     },
     "tests/test_tools.py": {
       "filePath": "tests/test_tools.py",
-      "contentHash": "2b04313aa6fb6f7b83ca869d4670794dda1cf3a879cd93179580d10652d293cf",
+      "contentHash": "fa95e4ac72123d93a2f9704135f2023d172a168cfed3ebe8d7a4d284aa279294",
       "functions": [
         {
           "name": "run_test",
@@ -11750,7 +12765,7 @@
           "params": [],
           "returnType": "int",
           "exported": true,
-          "lineCount": 67
+          "lineCount": 90
         }
       ],
       "classes": [],
@@ -11765,6 +12780,12 @@
           "source": "sys",
           "specifiers": [
             "sys"
+          ]
+        },
+        {
+          "source": "uuid",
+          "specifiers": [
+            "uuid"
           ]
         },
         {
@@ -11785,7 +12806,7 @@
         "run_test",
         "main"
       ],
-      "totalLines": 94,
+      "totalLines": 118,
       "hasStructuralAnalysis": true
     },
     "tests/test_worldgen.py": {
@@ -11836,7 +12857,7 @@
     },
     "UE_AI_integration.uplugin": {
       "filePath": "UE_AI_integration.uplugin",
-      "contentHash": "5b7aeddb72488d8c4ee162f6e836a0b38e6c42cad76efc8a4391ef89dd99e891",
+      "contentHash": "bb391e0db5a164e785e79b2fa5ff05acd36527f14c5b188d98ab4622975b6217",
       "functions": [],
       "classes": [],
       "imports": [],
