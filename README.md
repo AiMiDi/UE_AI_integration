@@ -1,367 +1,273 @@
-# UE5 Ultimate MCP
+# UE_AI_integration
 
-An open-source plugin that lets AI coding assistants control the Unreal Engine 5 editor — Blueprints, Materials, Sequencer, AI, World Building, and more.
+[简体中文](README.md) | [English](README_EN.md)
 
-**Status: Alpha / Untested** — built by combining three great open-source projects and adding new tool categories. Needs real-world testing.
+`UE_AI_integration` 是一个面向 Unreal Editor 的 MCP 集成插件。它通过单个
+Editor Module 和 TypeScript stdio bridge，让 Codex CLI、Claude Code 等
+MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与生产流程。
 
-## What it does
+当前插件版本为 `0.3.0`，以 Unreal Engine 5.3 为实际构建基线；UE
+5.4–5.7 的差异集中在兼容层，但尚未全部完成本地编译验证。
 
-You open your UE5 project, start Claude Code (or any MCP-compatible AI), and tell it what to build:
+## 核心特性
 
-```
-> "Add a health variable to the player blueprint, wire up a damage event, and create a HUD widget showing the health bar"
-```
+- 212 项 manifest 驱动的 Editor 与 PIE Runtime 能力。
+- 十个稳定的 MCP 工具，不把 212 项能力直接展开成工具列表。
+- 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
+- 专用 PIE 生命周期、Runtime 对象/Widget/Delegate/真实输入与 Scenario 能力。
+- Blueprint/UMG 写入返回编译、保存、重载和读回验证证据。
+- 统一的 HTTP envelope、状态码和参数错误模型。
+- 查询、命令与校验分层，所有 UObject 操作进入 Game Thread 队列。
+- MCP 只连接已经运行的 Unreal Editor，不负责启动或关闭 Editor。
+- 默认监听 `127.0.0.1:9847`，客户端可通过 `UE_PORT` 覆盖端口。
+- [UE Workflow DSL/CLI](docs/UE_WORKFLOW_DSL.md) 将单资产连续编辑合并为一次
+  可规划、可审批、可回滚的执行；调试和长任务不进入 Workflow。
 
-The AI uses 158 tools to directly manipulate the editor — creating Blueprints, wiring nodes, spawning actors, editing materials, setting up animations — without you clicking through menus.
+## 架构
 
-## Quick Start
-
-**You need:** UE 5.7, Node.js 18+, Claude Code
-
-### Option 1 — Claude Code Plugin (easiest)
-
-Install as a Claude Code plugin — no manual copying or build steps:
-
-```bash
-/plugin marketplace add https://github.com/NodeNestor/nestor-plugins
-/plugin install ue5-ultimate-mcp
-```
-
-Then in your UE5 project folder, just say:
-
-```
-/setup-ue5
-```
-
-Claude will automatically copy the plugin into your project, detect if it's a C++ or Blueprint-only project, and set everything up.
-
-### Option 2 — Manual setup
-
-**1. Get the plugin into your UE5 project**
-
-**Pre-built binary (Blueprint-only projects):** Download from [Releases](https://github.com/NodeNestor/UE5UltimateMCP/releases) and extract into `YourGame/Plugins/UE5UltimateMCP/`.
-
-**From source (C++ projects):**
-```bash
-git clone https://github.com/NodeNestor/UE5UltimateMCP.git
-cp -r UE5UltimateMCP YourGame/Plugins/UE5UltimateMCP
+```text
+MCP client
+    │ stdio
+    ▼
+TypeScript MCP bridge
+    │ HTTP :9847 (/api)
+    ▼
+UE_AI_integration Editor Module
+    ├── Core            manifest、registry、validation、executor
+    ├── Transport       HTTP envelope、状态码、Game Thread 队列
+    ├── Domains         Blueprint、Scene、Content、Animation、AI、Production
+    └── Infrastructure  资产解析、序列化、保存、编译、快照、PIE 生命周期、UE 兼容层
 ```
 
-**2. Register the MCP server**
+`Resources/Capabilities/*.json` 是 C++ 插件与 TypeScript bridge 共享的能力
+元数据源。MCP 路由只读取 manifest，不根据工具名称做正则分类。
 
-```bash
-claude mcp add ue5 -- node Plugins/UE5UltimateMCP/MCP/dist/index.js
+| Domain | 数量 | 能力范围 |
+|---|---:|---|
+| Blueprint | 58 | 资产生命周期、Graph、变量、组件、接口、Discovery、Diff、Validation |
+| Scene | 54 | Actor、PIE Runtime、Widget/Delegate/Input、Viewport、WorldGen、Foliage、Navigation |
+| Content | 59 | Material、DataTable、UserTypes、Niagara、UMG Authoring/Animation |
+| Animation | 10 | AnimBlueprint、State、Transition、BlendSpace |
+| AI | 9 | Behavior Tree、Blackboard |
+| Production | 22 | Sequencer、Scenario、模块溯源、Build、Cook、Package |
+
+## 环境要求
+
+- Unreal Engine 5.3–5.7
+- Node.js 20 或更高版本
+- C++ Unreal 项目，或与目标引擎匹配的预编译插件
+- 支持 MCP stdio server 的客户端
+
+## 安装 UE 插件
+
+将仓库放到工程插件目录：
+
+```text
+YourProject/
+└── Plugins/
+    └── UE_AI_integration/
+        ├── UE_AI_integration.uplugin
+        ├── Source/
+        ├── Resources/
+        └── MCP/
 ```
 
-**3. Use it**
+构建 TypeScript bridge：
 
-1. Open your project in UE5 — the plugin starts automatically (HTTP server on port 9847)
-2. Open a terminal in the same project folder
-3. Run `claude`
-4. Ask it to do things
-
-> **First time?** Try: "Check the server status and tell me how many tools are available"
-
-## What's inside
-
-This project stands on the shoulders of three excellent open-source UE5 MCP integrations:
-
-| Source Project | What we took | Credit |
-|---|---|---|
-| **[BlueprintMCP](https://github.com/mirno-ehf/ue5-mcp)** by mirno-ehf | Blueprint read/write, Materials, Animation, Snapshots — the surgical graph editing tools (83 tools) | Core of our Blueprint and Material systems |
-| **[UnrealClaude](https://github.com/Natfii/UnrealClaude)** by Natfii | Tool registry pattern, viewport capture, smart tool routing, context injection | Architecture inspiration + viewport/editor tools |
-| **[unreal-engine-mcp](https://github.com/flopperam/unreal-engine-mcp)** by flopperam | Actor management, procedural world generation (castles, towns, mazes) | World gen algorithms + actor tools |
-
-We combined the best parts into a single plugin and added **46 new tools** for categories none of them covered:
-
-- **Sequencer** — keyframes, camera cuts, render to video
-- **Behavior Trees** — tasks, decorators, blackboard, composites
-- **Navigation** — nav mesh building, pathfinding, modifiers
-- **Data Tables** — create, add rows, import CSV
-- **Foliage** — scatter instances, foliage types
-- **Niagara** — particle systems, emitters, parameters
-- **UI / UMG** — widget blueprints, child widgets, event binding
-- **Build & Package** — lighting, cook, package, commandlets
-
-> **Note:** [CLAUDIUS](https://claudiuscode.com/) ($60 on FAB) covers similar ground with 130+ commands and is a tested, production product. This is the free open-source alternative — less polished, but MIT licensed and extensible.
-
-## All 158 Tools
-
-<details>
-<summary><b>Actors (8)</b> — Spawn, delete, transform, inspect actors</summary>
-
-| Tool | Description |
-|------|-------------|
-| `spawn_actor` | Spawn by class (StaticMesh, PointLight, Camera, etc.) |
-| `delete_actor` | Remove an actor from the level |
-| `get_actors_in_level` | List all actors with transforms |
-| `find_actors_by_name` | Search by name pattern |
-| `set_actor_transform` | Set location, rotation, scale |
-| `spawn_blueprint_actor` | Spawn a Blueprint instance |
-| `get_actor_properties` | Read all editable properties |
-| `set_actor_property` | Set a property by name |
-</details>
-
-<details>
-<summary><b>Blueprint Read (8)</b> — Inspect Blueprints without modifying</summary>
-
-| Tool | Description |
-|------|-------------|
-| `list_blueprints` | List all Blueprint assets |
-| `get_blueprint` | Get graphs, variables, functions |
-| `get_blueprint_graph` | Full node graph with pins |
-| `search_blueprints` | Search by name, class, content |
-| `get_blueprint_summary` | Concise structure overview |
-| `describe_graph` | Human-readable logic description |
-| `find_asset_references` | Find what references a Blueprint |
-| `search_by_type` | Search assets by UClass |
-</details>
-
-<details>
-<summary><b>Blueprint Mutation (13)</b> — Edit Blueprint graphs</summary>
-
-| Tool | Description |
-|------|-------------|
-| `add_node` | Add function, event, flow control nodes |
-| `delete_node` | Remove a node |
-| `move_node` | Reposition in graph |
-| `connect_pins` | Wire two pins together |
-| `disconnect_pin` | Break a connection |
-| `set_pin_default` | Set default pin value |
-| `duplicate_nodes` | Copy nodes |
-| `set_node_comment` | Add/edit comment |
-| `refresh_all_nodes` | Fix stale references |
-| `replace_function_calls` | Bulk-replace function calls |
-| `rename_asset` | Rename with redirectors |
-| `delete_asset` | Delete an asset |
-| `set_blueprint_default` | Set CDO default value |
-</details>
-
-<details>
-<summary><b>Blueprint Graphs (5)</b> — Create and manage graphs</summary>
-
-| Tool | Description |
-|------|-------------|
-| `create_blueprint` | Create new Blueprint (Actor, Pawn, Interface, etc.) |
-| `create_graph` | Create function or macro graph |
-| `delete_graph` | Remove a graph |
-| `rename_graph` | Rename a graph |
-| `reparent_blueprint` | Change parent class |
-</details>
-
-<details>
-<summary><b>Variables (4)</b></summary>
-
-`add_variable`, `remove_variable`, `change_variable_type`, `set_variable_metadata`
-</details>
-
-<details>
-<summary><b>Parameters (3)</b></summary>
-
-`add_function_parameter`, `remove_function_parameter`, `change_function_parameter_type`
-</details>
-
-<details>
-<summary><b>Components (3)</b></summary>
-
-`list_components`, `add_component`, `remove_component`
-</details>
-
-<details>
-<summary><b>Interfaces (3)</b></summary>
-
-`list_interfaces`, `add_interface`, `remove_interface`
-</details>
-
-<details>
-<summary><b>Event Dispatchers (2)</b></summary>
-
-`add_event_dispatcher`, `list_event_dispatchers`
-</details>
-
-<details>
-<summary><b>User Types (4)</b></summary>
-
-`create_struct`, `create_enum`, `add_struct_property`, `remove_struct_property`
-</details>
-
-<details>
-<summary><b>Discovery (5)</b></summary>
-
-`list_classes`, `list_functions`, `list_properties`, `get_pin_info`, `check_pin_compatibility`
-</details>
-
-<details>
-<summary><b>Snapshots & Diff (6)</b></summary>
-
-`snapshot_graph`, `diff_graph`, `restore_graph`, `find_disconnected_pins`, `analyze_rebuild_impact`, `diff_blueprints`
-</details>
-
-<details>
-<summary><b>Validation (2)</b></summary>
-
-`validate_blueprint`, `validate_all_blueprints`
-</details>
-
-<details>
-<summary><b>Material Read (8)</b></summary>
-
-`list_materials`, `get_material`, `get_material_graph`, `describe_material`, `search_materials`, `find_material_references`, `list_material_functions`, `get_material_function`
-</details>
-
-<details>
-<summary><b>Material Mutation (14)</b></summary>
-
-`create_material`, `set_material_property`, `add_material_expression`, `delete_material_expression`, `connect_material_pins`, `disconnect_material_pin`, `set_expression_value`, `move_material_expression`, `create_material_instance`, `set_material_instance_parameter`, `snapshot_material_graph`, `diff_material_graph`, `restore_material_graph`, `validate_material`
-</details>
-
-<details>
-<summary><b>Animation (10)</b></summary>
-
-`create_anim_blueprint`, `add_anim_state`, `remove_anim_state`, `add_anim_transition`, `set_transition_rule`, `add_anim_node`, `add_state_machine`, `set_state_animation`, `create_blend_space`, `set_blend_space_samples`
-</details>
-
-<details>
-<summary><b>Sequencer (7)</b> — NEW</summary>
-
-`create_level_sequence`, `add_actor_to_sequence`, `add_transform_keyframe`, `add_camera_cut`, `set_sequence_length`, `render_sequence_to_video`, `play_sequence`
-</details>
-
-<details>
-<summary><b>Behavior Trees (9)</b> — NEW</summary>
-
-`create_behavior_tree`, `create_blackboard`, `add_blackboard_key`, `add_bt_task`, `add_bt_decorator`, `add_bt_service`, `add_bt_selector`, `add_bt_sequence`, `link_blackboard_to_tree`
-</details>
-
-<details>
-<summary><b>Navigation (5)</b> — NEW</summary>
-
-`build_navigation`, `add_nav_mesh_bounds`, `test_path`, `get_nav_mesh_info`, `add_nav_modifier`
-</details>
-
-<details>
-<summary><b>Data Tables (5)</b> — NEW</summary>
-
-`create_data_table`, `add_data_table_row`, `get_data_table_rows`, `remove_data_table_row`, `import_csv_to_data_table`
-</details>
-
-<details>
-<summary><b>Foliage (4)</b> — NEW</summary>
-
-`scatter_foliage`, `add_foliage_type`, `clear_foliage`, `get_foliage_info`
-</details>
-
-<details>
-<summary><b>Niagara (5)</b> — NEW</summary>
-
-`create_niagara_system`, `spawn_niagara_actor`, `add_niagara_emitter`, `set_niagara_parameter`, `list_niagara_systems`
-</details>
-
-<details>
-<summary><b>UI / UMG (5)</b> — NEW</summary>
-
-`create_widget_blueprint`, `add_widget_child`, `set_widget_property`, `list_widget_blueprints`, `bind_widget_event`
-</details>
-
-<details>
-<summary><b>World Generation (9)</b></summary>
-
-`create_wall`, `create_tower`, `create_staircase`, `create_arch`, `create_pyramid`, `create_maze`, `create_castle`, `create_town`, `create_house`
-</details>
-
-<details>
-<summary><b>Build & Package (6)</b> — NEW</summary>
-
-`build_lighting`, `build_navigation_only`, `cook_project`, `package_project`, `get_build_status`, `run_commandlet`
-</details>
-
-<details>
-<summary><b>Viewport & Editor (5)</b></summary>
-
-`capture_viewport`, `get_output_log`, `run_console_command`, `open_level`, `get_level_info`
-</details>
-
-## How it works
-
-```
-Claude Code  ←stdio→  TypeScript Bridge  ←HTTP :9847→  C++ Plugin in UE5 Editor
-                       (translates MCP          (runs tools on the
-                        protocol to HTTP)         game thread)
+```powershell
+cd YourProject\Plugins\UE_AI_integration\MCP
+npm ci
+npm run build
+npm test
 ```
 
-1. The C++ plugin loads when you open UE5 and starts an HTTP server on port 9847
-2. The TypeScript bridge connects Claude Code to that server
-3. When Claude calls a tool, the bridge POSTs to the plugin, which executes on the game thread
-4. New C++ tools auto-appear in Claude — no TypeScript changes needed
+启动 Unreal Editor 并确认插件已启用。Editor 侧服务启动后，可检查：
 
-## Testing
-
-Once UE5 is running with the plugin:
-
-```bash
-# Check if the server is responding
-python tests/test_health.py
-
-# Run integration tests (spawns actors, captures viewport, etc.)
-python tests/test_tools.py
-
-# Test world generation (creates and cleans up structures)
-python tests/test_worldgen.py
+```powershell
+Invoke-RestMethod http://127.0.0.1:9847/api/health
 ```
 
-## Adding new tools
+不要覆盖正在加载的插件 DLL。替换已有安装时，应先关闭 Unreal Editor，
+替换插件目录，再重新启动 Editor。
 
-Create a handler in `Source/.../Private/Handlers/`:
+## 配置 Codex CLI
 
-```cpp
-#include "Tools/MCPToolBase.h"
-#include "Tools/MCPToolRegistry.h"
+在 `~/.codex/config.toml` 中加入：
 
-class FTool_MyThing : public FMCPToolBase
+```toml
+[mcp_servers.ue_ai_integration]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['D:\Path\To\YourProject\Plugins\UE_AI_integration\MCP\dist\index.js']
+
+[mcp_servers.ue_ai_integration.env]
+UE_PORT = "9847"
+```
+
+重新启动 Codex CLI 后，可以用以下命令检查配置：
+
+```powershell
+codex mcp get ue_ai_integration
+```
+
+Claude Code 可使用：
+
+```powershell
+claude mcp add ue_ai_integration -- node Plugins\UE_AI_integration\MCP\dist\index.js
+```
+
+## MCP 工具
+
+bridge 始终注册以下十个工具，即使 Unreal Editor 暂时离线：
+
+- `ue_status`
+- `ue_capabilities`
+- `ue_context`
+- `ue_blueprint`
+- `ue_scene`
+- `ue_content`
+- `ue_animation`
+- `ue_ai`
+- `ue_production`
+- `ue_workflow`
+
+六个领域工具统一接收：
+
+```json
 {
-public:
-    FMCPToolInfo GetInfo() const override
-    {
-        FMCPToolInfo Info;
-        Info.Name = TEXT("my_thing");
-        Info.Description = TEXT("Does a thing");
-        Info.Annotations.Category = TEXT("MyCategory");
-        return Info;
-    }
-
-    FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
-    {
-        // UE5 API calls here...
-        TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-        Result->SetStringField(TEXT("status"), TEXT("done"));
-        return FMCPToolResult::Ok(Result);
-    }
-};
-
-namespace UltimateMCPTools {
-    void RegisterMyTools() {
-        FMCPToolRegistry::Get().Register(MakeShared<FTool_MyThing>());
-    }
+  "operation": "scene.actor.spawn",
+  "requestId": "client-generated-uuid",
+  "params": {
+    "type": "PointLight",
+    "name": "MCP_Light",
+    "location": [0, 0, 300]
+  }
 }
 ```
 
-Register it in `UltimateMCPSubsystem.cpp` and it auto-appears in Claude.
+先用 `ue_capabilities` 或 `ue_context` 查询 operation 的 schema、traits 和
+输出类型。领域工具会拒绝调用其他领域的 operation。
 
-## Requirements
+### PIE 生命周期
 
-- Unreal Engine 5.7 (pre-built binary is compiled against 5.7 — source may work on 5.4+ with minor API tweaks)
-- Node.js 18+
-- Claude Code (or any MCP-compatible AI client)
+通过 `ue_scene` 调用 PIE 生命周期能力：
 
-## License
+```json
+{
+  "operation": "scene.pie.restart",
+  "params": {}
+}
+```
 
-MIT — do whatever you want with it.
+| Operation | 行为 |
+|---|---|
+| `scene.pie.start` | 在活动关卡视口请求启动 PIE；若 PIE 已启动或正在启动，则幂等返回当前状态 |
+| `scene.pie.stop` | 请求停止活动 PIE；若启动仍在队列中，则取消该启动请求 |
+| `scene.pie.restart` | 先请求退出当前 PIE，确认旧 Play World 完全销毁后，在后续 Editor Tick 中重新启动 |
 
-## Acknowledgments
+响应数据包含 `action`、`requested`、`state`、`sessionId` 和 `generation`。
+PIE 重启后旧 Runtime object handle 会返回 `stale_session_handle`。
 
-This project wouldn't exist without:
+## HTTP API
 
-- **[mirno-ehf/ue5-mcp](https://github.com/mirno-ehf/ue5-mcp)** — The Blueprint and Material editing tools are adapted from this project. Their HTTP server architecture, queued game-thread execution, and SEH crash safety patterns form the backbone of our plugin.
-- **[Natfii/UnrealClaude](https://github.com/Natfii/UnrealClaude)** — The tool registry pattern, smart tool routing (mega-tool collapsing), and context injection system are inspired by this project. Their MCP bridge architecture influenced our TypeScript wrapper.
-- **[flopperam/unreal-engine-mcp](https://github.com/flopperam/unreal-engine-mcp)** — The actor management and procedural world generation (castles, towns, mazes) are ported from this project's Python algorithms.
-- **[CLAUDIUS](https://claudiuscode.com/)** — The paid plugin that showed what a comprehensive UE5 AI integration should cover. Our new tool categories (Sequencer, Behavior Trees, Navigation, etc.) were inspired by their feature set.
+Editor 插件保留三条原有路由，并新增两条 Workflow 路由：
+
+```text
+GET  /api/health
+GET  /api/capabilities?domain=<domain>
+POST /api/execute
+GET  /api/v1/workflow/handshake
+POST /api/v1/workflow
+```
+
+执行请求：
+
+```json
+{
+  "capability": "blueprint.asset.list",
+  "requestId": "client-generated-uuid",
+  "params": {
+    "filter": "Player"
+  }
+}
+```
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "data": {}
+}
+```
+
+错误响应：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "invalid_params",
+    "message": "..."
+  }
+}
+```
+
+状态码约定：
+
+| HTTP | 含义 |
+|---:|---|
+| 400 | JSON 无效 |
+| 404 | capability 不存在 |
+| 409 | `requestId` 与首次 payload 冲突，或异步任务冲突 |
+| 410 | PIE 会话句柄已经失效 |
+| 422 | 参数或领域不匹配 |
+| 500 | Editor 执行失败 |
+| 503 | Editor 服务暂不可用 |
+
+Registry 启动时会验证 manifest 与 C++ Handler 是否一一对应。缺失、重复或
+跨域绑定会让服务进入 `degraded` 状态：健康检查和能力查询仍然可用，但执行
+被禁用。
+
+## 开发与验证
+
+新增或迁移能力时：
+
+1. 在对应领域 manifest 中声明 descriptor。
+2. 在 `Private/Domains/<Domain>/<Kind>/` 实现相同点分 ID 的 Handler。
+3. 从领域 registrar 注册 Handler。
+4. 将复用逻辑下沉到 `Private/Infrastructure/`。
+5. 将 UE 版本差异限制在 `Private/Infrastructure/Compatibility/`。
+
+运行静态与 TypeScript 验证：
+
+```powershell
+node scripts\validate_capabilities.mjs
+cd MCP
+npm ci
+npm run build
+npm test
+npm audit --omit=dev
+```
+
+使用 UE 5.3 构建独立插件：
+
+```powershell
+scripts\build_plugin.bat "D:\code\D5\d5render-ue5_3" "..\UE_AI_integration-BuiltPlugin\UE5.3"
+```
+
+有运行中的 Editor 时，可继续执行只读和可回滚的 smoke test：
+
+```powershell
+python tests\test_health.py
+python tests\test_tools.py
+```
+
+## Credits
+
+项目参考了以下开源实现与设计：
+
+- [BlueprintMCP](https://github.com/mirno-ehf/ue5-mcp)
+- [UnrealClaude](https://github.com/Natfii/UnrealClaude)
+- [unreal-engine-mcp](https://github.com/flopperam/unreal-engine-mcp)
+
+本项目使用 MIT License。

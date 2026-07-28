@@ -1,63 +1,71 @@
-# UE5 Ultimate MCP
+# UE_AI_integration contributor guide
 
-The ultimate AI integration for Unreal Engine 5.7 — 150+ tools via Model Context Protocol.
+## System boundary
 
-## Architecture
-
-```
-Claude Code CLI ←stdio→ TypeScript MCP Wrapper ←HTTP :9847→ C++ UE5 Plugin
-                                                                  ↓
-                                                          Tool Registry
-                                                                  ↓
-                                                    UE5 Editor APIs (game thread)
+```text
+MCP client ←stdio→ MCP/src ←HTTP /api→ UE_AI_integration Editor module
 ```
 
-## Tool Categories
+The TypeScript process is a connect-only protocol adapter. It must never
+launch, kill, or request shutdown of an Editor process.
 
-| Category | Tools | Source |
-|----------|-------|--------|
-| Blueprint Read | list, get, search, describe | BlueprintMCP |
-| Blueprint Mutation | add_node, connect_pins, delete, rename | BlueprintMCP |
-| Blueprint Graphs | create, delete, rename, reparent | BlueprintMCP |
-| Variables | add, remove, change_type, metadata | BlueprintMCP |
-| Parameters | add, remove, change_type | BlueprintMCP |
-| Interfaces | list, add, remove | BlueprintMCP |
-| Dispatchers | add, list | BlueprintMCP |
-| Components | list, add, remove | BlueprintMCP |
-| Snapshots | snapshot, diff, restore, analyze | BlueprintMCP |
-| Validation | validate, validate_all | BlueprintMCP |
-| Discovery | list_classes, functions, properties, pins | BlueprintMCP |
-| User Types | create_struct, create_enum, properties | BlueprintMCP |
-| Material Read | list, get, describe, search | BlueprintMCP |
-| Material Mutation | create, expressions, connect, instances | BlueprintMCP |
-| Animation | state machines, transitions, blend spaces | BlueprintMCP |
-| Actors | spawn, delete, transform, find, properties | WorldBuilder |
-| Viewport | capture, output_log, console_command, level | UnrealClaude |
-| World Gen | castle, town, maze, tower, house, bridge | WorldBuilder |
-| Sequencer | create, keyframes, camera cuts, render | NEW |
-| Behavior Trees | create, tasks, decorators, blackboard | NEW |
-| Navigation | build, test_path, nav_mesh, modifiers | NEW |
-| Data Tables | create, add_row, import_csv | NEW |
-| Foliage | scatter, add_type, clear | NEW |
-| Niagara | create_system, spawn, emitters, params | NEW |
-| UI/UMG | widget_blueprint, add_child, properties | NEW |
-| Build | lighting, cook, package, commandlet | NEW |
+## Source layout
 
-## Adding New Tools
+The UE plugin remains one Editor module with four internal layers:
 
-1. Create `Source/.../Private/Handlers/YourCategory.cpp`
-2. Add tool classes inheriting `FMCPToolBase`
-3. Add registration function in `namespace UltimateMCPTools`
-4. Call it from `UltimateMCPSubsystem::Initialize()`
-5. TypeScript wrapper auto-discovers new tools via `/api/tools`
+- `Private/Core` — capability descriptors, registry and execution.
+- `Private/Transport` — HTTP routes and the Game Thread request queue.
+- `Private/Workflow` — the UE adapter for shared planning, transactions,
+  finalization, journals and rollback.
+- `Private/Domains` — six domains, each split into Query, Command and
+  Validation where applicable.
+- `Private/Infrastructure` — UE-specific lookup, serialization, persistence,
+  snapshots, crash boundaries and version compatibility.
 
-## Setup
+`Resources/Capabilities/*.json` is the public capability contract. Handler
+names, MCP routing and documentation must agree with it.
+
+## Invariants
+
+- There are exactly 212 capability IDs.
+- Domain counts are Blueprint 58, Scene 54, Content 59, Animation 10, AI 9,
+  Production 22.
+- Capability IDs are lower-case dotted identifiers.
+- A manifest entry and an implementation must have a one-to-one mapping.
+- Domain code contains no UE version macros.
+- HTTP handlers do not execute Unreal object operations directly.
+- MCP routing uses manifest metadata, never name-pattern classification.
+- The legacy HTTP routes remain `/api/health`, `/api/capabilities` and
+  `/api/execute`; Workflow adds only `/api/v1/workflow/handshake` and
+  `/api/v1/workflow`.
+- CMake and UBT compile the same `Workflow/src/WorkflowCore.cpp`; TypeScript
+  must not duplicate validation or planning.
+- Workflow v1 admits deterministic, single-asset edit steps only. Interactive
+  debugging and long-running jobs remain single operations or separate jobs.
+
+## Adding or moving a capability
+
+1. Choose the domain and `query`, `command` or `validation` kind.
+2. Add or update the descriptor in the domain manifest.
+3. Implement the capability with the exact dotted ID.
+4. Bind it in the domain registrar.
+5. Run `node scripts/validate_capabilities.mjs`.
+6. Run the MCP build and tests.
+7. Compile with `RunUAT BuildPlugin`.
+
+## Commands
 
 ```bash
-# 1. Copy plugin to YourProject/Plugins/UE5UltimateMCP/
-# 2. Build TypeScript wrapper
-cd MCP && npm install && npm run build
-# 3. Add to .mcp.json at project root
-# 4. Open UE5 editor → plugin starts on port 9847
-# 5. Run `claude` in project directory
+node scripts/validate_capabilities.mjs
+cd MCP
+npm ci
+npm run build
+npm test
 ```
+
+```bat
+scripts\build_plugin.bat "D:\code\D5\d5render-ue5_3" "BuiltPlugin\UE5.3"
+```
+
+UE 5.3 is the local compile baseline. Compatibility code for UE 5.4-5.7
+belongs exclusively under `Private/Infrastructure/Compatibility`.
