@@ -7,18 +7,30 @@
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
 #include "HAL/PlatformMisc.h"
+#include "HAL/PlatformProperties.h"
+#include "Infrastructure/EngineeringContractUtils.h"
 #include "Infrastructure/Sha256.h"
 #include "Misc/App.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Base64.h"
+#include "Misc/EngineVersion.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
 #include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
 #include "ProfilingDebugging/TraceAuxiliary.h"
 #include "RenderTimer.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "TraceServices/AnalysisService.h"
+#include "TraceServices/Containers/Tables.h"
+#include "TraceServices/ITraceServicesModule.h"
+#include "TraceServices/Model/AnalysisSession.h"
+#include "TraceServices/Model/Counters.h"
+#include "TraceServices/Model/Frames.h"
+#include "TraceServices/Model/Threads.h"
+#include "TraceServices/Model/TimingProfiler.h"
 #include "UnrealEngine.h"
 
 namespace UEAIIntegration::Infrastructure
@@ -31,6 +43,10 @@ namespace ProductionJobRuntimePrivate
 		64ll * 1024ll * 1024ll;
 	constexpr int32 MaxPackageScanFiles = 4096;
 	constexpr int32 MaxPackageArtifacts = 32;
+	constexpr int32 MaxTraceFrames = 10000;
+	constexpr int32 MaxTraceTimers = 200;
+	constexpr int32 MaxTraceCounters = 64;
+	constexpr int32 MaxTraceCounterValues = 10000;
 
 	FString PackageOutputRoot()
 	{
@@ -97,77 +113,6 @@ namespace ProductionJobRuntimePrivate
 			Copy->Values = Source->Values;
 		}
 		return Copy;
-	}
-
-	void WriteCanonicalJsonValue(
-		const TSharedPtr<FJsonValue>& Value,
-		FString& Out)
-	{
-		if (!Value.IsValid() || Value->IsNull())
-		{
-			Out += TEXT("null");
-			return;
-		}
-		switch (Value->Type)
-		{
-		case EJson::String:
-		{
-			FString Escaped;
-			const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
-				TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Escaped);
-			Writer->WriteValue(Value->AsString());
-			Writer->Close();
-			Out += Escaped;
-			break;
-		}
-		case EJson::Number:
-			Out += FString::Printf(TEXT("%.17g"), Value->AsNumber());
-			break;
-		case EJson::Boolean:
-			Out += Value->AsBool() ? TEXT("true") : TEXT("false");
-			break;
-		case EJson::Array:
-		{
-			Out += TEXT("[");
-			const TArray<TSharedPtr<FJsonValue>>& Values = Value->AsArray();
-			for (int32 Index = 0; Index < Values.Num(); ++Index)
-			{
-				if (Index > 0)
-				{
-					Out += TEXT(",");
-				}
-				WriteCanonicalJsonValue(Values[Index], Out);
-			}
-			Out += TEXT("]");
-			break;
-		}
-		case EJson::Object:
-		{
-			Out += TEXT("{");
-			TArray<FString> Keys;
-			Value->AsObject()->Values.GetKeys(Keys);
-			Keys.Sort();
-			for (int32 Index = 0; Index < Keys.Num(); ++Index)
-			{
-				if (Index > 0)
-				{
-					Out += TEXT(",");
-				}
-				WriteCanonicalJsonValue(
-					MakeShared<FJsonValueString>(Keys[Index]),
-					Out);
-				Out += TEXT(":");
-				WriteCanonicalJsonValue(
-					Value->AsObject()->Values.FindRef(Keys[Index]),
-					Out);
-			}
-			Out += TEXT("}");
-			break;
-		}
-		default:
-			Out += TEXT("null");
-			break;
-		}
 	}
 
 	FString ComputeFileSha256Stream(const FString& Path)
@@ -342,11 +287,545 @@ namespace ProductionJobRuntimePrivate
 			TEXT("job_start_failed"),
 			503);
 	}
+
+	double ReadBoundedNumber(
+		const TSharedPtr<FJsonObject>& Object,
+		const TCHAR* Field,
+		const double DefaultValue,
+		const double Minimum,
+		const double Maximum)
+	{
+		double Value = DefaultValue;
+		if (Object.IsValid())
+		{
+			Object->TryGetNumberField(Field, Value);
+		}
+		return FMath::Clamp(Value, Minimum, Maximum);
+	}
+
+	TSharedPtr<FJsonObject> BuildTraceProviderSummary(
+		const TraceServices::IAnalysisSession& Session,
+		const TSharedPtr<FJsonObject>& Params)
+	{
+		const double Duration = FMath::Max(0.0, Session.GetDurationSeconds());
+		const double RequestedEnd = ReadBoundedNumber(
+			Params,
+			TEXT("endTimeSeconds"),
+			Duration,
+			0.0,
+			Duration);
+		const double MaxDuration = ReadBoundedNumber(
+			Params,
+			TEXT("maxDurationSeconds"),
+			60.0,
+			0.1,
+			600.0);
+		const double RequestedStart = ReadBoundedNumber(
+			Params,
+			TEXT("startTimeSeconds"),
+			FMath::Max(0.0, RequestedEnd - MaxDuration),
+			0.0,
+			RequestedEnd);
+		const double IntervalStart = RequestedStart;
+		const double IntervalEnd = FMath::Min(
+			RequestedEnd,
+			IntervalStart + MaxDuration);
+		const int32 MaxFrames = FMath::Clamp(
+			static_cast<int32>(ReadBoundedNumber(
+				Params,
+				TEXT("maxFrames"),
+				2000.0,
+				1.0,
+				MaxTraceFrames)),
+			1,
+			MaxTraceFrames);
+		const int32 MaxTimers = FMath::Clamp(
+			static_cast<int32>(ReadBoundedNumber(
+				Params,
+				TEXT("maxTimers"),
+				50.0,
+				1.0,
+				MaxTraceTimers)),
+			1,
+			MaxTraceTimers);
+		const int32 MaxCounters = FMath::Clamp(
+			static_cast<int32>(ReadBoundedNumber(
+				Params,
+				TEXT("maxCounters"),
+				32.0,
+				1.0,
+				MaxTraceCounters)),
+			1,
+			MaxTraceCounters);
+		const int32 MaxCounterValues = FMath::Clamp(
+			static_cast<int32>(ReadBoundedNumber(
+				Params,
+				TEXT("maxCounterValues"),
+				2000.0,
+				1.0,
+				MaxTraceCounterValues)),
+			1,
+			MaxTraceCounterValues);
+
+		TSharedPtr<FJsonObject> Summary = MakeShared<FJsonObject>();
+		Summary->SetStringField(TEXT("schema"), TEXT("ue.trace-analysis.v1"));
+		Summary->SetNumberField(TEXT("durationSeconds"), Duration);
+		Summary->SetNumberField(TEXT("intervalStartSeconds"), IntervalStart);
+		Summary->SetNumberField(TEXT("intervalEndSeconds"), IntervalEnd);
+		Summary->SetBoolField(
+			TEXT("intervalClamped"),
+			RequestedEnd - RequestedStart > MaxDuration);
+
+		TraceServices::FAnalysisSessionReadScope ReadScope(Session);
+
+		TSharedPtr<FJsonObject> Frames = MakeShared<FJsonObject>();
+		const TraceServices::IFrameProvider* FrameProvider =
+			Session.ReadProvider<TraceServices::IFrameProvider>(
+				TraceServices::GetFrameProviderName());
+		auto AddFrameSummary =
+			[&Frames, FrameProvider, IntervalStart, IntervalEnd, MaxFrames](
+				const TCHAR* Name,
+				const ETraceFrameType FrameType)
+			{
+				TArray<double> Samples;
+				uint64 Total = 0;
+				if (FrameProvider)
+				{
+					FrameProvider->EnumerateFrames(
+						FrameType,
+						IntervalStart,
+						IntervalEnd,
+						[&Samples, &Total, MaxFrames](
+							const TraceServices::FFrame& Frame)
+						{
+							++Total;
+							if (Samples.Num() < MaxFrames)
+							{
+								Samples.Add(
+									FMath::Max(
+										0.0,
+										(Frame.EndTime - Frame.StartTime)
+											* 1000.0));
+							}
+						});
+				}
+				TSharedPtr<FJsonObject> FrameSummary =
+					FProductionJobRuntime::SummarizeMetric(
+						Samples,
+						16.6667);
+				FrameSummary->SetNumberField(
+					TEXT("totalFrameCount"),
+					static_cast<double>(Total));
+				FrameSummary->SetBoolField(
+					TEXT("truncated"),
+					Total > static_cast<uint64>(Samples.Num()));
+				Frames->SetObjectField(Name, FrameSummary);
+			};
+		AddFrameSummary(TEXT("game"), TraceFrameType_Game);
+		AddFrameSummary(TEXT("rendering"), TraceFrameType_Rendering);
+		Summary->SetObjectField(TEXT("frames"), Frames);
+
+		struct FTimerRow
+		{
+			FString Name;
+			FString File;
+			uint32 Id = 0;
+			uint32 Line = 0;
+			bool bGpu = false;
+			uint64 InstanceCount = 0;
+			double TotalInclusiveMs = 0.0;
+			double AverageInclusiveMs = 0.0;
+			double MaxInclusiveMs = 0.0;
+			double TotalExclusiveMs = 0.0;
+		};
+		TArray<FTimerRow> TimerRows;
+		const TraceServices::ITimingProfilerProvider* TimingProvider =
+			Session.ReadProvider<TraceServices::ITimingProfilerProvider>(
+				TraceServices::GetTimingProfilerProviderName());
+		if (TimingProvider && IntervalEnd > IntervalStart)
+		{
+			TraceServices::FCreateAggreationParams AggregationParams;
+			AggregationParams.IntervalStart = IntervalStart;
+			AggregationParams.IntervalEnd = IntervalEnd;
+			AggregationParams.CpuThreadFilter =
+				[](const uint32 ThreadId)
+				{
+					return true;
+				};
+			AggregationParams.IncludeGpu = true;
+			TUniquePtr<
+				TraceServices::ITable<
+					TraceServices::FTimingProfilerAggregatedStats>>
+				Table(TimingProvider->CreateAggregation(AggregationParams));
+			if (Table.IsValid())
+			{
+				TUniquePtr<
+					TraceServices::ITableReader<
+						TraceServices::FTimingProfilerAggregatedStats>>
+					Reader(Table->CreateReader());
+				for (; Reader.IsValid() && Reader->IsValid(); Reader->NextRow())
+				{
+					const TraceServices::FTimingProfilerAggregatedStats* Row =
+						Reader->GetCurrentRow();
+					if (!Row || !Row->Timer)
+					{
+						continue;
+					}
+					FTimerRow& Output = TimerRows.AddDefaulted_GetRef();
+					Output.Name = Row->Timer->Name
+						? Row->Timer->Name
+						: TEXT("<unnamed>");
+					Output.File = Row->Timer->File
+						? Row->Timer->File
+						: FString();
+					Output.Id = Row->Timer->Id;
+					Output.Line = Row->Timer->Line;
+					Output.bGpu = Row->Timer->IsGpuTimer != 0;
+					Output.InstanceCount = Row->InstanceCount;
+					Output.TotalInclusiveMs =
+						Row->TotalInclusiveTime * 1000.0;
+					Output.AverageInclusiveMs =
+						Row->AverageInclusiveTime * 1000.0;
+					Output.MaxInclusiveMs =
+						Row->MaxInclusiveTime * 1000.0;
+					Output.TotalExclusiveMs =
+						Row->TotalExclusiveTime * 1000.0;
+				}
+			}
+		}
+		TimerRows.Sort(
+			[](const FTimerRow& Left, const FTimerRow& Right)
+			{
+				if (Left.TotalInclusiveMs != Right.TotalInclusiveMs)
+				{
+					return Left.TotalInclusiveMs > Right.TotalInclusiveMs;
+				}
+				return Left.Name < Right.Name;
+			});
+		TArray<TSharedPtr<FJsonValue>> TimerValues;
+		const int32 TimerCount = FMath::Min(MaxTimers, TimerRows.Num());
+		TimerValues.Reserve(TimerCount);
+		for (int32 Index = 0; Index < TimerCount; ++Index)
+		{
+			const FTimerRow& Row = TimerRows[Index];
+			TSharedPtr<FJsonObject> Timer = MakeShared<FJsonObject>();
+			Timer->SetStringField(TEXT("name"), Row.Name);
+			Timer->SetNumberField(TEXT("timerId"), Row.Id);
+			Timer->SetBoolField(TEXT("gpu"), Row.bGpu);
+			Timer->SetNumberField(
+				TEXT("instanceCount"),
+				static_cast<double>(Row.InstanceCount));
+			Timer->SetNumberField(
+				TEXT("totalInclusiveMs"),
+				Row.TotalInclusiveMs);
+			Timer->SetNumberField(
+				TEXT("averageInclusiveMs"),
+				Row.AverageInclusiveMs);
+			Timer->SetNumberField(
+				TEXT("maxInclusiveMs"),
+				Row.MaxInclusiveMs);
+			Timer->SetNumberField(
+				TEXT("totalExclusiveMs"),
+				Row.TotalExclusiveMs);
+			if (!Row.File.IsEmpty())
+			{
+				Timer->SetStringField(TEXT("file"), Row.File);
+				Timer->SetNumberField(TEXT("line"), Row.Line);
+			}
+			TimerValues.Add(MakeShared<FJsonValueObject>(Timer));
+		}
+		Summary->SetArrayField(TEXT("timers"), TimerValues);
+		Summary->SetNumberField(TEXT("timerTotal"), TimerRows.Num());
+		Summary->SetBoolField(
+			TEXT("timersTruncated"),
+			TimerRows.Num() > TimerCount);
+
+		struct FTraceThreadGroup
+		{
+			FString OutputName;
+			TArray<uint32> ThreadIds;
+			TArray<FString> ThreadNames;
+			int32 MatchingThreadCount = 0;
+			bool bIncludeGpu = false;
+		};
+		TArray<FTraceThreadGroup> TraceThreadGroups;
+		{
+			FTraceThreadGroup& GameGroup =
+				TraceThreadGroups.AddDefaulted_GetRef();
+			GameGroup.OutputName = TEXT("game");
+			FTraceThreadGroup& RenderGroup =
+				TraceThreadGroups.AddDefaulted_GetRef();
+			RenderGroup.OutputName = TEXT("render");
+			FTraceThreadGroup& RhiGroup =
+				TraceThreadGroups.AddDefaulted_GetRef();
+			RhiGroup.OutputName = TEXT("rhi");
+			FTraceThreadGroup& GpuGroup =
+				TraceThreadGroups.AddDefaulted_GetRef();
+			GpuGroup.OutputName = TEXT("gpu");
+			GpuGroup.bIncludeGpu = true;
+		}
+		const TraceServices::IThreadProvider* ThreadProvider =
+			Session.ReadProvider<TraceServices::IThreadProvider>(
+				TraceServices::GetThreadProviderName());
+		if (ThreadProvider)
+		{
+			ThreadProvider->EnumerateThreads(
+				[&TraceThreadGroups](
+					const TraceServices::FThreadInfo& Thread)
+				{
+					const FString ThreadName =
+						Thread.Name ? Thread.Name : TEXT("<unnamed>");
+					const FString NormalizedName = ThreadName.ToLower();
+					int32 GroupIndex = INDEX_NONE;
+					if (NormalizedName.Contains(TEXT("gamethread"))
+						|| NormalizedName.Contains(TEXT("game thread")))
+					{
+						GroupIndex = 0;
+					}
+					else if (NormalizedName.Contains(TEXT("renderthread"))
+						|| NormalizedName.Contains(TEXT("render thread")))
+					{
+						GroupIndex = 1;
+					}
+					else if (NormalizedName.Contains(TEXT("rhithread"))
+						|| NormalizedName.Contains(TEXT("rhi thread")))
+					{
+						GroupIndex = 2;
+					}
+					if (GroupIndex == INDEX_NONE)
+					{
+						return;
+					}
+					FTraceThreadGroup& Group =
+						TraceThreadGroups[GroupIndex];
+					++Group.MatchingThreadCount;
+					if (Group.ThreadIds.Num() < 64)
+					{
+						Group.ThreadIds.Add(Thread.Id);
+						Group.ThreadNames.Add(ThreadName);
+					}
+				});
+		}
+		TSharedPtr<FJsonObject> ThreadAggregates =
+			MakeShared<FJsonObject>();
+		for (const FTraceThreadGroup& Group : TraceThreadGroups)
+		{
+			TSharedPtr<FJsonObject> GroupSummary =
+				MakeShared<FJsonObject>();
+			TArray<TSharedPtr<FJsonValue>> ThreadIdValues;
+			TArray<TSharedPtr<FJsonValue>> ThreadNameValues;
+			for (int32 ThreadIndex = 0;
+				ThreadIndex < Group.ThreadIds.Num();
+				++ThreadIndex)
+			{
+				ThreadIdValues.Add(
+					MakeShared<FJsonValueNumber>(
+						Group.ThreadIds[ThreadIndex]));
+				ThreadNameValues.Add(
+					MakeShared<FJsonValueString>(
+						Group.ThreadNames[ThreadIndex]));
+			}
+			GroupSummary->SetArrayField(
+				TEXT("threadIds"),
+				ThreadIdValues);
+			GroupSummary->SetArrayField(
+				TEXT("threadNames"),
+				ThreadNameValues);
+			GroupSummary->SetNumberField(
+				TEXT("matchingThreadCount"),
+				Group.MatchingThreadCount);
+			GroupSummary->SetBoolField(
+				TEXT("threadsTruncated"),
+				Group.MatchingThreadCount > Group.ThreadIds.Num());
+			if (!TimingProvider
+				|| (!Group.bIncludeGpu && Group.ThreadIds.IsEmpty()))
+			{
+				GroupSummary->SetBoolField(TEXT("available"), false);
+				ThreadAggregates->SetObjectField(
+					Group.OutputName,
+					GroupSummary);
+				continue;
+			}
+
+			TraceServices::FCreateAggreationParams GroupParams;
+			GroupParams.IntervalStart = IntervalStart;
+			GroupParams.IntervalEnd = IntervalEnd;
+			const TArray<uint32> IncludedThreadIds = Group.ThreadIds;
+			GroupParams.CpuThreadFilter =
+				[IncludedThreadIds](const uint32 ThreadId)
+				{
+					return IncludedThreadIds.Contains(ThreadId);
+				};
+			GroupParams.IncludeGpu = Group.bIncludeGpu;
+			TUniquePtr<
+				TraceServices::ITable<
+					TraceServices::FTimingProfilerAggregatedStats>>
+				GroupTable(
+					TimingProvider->CreateAggregation(GroupParams));
+			double TotalExclusiveMs = 0.0;
+			uint64 InstanceCount = 0;
+			int32 AggregatedTimerCount = 0;
+			if (GroupTable.IsValid())
+			{
+				TUniquePtr<
+					TraceServices::ITableReader<
+						TraceServices::FTimingProfilerAggregatedStats>>
+					GroupReader(GroupTable->CreateReader());
+				for (;
+					GroupReader.IsValid() && GroupReader->IsValid();
+					GroupReader->NextRow())
+				{
+					const TraceServices::FTimingProfilerAggregatedStats* Row =
+						GroupReader->GetCurrentRow();
+					if (!Row || !Row->Timer)
+					{
+						continue;
+					}
+					++AggregatedTimerCount;
+					InstanceCount += Row->InstanceCount;
+					TotalExclusiveMs +=
+						FMath::Max(0.0, Row->TotalExclusiveTime)
+						* 1000.0;
+				}
+			}
+			GroupSummary->SetBoolField(
+				TEXT("available"),
+				AggregatedTimerCount > 0);
+			GroupSummary->SetNumberField(
+				TEXT("timerCount"),
+				AggregatedTimerCount);
+			GroupSummary->SetNumberField(
+				TEXT("instanceCount"),
+				static_cast<double>(InstanceCount));
+			GroupSummary->SetNumberField(
+				TEXT("totalExclusiveMs"),
+				TotalExclusiveMs);
+			ThreadAggregates->SetObjectField(
+				Group.OutputName,
+				GroupSummary);
+		}
+		Summary->SetObjectField(
+			TEXT("threadAggregates"),
+			ThreadAggregates);
+
+		TSet<FString> RequestedCounters;
+		for (const FString& CounterName :
+			ReadStringArray(Params, TEXT("counterNames")))
+		{
+			RequestedCounters.Add(CounterName);
+		}
+		TArray<TSharedPtr<FJsonValue>> CounterValues;
+		int32 MatchingCounterTotal = 0;
+		const TraceServices::ICounterProvider* CounterProvider =
+			Session.ReadProvider<TraceServices::ICounterProvider>(
+				TraceServices::GetCounterProviderName());
+		if (CounterProvider)
+		{
+			CounterProvider->EnumerateCounters(
+				[&](
+					const uint32 CounterId,
+					const TraceServices::ICounter& Counter)
+				{
+					const FString Name =
+						Counter.GetName() ? Counter.GetName() : TEXT("<unnamed>");
+					if (!RequestedCounters.IsEmpty()
+						&& !RequestedCounters.Contains(Name))
+					{
+						return;
+					}
+					++MatchingCounterTotal;
+					if (CounterValues.Num() >= MaxCounters)
+					{
+						return;
+					}
+
+					TArray<double> Values;
+					int32 ObservedValueCount = 0;
+					if (Counter.IsFloatingPoint())
+					{
+						Counter.EnumerateFloatValues(
+							IntervalStart,
+							IntervalEnd,
+							false,
+							[&](const double Time, const double Value)
+							{
+								++ObservedValueCount;
+								if (Values.Num() < MaxCounterValues)
+								{
+									Values.Add(Value);
+								}
+							});
+					}
+					else
+					{
+						Counter.EnumerateValues(
+							IntervalStart,
+							IntervalEnd,
+							false,
+							[&](const double Time, const int64 Value)
+							{
+								++ObservedValueCount;
+								if (Values.Num() < MaxCounterValues)
+								{
+									Values.Add(static_cast<double>(Value));
+								}
+							});
+					}
+					TSharedPtr<FJsonObject> ValueSummary =
+						FProductionJobRuntime::SummarizeMetric(
+							Values,
+							TNumericLimits<double>::Max());
+					ValueSummary->SetStringField(
+						TEXT("unit"),
+						Counter.GetDisplayHint()
+								== TraceServices::CounterDisplayHint_Memory
+							? TEXT("bytes")
+							: TEXT("value"));
+					ValueSummary->RemoveField(TEXT("budgetMs"));
+					ValueSummary->RemoveField(TEXT("overBudgetFrames"));
+
+					TSharedPtr<FJsonObject> CounterObject =
+						MakeShared<FJsonObject>();
+					CounterObject->SetNumberField(TEXT("counterId"), CounterId);
+					CounterObject->SetStringField(TEXT("name"), Name);
+					CounterObject->SetStringField(
+						TEXT("group"),
+						Counter.GetGroup() ? Counter.GetGroup() : TEXT(""));
+					CounterObject->SetNumberField(
+						TEXT("observedValueCount"),
+						ObservedValueCount);
+					CounterObject->SetBoolField(
+						TEXT("valuesTruncated"),
+						ObservedValueCount > Values.Num());
+					CounterObject->SetObjectField(
+						TEXT("summary"),
+						ValueSummary);
+					CounterValues.Add(
+						MakeShared<FJsonValueObject>(CounterObject));
+				});
+		}
+		Summary->SetArrayField(TEXT("counters"), CounterValues);
+		Summary->SetNumberField(
+			TEXT("counterTotal"),
+			MatchingCounterTotal);
+		Summary->SetBoolField(
+			TEXT("countersTruncated"),
+			MatchingCounterTotal > CounterValues.Num());
+		return Summary;
+	}
 }
 
 using namespace ProductionJobRuntimePrivate;
 
-FProductionJobRuntime::FProductionJobRuntime()
+FProductionJobRuntime::FProductionJobRuntime(
+	FScenarioOperation InStartScenario,
+	FScenarioOperation InGetScenarioStatus,
+	FScenarioOperation InGetScenarioResult,
+	FScenarioOperation InCancelScenario)
+	: StartScenario(MoveTemp(InStartScenario))
+	, GetScenarioStatus(MoveTemp(InGetScenarioStatus))
+	, GetScenarioResult(MoveTemp(InGetScenarioResult))
+	, CancelScenario(MoveTemp(InCancelScenario))
 {
 	IFileManager::Get().MakeDirectory(*JobsRoot(), true);
 	LoadJournals();
@@ -391,6 +870,23 @@ FProductionJobRuntime::~FProductionJobRuntime()
 			Job.ReadPipe = nullptr;
 			Job.WritePipe = nullptr;
 		}
+		if (Job.TraceAnalysisSession.IsValid()
+			&& !Job.TraceAnalysisSession->IsAnalysisComplete())
+		{
+			Job.TraceAnalysisSession->Stop(true);
+			Job.TraceAnalysisSession.Reset();
+		}
+		if (!IsTerminalStatus(Job.Status))
+		{
+			Job.Status = TEXT("interrupted");
+			Job.Phase = TEXT("complete");
+			Job.ErrorCode = TEXT("editor_shutdown");
+			Job.Message =
+				TEXT("The Editor shut down before this job completed.");
+			Job.CompletedAtUtc = FDateTime::UtcNow().ToIso8601();
+			Job.Progress = 1.0;
+			SaveJournal(Job);
+		}
 	}
 }
 
@@ -405,6 +901,10 @@ void FProductionJobRuntime::Tick(float DeltaTime)
 		if (Pair.Value->Kind == TEXT("performance"))
 		{
 			TickPerformanceJob(*Pair.Value);
+		}
+		else if (Pair.Value->Kind == TEXT("traceAnalysis"))
+		{
+			TickTraceAnalysisJob(*Pair.Value);
 		}
 		else if (Pair.Value->Kind != TEXT("trace"))
 		{
@@ -454,18 +954,9 @@ FMCPToolResult FProductionJobRuntime::Execute(
 FString FProductionJobRuntime::ComputeChangePlanDigest(
 	const TSharedPtr<FJsonObject>& Request)
 {
-	FString Canonical;
-	WriteCanonicalJsonValue(
-		MakeShared<FJsonValueObject>(
-			Request.IsValid() ? Request : MakeShared<FJsonObject>()),
-		Canonical);
-	const FTCHARToUTF8 Utf8(*Canonical);
-	FString Hash;
-	if (!TrySha256Hex(Utf8.Get(), Utf8.Length(), Hash))
-	{
-		return FString();
-	}
-	return TEXT("sha256:") + Hash;
+	const FString Digest =
+		DigestJson(Request.IsValid() ? Request : MakeShared<FJsonObject>());
+	return Digest.IsEmpty() ? FString() : TEXT("sha256:") + Digest;
 }
 
 bool FProductionJobRuntime::IsPathWithin(
@@ -582,11 +1073,25 @@ FMCPToolResult FProductionJobRuntime::CancelJob(
 			ActiveTraceJobId.Reset();
 		}
 	}
-	else if (Job.bOwnsTrace && !Job.TraceJobId.IsEmpty())
+	if (Job.Kind == TEXT("performance")
+		&& Job.PerformanceMode == TEXT("scenario")
+		&& !Job.ScenarioRunId.IsEmpty()
+		&& CancelScenario)
+	{
+		TSharedPtr<FJsonObject> CancelParams = MakeShared<FJsonObject>();
+		CancelParams->SetStringField(TEXT("runId"), Job.ScenarioRunId);
+		CancelScenario(CancelParams);
+	}
+	if (Job.bOwnsTrace && !Job.TraceJobId.IsEmpty())
 	{
 		TSharedRef<FJsonObject> StopParams = MakeShared<FJsonObject>();
 		StopParams->SetStringField(TEXT("traceId"), Job.TraceJobId);
 		StopTrace(StopParams);
+	}
+	if (Job.TraceAnalysisSession.IsValid()
+		&& !Job.TraceAnalysisSession->IsAnalysisComplete())
+	{
+		Job.TraceAnalysisSession->Stop(true);
 	}
 	if (Job.ProcessHandle.IsValid())
 	{
@@ -1029,6 +1534,24 @@ void FProductionJobRuntime::FinishJob(
 	const FString& ErrorCode,
 	const FString& Message)
 {
+	if (Job.Kind == TEXT("performance")
+		&& Status != TEXT("succeeded"))
+	{
+		if (Job.PerformanceMode == TEXT("scenario")
+			&& !Job.ScenarioRunId.IsEmpty()
+			&& CancelScenario)
+		{
+			TSharedPtr<FJsonObject> CancelParams = MakeShared<FJsonObject>();
+			CancelParams->SetStringField(TEXT("runId"), Job.ScenarioRunId);
+			CancelScenario(CancelParams);
+		}
+		if (Job.bOwnsTrace && !Job.TraceJobId.IsEmpty())
+		{
+			TSharedPtr<FJsonObject> StopParams = MakeShared<FJsonObject>();
+			StopParams->SetStringField(TEXT("traceId"), Job.TraceJobId);
+			StopTrace(StopParams);
+		}
+	}
 	if (Job.ProcessHandle.IsValid())
 	{
 		if (Job.ReadPipe)
@@ -1113,6 +1636,7 @@ FMCPToolResult FProductionJobRuntime::StartTrace(
 			TEXT("default"),
 			TEXT("frame"),
 			TEXT("cpu"),
+			TEXT("gpu"),
 			TEXT("bookmark"),
 			TEXT("log")
 		};
@@ -1216,11 +1740,22 @@ FMCPToolResult FProductionJobRuntime::StopTrace(
 	ActiveTraceJobId.Reset();
 	const FString TracePath =
 		GetStringFieldOr(Job.Result, TEXT("destination"));
-	AddArtifact(
-		Job,
-		TracePath,
-		TEXT("capture.utrace"),
-		TEXT("application/x-unreal-trace"));
+	if (!AddArtifact(
+			Job,
+			TracePath,
+			TEXT("capture.utrace"),
+			TEXT("application/x-unreal-trace")))
+	{
+		FinishJob(
+			Job,
+			TEXT("failed"),
+			TEXT("trace_artifact_unavailable"),
+			TEXT("The trace stopped, but its .utrace artifact was not created."));
+		return FMCPToolResult::Error(
+			Job.Message,
+			Job.ErrorCode,
+			500);
+	}
 	FinishJob(Job, TEXT("succeeded"));
 	TSharedPtr<FJsonObject> Result = MakeJobSummary(Job, true);
 	Result->SetStringField(TEXT("traceId"), TraceId);
@@ -1246,31 +1781,144 @@ FMCPToolResult FProductionJobRuntime::AnalyzeTrace(
 			TEXT("trace_not_ready"),
 			409);
 	}
+	if (!ActiveHeavyJobId.IsEmpty())
+	{
+		const TSharedPtr<FJob>* Active = Jobs.Find(ActiveHeavyJobId);
+		if (Active && Active->IsValid() && (*Active)->Status == TEXT("running"))
+		{
+			return FMCPToolResult::Error(
+				TEXT("Another production job holds the runtime resource lock."),
+				TEXT("job_conflict"),
+				409);
+		}
+		ActiveHeavyJobId.Reset();
+	}
+	if ((*Trace)->Artifacts.IsEmpty())
+	{
+		return FMCPToolResult::Error(
+			TEXT("The completed trace has no registered .utrace artifact."),
+			TEXT("trace_artifact_unavailable"),
+			410);
+	}
+	const FString TracePath = (*Trace)->Artifacts[0].Path;
+	if (!IFileManager::Get().FileExists(*TracePath))
+	{
+		return FMCPToolResult::Error(
+			TEXT("The registered .utrace artifact is no longer available."),
+			TEXT("trace_artifact_unavailable"),
+			410);
+	}
+
+	ITraceServicesModule* TraceServicesModule =
+		FModuleManager::LoadModulePtr<ITraceServicesModule>(
+			TEXT("TraceServices"));
+	if (!TraceServicesModule)
+	{
+		return FMCPToolResult::Error(
+			TEXT("TraceServices could not be loaded by this Editor build."),
+			TEXT("trace_analysis_unavailable"),
+			503);
+	}
+	const TSharedPtr<TraceServices::IAnalysisService> AnalysisService =
+		TraceServicesModule->GetAnalysisService();
+	if (!AnalysisService.IsValid())
+	{
+		return FMCPToolResult::Error(
+			TEXT("TraceServices did not provide an analysis service."),
+			TEXT("trace_analysis_unavailable"),
+			503);
+	}
+
 	TSharedPtr<FJob> Analysis =
 		CreateJob(TEXT("traceAnalysis"), Params);
-	Analysis->Status = TEXT("succeeded");
-	Analysis->Phase = TEXT("complete");
+	Analysis->Status = TEXT("running");
+	Analysis->Phase = TEXT("analyzing");
 	Analysis->StartedAtUtc = FDateTime::UtcNow().ToIso8601();
-	Analysis->CompletedAtUtc = Analysis->StartedAtUtc;
-	Analysis->Progress = 1.0;
+	Analysis->StartedAtSeconds = FPlatformTime::Seconds();
+	Analysis->TimeoutAtSeconds =
+		Analysis->StartedAtSeconds
+		+ ReadBoundedNumber(
+			Params,
+			TEXT("timeoutSeconds"),
+			120.0,
+			1.0,
+			600.0);
+	Analysis->Progress = 0.0;
 	Analysis->Result->SetStringField(TEXT("traceId"), TraceId);
-	Analysis->Result->SetStringField(
-		TEXT("analysisLevel"),
-		TEXT("artifactSummary"));
-	Analysis->Result->SetBoolField(
-		TEXT("traceServicesAvailable"),
-		false);
-	Analysis->Result->SetStringField(
-		TEXT("availabilityReason"),
-		TEXT("TraceServices provider parsing is not linked in this build; the durable .utrace artifact remains available for Unreal Insights."));
-	if (!(*Trace)->Artifacts.IsEmpty())
+	Analysis->Result->SetStringField(TEXT("analysisLevel"), TEXT("providers"));
+	Analysis->Result->SetBoolField(TEXT("traceServicesAvailable"), true);
+	Analysis->Result->SetObjectField(
+		TEXT("traceArtifact"),
+		MakeArtifactSummary((*Trace)->Artifacts[0]));
+	Analysis->TraceAnalysisSession =
+		AnalysisService->StartAnalysis(*TracePath);
+	if (!Analysis->TraceAnalysisSession.IsValid())
 	{
-		Analysis->Result->SetObjectField(
-			TEXT("traceArtifact"),
-			MakeArtifactSummary((*Trace)->Artifacts[0]));
+		FinishJob(
+			*Analysis,
+			TEXT("failed"),
+			TEXT("trace_analysis_unavailable"),
+			TEXT("TraceServices rejected the .utrace artifact."));
+		return FMCPToolResult::Error(
+			Analysis->Message,
+			Analysis->ErrorCode,
+			500);
 	}
+	ActiveHeavyJobId = Analysis->Id;
 	SaveJournal(*Analysis);
-	return FMCPToolResult::Ok(MakeJobSummary(*Analysis, true));
+	return FMCPToolResult::Ok(MakeJobSummary(*Analysis, false));
+}
+
+void FProductionJobRuntime::TickTraceAnalysisJob(FJob& Job)
+{
+	if (!Job.TraceAnalysisSession.IsValid())
+	{
+		FinishJob(
+			Job,
+			TEXT("failed"),
+			TEXT("trace_analysis_unavailable"),
+			TEXT("The TraceServices analysis session was lost."));
+		return;
+	}
+	const double Now = FPlatformTime::Seconds();
+	if (Job.TimeoutAtSeconds > 0.0 && Now >= Job.TimeoutAtSeconds)
+	{
+		Job.TraceAnalysisSession->Stop(true);
+		Job.TraceAnalysisSession.Reset();
+		FinishJob(
+			Job,
+			TEXT("failed"),
+			TEXT("trace_analysis_timeout"),
+			TEXT("TraceServices analysis exceeded its bounded timeout."));
+		return;
+	}
+	if (!Job.TraceAnalysisSession->IsAnalysisComplete())
+	{
+		const double Span =
+			FMath::Max(Job.TimeoutAtSeconds - Job.StartedAtSeconds, 0.001);
+		Job.Progress = FMath::Clamp(
+			(Now - Job.StartedAtSeconds) / Span,
+			0.0,
+			0.95);
+		return;
+	}
+
+	Job.Result->SetObjectField(
+		TEXT("analysis"),
+		BuildTraceProviderSummary(
+			*Job.TraceAnalysisSession,
+			Job.Input));
+	Job.TraceAnalysisSession.Reset();
+	if (!WriteTraceAnalysisReport(Job))
+	{
+		FinishJob(
+			Job,
+			TEXT("failed"),
+			TEXT("artifact_write_failed"),
+			TEXT("Trace analysis completed, but its bounded report artifact could not be written."));
+		return;
+	}
+	FinishJob(Job, TEXT("succeeded"));
 }
 
 FMCPToolResult FProductionJobRuntime::StartPerformanceRun(
@@ -1308,6 +1956,81 @@ FMCPToolResult FProductionJobRuntime::StartPerformanceRun(
 		ActiveHeavyJobId.Reset();
 	}
 
+	const FString Mode =
+		GetStringFieldOr(Params, TEXT("mode"), TEXT("window"));
+	if (Mode != TEXT("window") && Mode != TEXT("scenario"))
+	{
+		return FMCPToolResult::Error(
+			TEXT("mode must be either 'window' or 'scenario'."),
+			TEXT("invalid_params"),
+			422);
+	}
+	if (Mode == TEXT("scenario")
+		&& (!Params.IsValid()
+			|| !Params->HasTypedField<EJson::Object>(TEXT("scenario"))))
+	{
+		return FMCPToolResult::Error(
+			TEXT("scenario mode requires a scenario object."),
+			TEXT("invalid_params"),
+			422);
+	}
+	if (Mode == TEXT("scenario"))
+	{
+		const TSharedPtr<FJsonObject> Scenario =
+			Params->GetObjectField(TEXT("scenario"));
+		int32 BeginIndex = INDEX_NONE;
+		int32 EndIndex = INDEX_NONE;
+		int32 BeginCount = 0;
+		int32 EndCount = 0;
+		if (Scenario->HasTypedField<EJson::Array>(TEXT("steps")))
+		{
+			const TArray<TSharedPtr<FJsonValue>>& Steps =
+				Scenario->GetArrayField(TEXT("steps"));
+			for (int32 Index = 0; Index < Steps.Num(); ++Index)
+			{
+				if (!Steps[Index].IsValid()
+					|| Steps[Index]->Type != EJson::Object)
+				{
+					continue;
+				}
+				const FString Action =
+					GetStringFieldOr(
+						Steps[Index]->AsObject(),
+						TEXT("action"));
+				if (Action == TEXT("metrics.begin"))
+				{
+					++BeginCount;
+					BeginIndex = Index;
+				}
+				else if (Action == TEXT("metrics.end"))
+				{
+					++EndCount;
+					EndIndex = Index;
+				}
+			}
+		}
+		if (BeginCount != 1
+			|| EndCount != 1
+			|| BeginIndex >= EndIndex)
+		{
+			return FMCPToolResult::Error(
+				TEXT("scenario mode requires exactly one metrics.begin followed by one metrics.end step."),
+				TEXT("invalid_params"),
+				422);
+		}
+	}
+	if (Mode == TEXT("scenario")
+		&& (!StartScenario
+			|| !GetScenarioStatus
+			|| !GetScenarioResult
+			|| !CancelScenario))
+	{
+		return FMCPToolResult::Error(
+			TEXT("Scenario orchestration is unavailable in this runtime."),
+			TEXT("scenario_unavailable"),
+			503);
+	}
+
 	const double WarmupSeconds = FMath::Clamp(
 		GetNumberFieldOr(Params, TEXT("warmupSeconds"), 2.0),
 		0.0,
@@ -1316,21 +2039,29 @@ FMCPToolResult FProductionJobRuntime::StartPerformanceRun(
 		GetNumberFieldOr(Params, TEXT("sampleSeconds"), 10.0),
 		0.1,
 		3600.0);
+	const int32 RepeatCount = FMath::Clamp(
+		static_cast<int32>(
+			GetNumberFieldOr(Params, TEXT("repeatCount"), 1.0)),
+		1,
+		20);
 	TSharedPtr<FJob> Job = CreateJob(TEXT("performance"), Params);
 	Job->Status = TEXT("running");
-	Job->Phase =
-		WarmupSeconds > 0.0 ? TEXT("warmup") : TEXT("sampling");
 	Job->StartedAtUtc = FDateTime::UtcNow().ToIso8601();
 	Job->StartedAtSeconds = FPlatformTime::Seconds();
-	Job->WarmupUntilSeconds = Job->StartedAtSeconds + WarmupSeconds;
-	Job->SamplingUntilSeconds =
-		Job->WarmupUntilSeconds + SampleSeconds;
-	Job->TimeoutAtSeconds = Job->SamplingUntilSeconds + 30.0;
+	Job->PerformanceMode = Mode;
+	Job->RepeatCount = RepeatCount;
+	Job->WarmupSeconds = WarmupSeconds;
+	Job->SampleSeconds = SampleSeconds;
 	Job->BudgetMs = FMath::Clamp(
 		GetNumberFieldOr(Params, TEXT("budgetMs"), 16.6667),
 		0.01,
 		10000.0);
 	Job->Result->SetObjectField(TEXT("context"), MakeRuntimeContext());
+	Job->Result->SetStringField(TEXT("mode"), Mode);
+	Job->Result->SetNumberField(TEXT("repeatCount"), RepeatCount);
+	Job->Result->SetNumberField(TEXT("warmupSeconds"), WarmupSeconds);
+	Job->Result->SetNumberField(TEXT("sampleSeconds"), SampleSeconds);
+	Job->Result->SetNumberField(TEXT("budgetMs"), Job->BudgetMs);
 
 	if (GetBoolFieldOr(Params, TEXT("captureTrace"), false))
 	{
@@ -1344,9 +2075,63 @@ FMCPToolResult FProductionJobRuntime::StartPerformanceRun(
 		}
 		else
 		{
-			Job->Result->SetStringField(
-				TEXT("traceAvailability"),
-				TraceResult.ErrorMessage);
+			FinishJob(
+				*Job,
+				TEXT("failed"),
+				TraceResult.ErrorCode.IsEmpty()
+					? TEXT("trace_capture_failed")
+					: TraceResult.ErrorCode,
+				TraceResult.ErrorMessage.IsEmpty()
+					? TEXT("Automatic trace capture could not be started.")
+					: TraceResult.ErrorMessage);
+			return FMCPToolResult::Error(
+				Job->Message,
+				Job->ErrorCode,
+				TraceResult.HttpStatus);
+		}
+	}
+	if (Mode == TEXT("window"))
+	{
+		BeginWindowIteration(*Job, Job->StartedAtSeconds);
+		Job->TimeoutAtSeconds =
+			Job->StartedAtSeconds
+			+ RepeatCount * (WarmupSeconds + SampleSeconds)
+			+ 30.0;
+	}
+	else
+	{
+		const TSharedPtr<FJsonObject> Scenario =
+			Params->GetObjectField(TEXT("scenario"));
+		const double ScenarioTimeoutSeconds =
+			Scenario->HasField(TEXT("timeoutMs"))
+				? FMath::Clamp(
+					Scenario->GetNumberField(TEXT("timeoutMs")) / 1000.0,
+					0.001,
+					3600.0)
+				: 300.0;
+		Job->TimeoutAtSeconds =
+			Job->StartedAtSeconds
+			+ FMath::Min(
+				86400.0,
+				RepeatCount * ScenarioTimeoutSeconds + 60.0);
+		FString ScenarioError;
+		if (!StartScenarioIteration(*Job, ScenarioError))
+		{
+			if (Job->bOwnsTrace && !Job->TraceJobId.IsEmpty())
+			{
+				TSharedPtr<FJsonObject> StopParams = MakeShared<FJsonObject>();
+				StopParams->SetStringField(TEXT("traceId"), Job->TraceJobId);
+				StopTrace(StopParams);
+			}
+			FinishJob(
+				*Job,
+				TEXT("failed"),
+				TEXT("scenario_start_failed"),
+				ScenarioError);
+			return FMCPToolResult::Error(
+				ScenarioError,
+				TEXT("scenario_start_failed"),
+				422);
 		}
 	}
 	ActiveHeavyJobId = Job->Id;
@@ -1356,46 +2141,45 @@ FMCPToolResult FProductionJobRuntime::StartPerformanceRun(
 	return FMCPToolResult::Ok(Result);
 }
 
-void FProductionJobRuntime::TickPerformanceJob(FJob& Job)
+void FProductionJobRuntime::BeginWindowIteration(
+	FJob& Job,
+	const double Now)
 {
-	const double Now = FPlatformTime::Seconds();
-	if (Now < Job.WarmupUntilSeconds)
-	{
-		Job.Phase = TEXT("warmup");
-		const double Span =
-			FMath::Max(Job.WarmupUntilSeconds - Job.StartedAtSeconds, 0.001);
-		Job.Progress = 0.2
-			* FMath::Clamp((Now - Job.StartedAtSeconds) / Span, 0.0, 1.0);
-		return;
-	}
-	Job.Phase = TEXT("sampling");
-	if (Now < Job.SamplingUntilSeconds)
-	{
-		const double DeltaMs = FApp::GetDeltaTime() * 1000.0;
-		if (DeltaMs >= 0.0)
-		{
-			Job.MetricSamples.FindOrAdd(TEXT("frameMs")).Add(DeltaMs);
-		}
-		Job.MetricSamples.FindOrAdd(TEXT("gameMs")).Add(
-			FPlatformTime::ToMilliseconds64(GGameThreadTime));
-		Job.MetricSamples.FindOrAdd(TEXT("renderMs")).Add(
-			FPlatformTime::ToMilliseconds64(GRenderThreadTime));
-		Job.MetricSamples.FindOrAdd(TEXT("rhiMs")).Add(
-			FPlatformTime::ToMilliseconds64(GRHIThreadTime));
-		if (GDynamicRHI)
-		{
-			Job.MetricSamples.FindOrAdd(TEXT("gpuMs")).Add(
-				FPlatformTime::ToMilliseconds64(
-					RHIGetGPUFrameCycles()));
-		}
-		const double Span =
-			FMath::Max(Job.SamplingUntilSeconds - Job.WarmupUntilSeconds, 0.001);
-		Job.Progress = 0.2 + 0.75
-			* FMath::Clamp((Now - Job.WarmupUntilSeconds) / Span, 0.0, 1.0);
-		return;
-	}
+	Job.MetricSamples.Reset();
+	Job.PendingIterationResult.Reset();
+	Job.WarmupUntilSeconds = Now + Job.WarmupSeconds;
+	Job.SamplingUntilSeconds =
+		Job.WarmupUntilSeconds + Job.SampleSeconds;
+	Job.Phase =
+		Job.WarmupSeconds > 0.0 ? TEXT("warmup") : TEXT("sampling");
+}
 
-	TSharedPtr<FJsonObject> Metrics = MakeShared<FJsonObject>();
+void FProductionJobRuntime::SamplePerformanceFrame(FJob& Job)
+{
+	const double DeltaMs = FApp::GetDeltaTime() * 1000.0;
+	if (DeltaMs >= 0.0)
+	{
+		Job.MetricSamples.FindOrAdd(TEXT("frameMs")).Add(DeltaMs);
+	}
+	Job.MetricSamples.FindOrAdd(TEXT("gameMs")).Add(
+		FPlatformTime::ToMilliseconds64(GGameThreadTime));
+	Job.MetricSamples.FindOrAdd(TEXT("renderMs")).Add(
+		FPlatformTime::ToMilliseconds64(GRenderThreadTime));
+	Job.MetricSamples.FindOrAdd(TEXT("rhiMs")).Add(
+		FPlatformTime::ToMilliseconds64(GRHIThreadTime));
+	if (GDynamicRHI)
+	{
+		Job.MetricSamples.FindOrAdd(TEXT("gpuMs")).Add(
+			FPlatformTime::ToMilliseconds64(RHIGetGPUFrameCycles()));
+	}
+}
+
+void FProductionJobRuntime::CompletePerformanceIteration(FJob& Job)
+{
+	if (Job.PendingIterationResult.IsValid())
+	{
+		return;
+	}
 	static const TArray<FString> MetricNames = {
 		TEXT("frameMs"),
 		TEXT("gameMs"),
@@ -1403,6 +2187,7 @@ void FProductionJobRuntime::TickPerformanceJob(FJob& Job)
 		TEXT("rhiMs"),
 		TEXT("gpuMs")
 	};
+	TSharedPtr<FJsonObject> Metrics = MakeShared<FJsonObject>();
 	for (const FString& MetricName : MetricNames)
 	{
 		const TArray<double>* Samples = Job.MetricSamples.Find(MetricName);
@@ -1411,12 +2196,122 @@ void FProductionJobRuntime::TickPerformanceJob(FJob& Job)
 			SummarizeMetric(
 				Samples ? *Samples : TArray<double>(),
 				Job.BudgetMs));
+		if (Samples)
+		{
+			Job.AggregateMetricSamples.FindOrAdd(MetricName).Append(*Samples);
+		}
 	}
-	Job.Result->SetObjectField(TEXT("metrics"), Metrics);
-	Job.Result->SetNumberField(
+	Job.PendingIterationResult = MakeShared<FJsonObject>();
+	Job.PendingIterationResult->SetNumberField(
+		TEXT("repeatIndex"),
+		Job.RepeatIndex + 1);
+	Job.PendingIterationResult->SetNumberField(
 		TEXT("sampleCount"),
 		Job.MetricSamples.FindRef(TEXT("frameMs")).Num());
-	Job.Result->SetNumberField(TEXT("budgetMs"), Job.BudgetMs);
+	Job.PendingIterationResult->SetObjectField(TEXT("metrics"), Metrics);
+	if (!Job.ScenarioRunId.IsEmpty())
+	{
+		Job.PendingIterationResult->SetStringField(
+			TEXT("scenarioRunId"),
+			Job.ScenarioRunId);
+	}
+}
+
+bool FProductionJobRuntime::StartScenarioIteration(
+	FJob& Job,
+	FString& OutError)
+{
+	OutError.Reset();
+	if (!StartScenario
+		|| !Job.Input.IsValid()
+		|| !Job.Input->HasTypedField<EJson::Object>(TEXT("scenario")))
+	{
+		OutError = TEXT("Scenario orchestration is unavailable.");
+		return false;
+	}
+	TSharedPtr<FJsonObject> ScenarioParams = MakeShared<FJsonObject>();
+	ScenarioParams->SetObjectField(
+		TEXT("scenario"),
+		CopyObject(Job.Input->GetObjectField(TEXT("scenario"))));
+	const FMCPToolResult ScenarioStart = StartScenario(ScenarioParams);
+	if (!ScenarioStart.bSuccess
+		|| !ScenarioStart.Data.IsValid()
+		|| !ScenarioStart.Data->TryGetStringField(
+			TEXT("runId"),
+			Job.ScenarioRunId))
+	{
+		OutError = ScenarioStart.ErrorMessage.IsEmpty()
+			? TEXT("Scenario did not return a runId.")
+			: ScenarioStart.ErrorMessage;
+		Job.ScenarioRunId.Reset();
+		return false;
+	}
+	Job.MetricSamples.Reset();
+	Job.PendingIterationResult.Reset();
+	Job.bScenarioMetricsWasActive = false;
+	Job.bScenarioMetricsObserved = false;
+	Job.WarmupUntilSeconds = 0.0;
+	Job.Phase = TEXT("scenario");
+	return true;
+}
+
+void FProductionJobRuntime::FinishPerformanceRun(FJob& Job)
+{
+	static const TArray<FString> MetricNames = {
+		TEXT("frameMs"),
+		TEXT("gameMs"),
+		TEXT("renderMs"),
+		TEXT("rhiMs"),
+		TEXT("gpuMs")
+	};
+	TSharedPtr<FJsonObject> Metrics = MakeShared<FJsonObject>();
+	for (const FString& MetricName : MetricNames)
+	{
+		Metrics->SetObjectField(
+			MetricName,
+			SummarizeMetric(
+				Job.AggregateMetricSamples.FindRef(MetricName),
+				Job.BudgetMs));
+	}
+	Job.Result->SetObjectField(TEXT("metrics"), Metrics);
+	Job.Result->SetArrayField(TEXT("repetitions"), Job.Repetitions);
+	TArray<TSharedPtr<FJsonValue>> CapturedLogWindows;
+	for (const TSharedPtr<FJsonValue>& RepetitionValue : Job.Repetitions)
+	{
+		if (!RepetitionValue.IsValid()
+			|| RepetitionValue->Type != EJson::Object)
+		{
+			continue;
+		}
+		const TSharedPtr<FJsonObject> Repetition =
+			RepetitionValue->AsObject();
+		if (!Repetition->HasTypedField<EJson::Object>(TEXT("scenario")))
+		{
+			continue;
+		}
+		const TSharedPtr<FJsonObject> Scenario =
+			Repetition->GetObjectField(TEXT("scenario"));
+		if (!Scenario->HasTypedField<EJson::Object>(TEXT("logWindow")))
+		{
+			continue;
+		}
+		TSharedPtr<FJsonObject> LogWindow =
+			CopyObject(Scenario->GetObjectField(TEXT("logWindow")));
+		LogWindow->SetNumberField(
+			TEXT("repeatIndex"),
+			GetNumberFieldOr(Repetition, TEXT("repeatIndex"), 0.0));
+		LogWindow->SetStringField(
+			TEXT("scenarioRunId"),
+			GetStringFieldOr(Scenario, TEXT("runId")));
+		CapturedLogWindows.Add(MakeShared<FJsonValueObject>(LogWindow));
+	}
+	Job.Result->SetArrayField(TEXT("logWindows"), CapturedLogWindows);
+	Job.Result->SetNumberField(
+		TEXT("completedRepeatCount"),
+		Job.Repetitions.Num());
+	Job.Result->SetNumberField(
+		TEXT("sampleCount"),
+		Job.AggregateMetricSamples.FindRef(TEXT("frameMs")).Num());
 	if (Job.bOwnsTrace && !Job.TraceJobId.IsEmpty())
 	{
 		TSharedPtr<FJsonObject> StopParams = MakeShared<FJsonObject>();
@@ -1424,9 +2319,321 @@ void FProductionJobRuntime::TickPerformanceJob(FJob& Job)
 		const FMCPToolResult TraceStop = StopTrace(StopParams);
 		Job.Result->SetStringField(TEXT("traceId"), Job.TraceJobId);
 		Job.Result->SetBoolField(TEXT("traceCompleted"), TraceStop.bSuccess);
+		if (TraceStop.bSuccess
+			&& TraceStop.Data.IsValid()
+			&& TraceStop.Data->HasTypedField<EJson::Array>(TEXT("artifacts")))
+		{
+			Job.Result->SetArrayField(
+				TEXT("traceArtifacts"),
+				TraceStop.Data->GetArrayField(TEXT("artifacts")));
+		}
+		const bool bTraceArtifactAvailable =
+			TraceStop.bSuccess
+			&& TraceStop.Data.IsValid()
+			&& TraceStop.Data->HasTypedField<EJson::Array>(
+				TEXT("artifacts"))
+			&& !TraceStop.Data->GetArrayField(TEXT("artifacts")).IsEmpty();
+		if (!bTraceArtifactAvailable)
+		{
+			WritePerformanceReport(Job);
+			FinishJob(
+				Job,
+				TEXT("failed"),
+				TraceStop.ErrorCode.IsEmpty()
+					? TEXT("trace_artifact_unavailable")
+					: TraceStop.ErrorCode,
+				TraceStop.ErrorMessage.IsEmpty()
+					? TEXT("Automatic trace capture completed without a registered artifact.")
+					: TraceStop.ErrorMessage);
+			return;
+		}
 	}
-	WritePerformanceReport(Job);
+	if (!WritePerformanceReport(Job))
+	{
+		FinishJob(
+			Job,
+			TEXT("failed"),
+			TEXT("artifact_write_failed"),
+			TEXT("Performance sampling completed, but its report artifact could not be written."));
+		return;
+	}
 	FinishJob(Job, TEXT("succeeded"));
+}
+
+void FProductionJobRuntime::TickPerformanceJob(FJob& Job)
+{
+	const double Now = FPlatformTime::Seconds();
+	if (Job.TimeoutAtSeconds > 0.0 && Now >= Job.TimeoutAtSeconds)
+	{
+		if (Job.PerformanceMode == TEXT("scenario")
+			&& !Job.ScenarioRunId.IsEmpty()
+			&& CancelScenario)
+		{
+			TSharedPtr<FJsonObject> CancelParams = MakeShared<FJsonObject>();
+			CancelParams->SetStringField(TEXT("runId"), Job.ScenarioRunId);
+			CancelScenario(CancelParams);
+		}
+		if (Job.bOwnsTrace && !Job.TraceJobId.IsEmpty())
+		{
+			TSharedPtr<FJsonObject> StopParams = MakeShared<FJsonObject>();
+			StopParams->SetStringField(TEXT("traceId"), Job.TraceJobId);
+			StopTrace(StopParams);
+		}
+		FinishJob(
+			Job,
+			TEXT("failed"),
+			TEXT("performance_timeout"),
+			TEXT("The performance run exceeded its bounded timeout."));
+		return;
+	}
+
+	if (Job.PerformanceMode == TEXT("scenario"))
+	{
+		TSharedPtr<FJsonObject> StatusParams = MakeShared<FJsonObject>();
+		StatusParams->SetStringField(TEXT("runId"), Job.ScenarioRunId);
+		const FMCPToolResult ScenarioStatus =
+			GetScenarioStatus(StatusParams);
+		if (!ScenarioStatus.bSuccess || !ScenarioStatus.Data.IsValid())
+		{
+			FinishJob(
+				Job,
+				TEXT("failed"),
+				TEXT("scenario_status_failed"),
+				ScenarioStatus.ErrorMessage.IsEmpty()
+					? TEXT("Scenario status became unavailable.")
+					: ScenarioStatus.ErrorMessage);
+			return;
+		}
+
+		bool bMetricsActive = false;
+		int32 MetricsBeginCount = 0;
+		int32 MetricsEndCount = 0;
+		if (ScenarioStatus.Data->HasTypedField<EJson::Object>(
+				TEXT("metrics")))
+		{
+			const TSharedPtr<FJsonObject> MetricsState =
+				ScenarioStatus.Data->GetObjectField(TEXT("metrics"));
+			bMetricsActive =
+				GetBoolFieldOr(MetricsState, TEXT("active"), false);
+			MetricsBeginCount = static_cast<int32>(
+				GetNumberFieldOr(
+					MetricsState,
+					TEXT("beginCount"),
+					0.0));
+			MetricsEndCount = static_cast<int32>(
+				GetNumberFieldOr(
+					MetricsState,
+					TEXT("endCount"),
+					0.0));
+		}
+		if (bMetricsActive && !Job.bScenarioMetricsWasActive)
+		{
+			Job.MetricSamples.Reset();
+			Job.PendingIterationResult.Reset();
+			Job.bScenarioMetricsObserved = true;
+			Job.WarmupUntilSeconds = Now + Job.WarmupSeconds;
+			Job.SamplingUntilSeconds =
+				Job.WarmupUntilSeconds + Job.SampleSeconds;
+			Job.Phase =
+				Job.WarmupSeconds > 0.0
+					? TEXT("scenarioWarmup")
+					: TEXT("scenarioSampling");
+		}
+		if (bMetricsActive)
+		{
+			if (Now >= Job.WarmupUntilSeconds
+				&& Now < Job.SamplingUntilSeconds)
+			{
+				Job.Phase = TEXT("scenarioSampling");
+				SamplePerformanceFrame(Job);
+			}
+			else if (Now >= Job.SamplingUntilSeconds)
+			{
+				Job.Phase = TEXT("scenarioSampleComplete");
+			}
+		}
+		else if (Job.bScenarioMetricsWasActive)
+		{
+			CompletePerformanceIteration(Job);
+			Job.Phase = TEXT("scenarioFinalizing");
+		}
+		Job.bScenarioMetricsWasActive = bMetricsActive;
+
+		const FString ScenarioState =
+			GetStringFieldOr(
+				ScenarioStatus.Data,
+				TEXT("status"),
+				TEXT("running"));
+		const double ScenarioProgress =
+			GetNumberFieldOr(
+				ScenarioStatus.Data,
+				TEXT("stepCount"),
+				0.0) > 0.0
+				? GetNumberFieldOr(
+					ScenarioStatus.Data,
+					TEXT("currentStep"),
+					0.0)
+					/ GetNumberFieldOr(
+						ScenarioStatus.Data,
+						TEXT("stepCount"),
+						1.0)
+				: 0.0;
+		Job.Progress = FMath::Clamp(
+			(Job.RepeatIndex + ScenarioProgress) / Job.RepeatCount,
+			0.0,
+			0.95);
+		if (ScenarioState == TEXT("running"))
+		{
+			return;
+		}
+		if (ScenarioState != TEXT("succeeded"))
+		{
+			FinishJob(
+				Job,
+				TEXT("failed"),
+				TEXT("scenario_failed"),
+				TEXT("A measured scenario repetition did not succeed."));
+			return;
+		}
+		if (!Job.bScenarioMetricsObserved
+			|| MetricsBeginCount != 1
+			|| MetricsEndCount != 1
+			|| !Job.PendingIterationResult.IsValid()
+			|| GetNumberFieldOr(
+				Job.PendingIterationResult,
+				TEXT("sampleCount"),
+				0.0) < 1.0)
+		{
+			FinishJob(
+				Job,
+				TEXT("failed"),
+				TEXT("performance_markers_invalid"),
+				TEXT("Scenario mode requires exactly one completed metrics.begin/metrics.end window with at least one sampled frame."));
+			return;
+		}
+
+		const FMCPToolResult ScenarioResult =
+			GetScenarioResult(StatusParams);
+		if (!ScenarioResult.bSuccess || !ScenarioResult.Data.IsValid())
+		{
+			FinishJob(
+				Job,
+				TEXT("failed"),
+				TEXT("scenario_result_failed"),
+				ScenarioResult.ErrorMessage.IsEmpty()
+					? TEXT("Scenario result became unavailable.")
+					: ScenarioResult.ErrorMessage);
+			return;
+		}
+		TSharedPtr<FJsonObject> ScenarioEvidence =
+			MakeShared<FJsonObject>();
+		ScenarioEvidence->SetStringField(
+			TEXT("runId"),
+			Job.ScenarioRunId);
+		ScenarioEvidence->SetStringField(
+			TEXT("status"),
+			ScenarioState);
+		if (ScenarioResult.Data->HasTypedField<EJson::Object>(
+				TEXT("logWindow")))
+		{
+			ScenarioEvidence->SetObjectField(
+				TEXT("logWindow"),
+				CopyObject(
+					ScenarioResult.Data->GetObjectField(
+						TEXT("logWindow"))));
+		}
+		if (ScenarioResult.Data->HasTypedField<EJson::Array>(
+				TEXT("artifacts")))
+		{
+			ScenarioEvidence->SetArrayField(
+				TEXT("artifacts"),
+				ScenarioResult.Data->GetArrayField(TEXT("artifacts")));
+		}
+		Job.PendingIterationResult->SetObjectField(
+			TEXT("scenario"),
+			ScenarioEvidence);
+		Job.Repetitions.Add(
+			MakeShared<FJsonValueObject>(
+				Job.PendingIterationResult));
+		Job.PendingIterationResult.Reset();
+		++Job.RepeatIndex;
+		if (Job.RepeatIndex >= Job.RepeatCount)
+		{
+			FinishPerformanceRun(Job);
+			return;
+		}
+		FString StartError;
+		if (!StartScenarioIteration(Job, StartError))
+		{
+			FinishJob(
+				Job,
+				TEXT("failed"),
+				TEXT("scenario_start_failed"),
+				StartError);
+		}
+		return;
+	}
+
+	if (Now < Job.WarmupUntilSeconds)
+	{
+		Job.Phase = TEXT("warmup");
+		const double IterationStart =
+			Job.WarmupUntilSeconds - Job.WarmupSeconds;
+		const double WarmupFraction =
+			Job.WarmupSeconds > 0.0
+				? FMath::Clamp(
+					(Now - IterationStart) / Job.WarmupSeconds,
+					0.0,
+					1.0)
+				: 1.0;
+		Job.Progress = FMath::Clamp(
+			(Job.RepeatIndex + 0.2 * WarmupFraction)
+				/ Job.RepeatCount,
+			0.0,
+			0.95);
+		return;
+	}
+	Job.Phase = TEXT("sampling");
+	if (Now < Job.SamplingUntilSeconds)
+	{
+		SamplePerformanceFrame(Job);
+		const double SamplingFraction =
+			FMath::Clamp(
+				(Now - Job.WarmupUntilSeconds)
+					/ FMath::Max(Job.SampleSeconds, 0.001),
+				0.0,
+				1.0);
+		Job.Progress = FMath::Clamp(
+			(Job.RepeatIndex + 0.2 + 0.75 * SamplingFraction)
+				/ Job.RepeatCount,
+			0.0,
+			0.95);
+		return;
+	}
+
+	CompletePerformanceIteration(Job);
+	if (GetNumberFieldOr(
+			Job.PendingIterationResult,
+			TEXT("sampleCount"),
+			0.0) < 1.0)
+	{
+		FinishJob(
+			Job,
+			TEXT("failed"),
+			TEXT("performance_no_samples"),
+			TEXT("The sampling window completed without a frame sample."));
+		return;
+	}
+	Job.Repetitions.Add(
+		MakeShared<FJsonValueObject>(Job.PendingIterationResult));
+	Job.PendingIterationResult.Reset();
+	++Job.RepeatIndex;
+	if (Job.RepeatIndex >= Job.RepeatCount)
+	{
+		FinishPerformanceRun(Job);
+		return;
+	}
+	BeginWindowIteration(Job, Now);
 }
 
 FMCPToolResult FProductionJobRuntime::GetPerformanceResult(
@@ -1474,17 +2681,49 @@ FMCPToolResult FProductionJobRuntime::ComparePerformanceRuns(
 			409);
 	}
 
+	TSharedPtr<FJsonObject> Data = ComparePerformanceResults(
+		(*Baseline)->Result,
+		(*Candidate)->Result,
+		Params);
+	Data->SetStringField(TEXT("baselineRunId"), BaselineId);
+	Data->SetStringField(TEXT("candidateRunId"), CandidateId);
+	return FMCPToolResult::Ok(Data);
+}
+
+TSharedPtr<FJsonObject> FProductionJobRuntime::ComparePerformanceResults(
+	const TSharedPtr<FJsonObject>& BaselineResult,
+	const TSharedPtr<FJsonObject>& CandidateResult,
+	const TSharedPtr<FJsonObject>& Params)
+{
+	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("schema"), TEXT("ue.performance-comparison.v1"));
+	if (!BaselineResult.IsValid()
+		|| !CandidateResult.IsValid()
+		|| !BaselineResult->HasTypedField<EJson::Object>(TEXT("context"))
+		|| !CandidateResult->HasTypedField<EJson::Object>(TEXT("context"))
+		|| !BaselineResult->HasTypedField<EJson::Object>(TEXT("metrics"))
+		|| !CandidateResult->HasTypedField<EJson::Object>(TEXT("metrics")))
+	{
+		Data->SetStringField(TEXT("verdict"), TEXT("inconclusive"));
+		Data->SetStringField(
+			TEXT("reason"),
+			TEXT("One or both performance results are incomplete."));
+		return Data;
+	}
+
 	const TSharedPtr<FJsonObject> BaselineContext =
-		(*Baseline)->Result->GetObjectField(TEXT("context"));
+		BaselineResult->GetObjectField(TEXT("context"));
 	const TSharedPtr<FJsonObject> CandidateContext =
-		(*Candidate)->Result->GetObjectField(TEXT("context"));
+		CandidateResult->GetObjectField(TEXT("context"));
 	static const TArray<FString> ContextFields = {
 		TEXT("project"),
 		TEXT("map"),
 		TEXT("rhi"),
 		TEXT("gpu"),
 		TEXT("resolution"),
-		TEXT("configuration")
+		TEXT("configuration"),
+		TEXT("engineVersion"),
+		TEXT("platform")
 	};
 	TArray<TSharedPtr<FJsonValue>> Mismatches;
 	for (const FString& Field : ContextFields)
@@ -1501,9 +2740,6 @@ FMCPToolResult FProductionJobRuntime::ComparePerformanceRuns(
 		}
 	}
 
-	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
-	Data->SetStringField(TEXT("baselineRunId"), BaselineId);
-	Data->SetStringField(TEXT("candidateRunId"), CandidateId);
 	Data->SetArrayField(TEXT("contextMismatches"), Mismatches);
 	if (!Mismatches.IsEmpty())
 	{
@@ -1511,54 +2747,158 @@ FMCPToolResult FProductionJobRuntime::ComparePerformanceRuns(
 		Data->SetStringField(
 			TEXT("reason"),
 			TEXT("Performance run contexts differ."));
-		return FMCPToolResult::Ok(Data);
+		return Data;
 	}
 
-	const FString Metric =
-		GetStringFieldOr(Params, TEXT("metric"), TEXT("frameMs"));
-	const double MaxRegressionPercent =
-		GetNumberFieldOr(Params, TEXT("maxRegressionPercent"), 5.0);
-	const double AbsoluteBudgetMs =
-		GetNumberFieldOr(Params, TEXT("absoluteBudgetMs"), 0.0);
-	const TSharedPtr<FJsonObject> BaselineMetric =
-		(*Baseline)->Result->GetObjectField(TEXT("metrics"))
-			->GetObjectField(Metric);
-	const TSharedPtr<FJsonObject> CandidateMetric =
-		(*Candidate)->Result->GetObjectField(TEXT("metrics"))
-			->GetObjectField(Metric);
-	if (!GetBoolFieldOr(BaselineMetric, TEXT("available"), false)
-		|| !GetBoolFieldOr(CandidateMetric, TEXT("available"), false))
+	TArray<TSharedPtr<FJsonValue>> RequestedChecks;
+	if (Params.IsValid()
+		&& Params->HasTypedField<EJson::Array>(TEXT("checks")))
 	{
-		Data->SetStringField(TEXT("verdict"), TEXT("inconclusive"));
-		Data->SetStringField(
-			TEXT("reason"),
-			TEXT("The requested metric is unavailable."));
-		return FMCPToolResult::Ok(Data);
+		RequestedChecks = Params->GetArrayField(TEXT("checks"));
 	}
-	const double Before =
-		GetNumberFieldOr(BaselineMetric, TEXT("p95"), 0.0);
-	const double After =
-		GetNumberFieldOr(CandidateMetric, TEXT("p95"), 0.0);
-	const double RegressionPercent =
-		Before > SMALL_NUMBER ? ((After - Before) / Before) * 100.0 : 0.0;
-	const bool bRegression =
-		RegressionPercent > MaxRegressionPercent
-		|| (AbsoluteBudgetMs > 0.0 && After > AbsoluteBudgetMs);
-	Data->SetStringField(TEXT("metric"), Metric);
-	Data->SetNumberField(TEXT("baselineP95"), Before);
-	Data->SetNumberField(TEXT("candidateP95"), After);
-	Data->SetNumberField(TEXT("regressionPercent"), RegressionPercent);
-	Data->SetNumberField(
-		TEXT("maxRegressionPercent"),
-		MaxRegressionPercent);
-	if (AbsoluteBudgetMs > 0.0)
+	if (RequestedChecks.IsEmpty())
 	{
-		Data->SetNumberField(TEXT("absoluteBudgetMs"), AbsoluteBudgetMs);
+		TSharedPtr<FJsonObject> LegacyCheck = MakeShared<FJsonObject>();
+		LegacyCheck->SetStringField(
+			TEXT("metric"),
+			GetStringFieldOr(Params, TEXT("metric"), TEXT("frameMs")));
+		LegacyCheck->SetStringField(
+			TEXT("statistic"),
+			GetStringFieldOr(Params, TEXT("statistic"), TEXT("p95")));
+		LegacyCheck->SetNumberField(
+			TEXT("maxRegressionPercent"),
+			GetNumberFieldOr(
+				Params,
+				TEXT("maxRegressionPercent"),
+				5.0));
+		const double AbsoluteBudgetMs =
+			GetNumberFieldOr(
+				Params,
+				TEXT("absoluteBudgetMs"),
+				0.0);
+		if (AbsoluteBudgetMs > 0.0)
+		{
+			LegacyCheck->SetNumberField(
+				TEXT("absoluteBudgetMs"),
+				AbsoluteBudgetMs);
+		}
+		RequestedChecks.Add(
+			MakeShared<FJsonValueObject>(LegacyCheck));
 	}
+
+	const TSharedPtr<FJsonObject> BaselineMetrics =
+		BaselineResult->GetObjectField(TEXT("metrics"));
+	const TSharedPtr<FJsonObject> CandidateMetrics =
+		CandidateResult->GetObjectField(TEXT("metrics"));
+	TArray<TSharedPtr<FJsonValue>> CheckResults;
+	bool bAnyRegression = false;
+	bool bAnyInconclusive = false;
+	const int32 CheckLimit = FMath::Min(32, RequestedChecks.Num());
+	for (int32 CheckIndex = 0; CheckIndex < CheckLimit; ++CheckIndex)
+	{
+		const TSharedPtr<FJsonValue>& CheckValue =
+			RequestedChecks[CheckIndex];
+		if (!CheckValue.IsValid() || CheckValue->Type != EJson::Object)
+		{
+			bAnyInconclusive = true;
+			continue;
+		}
+		const TSharedPtr<FJsonObject> Check = CheckValue->AsObject();
+		const FString Metric =
+			GetStringFieldOr(Check, TEXT("metric"), TEXT("frameMs"));
+		const FString Statistic =
+			GetStringFieldOr(Check, TEXT("statistic"), TEXT("p95"));
+		const double MaxRegressionPercent =
+			GetNumberFieldOr(
+				Check,
+				TEXT("maxRegressionPercent"),
+				5.0);
+		const double AbsoluteBudgetMs =
+			GetNumberFieldOr(
+				Check,
+				TEXT("absoluteBudgetMs"),
+				0.0);
+		TSharedPtr<FJsonObject> CheckResult = MakeShared<FJsonObject>();
+		CheckResult->SetStringField(TEXT("metric"), Metric);
+		CheckResult->SetStringField(TEXT("statistic"), Statistic);
+		CheckResult->SetNumberField(
+			TEXT("maxRegressionPercent"),
+			MaxRegressionPercent);
+		if (AbsoluteBudgetMs > 0.0)
+		{
+			CheckResult->SetNumberField(
+				TEXT("absoluteBudgetMs"),
+				AbsoluteBudgetMs);
+		}
+
+		const TSharedPtr<FJsonObject>* BaselineMetricPtr = nullptr;
+		const TSharedPtr<FJsonObject>* CandidateMetricPtr = nullptr;
+		const bool bMetricObjectsAvailable =
+			BaselineMetrics->TryGetObjectField(
+				Metric,
+				BaselineMetricPtr)
+			&& CandidateMetrics->TryGetObjectField(
+				Metric,
+				CandidateMetricPtr)
+			&& BaselineMetricPtr
+			&& CandidateMetricPtr;
+		if (!bMetricObjectsAvailable
+			|| !GetBoolFieldOr(
+				*BaselineMetricPtr,
+				TEXT("available"),
+				false)
+			|| !GetBoolFieldOr(
+				*CandidateMetricPtr,
+				TEXT("available"),
+				false)
+			|| !(*BaselineMetricPtr)->HasField(Statistic)
+			|| !(*CandidateMetricPtr)->HasField(Statistic))
+		{
+			CheckResult->SetStringField(
+				TEXT("verdict"),
+				TEXT("inconclusive"));
+			CheckResult->SetStringField(
+				TEXT("reason"),
+				TEXT("The requested metric or statistic is unavailable."));
+			CheckResults.Add(
+				MakeShared<FJsonValueObject>(CheckResult));
+			bAnyInconclusive = true;
+			continue;
+		}
+		const double Before =
+			(*BaselineMetricPtr)->GetNumberField(Statistic);
+		const double After =
+			(*CandidateMetricPtr)->GetNumberField(Statistic);
+		const double RegressionPercent =
+			Before > SMALL_NUMBER
+				? ((After - Before) / Before) * 100.0
+				: (After > Before ? 1000000000.0 : 0.0);
+		const bool bRegression =
+			RegressionPercent > MaxRegressionPercent
+			|| (AbsoluteBudgetMs > 0.0 && After > AbsoluteBudgetMs);
+		CheckResult->SetNumberField(TEXT("baseline"), Before);
+		CheckResult->SetNumberField(TEXT("candidate"), After);
+		CheckResult->SetNumberField(
+			TEXT("regressionPercent"),
+			RegressionPercent);
+		CheckResult->SetStringField(
+			TEXT("verdict"),
+			bRegression ? TEXT("regression") : TEXT("pass"));
+		CheckResults.Add(
+			MakeShared<FJsonValueObject>(CheckResult));
+		bAnyRegression |= bRegression;
+	}
+	Data->SetArrayField(TEXT("checks"), CheckResults);
+	Data->SetNumberField(TEXT("checkTotal"), RequestedChecks.Num());
+	Data->SetBoolField(
+		TEXT("checksTruncated"),
+		RequestedChecks.Num() > CheckLimit);
 	Data->SetStringField(
 		TEXT("verdict"),
-		bRegression ? TEXT("fail") : TEXT("pass"));
-	return FMCPToolResult::Ok(Data);
+		bAnyRegression
+			? TEXT("regression")
+			: (bAnyInconclusive ? TEXT("inconclusive") : TEXT("pass")));
+	return Data;
 }
 
 FMCPToolResult FProductionJobRuntime::ListTests(
@@ -1812,12 +3152,12 @@ FMCPToolResult FProductionJobRuntime::StartPackage(
 	const FString Config =
 		GetStringFieldOr(Params, TEXT("config"), TEXT("Shipping"));
 	const FString OutputInput =
-		GetStringFieldOr(Params, TEXT("output_dir"));
+		GetStringFieldOr(Params, TEXT("outputDir"));
 	if (OutputInput.IsEmpty()
 		|| !IsSafeLegacyArgumentString(OutputInput))
 	{
 		return FMCPToolResult::Error(
-			TEXT("output_dir is required and may not contain command separators."),
+			TEXT("outputDir is required and may not contain command separators."),
 			TEXT("invalid_params"),
 			422);
 	}
@@ -1831,9 +3171,9 @@ FMCPToolResult FProductionJobRuntime::StartPackage(
 	{
 		return FMCPToolResult::Error(
 			TEXT(
-				"output_dir must resolve inside "
+				"outputDir must resolve inside "
 				"Saved/UEAIIntegration/Packages."),
-			TEXT("output_path_not_permitted"),
+			TEXT("outputPath_not_permitted"),
 			403);
 	}
 	IFileManager::Get().MakeDirectory(*AllowedOutputRoot, true);
@@ -1892,11 +3232,11 @@ FMCPToolResult FProductionJobRuntime::StartCommandlet(
 			422);
 	}
 	const FString Commandlet =
-		GetStringFieldOr(Params, TEXT("commandlet_name"));
+		GetStringFieldOr(Params, TEXT("commandletName"));
 	if (!IsSafeToken(Commandlet, 128))
 	{
 		return FMCPToolResult::Error(
-			TEXT("commandlet_name must be an identifier token."),
+			TEXT("commandletName must be an identifier token."),
 			TEXT("invalid_params"),
 			422);
 	}
@@ -3017,11 +4357,14 @@ void FProductionJobRuntime::WriteTestReports(FJob& Job)
 		TEXT("application/xml"));
 }
 
-void FProductionJobRuntime::WritePerformanceReport(FJob& Job)
+bool FProductionJobRuntime::WritePerformanceReport(FJob& Job)
 {
 	TSharedPtr<FJsonObject> Report = MakeShared<FJsonObject>();
-	Report->SetStringField(TEXT("schema"), TEXT("ue.performance-run.v1"));
+	Report->SetStringField(TEXT("schema"), TEXT("ue.performance-run.v2"));
 	Report->SetStringField(TEXT("runId"), Job.Id);
+	Report->SetStringField(
+		TEXT("mode"),
+		GetStringFieldOr(Job.Result, TEXT("mode"), TEXT("window")));
 	Report->SetObjectField(
 		TEXT("context"),
 		Job.Result->GetObjectField(TEXT("context")));
@@ -3031,18 +4374,91 @@ void FProductionJobRuntime::WritePerformanceReport(FJob& Job)
 	Report->SetNumberField(
 		TEXT("sampleCount"),
 		GetNumberFieldOr(Job.Result, TEXT("sampleCount"), 0.0));
+	Report->SetNumberField(
+		TEXT("repeatCount"),
+		GetNumberFieldOr(Job.Result, TEXT("repeatCount"), 1.0));
+	Report->SetNumberField(
+		TEXT("completedRepeatCount"),
+		GetNumberFieldOr(
+			Job.Result,
+			TEXT("completedRepeatCount"),
+			0.0));
+	if (Job.Result->HasTypedField<EJson::Array>(TEXT("repetitions")))
+	{
+		Report->SetArrayField(
+			TEXT("repetitions"),
+			Job.Result->GetArrayField(TEXT("repetitions")));
+	}
+	if (Job.Result->HasTypedField<EJson::Array>(TEXT("logWindows")))
+	{
+		Report->SetArrayField(
+			TEXT("logWindows"),
+			Job.Result->GetArrayField(TEXT("logWindows")));
+	}
+	if (Job.Result->HasField(TEXT("traceId")))
+	{
+		Report->SetStringField(
+			TEXT("traceId"),
+			GetStringFieldOr(Job.Result, TEXT("traceId")));
+		Report->SetBoolField(
+			TEXT("traceCompleted"),
+			GetBoolFieldOr(Job.Result, TEXT("traceCompleted"), false));
+		if (Job.Result->HasTypedField<EJson::Array>(
+				TEXT("traceArtifacts")))
+		{
+			Report->SetArrayField(
+				TEXT("traceArtifacts"),
+				Job.Result->GetArrayField(TEXT("traceArtifacts")));
+		}
+	}
 	FString Json;
 	const TSharedRef<TJsonWriter<>> Writer =
 		TJsonWriterFactory<>::Create(&Json);
-	FJsonSerializer::Serialize(Report.ToSharedRef(), Writer);
+	if (!FJsonSerializer::Serialize(Report.ToSharedRef(), Writer))
+	{
+		return false;
+	}
 	const FString Path =
 		FPaths::Combine(JobDirectory(Job.Id), TEXT("performance.json"));
-	FFileHelper::SaveStringToFile(Json, *Path);
-	AddArtifact(
-		Job,
-		Path,
-		TEXT("performance.json"),
-		TEXT("application/json"));
+	return FFileHelper::SaveStringToFile(Json, *Path)
+		&& AddArtifact(
+			Job,
+			Path,
+			TEXT("performance.json"),
+			TEXT("application/json")) != nullptr;
+}
+
+bool FProductionJobRuntime::WriteTraceAnalysisReport(FJob& Job)
+{
+	if (!Job.Result.IsValid()
+		|| !Job.Result->HasTypedField<EJson::Object>(TEXT("analysis")))
+	{
+		return false;
+	}
+	TSharedPtr<FJsonObject> Report = MakeShared<FJsonObject>();
+	Report->SetStringField(TEXT("schema"), TEXT("ue.trace-analysis.v1"));
+	Report->SetStringField(TEXT("jobId"), Job.Id);
+	Report->SetStringField(
+		TEXT("traceId"),
+		GetStringFieldOr(Job.Result, TEXT("traceId")));
+	Report->SetObjectField(
+		TEXT("analysis"),
+		CopyObject(Job.Result->GetObjectField(TEXT("analysis"))));
+	FString Json;
+	const TSharedRef<TJsonWriter<>> Writer =
+		TJsonWriterFactory<>::Create(&Json);
+	if (!FJsonSerializer::Serialize(Report.ToSharedRef(), Writer))
+	{
+		return false;
+	}
+	const FString Path =
+		FPaths::Combine(JobDirectory(Job.Id), TEXT("trace-analysis.json"));
+	return FFileHelper::SaveStringToFile(Json, *Path)
+		&& AddArtifact(
+			Job,
+			Path,
+			TEXT("trace-analysis.json"),
+			TEXT("application/json")) != nullptr;
 }
 
 FProductionJobRuntime::FArtifact* FProductionJobRuntime::AddArtifact(
@@ -3207,6 +4623,7 @@ TSharedPtr<FJsonObject> FProductionJobRuntime::MakeRuntimeContext()
 		TEXT("rhi"),
 		GDynamicRHI ? FString(GDynamicRHI->GetName()) : TEXT("unavailable"));
 	Context->SetStringField(TEXT("gpu"), FPlatformMisc::GetPrimaryGPUBrand());
+	Context->SetStringField(TEXT("cpu"), FPlatformMisc::GetCPUBrand());
 	Context->SetStringField(
 		TEXT("resolution"),
 		FString::Printf(
@@ -3216,6 +4633,19 @@ TSharedPtr<FJsonObject> FProductionJobRuntime::MakeRuntimeContext()
 	Context->SetStringField(
 		TEXT("configuration"),
 		LexToString(FApp::GetBuildConfiguration()));
+	Context->SetStringField(
+		TEXT("engineVersion"),
+		FEngineVersion::Current().ToString());
+	Context->SetStringField(
+		TEXT("platform"),
+		ANSI_TO_TCHAR(FPlatformProperties::IniPlatformName()));
+	const FString Fingerprint = DigestJson(Context);
+	if (!Fingerprint.IsEmpty())
+	{
+		Context->SetStringField(
+			TEXT("fingerprint"),
+			TEXT("sha256:") + Fingerprint);
+	}
 	return Context;
 }
 

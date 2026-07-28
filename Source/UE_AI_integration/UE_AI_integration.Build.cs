@@ -14,7 +14,7 @@ public class UE_AI_integration : ModuleRules
 		PrivateIncludePaths.Add(
 			Path.Combine(ModuleDirectory, "..", "..", "Workflow", "ThirdParty"));
 
-		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"0.3.1\"");
+		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"0.4.0\"");
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
@@ -96,6 +96,9 @@ public class UE_AI_integration : ModuleRules
 
 			// Plugin descriptor/version lookup
 			"Projects",
+
+			// Bounded .utrace provider analysis
+			"TraceServices",
 
 			// Cross-version SHA-256 implementation
 			"SSL"

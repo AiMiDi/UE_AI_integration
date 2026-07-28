@@ -58,6 +58,8 @@ namespace
 		TEXT("viewport.capture"),
 		TEXT("log.capture"),
 		TEXT("frameTime.sample"),
+		TEXT("metrics.begin"),
+		TEXT("metrics.end"),
 	};
 
 	const TSet<FString> AllowedAssertionTypes = {
@@ -282,7 +284,24 @@ FProductionRuntimeController::FProductionRuntimeController(
 	: Registry(InRegistry)
 	, PIEController(InPIEController)
 	, InitializedAtUtc(FDateTime::UtcNow())
-	, JobRuntime(MakeUnique<FProductionJobRuntime>())
+	, JobRuntime(
+		MakeUnique<FProductionJobRuntime>(
+			[this](const TSharedPtr<FJsonObject>& Params)
+			{
+				return StartScenario(Params);
+			},
+			[this](const TSharedPtr<FJsonObject>& Params)
+			{
+				return GetScenarioStatus(Params);
+			},
+			[this](const TSharedPtr<FJsonObject>& Params)
+			{
+				return GetScenarioResult(Params);
+			},
+			[this](const TSharedPtr<FJsonObject>& Params)
+			{
+				return CancelScenario(Params);
+			}))
 {
 	IFileManager::Get().MakeDirectory(*ScenarioDirectory(), true);
 }
@@ -431,6 +450,14 @@ FMCPToolResult FProductionRuntimeController::StartScenario(
 			? Scenario->GetNumberField(TEXT("timeoutMs"))
 			: 300000.0;
 	Run->DeadlineSeconds = Run->StartedAtSeconds + TimeoutMs / 1000.0;
+	Run->LogPath = FindEditorLogPath();
+	if (!Run->LogPath.IsEmpty())
+	{
+		Run->LogStartOffset =
+			FMath::Max<int64>(
+				0,
+				IFileManager::Get().FileSize(*Run->LogPath));
+	}
 
 	if (Scenario->HasTypedField<EJson::Object>(TEXT("cleanup")))
 	{
@@ -983,6 +1010,10 @@ FMCPToolResult FProductionRuntimeController::ValidateScenarioObject(
 	}
 
 	TSet<FString> StepIds;
+	int32 MetricsBeginCount = 0;
+	int32 MetricsEndCount = 0;
+	int32 MetricsBeginIndex = INDEX_NONE;
+	int32 MetricsEndIndex = INDEX_NONE;
 	for (int32 Index = 0; Index < Steps.Num(); ++Index)
 	{
 		if (!Steps[Index].IsValid() || Steps[Index]->Type != EJson::Object)
@@ -1020,6 +1051,16 @@ FMCPToolResult FProductionRuntimeController::ValidateScenarioObject(
 				FString::Printf(
 					TEXT("steps[%d].action is not supported."),
 					Index));
+		}
+		else if (Action == TEXT("metrics.begin"))
+		{
+			++MetricsBeginCount;
+			MetricsBeginIndex = Index;
+		}
+		else if (Action == TEXT("metrics.end"))
+		{
+			++MetricsEndCount;
+			MetricsEndIndex = Index;
 		}
 
 		if (Step->HasField(TEXT("assertions")))
@@ -1075,6 +1116,14 @@ FMCPToolResult FProductionRuntimeController::ValidateScenarioObject(
 						Index));
 			}
 		}
+	}
+	if (MetricsBeginCount != MetricsEndCount
+		|| MetricsBeginCount > 1
+		|| (MetricsBeginCount == 1
+			&& MetricsBeginIndex >= MetricsEndIndex))
+	{
+		OutErrors.Add(
+			TEXT("Scenario metrics markers must contain at most one metrics.begin followed by exactly one metrics.end."));
 	}
 	return FMCPToolResult::Ok(MakeShared<FJsonObject>());
 }
@@ -1402,6 +1451,7 @@ void FProductionRuntimeController::FinishScenario(
 	{
 		PIEController.Stop();
 	}
+	CaptureScenarioLogWindow(Run);
 	WriteScenarioReceipt(Run);
 	if (ActiveScenarioId == Run.Id)
 	{
@@ -1438,7 +1488,51 @@ bool FProductionRuntimeController::ExecuteScenarioStep(
 	ToolParams = ResolvedParamsValue->AsObject();
 
 	TSharedPtr<FJsonObject> StepResult;
-	if (Action == TEXT("frameTime.sample"))
+	if (Action == TEXT("metrics.begin"))
+	{
+		if (Run.bMetricsActive || Run.MetricsBeginCount > 0)
+		{
+			OutErrorCode = TEXT("performance_markers_invalid");
+			OutErrorMessage =
+				TEXT("metrics.begin may execute only once per scenario.");
+			return false;
+		}
+		Run.bMetricsActive = true;
+		Run.MetricsBeginCount = 1;
+		Run.MetricsStartedAtSeconds = FPlatformTime::Seconds();
+		StepResult = MakeShared<FJsonObject>();
+		StepResult->SetBoolField(TEXT("active"), true);
+		StepResult->SetNumberField(TEXT("beginCount"), 1);
+	}
+	else if (Action == TEXT("metrics.end"))
+	{
+		if (!Run.bMetricsActive
+			|| Run.MetricsBeginCount != 1
+			|| Run.MetricsEndCount > 0)
+		{
+			OutErrorCode = TEXT("performance_markers_invalid");
+			OutErrorMessage =
+				TEXT("metrics.end requires one active metrics.begin marker.");
+			return false;
+		}
+		Run.bMetricsActive = false;
+		Run.MetricsEndCount = 1;
+		Run.MetricsEndedAtSeconds = FPlatformTime::Seconds();
+		StepResult = MakeShared<FJsonObject>();
+		StepResult->SetBoolField(TEXT("active"), false);
+		StepResult->SetNumberField(TEXT("endCount"), 1);
+		StepResult->SetNumberField(
+			TEXT("durationMs"),
+			FMath::Max(
+				0.0,
+				Run.MetricsEndedAtSeconds - Run.MetricsStartedAtSeconds)
+				* 1000.0);
+	}
+	else if (Action == TEXT("log.capture"))
+	{
+		StepResult = BuildScenarioLogWindow(Run, ToolParams);
+	}
+	else if (Action == TEXT("frameTime.sample"))
 	{
 		StepResult = MakeShared<FJsonObject>();
 		StepResult->SetNumberField(
@@ -1682,6 +1776,128 @@ void FProductionRuntimeController::CaptureArtifact(
 	StepResult->SetStringField(TEXT("artifactId"), ArtifactId);
 }
 
+void FProductionRuntimeController::CaptureScenarioLogWindow(
+	FScenarioRun& Run) const
+{
+	Run.LogWindow = BuildScenarioLogWindow(Run);
+}
+
+TSharedPtr<FJsonObject> FProductionRuntimeController::BuildScenarioLogWindow(
+	const FScenarioRun& Run,
+	const TSharedPtr<FJsonObject>& Params) const
+{
+	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("path"), Run.LogPath);
+	Data->SetNumberField(
+		TEXT("startCursor"),
+		static_cast<double>(Run.LogStartOffset));
+	if (Run.LogPath.IsEmpty()
+		|| !IFileManager::Get().FileExists(*Run.LogPath))
+	{
+		Data->SetBoolField(TEXT("available"), false);
+		Data->SetStringField(
+			TEXT("reason"),
+			TEXT("The active Editor log file could not be resolved."));
+		Data->SetStringField(TEXT("content"), FString());
+		return Data;
+	}
+
+	const int64 FileSize = IFileManager::Get().FileSize(*Run.LogPath);
+	if (FileSize < 0)
+	{
+		Data->SetBoolField(TEXT("available"), false);
+		Data->SetStringField(
+			TEXT("reason"),
+			TEXT("The active Editor log file could not be measured."));
+		Data->SetStringField(TEXT("content"), FString());
+		return Data;
+	}
+	const bool bRotated = FileSize < Run.LogStartOffset;
+	const int64 WindowStart = bRotated ? 0 : Run.LogStartOffset;
+	const int32 MaxChars = FMath::Clamp(
+		Params.IsValid() && Params->HasField(TEXT("maxChars"))
+			? static_cast<int32>(
+				Params->GetNumberField(TEXT("maxChars")))
+			: 262144,
+		1,
+		1024 * 1024);
+	const int64 AvailableBytes = FMath::Max<int64>(0, FileSize - WindowStart);
+	const int64 ReadStart =
+		AvailableBytes > MaxChars
+			? FileSize - MaxChars
+			: WindowStart;
+	const int32 BytesToRead = static_cast<int32>(
+		FMath::Min<int64>(MaxChars, FileSize - ReadStart));
+	TArray<uint8> Bytes;
+	Bytes.SetNumUninitialized(BytesToRead + 1);
+	bool bRead = false;
+	TUniquePtr<IFileHandle> File(
+		FPlatformFileManager::Get().GetPlatformFile().OpenRead(
+			*Run.LogPath));
+	if (File)
+	{
+		bRead =
+			File->Seek(ReadStart)
+			&& (BytesToRead == 0
+				|| File->Read(Bytes.GetData(), BytesToRead));
+	}
+	if (!bRead)
+	{
+		Data->SetBoolField(TEXT("available"), false);
+		Data->SetStringField(
+			TEXT("reason"),
+			TEXT("The scenario log window could not be read."));
+		Data->SetStringField(TEXT("content"), FString());
+		return Data;
+	}
+	Bytes[BytesToRead] = 0;
+	const FUTF8ToTCHAR Converted(
+		reinterpret_cast<const ANSICHAR*>(Bytes.GetData()),
+		BytesToRead);
+	FString Content(Converted.Length(), Converted.Get());
+	FString Filter;
+	if (Params.IsValid())
+	{
+		Params->TryGetStringField(TEXT("filter"), Filter);
+	}
+	Filter.LeftInline(256, false);
+	if (!Filter.IsEmpty())
+	{
+		TArray<FString> Lines;
+		Content.ParseIntoArrayLines(Lines, false);
+		TArray<FString> MatchingLines;
+		for (const FString& Line : Lines)
+		{
+			if (Line.Contains(Filter, ESearchCase::IgnoreCase))
+			{
+				MatchingLines.Add(Line);
+			}
+		}
+		Content = FString::Join(MatchingLines, TEXT("\n"));
+		Data->SetStringField(TEXT("filter"), Filter);
+		Data->SetNumberField(
+			TEXT("matchingLineCount"),
+			MatchingLines.Num());
+	}
+
+	TArray<FString> ResultLines;
+	Content.ParseIntoArrayLines(ResultLines, false);
+	Data->SetBoolField(TEXT("available"), true);
+	Data->SetBoolField(TEXT("rotated"), bRotated);
+	Data->SetBoolField(
+		TEXT("truncated"),
+		AvailableBytes > MaxChars);
+	Data->SetNumberField(
+		TEXT("retainedFromCursor"),
+		static_cast<double>(ReadStart));
+	Data->SetNumberField(
+		TEXT("endCursor"),
+		static_cast<double>(FileSize));
+	Data->SetNumberField(TEXT("lineCount"), ResultLines.Num());
+	Data->SetStringField(TEXT("content"), Content);
+	return Data;
+}
+
 void FProductionRuntimeController::WriteScenarioReceipt(
 	const FScenarioRun& Run) const
 {
@@ -1713,6 +1929,38 @@ TSharedPtr<FJsonObject> FProductionRuntimeController::MakeScenarioSummary(
 		Run.Scenario.IsValid()
 			? Run.Scenario->GetArrayField(TEXT("steps")).Num()
 			: 0);
+	TSharedPtr<FJsonObject> Metrics = MakeShared<FJsonObject>();
+	Metrics->SetBoolField(TEXT("active"), Run.bMetricsActive);
+	Metrics->SetNumberField(
+		TEXT("beginCount"),
+		Run.MetricsBeginCount);
+	Metrics->SetNumberField(
+		TEXT("endCount"),
+		Run.MetricsEndCount);
+	Metrics->SetBoolField(
+		TEXT("completed"),
+		Run.MetricsBeginCount == 1
+			&& Run.MetricsEndCount == 1
+			&& !Run.bMetricsActive);
+	if (Run.MetricsStartedAtSeconds > 0.0)
+	{
+		Metrics->SetNumberField(
+			TEXT("elapsedMs"),
+			FMath::Max(
+				0.0,
+				(Run.bMetricsActive
+					? FPlatformTime::Seconds()
+					: Run.MetricsEndedAtSeconds)
+					- Run.MetricsStartedAtSeconds)
+				* 1000.0);
+	}
+	Data->SetObjectField(TEXT("metrics"), Metrics);
+	if (Run.LogWindow.IsValid())
+	{
+		Data->SetObjectField(
+			TEXT("logWindow"),
+			CopyControllerJsonObject(Run.LogWindow));
+	}
 	if (!Run.ErrorCode.IsEmpty())
 	{
 		Data->SetObjectField(
@@ -1765,6 +2013,49 @@ FString FProductionRuntimeController::ScenarioDirectory()
 		FPaths::Combine(
 			FPaths::ProjectSavedDir(),
 			TEXT("UE_AI_integration/Scenarios")));
+}
+
+FString FProductionRuntimeController::FindEditorLogPath()
+{
+	const FString ProjectLogDirectory =
+		FPaths::ConvertRelativePathToFull(FPaths::ProjectLogDir());
+	const TArray<FString> Preferred = {
+		FPaths::Combine(
+			ProjectLogDirectory,
+			FString(FApp::GetProjectName()) + TEXT(".log")),
+		FPaths::Combine(
+			ProjectLogDirectory,
+			TEXT("UnrealEditor.log"))
+	};
+	for (const FString& Candidate : Preferred)
+	{
+		if (IFileManager::Get().FileExists(*Candidate))
+		{
+			return Candidate;
+		}
+	}
+
+	TArray<FString> LogFiles;
+	IFileManager::Get().FindFiles(
+		LogFiles,
+		*FPaths::Combine(ProjectLogDirectory, TEXT("*.log")),
+		true,
+		false);
+	FString NewestPath;
+	FDateTime NewestTimestamp = FDateTime::MinValue();
+	for (const FString& Name : LogFiles)
+	{
+		const FString Candidate =
+			FPaths::Combine(ProjectLogDirectory, Name);
+		const FDateTime Timestamp =
+			IFileManager::Get().GetTimeStamp(*Candidate);
+		if (NewestPath.IsEmpty() || Timestamp > NewestTimestamp)
+		{
+			NewestPath = Candidate;
+			NewestTimestamp = Timestamp;
+		}
+	}
+	return NewestPath;
 }
 
 FString FProductionRuntimeController::MapScenarioActionToCapability(

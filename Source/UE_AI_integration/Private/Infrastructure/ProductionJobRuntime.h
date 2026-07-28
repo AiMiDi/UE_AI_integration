@@ -4,6 +4,11 @@
 #include "HAL/PlatformProcess.h"
 #include "Tools/MCPToolBase.h"
 
+namespace TraceServices
+{
+class IAnalysisSession;
+}
+
 namespace UEAIIntegration::Infrastructure
 {
 /**
@@ -16,7 +21,14 @@ namespace UEAIIntegration::Infrastructure
 class FProductionJobRuntime
 {
 public:
-	FProductionJobRuntime();
+	using FScenarioOperation =
+		TFunction<FMCPToolResult(const TSharedPtr<FJsonObject>&)>;
+
+	explicit FProductionJobRuntime(
+		FScenarioOperation InStartScenario = FScenarioOperation(),
+		FScenarioOperation InGetScenarioStatus = FScenarioOperation(),
+		FScenarioOperation InGetScenarioResult = FScenarioOperation(),
+		FScenarioOperation InCancelScenario = FScenarioOperation());
 	~FProductionJobRuntime();
 
 	void Tick(float DeltaTime);
@@ -35,6 +47,10 @@ public:
 	static TSharedPtr<FJsonObject> SummarizeMetric(
 		const TArray<double>& Samples,
 		double BudgetMs);
+	static TSharedPtr<FJsonObject> ComparePerformanceResults(
+		const TSharedPtr<FJsonObject>& BaselineResult,
+		const TSharedPtr<FJsonObject>& CandidateResult,
+		const TSharedPtr<FJsonObject>& Params);
 
 private:
 	struct FArtifact
@@ -82,12 +98,24 @@ private:
 		TSharedPtr<FJsonObject> Result;
 		TArray<FArtifact> Artifacts;
 		int64 SynchronousArtifactHashBytes = 0;
+		TSharedPtr<const TraceServices::IAnalysisSession> TraceAnalysisSession;
 
 		// In-Editor performance sampler state.
+		FString PerformanceMode = TEXT("window");
+		int32 RepeatCount = 1;
+		int32 RepeatIndex = 0;
+		double WarmupSeconds = 0.0;
+		double SampleSeconds = 0.0;
 		double WarmupUntilSeconds = 0.0;
 		double SamplingUntilSeconds = 0.0;
 		double BudgetMs = 16.6667;
 		TMap<FString, TArray<double>> MetricSamples;
+		TMap<FString, TArray<double>> AggregateMetricSamples;
+		TArray<TSharedPtr<FJsonValue>> Repetitions;
+		TSharedPtr<FJsonObject> PendingIterationResult;
+		FString ScenarioRunId;
+		bool bScenarioMetricsWasActive = false;
+		bool bScenarioMetricsObserved = false;
 		bool bOwnsTrace = false;
 		FString TraceJobId;
 	};
@@ -151,6 +179,12 @@ private:
 		bool& bOutConflict) const;
 	void TickProcessJob(FJob& Job);
 	void TickPerformanceJob(FJob& Job);
+	void TickTraceAnalysisJob(FJob& Job);
+	void SamplePerformanceFrame(FJob& Job);
+	void BeginWindowIteration(FJob& Job, double Now);
+	void CompletePerformanceIteration(FJob& Job);
+	bool StartScenarioIteration(FJob& Job, FString& OutError);
+	void FinishPerformanceRun(FJob& Job);
 	void FinishJob(
 		FJob& Job,
 		const FString& Status,
@@ -158,7 +192,8 @@ private:
 		const FString& Message = FString());
 	void PostProcessJob(FJob& Job);
 	void WriteTestReports(FJob& Job);
-	void WritePerformanceReport(FJob& Job);
+	bool WritePerformanceReport(FJob& Job);
+	bool WriteTraceAnalysisReport(FJob& Job);
 
 	FArtifact* AddArtifact(
 		FJob& Job,
@@ -202,5 +237,9 @@ private:
 	TMap<FString, TSharedPtr<FJob>> Jobs;
 	FString ActiveHeavyJobId;
 	FString ActiveTraceJobId;
+	FScenarioOperation StartScenario;
+	FScenarioOperation GetScenarioStatus;
+	FScenarioOperation GetScenarioResult;
+	FScenarioOperation CancelScenario;
 };
 }

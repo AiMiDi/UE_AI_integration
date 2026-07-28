@@ -12,6 +12,54 @@
 
 using UEAIIntegration::Infrastructure::FProductionJobRuntime;
 
+namespace
+{
+TSharedPtr<FJsonObject> MakeMetricSummary(
+	const double P95,
+	const int32 SampleCount = 120)
+{
+	TSharedPtr<FJsonObject> Metric = MakeShared<FJsonObject>();
+	Metric->SetBoolField(TEXT("available"), true);
+	Metric->SetNumberField(TEXT("sampleCount"), SampleCount);
+	Metric->SetNumberField(TEXT("min"), P95 * 0.5);
+	Metric->SetNumberField(TEXT("max"), P95 * 1.5);
+	Metric->SetNumberField(TEXT("mean"), P95 * 0.8);
+	Metric->SetNumberField(TEXT("p50"), P95 * 0.7);
+	Metric->SetNumberField(TEXT("p95"), P95);
+	Metric->SetNumberField(TEXT("p99"), P95 * 1.2);
+	return Metric;
+}
+
+TSharedPtr<FJsonObject> MakePerformanceResult(
+	const double FrameP95,
+	const double GameP95,
+	const FString& Map = TEXT("AutomationMap"))
+{
+	TSharedPtr<FJsonObject> Context = MakeShared<FJsonObject>();
+	Context->SetStringField(TEXT("project"), TEXT("Automation"));
+	Context->SetStringField(TEXT("map"), Map);
+	Context->SetStringField(TEXT("rhi"), TEXT("D3D12"));
+	Context->SetStringField(TEXT("gpu"), TEXT("Test GPU"));
+	Context->SetStringField(TEXT("resolution"), TEXT("1920x1080"));
+	Context->SetStringField(TEXT("configuration"), TEXT("Development"));
+	Context->SetStringField(TEXT("engineVersion"), TEXT("5.3.0"));
+	Context->SetStringField(TEXT("platform"), TEXT("Windows"));
+
+	TSharedPtr<FJsonObject> Metrics = MakeShared<FJsonObject>();
+	Metrics->SetObjectField(
+		TEXT("frameMs"),
+		MakeMetricSummary(FrameP95));
+	Metrics->SetObjectField(
+		TEXT("gameMs"),
+		MakeMetricSummary(GameP95));
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetObjectField(TEXT("context"), Context);
+	Result->SetObjectField(TEXT("metrics"), Metrics);
+	return Result;
+}
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FProductionJobRuntimeContractTest,
 	"UE_AI_integration.Production.JobRuntime.Contracts",
@@ -68,6 +116,191 @@ bool FProductionJobRuntimeContractTest::RunTest(const FString& Parameters)
 	const TSharedPtr<FJsonObject> EmptyMetric =
 		FProductionJobRuntime::SummarizeMetric(TArray<double>(), 16.6667);
 	TestFalse(TEXT("Empty metric is unavailable"), EmptyMetric->GetBoolField(TEXT("available")));
+
+	TSharedPtr<FJsonObject> CompareParams = MakeShared<FJsonObject>();
+	TArray<TSharedPtr<FJsonValue>> Checks;
+	TSharedPtr<FJsonObject> FrameCheck = MakeShared<FJsonObject>();
+	FrameCheck->SetStringField(TEXT("metric"), TEXT("frameMs"));
+	FrameCheck->SetStringField(TEXT("statistic"), TEXT("p95"));
+	FrameCheck->SetNumberField(TEXT("maxRegressionPercent"), 5.0);
+	Checks.Add(MakeShared<FJsonValueObject>(FrameCheck));
+	TSharedPtr<FJsonObject> GameCheck = MakeShared<FJsonObject>();
+	GameCheck->SetStringField(TEXT("metric"), TEXT("gameMs"));
+	GameCheck->SetStringField(TEXT("statistic"), TEXT("p95"));
+	GameCheck->SetNumberField(TEXT("maxRegressionPercent"), 10.0);
+	Checks.Add(MakeShared<FJsonValueObject>(GameCheck));
+	CompareParams->SetArrayField(TEXT("checks"), Checks);
+	const TSharedPtr<FJsonObject> Comparison =
+		FProductionJobRuntime::ComparePerformanceResults(
+			MakePerformanceResult(10.0, 8.0),
+			MakePerformanceResult(12.0, 8.4),
+			CompareParams);
+	TestEqual(
+		TEXT("Any failed threshold produces a regression verdict"),
+		Comparison->GetStringField(TEXT("verdict")),
+		FString(TEXT("regression")));
+	TestEqual(
+		TEXT("Every requested threshold is reported"),
+		Comparison->GetArrayField(TEXT("checks")).Num(),
+		2);
+	TestEqual(
+		TEXT("Passing checks remain distinguishable"),
+		Comparison->GetArrayField(TEXT("checks"))[1]
+			->AsObject()
+			->GetStringField(TEXT("verdict")),
+		FString(TEXT("pass")));
+
+	const TSharedPtr<FJsonObject> Incompatible =
+		FProductionJobRuntime::ComparePerformanceResults(
+			MakePerformanceResult(10.0, 8.0),
+			MakePerformanceResult(10.0, 8.0, TEXT("OtherMap")),
+			CompareParams);
+	TestEqual(
+		TEXT("Environment drift makes comparisons inconclusive"),
+		Incompatible->GetStringField(TEXT("verdict")),
+		FString(TEXT("inconclusive")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FProductionPerformanceScenarioWindowTest,
+	"UE_AI_integration.Production.Performance.ScenarioMeasurementWindow",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FProductionPerformanceScenarioWindowTest::RunTest(
+	const FString& Parameters)
+{
+	int32 ScenarioStartCount = 0;
+	bool bMetricsActive = true;
+	int32 MetricsBeginCount = 1;
+	int32 MetricsEndCount = 0;
+	FString ScenarioStatus = TEXT("running");
+
+	auto StartScenario =
+		[&](
+			const TSharedPtr<FJsonObject>& ScenarioParams)
+			-> FMCPToolResult
+		{
+			++ScenarioStartCount;
+			bMetricsActive = true;
+			MetricsBeginCount = 1;
+			MetricsEndCount = 0;
+			ScenarioStatus = TEXT("running");
+			TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+			Data->SetStringField(
+				TEXT("runId"),
+				FString::Printf(
+					TEXT("scenario-%d"),
+					ScenarioStartCount));
+			return FMCPToolResult::Ok(Data);
+		};
+	auto GetScenarioStatus =
+		[&](
+			const TSharedPtr<FJsonObject>& StatusParams)
+			-> FMCPToolResult
+		{
+			TSharedPtr<FJsonObject> Metrics = MakeShared<FJsonObject>();
+			Metrics->SetBoolField(TEXT("active"), bMetricsActive);
+			Metrics->SetNumberField(
+				TEXT("beginCount"),
+				MetricsBeginCount);
+			Metrics->SetNumberField(TEXT("endCount"), MetricsEndCount);
+			TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+			Data->SetStringField(TEXT("status"), ScenarioStatus);
+			Data->SetNumberField(TEXT("currentStep"), bMetricsActive ? 1 : 2);
+			Data->SetNumberField(TEXT("stepCount"), 2);
+			Data->SetObjectField(TEXT("metrics"), Metrics);
+			return FMCPToolResult::Ok(Data);
+		};
+	auto GetScenarioResult =
+		[](
+			const TSharedPtr<FJsonObject>& ResultParams)
+			-> FMCPToolResult
+		{
+			TSharedPtr<FJsonObject> LogWindow = MakeShared<FJsonObject>();
+			LogWindow->SetBoolField(TEXT("available"), true);
+			LogWindow->SetNumberField(TEXT("startCursor"), 100);
+			LogWindow->SetNumberField(TEXT("endCursor"), 200);
+			TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+			Data->SetObjectField(TEXT("logWindow"), LogWindow);
+			return FMCPToolResult::Ok(Data);
+		};
+	auto CancelScenario =
+		[](
+			const TSharedPtr<FJsonObject>& CancelParams)
+			-> FMCPToolResult
+		{
+			return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+		};
+
+	FProductionJobRuntime Runtime(
+		MoveTemp(StartScenario),
+		MoveTemp(GetScenarioStatus),
+		MoveTemp(GetScenarioResult),
+		MoveTemp(CancelScenario));
+	TSharedPtr<FJsonObject> Scenario = MakeShared<FJsonObject>();
+	TArray<TSharedPtr<FJsonValue>> Steps;
+	for (const TCHAR* Action : {
+		TEXT("metrics.begin"),
+		TEXT("metrics.end")})
+	{
+		TSharedPtr<FJsonObject> Step = MakeShared<FJsonObject>();
+		Step->SetStringField(TEXT("action"), Action);
+		Steps.Add(MakeShared<FJsonValueObject>(Step));
+	}
+	Scenario->SetArrayField(TEXT("steps"), Steps);
+	TSharedPtr<FJsonObject> RunParams = MakeShared<FJsonObject>();
+	RunParams->SetStringField(TEXT("mode"), TEXT("scenario"));
+	RunParams->SetObjectField(TEXT("scenario"), Scenario);
+	RunParams->SetNumberField(TEXT("repeatCount"), 2);
+	RunParams->SetNumberField(TEXT("warmupSeconds"), 0);
+	RunParams->SetNumberField(TEXT("sampleSeconds"), 1);
+
+	const FMCPToolResult Started = Runtime.Execute(
+		TEXT("production.performance.run"),
+		RunParams);
+	if (!TestTrue(TEXT("Scenario performance run starts"), Started.bSuccess))
+	{
+		return false;
+	}
+	const FString RunId = Started.Data->GetStringField(TEXT("runId"));
+
+	for (int32 RepeatIndex = 0; RepeatIndex < 2; ++RepeatIndex)
+	{
+		Runtime.Tick(0.0f);
+		bMetricsActive = false;
+		MetricsEndCount = 1;
+		ScenarioStatus = TEXT("succeeded");
+		Runtime.Tick(0.0f);
+	}
+	TestEqual(
+		TEXT("Each performance repetition starts one Scenario"),
+		ScenarioStartCount,
+		2);
+
+	TSharedPtr<FJsonObject> ResultParams = MakeShared<FJsonObject>();
+	ResultParams->SetStringField(TEXT("runId"), RunId);
+	const FMCPToolResult Result = Runtime.Execute(
+		TEXT("production.performance.result.get"),
+		ResultParams);
+	if (!TestTrue(TEXT("Scenario performance result is available"), Result.bSuccess))
+	{
+		return false;
+	}
+	const TSharedPtr<FJsonObject> Performance =
+		Result.Data->GetObjectField(TEXT("result"));
+	TestEqual(
+		TEXT("Both repetitions are retained"),
+		Performance->GetArrayField(TEXT("repetitions")).Num(),
+		2);
+	TestEqual(
+		TEXT("Each repetition retains its run-bounded log window"),
+		Performance->GetArrayField(TEXT("logWindows")).Num(),
+		2);
+	TestEqual(
+		TEXT("Only active marker windows contribute frame samples"),
+		Performance->GetIntegerField(TEXT("sampleCount")),
+		2);
 	return true;
 }
 
@@ -133,6 +366,7 @@ bool FProductionCapabilityAdmissionTest::RunTest(const FString& Parameters)
 		TEXT("production.horde.context.get"),
 	};
 	TSet<FString> Found;
+	TMap<FString, TSharedPtr<FJsonObject>> CapabilitiesById;
 	for (const TSharedPtr<FJsonValue>& Value :
 		Root->GetArrayField(TEXT("capabilities")))
 	{
@@ -142,6 +376,7 @@ bool FProductionCapabilityAdmissionTest::RunTest(const FString& Parameters)
 		}
 		const TSharedPtr<FJsonObject> Capability = Value->AsObject();
 		const FString Id = Capability->GetStringField(TEXT("id"));
+		CapabilitiesById.Add(Id, Capability);
 		if (!ExpectedJobOperations.Contains(Id))
 		{
 			continue;
@@ -171,6 +406,83 @@ bool FProductionCapabilityAdmissionTest::RunTest(const FString& Parameters)
 		TEXT("Production manifest includes the migrated and new operations"),
 		Root->GetArrayField(TEXT("capabilities")).Num(),
 		47);
+
+	const TSharedPtr<FJsonObject> TraceAnalyze =
+		CapabilitiesById.FindRef(TEXT("production.trace.analyze"));
+	TestTrue(
+		TEXT("Trace analysis exposes bounded provider controls"),
+		TraceAnalyze.IsValid()
+			&& TraceAnalyze->GetObjectField(TEXT("inputSchema"))
+				->GetObjectField(TEXT("properties"))
+				->HasField(TEXT("maxTimers"))
+			&& TraceAnalyze->GetObjectField(TEXT("inputSchema"))
+				->GetObjectField(TEXT("properties"))
+				->HasField(TEXT("maxCounterValues")));
+
+	const TSharedPtr<FJsonObject> PerformanceRun =
+		CapabilitiesById.FindRef(TEXT("production.performance.run"));
+	TestTrue(
+		TEXT("Performance runs expose window and Scenario controls"),
+		PerformanceRun.IsValid()
+			&& PerformanceRun->GetObjectField(TEXT("inputSchema"))
+				->GetObjectField(TEXT("properties"))
+				->HasField(TEXT("mode"))
+			&& PerformanceRun->GetObjectField(TEXT("inputSchema"))
+				->GetObjectField(TEXT("properties"))
+				->HasField(TEXT("scenario"))
+			&& PerformanceRun->GetObjectField(TEXT("inputSchema"))
+				->GetObjectField(TEXT("properties"))
+				->HasField(TEXT("repeatCount")));
+
+	const TSharedPtr<FJsonObject> PerformanceCompare =
+		CapabilitiesById.FindRef(TEXT("production.performance.compare"));
+	TestTrue(
+		TEXT("Performance comparison exposes multi-threshold checks"),
+		PerformanceCompare.IsValid()
+			&& PerformanceCompare->GetObjectField(TEXT("inputSchema"))
+				->GetObjectField(TEXT("properties"))
+				->HasField(TEXT("checks")));
+
+	for (const FString ScenarioCapabilityId : {
+		FString(TEXT("production.scenario.validate")),
+		FString(TEXT("production.scenario.start"))})
+	{
+		const TSharedPtr<FJsonObject> ScenarioCapability =
+			CapabilitiesById.FindRef(ScenarioCapabilityId);
+		if (!TestTrue(
+				*FString::Printf(
+					TEXT("%s exists"),
+					*ScenarioCapabilityId),
+				ScenarioCapability.IsValid()))
+		{
+			continue;
+		}
+		const TArray<TSharedPtr<FJsonValue>>& Actions =
+			ScenarioCapability->GetObjectField(TEXT("inputSchema"))
+				->GetObjectField(TEXT("properties"))
+				->GetObjectField(TEXT("scenario"))
+				->GetObjectField(TEXT("properties"))
+				->GetObjectField(TEXT("steps"))
+				->GetObjectField(TEXT("items"))
+				->GetObjectField(TEXT("properties"))
+				->GetObjectField(TEXT("action"))
+				->GetArrayField(TEXT("enum"));
+		TSet<FString> ActionNames;
+		for (const TSharedPtr<FJsonValue>& Action : Actions)
+		{
+			ActionNames.Add(Action->AsString());
+		}
+		TestTrue(
+			*FString::Printf(
+				TEXT("%s admits metrics.begin"),
+				*ScenarioCapabilityId),
+			ActionNames.Contains(TEXT("metrics.begin")));
+		TestTrue(
+			*FString::Printf(
+				TEXT("%s admits metrics.end"),
+				*ScenarioCapabilityId),
+			ActionNames.Contains(TEXT("metrics.end")));
+	}
 	return true;
 }
 

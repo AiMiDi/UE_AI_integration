@@ -93,7 +93,7 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "commandlet_name": {
+          "commandletName": {
             "type": "string",
             "enum": [
               "FixupRedirects",
@@ -132,7 +132,7 @@
           }
         },
         "required": [
-          "commandlet_name"
+          "commandletName"
         ],
         "additionalProperties": false
       },
@@ -243,7 +243,7 @@
               "IOS"
             ]
           },
-      "output_dir": {
+      "outputDir": {
         "type": "string",
         "description": "Relative directory below Saved/UEAIIntegration/Packages, or an absolute path inside that root"
           },
@@ -273,7 +273,7 @@
         },
         "required": [
           "platform",
-          "output_dir"
+          "outputDir"
         ],
         "additionalProperties": false
       },
@@ -507,7 +507,7 @@
             "type": "string",
             "description": "Asset path of the Level Sequence"
           },
-          "output_path": {
+          "outputPath": {
             "type": "string",
             "description": "Output directory for rendered video"
           },
@@ -518,7 +518,7 @@
         },
         "required": [
           "sequence",
-          "output_path"
+          "outputPath"
         ],
         "additionalProperties": false
       },
@@ -587,7 +587,9 @@
                         "input.mode",
                         "viewport.capture",
                         "log.capture",
-                        "frameTime.sample"
+                        "frameTime.sample",
+                        "metrics.begin",
+                        "metrics.end"
                       ]
                     },
                     "params": {
@@ -737,7 +739,9 @@
                         "input.mode",
                         "viewport.capture",
                         "log.capture",
-                        "frameTime.sample"
+                        "frameTime.sample",
+                        "metrics.begin",
+                        "metrics.end"
                       ]
                     },
                     "params": {
@@ -1333,13 +1337,60 @@
       "id": "production.trace.analyze",
       "domain": "production",
       "kind": "command",
-      "description": "Create a bounded analysis receipt for a completed trace without inlining trace data.",
+      "description": "Start bounded asynchronous TraceServices provider analysis for a completed trace without inlining raw events.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "traceId": {
             "type": "string",
             "minLength": 1
+          },
+          "startTimeSeconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "endTimeSeconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "maxDurationSeconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 600
+          },
+          "maxFrames": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "maxTimers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "maxCounters": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          },
+          "maxCounterValues": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "counterNames": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          },
+          "timeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 600
           }
         },
         "required": [
@@ -1367,10 +1418,27 @@
       "id": "production.performance.run",
       "domain": "production",
       "kind": "command",
-      "description": "Run a warmup plus frame-window performance sample with p50/p95/p99 metrics.",
+      "description": "Run repeatable window or marker-bounded Scenario performance samples with p50/p95/p99 evidence.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "window",
+              "scenario"
+            ]
+          },
+          "scenario": {
+            "type": "object",
+            "description": "Existing Scenario AST. Scenario mode requires one metrics.begin followed by one metrics.end step.",
+            "additionalProperties": true
+          },
+          "repeatCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
           "warmupSeconds": {
             "type": "number",
             "minimum": 0,
@@ -1451,7 +1519,7 @@
       "id": "production.performance.compare",
       "domain": "production",
       "kind": "validation",
-      "description": "Compare context-compatible performance runs and return pass, fail, or inconclusive.",
+      "description": "Compare context-compatible performance runs across one or more thresholds and return pass, regression, or inconclusive.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1473,6 +1541,17 @@
               "gpuMs"
             ]
           },
+          "statistic": {
+            "type": "string",
+            "enum": [
+              "min",
+              "max",
+              "mean",
+              "p50",
+              "p95",
+              "p99"
+            ]
+          },
           "maxRegressionPercent": {
             "type": "number",
             "minimum": 0,
@@ -1482,6 +1561,51 @@
             "type": "number",
             "minimum": 0,
             "maximum": 10000
+          },
+          "checks": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "type": "object",
+              "properties": {
+                "metric": {
+                  "type": "string",
+                  "enum": [
+                    "frameMs",
+                    "gameMs",
+                    "renderMs",
+                    "rhiMs",
+                    "gpuMs"
+                  ]
+                },
+                "statistic": {
+                  "type": "string",
+                  "enum": [
+                    "min",
+                    "max",
+                    "mean",
+                    "p50",
+                    "p95",
+                    "p99"
+                  ]
+                },
+                "maxRegressionPercent": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "absoluteBudgetMs": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 10000
+                }
+              },
+              "required": [
+                "metric"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [

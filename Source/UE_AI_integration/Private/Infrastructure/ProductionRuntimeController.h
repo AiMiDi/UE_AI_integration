@@ -66,8 +66,16 @@ private:
 		double DeadlineSeconds = 0.0;
 		double StepStartedAtSeconds = 0.0;
 		double WaitUntilSeconds = 0.0;
+		double MetricsStartedAtSeconds = 0.0;
+		double MetricsEndedAtSeconds = 0.0;
+		int32 MetricsBeginCount = 0;
+		int32 MetricsEndCount = 0;
+		bool bMetricsActive = false;
 		bool bCancelRequested = false;
 		bool bCleanupStopPIE = false;
+		FString LogPath;
+		int64 LogStartOffset = 0;
+		TSharedPtr<FJsonObject> LogWindow;
 	};
 
 	struct FBuildJob
@@ -119,11 +127,17 @@ private:
 		FScenarioRun& Run,
 		const FString& StepId,
 		const TSharedPtr<FJsonObject>& StepResult);
+	void CaptureScenarioLogWindow(FScenarioRun& Run) const;
+	TSharedPtr<FJsonObject> BuildScenarioLogWindow(
+		const FScenarioRun& Run,
+		const TSharedPtr<FJsonObject>& Params =
+			TSharedPtr<FJsonObject>()) const;
 	void WriteScenarioReceipt(const FScenarioRun& Run) const;
 	TSharedPtr<FJsonObject> MakeScenarioSummary(const FScenarioRun& Run) const;
 	TSharedPtr<FJsonObject> MakeBuildSummary(const FBuildJob& Job) const;
 
 	static FString ScenarioDirectory();
+	static FString FindEditorLogPath();
 	static FString MapScenarioActionToCapability(
 		const FString& Action,
 		TSharedPtr<FJsonObject>& InOutParams);
