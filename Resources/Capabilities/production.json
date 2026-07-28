@@ -1,0 +1,940 @@
+{
+  "schemaVersion": 2,
+  "domain": "production",
+  "capabilities": [
+    {
+      "id": "production.build.lighting",
+      "domain": "production",
+      "kind": "command",
+      "description": "Build lighting for the current level at the specified quality.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "quality": {
+            "type": "string",
+            "description": "Quality: 'preview', 'medium', 'high', 'production'. Default: 'preview'"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.build.navigation",
+      "domain": "production",
+      "kind": "command",
+      "description": "Rebuild only navigation data for the current level.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.build.status",
+      "domain": "production",
+      "kind": "query",
+      "description": "Check if any editor build operations (lighting, etc.) are currently in progress.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.commandlet.run",
+      "domain": "production",
+      "kind": "command",
+      "description": "Run a UE5 commandlet by name (e.g. 'ResavePackages', 'FixupRedirects').",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "commandlet_name": {
+            "type": "string",
+            "description": "Name of the commandlet to run"
+          },
+          "args": {
+            "type": "string",
+            "description": "Additional command-line arguments for the commandlet"
+          }
+        },
+        "required": [
+          "commandlet_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.project.cook",
+      "domain": "production",
+      "kind": "command",
+      "description": "Cook the project for a target platform using Unreal Automation Tool (UAT).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string",
+            "description": "Target platform: 'Win64', 'Linux', 'Mac', 'Android', 'IOS'"
+          },
+          "config": {
+            "type": "string",
+            "description": "Build config: 'Development', 'Shipping', 'DebugGame'. Default: 'Development'"
+          }
+        },
+        "required": [
+          "platform"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.project.package",
+      "domain": "production",
+      "kind": "command",
+      "description": "Package (build + cook + stage) the project for a target platform.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string",
+            "description": "Target platform: 'Win64', 'Linux', 'Mac', 'Android', 'IOS'"
+          },
+          "output_dir": {
+            "type": "string",
+            "description": "Directory to output the packaged build"
+          },
+          "config": {
+            "type": "string",
+            "description": "Build config: 'Development', 'Shipping'. Default: 'Shipping'"
+          }
+        },
+        "required": [
+          "platform",
+          "output_dir"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.sequence.actor.add",
+      "domain": "production",
+      "kind": "command",
+      "description": "Bind an actor from the level to a Level Sequence as a possessable.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "string",
+            "description": "Asset path of the Level Sequence (e.g. '/Game/Cinematics/MySeq')"
+          },
+          "actor": {
+            "type": "string",
+            "description": "Name or label of the actor in the current level"
+          }
+        },
+        "required": [
+          "sequence",
+          "actor"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.sequence.camera_cut.add",
+      "domain": "production",
+      "kind": "command",
+      "description": "Add a camera cut at a specific time in a Level Sequence.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "string",
+            "description": "Asset path of the Level Sequence"
+          },
+          "camera": {
+            "type": "string",
+            "description": "Name of the camera actor to cut to"
+          },
+          "time": {
+            "type": "number",
+            "description": "Time in seconds for the camera cut"
+          }
+        },
+        "required": [
+          "sequence",
+          "camera",
+          "time"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.sequence.create",
+      "domain": "production",
+      "kind": "command",
+      "description": "Create a new Level Sequence asset for cinematics.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Asset name for the new Level Sequence (e.g. 'MySequence')"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.sequence.length.set",
+      "domain": "production",
+      "kind": "command",
+      "description": "Set the playback duration of a Level Sequence.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "string",
+            "description": "Asset path of the Level Sequence"
+          },
+          "duration": {
+            "type": "number",
+            "description": "Duration in seconds"
+          }
+        },
+        "required": [
+          "sequence",
+          "duration"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.sequence.play",
+      "domain": "production",
+      "kind": "command",
+      "description": "Play (preview) a Level Sequence in the editor viewport.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "string",
+            "description": "Asset path of the Level Sequence to play"
+          }
+        },
+        "required": [
+          "sequence"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.sequence.transform_keyframe.add",
+      "domain": "production",
+      "kind": "command",
+      "description": "Add a transform keyframe to an actor bound in a Level Sequence.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "string",
+            "description": "Asset path of the Level Sequence"
+          },
+          "actor": {
+            "type": "string",
+            "description": "Name or label of the bound actor"
+          },
+          "time": {
+            "type": "number",
+            "description": "Time in seconds for the keyframe"
+          },
+          "location": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } location"
+          },
+          "rotation": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ pitch, yaw, roll } rotation"
+          }
+        },
+        "required": [
+          "sequence",
+          "actor",
+          "time"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.sequence.video.render",
+      "domain": "production",
+      "kind": "command",
+      "description": "Render a Level Sequence to a video file using Movie Render Pipeline / Automated Level Sequence Capture.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sequence": {
+            "type": "string",
+            "description": "Asset path of the Level Sequence"
+          },
+          "output_path": {
+            "type": "string",
+            "description": "Output directory for rendered video"
+          },
+          "resolution": {
+            "type": "string",
+            "description": "Resolution like '1920x1080' (default: 1920x1080)"
+          }
+        },
+        "required": [
+          "sequence",
+          "output_path"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.scenario.validate",
+      "domain": "production",
+      "kind": "validation",
+      "description": "Validate a bounded runtime scenario AST without starting PIE or executing actions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scenario": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "steps": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 256,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "pie.start",
+                        "pie.stop",
+                        "pie.restart",
+                        "pie.pause",
+                        "pie.resume",
+                        "wait",
+                        "object.find",
+                        "object.get",
+                        "object.set",
+                        "object.call",
+                        "widget.tree",
+                        "widget.state",
+                        "delegate.bind",
+                        "delegate.unbind",
+                        "delegate.list",
+                        "delegate.is_bound",
+                        "delegate.broadcast",
+                        "widget.click",
+                        "widget.drag",
+                        "widget.focus",
+                        "widget.hitTest",
+                        "input.key",
+                        "input.mode",
+                        "viewport.capture",
+                        "log.capture",
+                        "frameTime.sample"
+                      ]
+                    },
+                    "params": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 300000
+                    },
+                    "assertions": {
+                      "type": "array",
+                      "maxItems": 64,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "equals",
+                              "exists",
+                              "widgetState",
+                              "delegateBound",
+                              "hitTestContains",
+                              "logNotContains",
+                              "imageDiff"
+                            ]
+                          },
+                          "actual": {
+                            "description": "Literal value or JSON Pointer binding evaluated by the scenario runner"
+                          },
+                          "expected": {
+                            "description": "Expected JSON-compatible assertion value"
+                          },
+                          "params": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "required": [
+                          "type"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "action"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3600000
+              },
+              "cleanup": {
+                "type": "object",
+                "properties": {
+                  "stopPie": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "stopPie"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "name",
+              "steps"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "scenario"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.scenario.start",
+      "domain": "production",
+      "kind": "command",
+      "description": "Start one validated asynchronous PIE runtime scenario and return its run identifier.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scenario": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "steps": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 256,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "pie.start",
+                        "pie.stop",
+                        "pie.restart",
+                        "pie.pause",
+                        "pie.resume",
+                        "wait",
+                        "object.find",
+                        "object.get",
+                        "object.set",
+                        "object.call",
+                        "widget.tree",
+                        "widget.state",
+                        "delegate.bind",
+                        "delegate.unbind",
+                        "delegate.list",
+                        "delegate.is_bound",
+                        "delegate.broadcast",
+                        "widget.click",
+                        "widget.drag",
+                        "widget.focus",
+                        "widget.hitTest",
+                        "input.key",
+                        "input.mode",
+                        "viewport.capture",
+                        "log.capture",
+                        "frameTime.sample"
+                      ]
+                    },
+                    "params": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 300000
+                    },
+                    "assertions": {
+                      "type": "array",
+                      "maxItems": 64,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "equals",
+                              "exists",
+                              "widgetState",
+                              "delegateBound",
+                              "hitTestContains",
+                              "logNotContains",
+                              "imageDiff"
+                            ]
+                          },
+                          "actual": {
+                            "description": "Literal value or JSON Pointer binding evaluated by the scenario runner"
+                          },
+                          "expected": {
+                            "description": "Expected JSON-compatible assertion value"
+                          },
+                          "params": {
+                            "type": "object",
+                            "additionalProperties": true
+                          }
+                        },
+                        "required": [
+                          "type"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "action"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3600000
+              },
+              "cleanup": {
+                "type": "object",
+                "properties": {
+                  "stopPie": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "stopPie"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "name",
+              "steps"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "scenario"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.scenario.status",
+      "domain": "production",
+      "kind": "query",
+      "description": "Return current progress and the latest completed step for an asynchronous scenario run.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.scenario.cancel",
+      "domain": "production",
+      "kind": "command",
+      "description": "Request cancellation of an active scenario and run its declared PIE cleanup.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.scenario.result.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Read the durable receipt, assertion results, diagnostics, and artifact metadata for a scenario run.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.scenario.artifact.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Return one scenario screenshot or image-diff artifact as base64 image content plus metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "artifactId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "runId",
+          "artifactId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "image"
+      }
+    },
+    {
+      "id": "production.module.loaded.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Report the loaded plugin module, DLL and PDB provenance, hashes, timestamps, and Live Coding state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.build.target",
+      "domain": "production",
+      "kind": "command",
+      "description": "Start a constrained Live Coding or UBT build for the current project's Editor target.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "liveCoding",
+              "ubt"
+            ]
+          },
+          "confirmBuild": {
+            "const": true,
+            "description": "Explicit confirmation required before starting the build"
+          }
+        },
+        "required": [
+          "mode",
+          "confirmBuild"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "production.build.job.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Read status, timestamps, output summary, and provenance checks for a constrained build job.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    }
+  ]
+}

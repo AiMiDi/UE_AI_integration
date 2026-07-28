@@ -1,0 +1,2841 @@
+{
+  "schemaVersion": 2,
+  "domain": "content",
+  "capabilities": [
+    {
+      "id": "content.data_table.create",
+      "domain": "content",
+      "kind": "command",
+      "description": "Create a new Data Table asset with a specified row struct.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name for the Data Table asset"
+          },
+          "row_struct": {
+            "type": "string",
+            "description": "Row struct path or name (e.g. '/Script/Engine.DataTableRowHandle' or custom struct path)"
+          }
+        },
+        "required": [
+          "name",
+          "row_struct"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.data_table.csv.import",
+      "domain": "content",
+      "kind": "command",
+      "description": "Import CSV data into an existing Data Table, replacing all current rows.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table": {
+            "type": "string",
+            "description": "Asset path of the Data Table"
+          },
+          "csv_path": {
+            "type": "string",
+            "description": "Absolute file path to the CSV file"
+          }
+        },
+        "required": [
+          "table",
+          "csv_path"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.data_table.row.add",
+      "domain": "content",
+      "kind": "command",
+      "description": "Add a row to a Data Table using JSON values.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table": {
+            "type": "string",
+            "description": "Asset path of the Data Table"
+          },
+          "row_name": {
+            "type": "string",
+            "description": "Name for the new row"
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "JSON object with column values matching the struct fields"
+          }
+        },
+        "required": [
+          "table",
+          "row_name",
+          "values"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.data_table.row.list",
+      "domain": "content",
+      "kind": "query",
+      "description": "Get all rows from a Data Table as JSON.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table": {
+            "type": "string",
+            "description": "Asset path of the Data Table"
+          }
+        },
+        "required": [
+          "table"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.data_table.row.remove",
+      "domain": "content",
+      "kind": "command",
+      "description": "Remove a row from a Data Table by name.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "table": {
+            "type": "string",
+            "description": "Asset path of the Data Table"
+          },
+          "row_name": {
+            "type": "string",
+            "description": "Name of the row to remove"
+          }
+        },
+        "required": [
+          "table",
+          "row_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.enum.create",
+      "domain": "content",
+      "kind": "command",
+      "description": "Create a new UserDefinedEnum asset with specified values.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "assetPath": {
+            "type": "string",
+            "description": "Full asset path (e.g. /Game/DataTypes/E_MyEnum)"
+          },
+          "values": {
+            "type": "array",
+            "items": {},
+            "description": "Array of enum value strings"
+          }
+        },
+        "required": [
+          "assetPath",
+          "values"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.create",
+      "domain": "content",
+      "kind": "command",
+      "description": "Create a new UMaterial asset with optional domain, blend mode, and two-sided settings.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Material name"
+          },
+          "packagePath": {
+            "type": "string",
+            "description": "Package path (e.g. /Game/Materials)"
+          },
+          "domain": {
+            "type": "string",
+            "description": "Material domain (Surface, DeferredDecal, etc.)"
+          },
+          "blendMode": {
+            "type": "string",
+            "description": "Blend mode (Opaque, Masked, Translucent, etc.)"
+          },
+          "twoSided": {
+            "type": "boolean",
+            "description": "Enable two-sided rendering"
+          }
+        },
+        "required": [
+          "name",
+          "packagePath"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "material"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.material.describe",
+      "domain": "content",
+      "kind": "query",
+      "description": "Human-readable description of a material's node chains by tracing from root inputs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name or path"
+          }
+        },
+        "required": [
+          "material"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.expression.add",
+      "domain": "content",
+      "kind": "command",
+      "description": "Add a new expression node to a material or material function.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name (or use materialFunction)"
+          },
+          "materialFunction": {
+            "type": "string",
+            "description": "MaterialFunction name (or use material)"
+          },
+          "expressionClass": {
+            "type": "string",
+            "description": "Expression class without prefix (e.g. Constant, ScalarParameter, Add)"
+          },
+          "posX": {
+            "type": "number",
+            "description": "X position in graph"
+          },
+          "posY": {
+            "type": "number",
+            "description": "Y position in graph"
+          }
+        },
+        "required": [
+          "expressionClass"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "material"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.material.expression.delete",
+      "domain": "content",
+      "kind": "command",
+      "description": "Remove an expression node from a material by nodeId.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name (or use materialFunction)"
+          },
+          "materialFunction": {
+            "type": "string",
+            "description": "MaterialFunction name"
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "Node GUID to delete"
+          }
+        },
+        "required": [
+          "nodeId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.expression.move",
+      "domain": "content",
+      "kind": "command",
+      "description": "Reposition a material expression node in the graph.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name"
+          },
+          "materialFunction": {
+            "type": "string",
+            "description": "MaterialFunction name"
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "Node GUID"
+          },
+          "posX": {
+            "type": "number",
+            "description": "New X position"
+          },
+          "posY": {
+            "type": "number",
+            "description": "New Y position"
+          }
+        },
+        "required": [
+          "nodeId",
+          "posX",
+          "posY"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "material"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.material.expression.value.set",
+      "domain": "content",
+      "kind": "command",
+      "description": "Set a value on a material expression (Constant, Vector, Parameter, Custom code, etc.).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name"
+          },
+          "materialFunction": {
+            "type": "string",
+            "description": "MaterialFunction name"
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "Node GUID"
+          },
+          "value": {
+            "type": "string",
+            "description": "Value (number, object {r,g,b,a}, or string for Custom code)"
+          },
+          "parameterName": {
+            "type": "string",
+            "description": "Rename the parameter (for ScalarParameter/VectorParameter)"
+          }
+        },
+        "required": [
+          "nodeId",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "material"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.material.function.get",
+      "domain": "content",
+      "kind": "query",
+      "description": "Get detailed info about a MaterialFunction including inputs, outputs, and expressions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "MaterialFunction name or path"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.function.list",
+      "domain": "content",
+      "kind": "query",
+      "description": "List MaterialFunction assets.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Name/path filter"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.get",
+      "domain": "content",
+      "kind": "query",
+      "description": "Get detailed info about a Material or MaterialInstance.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Material name or path"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.graph.diff",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Diff current material graph against a snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name"
+          },
+          "snapshotId": {
+            "type": "string",
+            "description": "Snapshot ID to diff against"
+          }
+        },
+        "required": [
+          "material",
+          "snapshotId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.graph.get",
+      "domain": "content",
+      "kind": "query",
+      "description": "Get the serialized node graph for a material.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Material name or path"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "material"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.material.graph.restore",
+      "domain": "content",
+      "kind": "command",
+      "description": "Restore material graph connections from a snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name"
+          },
+          "snapshotId": {
+            "type": "string",
+            "description": "Snapshot ID"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "Preview without applying"
+          }
+        },
+        "required": [
+          "material",
+          "snapshotId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.graph.snapshot",
+      "domain": "content",
+      "kind": "command",
+      "description": "Take a snapshot of the current material graph state for later diff/restore.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name or path"
+          }
+        },
+        "required": [
+          "material"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.instance.create",
+      "domain": "content",
+      "kind": "command",
+      "description": "Create a MaterialInstanceConstant from a parent material.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Instance name"
+          },
+          "packagePath": {
+            "type": "string",
+            "description": "Package path"
+          },
+          "parent": {
+            "type": "string",
+            "description": "Parent material name or path"
+          }
+        },
+        "required": [
+          "name",
+          "packagePath",
+          "parent"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.instance.parameter.set",
+      "domain": "content",
+      "kind": "command",
+      "description": "Set a parameter override on a MaterialInstanceConstant.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "instance": {
+            "type": "string",
+            "description": "MaterialInstance name or path"
+          },
+          "parameterName": {
+            "type": "string",
+            "description": "Parameter name"
+          },
+          "value": {
+            "type": "string",
+            "description": "New value (number for scalar, {r,g,b,a} for vector)"
+          }
+        },
+        "required": [
+          "instance",
+          "parameterName",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.list",
+      "domain": "content",
+      "kind": "query",
+      "description": "List Material and MaterialInstance assets in the project.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Name/path filter"
+          },
+          "type": {
+            "type": "string",
+            "description": "Filter by type: material, instance, or all"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.pin.connect",
+      "domain": "content",
+      "kind": "command",
+      "description": "Connect two pins in a material graph.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name"
+          },
+          "materialFunction": {
+            "type": "string",
+            "description": "MaterialFunction name"
+          },
+          "sourceNodeId": {
+            "type": "string",
+            "description": "Source node GUID"
+          },
+          "sourcePinName": {
+            "type": "string",
+            "description": "Source pin name"
+          },
+          "targetNodeId": {
+            "type": "string",
+            "description": "Target node GUID"
+          },
+          "targetPinName": {
+            "type": "string",
+            "description": "Target pin name"
+          }
+        },
+        "required": [
+          "sourceNodeId",
+          "sourcePinName",
+          "targetNodeId",
+          "targetPinName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "material"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.material.pin.disconnect",
+      "domain": "content",
+      "kind": "command",
+      "description": "Break all connections on a pin in a material graph.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name"
+          },
+          "materialFunction": {
+            "type": "string",
+            "description": "MaterialFunction name"
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "Node GUID"
+          },
+          "pinName": {
+            "type": "string",
+            "description": "Pin name to disconnect"
+          }
+        },
+        "required": [
+          "nodeId",
+          "pinName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.property.set",
+      "domain": "content",
+      "kind": "command",
+      "description": "Set a top-level material property (domain, blendMode, twoSided, shadingModel, opacity, usage flags).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name or path"
+          },
+          "property": {
+            "type": "string",
+            "description": "Property name"
+          },
+          "value": {
+            "type": "string",
+            "description": "New value (type depends on property)"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "Preview without applying"
+          }
+        },
+        "required": [
+          "material",
+          "property",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "material"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.material.references",
+      "domain": "content",
+      "kind": "query",
+      "description": "Find assets that reference a given material.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name or path"
+          }
+        },
+        "required": [
+          "material"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.search",
+      "domain": "content",
+      "kind": "query",
+      "description": "Search materials by name, expression class, or parameter name.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search query"
+          },
+          "maxResults": {
+            "type": "number",
+            "description": "Max results (default 50)"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.material.validate",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Force-recompile a material and report errors.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "material": {
+            "type": "string",
+            "description": "Material name or path"
+          }
+        },
+        "required": [
+          "material"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "finalizer",
+        "scopeKinds": [
+          "material"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.niagara.actor.spawn",
+      "domain": "content",
+      "kind": "command",
+      "description": "Spawn a Niagara particle system actor at a location in the level.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "description": "Asset path of the Niagara System"
+          },
+          "location": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } spawn location"
+          },
+          "rotation": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ pitch, yaw, roll } spawn rotation (optional)"
+          },
+          "label": {
+            "type": "string",
+            "description": "Actor label (optional)"
+          }
+        },
+        "required": [
+          "system",
+          "location"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.niagara.emitter.add",
+      "domain": "content",
+      "kind": "command",
+      "description": "Add an emitter to a Niagara System from a template emitter asset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "description": "Asset path of the Niagara System"
+          },
+          "emitter_template": {
+            "type": "string",
+            "description": "Asset path of the Niagara Emitter to add as template"
+          }
+        },
+        "required": [
+          "system",
+          "emitter_template"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.niagara.parameter.set",
+      "domain": "content",
+      "kind": "command",
+      "description": "Set a parameter override on a spawned Niagara component in the level.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "type": "string",
+            "description": "Name or label of the Niagara actor in the level"
+          },
+          "param_name": {
+            "type": "string",
+            "description": "Parameter name (e.g. 'SpawnRate', 'Color')"
+          },
+          "value": {
+            "type": "string",
+            "description": "Value as string. For vectors use 'x,y,z'. For colors use 'r,g,b,a' (0-1 range). For numbers, just the number."
+          },
+          "param_type": {
+            "type": "string",
+            "description": "Type: float, int, bool, vector, color. Default: float"
+          }
+        },
+        "required": [
+          "actor",
+          "param_name",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.niagara.system.create",
+      "domain": "content",
+      "kind": "command",
+      "description": "Create a new empty Niagara System asset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name for the Niagara System asset"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.niagara.system.list",
+      "domain": "content",
+      "kind": "query",
+      "description": "List all Niagara System assets in the project via the Asset Registry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Optional name filter (substring match)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.struct.create",
+      "domain": "content",
+      "kind": "command",
+      "description": "Create a new UserDefinedStruct asset with optional initial properties.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "assetPath": {
+            "type": "string",
+            "description": "Full asset path (e.g. /Game/DataTypes/S_MyStruct)"
+          },
+          "properties": {
+            "type": "array",
+            "items": {},
+            "description": "Array of {name, type} objects"
+          }
+        },
+        "required": [
+          "assetPath"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.struct.property.add",
+      "domain": "content",
+      "kind": "command",
+      "description": "Add a property to an existing UserDefinedStruct.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "assetPath": {
+            "type": "string",
+            "description": "Struct asset path"
+          },
+          "name": {
+            "type": "string",
+            "description": "Property name"
+          },
+          "type": {
+            "type": "string",
+            "description": "Property type"
+          }
+        },
+        "required": [
+          "assetPath",
+          "name",
+          "type"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.struct.property.remove",
+      "domain": "content",
+      "kind": "command",
+      "description": "Remove a property from a UserDefinedStruct.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "assetPath": {
+            "type": "string",
+            "description": "Struct asset path"
+          },
+          "name": {
+            "type": "string",
+            "description": "Property to remove"
+          }
+        },
+        "required": [
+          "assetPath",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.widget.blueprint.create",
+      "domain": "content",
+      "kind": "command",
+      "description": "Create a new Widget Blueprint asset with a root CanvasPanel.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name for the Widget Blueprint asset"
+          },
+          "package_path": {
+            "type": "string",
+            "description": "Optional package directory; Workflow scope injection uses this to preserve scope.asset exactly"
+          },
+          "parent_class": {
+            "type": "string",
+            "description": "Parent class (default: 'UserWidget')"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.blueprint.list",
+      "domain": "content",
+      "kind": "query",
+      "description": "List all Widget Blueprint assets in the project.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Optional name filter (substring match)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "content.widget.child.add",
+      "domain": "content",
+      "kind": "command",
+      "description": "Add a child widget to a Widget Blueprint under a specified parent slot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "description": "Asset path of the Widget Blueprint"
+          },
+          "child_class": {
+            "type": "string",
+            "description": "Widget class: Button, TextBlock, Image, VerticalBox, HorizontalBox, etc."
+          },
+          "class": {
+            "type": "string",
+            "description": "Workflow DSL alias for child_class"
+          },
+          "child_name": {
+            "type": "string",
+            "description": "Name for the new widget"
+          },
+          "name": {
+            "type": "string",
+            "description": "Workflow DSL alias for child_name"
+          },
+          "parent_name": {
+            "type": "string",
+            "description": "Name of the parent widget in the tree (default: root)"
+          },
+          "parent": {
+            "type": "string",
+            "description": "Workflow DSL alias for parent_name"
+          }
+        },
+        "required": [
+          "widget_bp"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "child_class",
+              "child_name"
+            ]
+          },
+          {
+            "required": [
+              "class",
+              "name"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.event.bind",
+      "domain": "content",
+      "kind": "command",
+      "description": "Bind a widget event (e.g. OnClicked) to a function in the Widget Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "description": "Asset path of the Widget Blueprint"
+          },
+          "widget_name": {
+            "type": "string",
+            "description": "Name of the widget to bind"
+          },
+          "event_name": {
+            "type": "string",
+            "description": "Event delegate name (e.g. 'OnClicked', 'OnPressed', 'OnValueChanged')"
+          },
+          "function_name": {
+            "type": "string",
+            "description": "Name of the function to bind to (must exist in the Blueprint graph)"
+          }
+        },
+        "required": [
+          "widget_bp",
+          "widget_name",
+          "event_name",
+          "function_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.property.set",
+      "domain": "content",
+      "kind": "command",
+      "description": "Set a property on a widget within a Widget Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "description": "Asset path of the Widget Blueprint"
+          },
+          "widget_name": {
+            "type": "string",
+            "description": "Name of the target widget"
+          },
+          "property": {
+            "type": "string",
+            "description": "Property name (e.g. 'Text', 'ColorAndOpacity', 'Visibility')"
+          },
+          "value": {
+            "type": "string",
+            "description": "Value as string (property-dependent format)"
+          }
+        },
+        "required": [
+          "widget_bp",
+          "widget_name",
+          "property",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.slot.layout.set",
+      "domain": "content",
+      "kind": "command",
+      "description": "Set Canvas Panel slot layout for a widget within a Widget Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "description": "Asset path of the Widget Blueprint"
+          },
+          "widget_name": {
+            "type": "string",
+            "description": "Name of the target widget"
+          },
+          "target": {
+            "type": "object",
+            "description": "Typed widget reference produced by another workflow operation",
+            "properties": {
+              "kind": {
+                "const": "widget"
+              },
+              "widgetBlueprint": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "widgetBlueprint",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "anchors": {
+            "type": "array",
+            "description": "Canvas anchors as [minX, minY, maxX, maxY]",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "alignment": {
+            "type": "array",
+            "description": "Slot alignment as [x, y]",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "offsets": {
+            "type": "array",
+            "description": "Canvas offsets as [left, top, right, bottom]",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "auto_size": {
+            "type": "boolean",
+            "description": "Whether the Canvas slot sizes to the widget content"
+          },
+          "z_order": {
+            "type": "integer",
+            "description": "Canvas slot Z order"
+          }
+        },
+        "required": [
+          "widget_bp"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "widget_name"
+            ]
+          },
+          {
+            "required": [
+              "target"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.child.remove",
+      "domain": "content",
+      "kind": "command",
+      "description": "Remove a child widget from a Widget Blueprint hierarchy.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "description": "Asset path of the Widget Blueprint"
+          },
+          "child_name": {
+            "type": "string",
+            "description": "Name of the child widget to remove"
+          }
+        },
+        "required": [
+          "widget_bp",
+          "child_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "confirmWrite"
+      }
+    },
+    {
+      "id": "content.widget.child.reorder",
+      "domain": "content",
+      "kind": "command",
+      "description": "Move a child widget to a new index within its current parent.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "description": "Asset path of the Widget Blueprint"
+          },
+          "child_name": {
+            "type": "string",
+            "description": "Name of the child widget to reorder"
+          },
+          "new_index": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Zero-based destination index"
+          }
+        },
+        "required": [
+          "widget_bp",
+          "child_name",
+          "new_index"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.hierarchy.get",
+      "domain": "content",
+      "kind": "query",
+      "description": "Read back the complete widget hierarchy and supported slot layout data.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "description": "Asset path of the Widget Blueprint"
+          }
+        },
+        "required": [
+          "widget_bp"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.widget.binding.list",
+      "domain": "content",
+      "kind": "query",
+      "description": "List Widget Blueprint event bindings and report binding kind, function existence, signature compatibility, and generated binding state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "widget_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "event_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "function_name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "widget_bp"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.widget.event.unbind",
+      "domain": "content",
+      "kind": "command",
+      "description": "Remove one function or all functions registered for a Widget Blueprint event.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "widget_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "event_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "function_name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "widget_bp",
+          "widget_name",
+          "event_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.child.rename",
+      "domain": "content",
+      "kind": "command",
+      "description": "Rename a child widget within a Widget Blueprint hierarchy.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "child_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "new_name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "widget_bp",
+          "child_name",
+          "new_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.child.copy",
+      "domain": "content",
+      "kind": "command",
+      "description": "Copy a child widget within the same Widget Blueprint, optionally selecting its parent and index.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "child_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "new_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "parent_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "new_index": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "widget_bp",
+          "child_name",
+          "new_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.child.reparent",
+      "domain": "content",
+      "kind": "command",
+      "description": "Move a child widget to another panel within the same Widget Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "child_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "new_parent_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "new_index": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "widget_bp",
+          "child_name",
+          "new_parent_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.named_slot.set",
+      "domain": "content",
+      "kind": "command",
+      "description": "Set or clear the content assigned to a named slot in a Widget Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "host_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "slot_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "content_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "widget_bp",
+          "host_name",
+          "slot_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.root.set",
+      "domain": "content",
+      "kind": "command",
+      "description": "Set an existing widget as the root of a Widget Blueprint hierarchy.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "widget_name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "widget_bp",
+          "widget_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.slot.properties.set",
+      "domain": "content",
+      "kind": "command",
+      "description": "Set schema-validated panel slot properties for a widget in a Widget Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "widget_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "slotType": {
+            "type": "string",
+            "enum": [
+              "Canvas",
+              "HorizontalBox",
+              "VerticalBox",
+              "Grid",
+              "UniformGrid",
+              "Overlay"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "anchors": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "offsets": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "alignment": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "autoSize": {
+                "type": "boolean"
+              },
+              "zOrder": {
+                "type": "integer"
+              },
+              "padding": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "sizeRule": {
+                "type": "string",
+                "enum": [
+                  "Auto",
+                  "Fill"
+                ]
+              },
+              "fill": {
+                "type": "number",
+                "minimum": 0
+              },
+              "horizontalAlignment": {
+                "type": "string",
+                "enum": [
+                  "Fill",
+                  "Left",
+                  "Center",
+                  "Right"
+                ]
+              },
+              "verticalAlignment": {
+                "type": "string",
+                "enum": [
+                  "Fill",
+                  "Top",
+                  "Center",
+                  "Bottom"
+                ]
+              },
+              "row": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "column": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "rowSpan": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "columnSpan": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "layer": {
+                "type": "integer"
+              },
+              "nudge": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              }
+            },
+            "minProperties": 1,
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "widget_bp",
+          "widget_name",
+          "slotType",
+          "properties"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "slotType": {
+                  "const": "Canvas"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "anchors": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 4,
+                      "maxItems": 4
+                    },
+                    "offsets": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 4,
+                      "maxItems": 4
+                    },
+                    "alignment": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 2,
+                      "maxItems": 2
+                    },
+                    "autoSize": {
+                      "type": "boolean"
+                    },
+                    "zOrder": {
+                      "type": "integer"
+                    }
+                  },
+                  "minProperties": 1,
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "slotType": {
+                  "enum": [
+                    "HorizontalBox",
+                    "VerticalBox",
+                    "Overlay"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "padding": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 4,
+                      "maxItems": 4
+                    },
+                    "sizeRule": {
+                      "type": "string",
+                      "enum": [
+                        "Auto",
+                        "Fill"
+                      ]
+                    },
+                    "fill": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "horizontalAlignment": {
+                      "type": "string",
+                      "enum": [
+                        "Fill",
+                        "Left",
+                        "Center",
+                        "Right"
+                      ]
+                    },
+                    "verticalAlignment": {
+                      "type": "string",
+                      "enum": [
+                        "Fill",
+                        "Top",
+                        "Center",
+                        "Bottom"
+                      ]
+                    }
+                  },
+                  "minProperties": 1,
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "slotType": {
+                  "const": "Grid"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "padding": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 4,
+                      "maxItems": 4
+                    },
+                    "horizontalAlignment": {
+                      "type": "string",
+                      "enum": [
+                        "Fill",
+                        "Left",
+                        "Center",
+                        "Right"
+                      ]
+                    },
+                    "verticalAlignment": {
+                      "type": "string",
+                      "enum": [
+                        "Fill",
+                        "Top",
+                        "Center",
+                        "Bottom"
+                      ]
+                    },
+                    "row": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "column": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "rowSpan": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "columnSpan": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "layer": {
+                      "type": "integer"
+                    },
+                    "nudge": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 2,
+                      "maxItems": 2
+                    }
+                  },
+                  "minProperties": 1,
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "slotType": {
+                  "const": "UniformGrid"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "properties": {
+                  "type": "object",
+                  "properties": {
+                    "horizontalAlignment": {
+                      "type": "string",
+                      "enum": [
+                        "Fill",
+                        "Left",
+                        "Center",
+                        "Right"
+                      ]
+                    },
+                    "verticalAlignment": {
+                      "type": "string",
+                      "enum": [
+                        "Fill",
+                        "Top",
+                        "Center",
+                        "Bottom"
+                      ]
+                    },
+                    "row": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "column": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "minProperties": 1,
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.animation.get",
+      "domain": "content",
+      "kind": "query",
+      "description": "Read one or all Widget Blueprint animations, tracks, and keys.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "animation_name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "widget_bp"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.widget.animation.create",
+      "domain": "content",
+      "kind": "command",
+      "description": "Create a Widget Blueprint animation with an optional playback range and display rate.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "animation_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "start_time": {
+            "type": "number",
+            "minimum": 0
+          },
+          "end_time": {
+            "type": "number",
+            "minimum": 0
+          },
+          "display_rate": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "widget_bp",
+          "animation_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.animation.track.set",
+      "domain": "content",
+      "kind": "command",
+      "description": "Create or replace a typed property track and its keys in a Widget Blueprint animation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "animation_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "widget_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "property": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value_type": {
+            "type": "string",
+            "enum": [
+              "float",
+              "bool",
+              "enum",
+              "vector2",
+              "color",
+              "transform2d"
+            ]
+          },
+          "keys": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "time": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "value": {
+                  "description": "Typed JSON key value matching value_type"
+                }
+              },
+              "required": [
+                "time",
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "widget_bp",
+          "animation_name",
+          "widget_name",
+          "property",
+          "value_type",
+          "keys"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "content.widget.animation.delete",
+      "domain": "content",
+      "kind": "command",
+      "description": "Delete a Widget Blueprint animation and all of its tracks.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "animation_name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "widget_bp",
+          "animation_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "confirmWrite"
+      }
+    },
+    {
+      "id": "content.widget.designer.settings.get",
+      "domain": "content",
+      "kind": "query",
+      "description": "Read Widget Blueprint designer sizing settings and compute preview DPI for an optional viewport size.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "preview_size": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "required": [
+          "widget_bp"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.widget.designer.settings.set",
+      "domain": "content",
+      "kind": "command",
+      "description": "Set Widget Blueprint design-time sizing settings and return the resulting preview DPI.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widget_bp": {
+            "type": "string",
+            "minLength": 1
+          },
+          "design_size_mode": {
+            "type": "string",
+            "enum": [
+              "FillScreen",
+              "Custom",
+              "CustomOnScreen",
+              "Desired",
+              "DesiredOnScreen"
+            ]
+          },
+          "design_time_size": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "preview_size": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "required": [
+          "widget_bp"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "design_size_mode"
+            ]
+          },
+          {
+            "required": [
+              "design_time_size"
+            ]
+          },
+          {
+            "required": [
+              "preview_size"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    }
+  ]
+}

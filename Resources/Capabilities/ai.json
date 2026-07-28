@@ -1,0 +1,299 @@
+{
+  "schemaVersion": 2,
+  "domain": "ai",
+  "capabilities": [
+    {
+      "id": "ai.behavior_tree.blackboard.link",
+      "domain": "ai",
+      "kind": "command",
+      "description": "Link a Blackboard Data asset to a Behavior Tree.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tree": {
+            "type": "string",
+            "description": "Asset path of the Behavior Tree"
+          },
+          "blackboard": {
+            "type": "string",
+            "description": "Asset path of the Blackboard Data"
+          }
+        },
+        "required": [
+          "tree",
+          "blackboard"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "ai.behavior_tree.create",
+      "domain": "ai",
+      "kind": "command",
+      "description": "Create a new Behavior Tree asset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name for the Behavior Tree asset"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "ai.behavior_tree.decorator.add",
+      "domain": "ai",
+      "kind": "command",
+      "description": "Add a decorator to a node in a Behavior Tree.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tree": {
+            "type": "string",
+            "description": "Asset path of the Behavior Tree"
+          },
+          "decorator_class": {
+            "type": "string",
+            "description": "Class name of the decorator (e.g. 'BTDecorator_Blackboard')"
+          },
+          "node_index": {
+            "type": "number",
+            "description": "Index of the composite node to attach to (0 = root)"
+          }
+        },
+        "required": [
+          "tree",
+          "decorator_class"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "ai.behavior_tree.selector.add",
+      "domain": "ai",
+      "kind": "command",
+      "description": "Add a Selector composite node to a Behavior Tree.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tree": {
+            "type": "string",
+            "description": "Asset path of the Behavior Tree"
+          },
+          "parent_index": {
+            "type": "number",
+            "description": "Index of parent composite (0 = root). Default: 0"
+          }
+        },
+        "required": [
+          "tree"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "ai.behavior_tree.sequence.add",
+      "domain": "ai",
+      "kind": "command",
+      "description": "Add a Sequence composite node to a Behavior Tree.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tree": {
+            "type": "string",
+            "description": "Asset path of the Behavior Tree"
+          },
+          "parent_index": {
+            "type": "number",
+            "description": "Index of parent composite (0 = root). Default: 0"
+          }
+        },
+        "required": [
+          "tree"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "ai.behavior_tree.service.add",
+      "domain": "ai",
+      "kind": "command",
+      "description": "Add a service to a composite node in a Behavior Tree.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tree": {
+            "type": "string",
+            "description": "Asset path of the Behavior Tree"
+          },
+          "service_class": {
+            "type": "string",
+            "description": "Class name of the service (e.g. 'BTService_DefaultFocus')"
+          },
+          "node_index": {
+            "type": "number",
+            "description": "Index of the composite node to attach to (0 = root)"
+          }
+        },
+        "required": [
+          "tree",
+          "service_class"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "ai.behavior_tree.task.add",
+      "domain": "ai",
+      "kind": "command",
+      "description": "Add a task node to a Behavior Tree under a specified parent composite node.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tree": {
+            "type": "string",
+            "description": "Asset path of the Behavior Tree"
+          },
+          "task_class": {
+            "type": "string",
+            "description": "Class name of the BTTask (e.g. 'BTTask_MoveTo', 'BTTask_Wait')"
+          },
+          "parent_index": {
+            "type": "number",
+            "description": "Index of the parent composite node (0 = root). Default: 0"
+          }
+        },
+        "required": [
+          "tree",
+          "task_class"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "ai.blackboard.create",
+      "domain": "ai",
+      "kind": "command",
+      "description": "Create a new Blackboard Data asset for AI.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name for the Blackboard asset"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "ai.blackboard.key.add",
+      "domain": "ai",
+      "kind": "command",
+      "description": "Add a key entry to a Blackboard Data asset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blackboard": {
+            "type": "string",
+            "description": "Asset path of the Blackboard Data"
+          },
+          "key_name": {
+            "type": "string",
+            "description": "Name of the new key"
+          },
+          "key_type": {
+            "type": "string",
+            "description": "Type: bool, int, float, string, vector, rotator, object, name, class, enum"
+          }
+        },
+        "required": [
+          "blackboard",
+          "key_name",
+          "key_type"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    }
+  ]
+}

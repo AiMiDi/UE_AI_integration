@@ -1,0 +1,1067 @@
+{
+  "schema": "ue.workflow-admission.v1",
+  "admissionValues": [
+    "editStep",
+    "finalizer",
+    "observeOnly",
+    "interactiveOnly",
+    "none"
+  ],
+  "operations": {
+    "blueprint.asset.create": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint"
+      ],
+      "scopeParameters": [
+        "blueprintName",
+        "packagePath"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "blueprintName": {
+            "type": "string"
+          },
+          "assetPath": {
+            "type": "string"
+          },
+          "packagePath": {
+            "type": "string"
+          },
+          "blueprintType": {
+            "type": "string"
+          },
+          "parentClass": {
+            "type": "string"
+          },
+          "graphs": {
+            "type": "array"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.variable.add": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "blueprint": {
+            "type": "string"
+          },
+          "variableName": {
+            "type": "string"
+          },
+          "variableType": {
+            "type": "string"
+          },
+          "isArray": {
+            "type": "boolean"
+          },
+          "category": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.variable.metadata.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "variable": {
+            "type": "string"
+          },
+          "blueprint": {
+            "type": "string"
+          },
+          "changes": {
+            "type": "object"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.graph.create": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "blueprint": {
+            "type": "string"
+          },
+          "graphName": {
+            "type": "string"
+          },
+          "graphType": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.node.add": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "blueprint": {
+            "type": "string"
+          },
+          "graph": {
+            "type": "string"
+          },
+          "nodeType": {
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "node": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "blueprint.node.move": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "posX": {
+            "type": "number"
+          },
+          "posY": {
+            "type": "number"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.node.comment.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "oldComment": {
+            "type": "string"
+          },
+          "newComment": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.pin.default.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "oldValue": {
+            "type": "string"
+          },
+          "newValue": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.pin.connect": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "blueprint": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.component.add": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "blueprint": {
+            "type": "string"
+          },
+          "componentClass": {
+            "type": "string"
+          },
+          "parentComponent": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.dispatcher.add": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "dispatcherName": {
+            "type": "string"
+          },
+          "blueprint": {
+            "type": "string"
+          },
+          "parameters": {
+            "type": "array"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.function.parameter.add": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "functionName": {
+            "type": "string"
+          },
+          "paramName": {
+            "type": "string"
+          },
+          "blueprint": {
+            "type": "string"
+          },
+          "nodeType": {
+            "type": "string"
+          },
+          "paramType": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.asset.validate": {
+      "admission": "finalizer",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": false,
+      "risk": "readOnly"
+    },
+    "blueprint.asset.compile": {
+      "admission": "finalizer",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": false,
+      "risk": "safeWrite"
+    },
+    "blueprint.asset.get": {
+      "admission": "observeOnly",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "name"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": false,
+      "risk": "readOnly"
+    },
+    "blueprint.graph.get": {
+      "admission": "observeOnly",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "name"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": false,
+      "risk": "readOnly"
+    },
+    "content.widget.blueprint.create": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "name",
+        "package_path"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_class": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "content.widget.child.add": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "widget_bp"
+      ],
+      "parameterAliases": {
+        "class": "child_class",
+        "name": "child_name",
+        "parent": "parent_name"
+      },
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "widgetRef": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "widget"
+              },
+              "widgetBlueprint": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "widgetBlueprint",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "child_name": {
+            "type": "string"
+          },
+          "child_class": {
+            "type": "string"
+          },
+          "parent": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "content.widget.property.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "widget_bp"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "widget": {
+            "type": "string"
+          },
+          "property": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "deferredCompile": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "content.widget.event.bind": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "widget_bp"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "widget": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string"
+          },
+          "function": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "already_bound": {
+            "type": "boolean"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "deferredCompile": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "content.widget.slot.layout.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "widget_bp"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "widgetRef": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "widget"
+              },
+              "widgetBlueprint": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "widgetBlueprint",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "layout": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "content.widget.child.remove": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "widget_bp"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "confirmWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "child_name": {
+            "type": "string"
+          },
+          "parent": {
+            "type": "string"
+          },
+          "former_index": {
+            "type": "integer"
+          },
+          "removed": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "content.widget.child.reorder": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "widget_bp"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "widgetRef": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "widget"
+              },
+              "widgetBlueprint": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "widgetBlueprint",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "parent": {
+            "type": "string"
+          },
+          "old_index": {
+            "type": "integer"
+          },
+          "new_index": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "content.widget.hierarchy.get": {
+      "admission": "observeOnly",
+      "scopeKinds": [
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "widget_bp"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": false,
+      "risk": "readOnly",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "widgetBlueprint": {
+            "type": "string"
+          },
+          "root": {
+            "type": "object"
+          },
+          "widgets": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "content.material.create": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "material"
+      ],
+      "scopeParameters": [
+        "name",
+        "packagePath"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "content.material.expression.add": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "material"
+      ],
+      "scopeParameters": [
+        "material"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "expressionClass": {
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "posX": {
+            "type": "number"
+          },
+          "posY": {
+            "type": "number"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "content.material.expression.move": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "material"
+      ],
+      "scopeParameters": [
+        "material"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "posX": {
+            "type": "number"
+          },
+          "posY": {
+            "type": "number"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "content.material.expression.value.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "material"
+      ],
+      "scopeParameters": [
+        "material"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "expressionType": {
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "newValue": {},
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "content.material.pin.connect": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "material"
+      ],
+      "scopeParameters": [
+        "material"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "material": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "content.material.property.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "material"
+      ],
+      "scopeParameters": [
+        "material"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "property": {
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "oldValue": {},
+          "newValue": {},
+          "dryRun": {
+            "type": "boolean"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "content.material.validate": {
+      "admission": "finalizer",
+      "scopeKinds": [
+        "material"
+      ],
+      "scopeParameters": [
+        "material"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": false,
+      "risk": "readOnly"
+    },
+    "content.material.graph.get": {
+      "admission": "observeOnly",
+      "scopeKinds": [
+        "material"
+      ],
+      "scopeParameters": [
+        "name"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": false,
+      "risk": "readOnly"
+    }
+  },
+  "scopeKinds": {
+    "blueprint": {
+      "initializer": {
+        "operationType": "blueprint.asset.create",
+        "params": {
+          "parentClass": "Actor"
+        }
+      },
+      "defaultReadBack": [
+        "asset"
+      ],
+      "compile": {
+        "operationType": "blueprint.asset.compile"
+      },
+      "readBack": {
+        "asset": {
+          "operationType": "blueprint.asset.get"
+        },
+        "graphs": {
+          "operationType": "blueprint.graph.get"
+        },
+        "variables": {
+          "operationType": "blueprint.asset.get"
+        }
+      }
+    },
+    "widgetBlueprint": {
+      "initializer": {
+        "operationType": "content.widget.blueprint.create",
+        "params": {}
+      },
+      "defaultReadBack": [
+        "widgetTree",
+        "bindings",
+        "layout"
+      ],
+      "compile": {
+        "operationType": "blueprint.asset.compile"
+      },
+      "readBack": {
+        "widgetTree": {
+          "operationType": "content.widget.hierarchy.get"
+        },
+        "bindings": {
+          "operationType": "content.widget.hierarchy.get"
+        },
+        "layout": {
+          "operationType": "content.widget.hierarchy.get"
+        },
+        "graphs": {
+          "operationType": "blueprint.graph.get"
+        }
+      }
+    },
+    "material": {
+      "initializer": {
+        "operationType": "content.material.create",
+        "params": {}
+      },
+      "forbiddenParameters": [
+        "materialFunction"
+      ],
+      "defaultReadBack": [
+        "graph"
+      ],
+      "compile": {
+        "operationType": "content.material.validate"
+      },
+      "readBack": {
+        "graph": {
+          "operationType": "content.material.graph.get"
+        },
+        "properties": {
+          "operationType": "content.material.graph.get"
+        }
+      }
+    }
+  }
+}

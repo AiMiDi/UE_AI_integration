@@ -1,0 +1,59 @@
+{
+  "dsl": "ue.workflow",
+  "dslVersion": "1.0",
+  "workflowKind": "assetEdit",
+  "workflowId": "build-login-widget",
+  "scope": {
+    "kind": "widgetBlueprint",
+    "asset": "/Game/UI/WBP_Login",
+    "createIfMissing": true
+  },
+  "persistence": "dirtyOnly",
+  "operations": [
+    {
+      "id": "title",
+      "type": "content.widget.child.add",
+      "params": {
+        "parent": "RootCanvas",
+        "class": "TextBlock",
+        "name": "Title"
+      }
+    },
+    {
+      "id": "layoutTitle",
+      "type": "content.widget.slot.layout.set",
+      "bindings": {
+        "/target": {
+          "from": "title",
+          "path": "/widgetRef"
+        }
+      },
+      "params": {
+        "anchors": [
+          0.5,
+          0.0,
+          0.5,
+          0.0
+        ],
+        "alignment": [
+          0.5,
+          0.0
+        ],
+        "offsets": [
+          -200,
+          40,
+          400,
+          64
+        ]
+      }
+    }
+  ],
+  "verify": {
+    "compile": true,
+    "readBack": [
+      "widgetTree",
+      "bindings",
+      "layout"
+    ]
+  }
+}

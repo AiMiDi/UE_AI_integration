@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ue-ai-cli.local/schemas/ue.workflow-receipt.v1.json",
+  "title": "UE Workflow Receipt v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "runId",
+    "planDigest",
+    "contractSetDigest",
+    "status"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ue.workflow-run.v1"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "planDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "contractSetDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "status": {
+      "enum": [
+        "pending",
+        "running",
+        "failed",
+        "blocked",
+        "completed",
+        "rolledBack"
+      ]
+    }
+  }
+}

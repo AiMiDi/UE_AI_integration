@@ -1,0 +1,2290 @@
+{
+  "schemaVersion": 2,
+  "domain": "blueprint",
+  "capabilities": [
+    {
+      "id": "blueprint.asset.create",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Create a new Blueprint asset with a specified parent class, package path, and optional type.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprintName": {
+            "type": "string",
+            "description": "Name for the new Blueprint"
+          },
+          "packagePath": {
+            "type": "string",
+            "description": "Package path starting with /Game"
+          },
+          "parentClass": {
+            "type": "string",
+            "description": "Parent class name (e.g. Actor, Pawn)"
+          },
+          "blueprintType": {
+            "type": "string",
+            "description": "Normal, Interface, FunctionLibrary, or MacroLibrary"
+          }
+        },
+        "required": [
+          "blueprintName",
+          "packagePath",
+          "parentClass"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.asset.delete",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Delete a .uasset file after verifying no references exist. Use force=true to skip reference check.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "assetPath": {
+            "type": "string",
+            "description": "Package path of asset to delete"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Force delete even with references"
+          }
+        },
+        "required": [
+          "assetPath"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.diff",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Structural diff between two Blueprints — compares graphs, nodes, connections, and variables.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprintA": {
+            "type": "string",
+            "description": "First Blueprint name or path"
+          },
+          "blueprintB": {
+            "type": "string",
+            "description": "Second Blueprint name or path"
+          },
+          "graph": {
+            "type": "string",
+            "description": "Filter to a specific graph name"
+          }
+        },
+        "required": [
+          "blueprintA",
+          "blueprintB"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Get detailed information about a Blueprint asset including variables, graphs, and parent class.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "blueprint.asset.list",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "List all Blueprint assets in the project, optionally filtered by name, parent class, or type.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Name/path substring filter"
+          },
+          "parentClass": {
+            "type": "string",
+            "description": "Filter by parent class name"
+          },
+          "type": {
+            "type": "string",
+            "description": "all, regular, or level"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.references",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Find all assets that reference a given asset path, categorized as Blueprint vs other references.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "assetPath": {
+            "type": "string",
+            "description": "Package path of the asset to find references to"
+          }
+        },
+        "required": [
+          "assetPath"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.rename",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Rename or move an asset to a new path with automatic reference fixup.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "assetPath": {
+            "type": "string",
+            "description": "Current asset path"
+          },
+          "newPath": {
+            "type": "string",
+            "description": "New path or name"
+          }
+        },
+        "required": [
+          "assetPath",
+          "newPath"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.reparent",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Change a Blueprint's parent class.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "newParentClass": {
+            "type": "string",
+            "description": "New parent class name"
+          }
+        },
+        "required": [
+          "blueprint",
+          "newParentClass"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.search",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Search across all Blueprint graphs for nodes matching a query string (function names, events, variables).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search term"
+          },
+          "path": {
+            "type": "string",
+            "description": "Path filter"
+          },
+          "maxResults": {
+            "type": "number",
+            "description": "Max results (default 50)"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.search_by_type",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Find all usages of a specific type (struct, enum, class) across all Blueprint variables, parameters, and pin connections.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "typeName": {
+            "type": "string",
+            "description": "Type name to search for"
+          },
+          "filter": {
+            "type": "string",
+            "description": "Blueprint name/path filter"
+          },
+          "maxResults": {
+            "type": "number",
+            "description": "Max results (default 200)"
+          }
+        },
+        "required": [
+          "typeName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.summary",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Get a brief summary of a Blueprint: parent class, variable count, graph names, and node counts.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Blueprint name"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.validate",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Compile a Blueprint without saving and report errors and warnings.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "finalizer",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "blueprint.asset.validate_all",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Bulk-validate multiple Blueprints by compiling them without saving. Returns only failures.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Name/path filter"
+          },
+          "countOnly": {
+            "type": "boolean",
+            "description": "Only return count, don't compile"
+          },
+          "offset": {
+            "type": "number",
+            "description": "Start index for pagination"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Max blueprints to validate"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.class.list",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Discover available UClasses, optionally filtered by name or parent class.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "string",
+            "description": "Name substring filter"
+          },
+          "parentClass": {
+            "type": "string",
+            "description": "Only list subclasses of this class"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Max results (default 100, max 500)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.component.add",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Add a component to a Blueprint's Simple Construction Script.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "componentClass": {
+            "type": "string",
+            "description": "Component class (e.g. StaticMeshComponent)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Component name"
+          },
+          "parentComponent": {
+            "type": "string",
+            "description": "Parent component name to attach to"
+          }
+        },
+        "required": [
+          "blueprint",
+          "componentClass",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.component.list",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "List all components in a Blueprint's Simple Construction Script.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.component.remove",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Remove a component from a Blueprint's Simple Construction Script.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "name": {
+            "type": "string",
+            "description": "Component to remove"
+          }
+        },
+        "required": [
+          "blueprint",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.default.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Set the default value of a Blueprint variable on the CDO (Class Default Object).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "variable": {
+            "type": "string",
+            "description": "Variable name"
+          },
+          "value": {
+            "type": "string",
+            "description": "New default value as string"
+          }
+        },
+        "required": [
+          "blueprint",
+          "variable",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.dispatcher.add",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Create a new multicast delegate (event dispatcher) on a Blueprint, optionally with parameters.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "dispatcherName": {
+            "type": "string",
+            "description": "Name for the event dispatcher"
+          },
+          "parameters": {
+            "type": "array",
+            "items": {},
+            "description": "Array of {name, type} objects for dispatcher parameters"
+          }
+        },
+        "required": [
+          "blueprint",
+          "dispatcherName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.dispatcher.list",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "List all event dispatchers on a Blueprint with their parameters.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.function.calls.replace",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Redirect all function call nodes from one class to another in a Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "oldClass": {
+            "type": "string",
+            "description": "Current class name"
+          },
+          "newClass": {
+            "type": "string",
+            "description": "New class name"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "Preview changes without applying"
+          }
+        },
+        "required": [
+          "blueprint",
+          "oldClass",
+          "newClass"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.function.list",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "List Blueprint-callable functions on a class with parameter and return type info.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "className": {
+            "type": "string",
+            "description": "Class to inspect"
+          },
+          "filter": {
+            "type": "string",
+            "description": "Name filter"
+          }
+        },
+        "required": [
+          "className"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.function.parameter.add",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Add a parameter to a function, custom event, or event dispatcher.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "functionName": {
+            "type": "string",
+            "description": "Function, event, or dispatcher name"
+          },
+          "paramName": {
+            "type": "string",
+            "description": "Parameter name"
+          },
+          "paramType": {
+            "type": "string",
+            "description": "Parameter type"
+          }
+        },
+        "required": [
+          "blueprint",
+          "functionName",
+          "paramName",
+          "paramType"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.function.parameter.remove",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Remove a parameter from a function or custom event.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "functionName": {
+            "type": "string",
+            "description": "Function or event name"
+          },
+          "paramName": {
+            "type": "string",
+            "description": "Parameter to remove"
+          }
+        },
+        "required": [
+          "blueprint",
+          "functionName",
+          "paramName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.function.parameter.type.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Change the type of a function or custom event parameter.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "functionName": {
+            "type": "string",
+            "description": "Function or event name"
+          },
+          "paramName": {
+            "type": "string",
+            "description": "Parameter name"
+          },
+          "newType": {
+            "type": "string",
+            "description": "New parameter type"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "If true, only analyze impact"
+          }
+        },
+        "required": [
+          "blueprint",
+          "functionName",
+          "paramName",
+          "newType"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.graph.create",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Create a new function, macro, or custom event graph in a Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "graphName": {
+            "type": "string",
+            "description": "Name for the new graph"
+          },
+          "graphType": {
+            "type": "string",
+            "description": "function, macro, or customEvent"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graphName",
+          "graphType"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.graph.delete",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Delete a function or macro graph from a Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "graphName": {
+            "type": "string",
+            "description": "Graph to delete"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graphName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.graph.describe",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Get a human-readable description of the execution flow in a Blueprint graph.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "graph": {
+            "type": "string",
+            "description": "Graph name"
+          }
+        },
+        "required": [
+          "name",
+          "graph"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.graph.diff",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Compare current Blueprint graph state against a previously captured snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "snapshotId": {
+            "type": "string",
+            "description": "Snapshot ID to compare against"
+          },
+          "graph": {
+            "type": "string",
+            "description": "Specific graph to diff"
+          }
+        },
+        "required": [
+          "blueprint",
+          "snapshotId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.graph.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Get the full node graph of a specific graph in a Blueprint, including all nodes and pin connections.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "graph": {
+            "type": "string",
+            "description": "Graph name (e.g. EventGraph, MyFunction)"
+          }
+        },
+        "required": [
+          "name",
+          "graph"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "blueprint.graph.rebuild_impact.analyze",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Analyze which Blueprints would be affected by rebuilding structs/enums from a given module.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "moduleName": {
+            "type": "string",
+            "description": "Module name to analyze"
+          },
+          "structNames": {
+            "type": "array",
+            "items": {},
+            "description": "Optional specific struct/enum names to check"
+          }
+        },
+        "required": [
+          "moduleName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.graph.rename",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Rename a function or macro graph in a Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "graphName": {
+            "type": "string",
+            "description": "Current graph name"
+          },
+          "newName": {
+            "type": "string",
+            "description": "New graph name"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graphName",
+          "newName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.graph.restore",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Restore severed connections from a snapshot. Reconnects pins that existed in the snapshot but are now disconnected.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "snapshotId": {
+            "type": "string",
+            "description": "Snapshot ID to restore from"
+          },
+          "graph": {
+            "type": "string",
+            "description": "Specific graph to restore"
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "Only restore connections for this node"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "If true, only report what would be restored"
+          }
+        },
+        "required": [
+          "blueprint",
+          "snapshotId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.graph.snapshot",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Capture a snapshot of a Blueprint's graph state (nodes and connections) for later diffing/restoring.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "graph": {
+            "type": "string",
+            "description": "Specific graph name to snapshot (omit for all)"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.interface.add",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Add a Blueprint Interface implementation to a Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "interfaceName": {
+            "type": "string",
+            "description": "Interface class or asset name"
+          }
+        },
+        "required": [
+          "blueprint",
+          "interfaceName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.interface.list",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "List all interfaces implemented by a Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.interface.remove",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Remove a Blueprint Interface implementation from a Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "interfaceName": {
+            "type": "string",
+            "description": "Interface to remove"
+          },
+          "preserveFunctions": {
+            "type": "boolean",
+            "description": "Keep function graph stubs"
+          }
+        },
+        "required": [
+          "blueprint",
+          "interfaceName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.node.add",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Create a Blueprint graph node, including override/bound events, delegate operations, input actions, async actions, and latent function calls.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "graph": {
+            "type": "string",
+            "description": "Graph name"
+          },
+          "nodeType": {
+            "type": "string",
+            "description": "Node type to create"
+          },
+          "posX": {
+            "type": "number",
+            "description": "X position"
+          },
+          "posY": {
+            "type": "number",
+            "description": "Y position"
+          },
+          "functionName": {
+            "type": "string",
+            "description": "For CallFunction/OverrideEvent/CallParentFunction"
+          },
+          "className": {
+            "type": "string",
+            "description": "For CallFunction: class to find function on"
+          },
+          "variableName": {
+            "type": "string",
+            "description": "For VariableGet/VariableSet"
+          },
+          "typeName": {
+            "type": "string",
+            "description": "For BreakStruct/MakeStruct"
+          },
+          "castTarget": {
+            "type": "string",
+            "description": "For DynamicCast"
+          },
+          "eventName": {
+            "type": "string",
+            "description": "For CustomEvent"
+          },
+          "comment": {
+            "type": "string",
+            "description": "For Comment node"
+          },
+          "componentName": {
+            "type": "string",
+            "description": "For ComponentBoundEvent: generated component property name"
+          },
+          "delegateName": {
+            "type": "string",
+            "description": "For bound-event and delegate nodes: multicast delegate property name"
+          },
+          "actorPath": {
+            "type": "string",
+            "description": "For ActorBoundEvent: full editor actor object path"
+          },
+          "inputActionName": {
+            "type": "string",
+            "description": "For InputAction: legacy action mapping name"
+          },
+          "inputAction": {
+            "type": "string",
+            "description": "For EnhancedInputAction: InputAction asset object path"
+          },
+          "inputActionPath": {
+            "type": "string",
+            "description": "Alias for inputAction"
+          },
+          "consumeInput": {
+            "type": "boolean",
+            "description": "For InputAction: consume the input event"
+          },
+          "executeWhenPaused": {
+            "type": "boolean",
+            "description": "For InputAction: execute while the game is paused"
+          },
+          "overrideParentBinding": {
+            "type": "boolean",
+            "description": "For InputAction: override the parent Blueprint binding"
+          },
+          "factoryFunctionName": {
+            "type": "string",
+            "description": "For AsyncAction: static factory function"
+          },
+          "factoryClassName": {
+            "type": "string",
+            "description": "For AsyncAction: class declaring the factory function"
+          },
+          "latent": {
+            "type": "boolean",
+            "description": "For CallFunction: require a latent function"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "nodeType"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.node.comment.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Set or clear the comment bubble text on a node.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "Node GUID"
+          },
+          "comment": {
+            "type": "string",
+            "description": "Comment text (empty to clear)"
+          }
+        },
+        "required": [
+          "blueprint",
+          "nodeId",
+          "comment"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.node.delete",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Remove a node from a Blueprint graph. Cannot delete root/entry/event nodes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "Node GUID"
+          }
+        },
+        "required": [
+          "blueprint",
+          "nodeId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.node.duplicate",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Duplicate one or more nodes in a Blueprint graph with optional position offset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "nodeIds": {
+            "type": "array",
+            "items": {},
+            "description": "Array of node GUIDs to duplicate"
+          },
+          "offsetX": {
+            "type": "number",
+            "description": "X offset for duplicates"
+          },
+          "offsetY": {
+            "type": "number",
+            "description": "Y offset for duplicates"
+          }
+        },
+        "required": [
+          "blueprint",
+          "nodeIds"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.node.move",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Move a node to a new position in the graph editor.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "Node GUID"
+          },
+          "posX": {
+            "type": "number",
+            "description": "New X position"
+          },
+          "posY": {
+            "type": "number",
+            "description": "New Y position"
+          }
+        },
+        "required": [
+          "blueprint",
+          "nodeId",
+          "posX",
+          "posY"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.node.refresh_all",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Refresh all nodes in a Blueprint, removing orphaned pins and recompiling.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.pin.compatibility.check",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Pre-flight check whether two pins can be connected.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "sourceNodeId": {
+            "type": "string",
+            "description": "Source node GUID"
+          },
+          "sourcePinName": {
+            "type": "string",
+            "description": "Source pin name"
+          },
+          "targetNodeId": {
+            "type": "string",
+            "description": "Target node GUID"
+          },
+          "targetPinName": {
+            "type": "string",
+            "description": "Target pin name"
+          }
+        },
+        "required": [
+          "blueprint",
+          "sourceNodeId",
+          "sourcePinName",
+          "targetNodeId",
+          "targetPinName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.pin.connect",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Connect two pins together in a Blueprint graph. Use check_pin_compatibility first to verify.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "sourceNodeId": {
+            "type": "string",
+            "description": "Source node GUID"
+          },
+          "sourcePinName": {
+            "type": "string",
+            "description": "Source pin name"
+          },
+          "targetNodeId": {
+            "type": "string",
+            "description": "Target node GUID"
+          },
+          "targetPinName": {
+            "type": "string",
+            "description": "Target pin name"
+          }
+        },
+        "required": [
+          "blueprint",
+          "sourceNodeId",
+          "sourcePinName",
+          "targetNodeId",
+          "targetPinName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.pin.default.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Set the default value of an input pin on a node.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "Node GUID"
+          },
+          "pinName": {
+            "type": "string",
+            "description": "Pin name"
+          },
+          "value": {
+            "type": "string",
+            "description": "New default value"
+          }
+        },
+        "required": [
+          "blueprint",
+          "nodeId",
+          "pinName",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.pin.disconnect",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Break connections on a pin. Optionally specify a target to disconnect only one link.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "Node GUID"
+          },
+          "pinName": {
+            "type": "string",
+            "description": "Pin name"
+          },
+          "targetNodeId": {
+            "type": "string",
+            "description": "Specific target node GUID"
+          },
+          "targetPinName": {
+            "type": "string",
+            "description": "Specific target pin name"
+          }
+        },
+        "required": [
+          "blueprint",
+          "nodeId",
+          "pinName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.pin.disconnected.find",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Find Break/Make struct nodes with unresolved types or zero connections, and snapshot-based definite-break detection.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "filter": {
+            "type": "string",
+            "description": "Path/name filter for bulk scan"
+          },
+          "snapshotId": {
+            "type": "string",
+            "description": "Snapshot ID for definite-break detection"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.pin.info",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Get detailed information about a specific pin on a node.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "Node GUID"
+          },
+          "pinName": {
+            "type": "string",
+            "description": "Pin name"
+          }
+        },
+        "required": [
+          "blueprint",
+          "nodeId",
+          "pinName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.property.list",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "List properties on a class with type and flag information.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "className": {
+            "type": "string",
+            "description": "Class to inspect"
+          },
+          "filter": {
+            "type": "string",
+            "description": "Name filter"
+          }
+        },
+        "required": [
+          "className"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.variable.add",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Add a new member variable to a Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "variableName": {
+            "type": "string",
+            "description": "Name for the new variable"
+          },
+          "variableType": {
+            "type": "string",
+            "description": "Type (e.g. Boolean, Float, Vector, MyStruct)"
+          },
+          "category": {
+            "type": "string",
+            "description": "Category for organization"
+          },
+          "isArray": {
+            "type": "boolean",
+            "description": "Whether this is an array variable"
+          },
+          "defaultValue": {
+            "type": "string",
+            "description": "Default value as string"
+          }
+        },
+        "required": [
+          "blueprint",
+          "variableName",
+          "variableType"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.variable.metadata.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Set variable properties like category, tooltip, replication, editability, etc.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "variable": {
+            "type": "string",
+            "description": "Variable name"
+          },
+          "category": {
+            "type": "string",
+            "description": "Category for organization"
+          },
+          "tooltip": {
+            "type": "string",
+            "description": "Tooltip text"
+          },
+          "replication": {
+            "type": "string",
+            "description": "none, replicated, or repNotify"
+          },
+          "exposeOnSpawn": {
+            "type": "boolean",
+            "description": "Expose on spawn"
+          },
+          "isPrivate": {
+            "type": "boolean",
+            "description": "Blueprint private"
+          },
+          "editability": {
+            "type": "string",
+            "description": "editAnywhere, editDefaultsOnly, editInstanceOnly, none"
+          }
+        },
+        "required": [
+          "blueprint",
+          "variable"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.variable.remove",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Remove a member variable from a Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "variableName": {
+            "type": "string",
+            "description": "Variable to remove"
+          }
+        },
+        "required": [
+          "blueprint",
+          "variableName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.variable.type.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Change the type of an existing Blueprint member variable.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "variable": {
+            "type": "string",
+            "description": "Variable name"
+          },
+          "newType": {
+            "type": "string",
+            "description": "New type name"
+          },
+          "typeCategory": {
+            "type": "string",
+            "description": "object, softobject, class, softclass, interface"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "If true, only analyze impact without changing"
+          }
+        },
+        "required": [
+          "blueprint",
+          "variable",
+          "newType"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.compile",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Compile a Blueprint or Widget Blueprint and return compiler diagnostics plus mutation verification metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint asset package or object path"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.save",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Save a Blueprint or Widget Blueprint package and verify the persisted asset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint asset package or object path"
+          },
+          "only_if_dirty": {
+            "type": "boolean",
+            "description": "If true, skip saving an already clean package"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.reload",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Reload a clean Blueprint or Widget Blueprint package from disk and verify the reloaded asset; dirty assets are rejected.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint asset package or object path"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Allow reload to discard unsaved changes; false rejects dirty assets"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.asset.dirty.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Report whether a Blueprint or Widget Blueprint package is dirty in the editor.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint asset package or object path"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ue-ai-cli.local/schemas/ue.workflow-result.v1.json",
+  "title": "UE Workflow Result v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "runId",
+    "status",
+    "planDigest",
+    "contractSetDigest",
+    "receipt"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ue.workflow-result.v1"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "pending",
+        "running",
+        "failed",
+        "blocked",
+        "completed",
+        "rolledBack"
+      ]
+    },
+    "planDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "contractSetDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "receipt": {
+      "type": "object"
+    },
+    "operations": {
+      "type": "array"
+    },
+    "dirtyPackages": {
+      "type": "array"
+    },
+    "readBack": {
+      "type": "object"
+    },
+    "assetDiff": {
+      "type": "object"
+    },
+    "rollback": {
+      "type": "object"
+    },
+    "diagnostics": {
+      "type": "array"
+    }
+  }
+}

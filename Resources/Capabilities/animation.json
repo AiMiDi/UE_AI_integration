@@ -1,0 +1,463 @@
+{
+  "schemaVersion": 2,
+  "domain": "animation",
+  "capabilities": [
+    {
+      "id": "animation.blend_space.create",
+      "domain": "animation",
+      "kind": "command",
+      "description": "Create a new 2D Blend Space asset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Blend space name"
+          },
+          "packagePath": {
+            "type": "string",
+            "description": "Package path"
+          },
+          "skeleton": {
+            "type": "string",
+            "description": "Skeleton name or path"
+          }
+        },
+        "required": [
+          "name",
+          "packagePath",
+          "skeleton"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "animation.blend_space.samples.set",
+      "domain": "animation",
+      "kind": "command",
+      "description": "Set animation samples and axis parameters on a Blend Space.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blendSpace": {
+            "type": "string",
+            "description": "Blend Space name or path"
+          },
+          "samples": {
+            "type": "array",
+            "items": {},
+            "description": "Array of {animationAsset, x, y}"
+          },
+          "axisXName": {
+            "type": "string",
+            "description": "X axis display name"
+          },
+          "axisYName": {
+            "type": "string",
+            "description": "Y axis display name"
+          },
+          "axisXMin": {
+            "type": "number",
+            "description": "X axis minimum"
+          },
+          "axisXMax": {
+            "type": "number",
+            "description": "X axis maximum"
+          },
+          "axisYMin": {
+            "type": "number",
+            "description": "Y axis minimum"
+          },
+          "axisYMax": {
+            "type": "number",
+            "description": "Y axis maximum"
+          }
+        },
+        "required": [
+          "blendSpace"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "animation.blueprint.create",
+      "domain": "animation",
+      "kind": "command",
+      "description": "Create a new Animation Blueprint with a target skeleton.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Blueprint name"
+          },
+          "packagePath": {
+            "type": "string",
+            "description": "Package path"
+          },
+          "skeleton": {
+            "type": "string",
+            "description": "Skeleton name or path"
+          },
+          "parentClass": {
+            "type": "string",
+            "description": "Parent class (default AnimInstance)"
+          }
+        },
+        "required": [
+          "name",
+          "packagePath",
+          "skeleton"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "animation.node.add",
+      "domain": "animation",
+      "kind": "command",
+      "description": "Add an animation node (SequencePlayer, BlendSpacePlayer, StateMachine) to an anim graph.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "AnimBlueprint name"
+          },
+          "nodeType": {
+            "type": "string",
+            "description": "Node type: SequencePlayer, BlendSpacePlayer, StateMachine"
+          },
+          "graph": {
+            "type": "string",
+            "description": "Target graph name (default AnimGraph)"
+          },
+          "animationAsset": {
+            "type": "string",
+            "description": "Animation/BlendSpace asset name"
+          },
+          "posX": {
+            "type": "number",
+            "description": "X position"
+          },
+          "posY": {
+            "type": "number",
+            "description": "Y position"
+          }
+        },
+        "required": [
+          "blueprint",
+          "nodeType"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "animation.state_machine.add",
+      "domain": "animation",
+      "kind": "command",
+      "description": "Add a new state machine node to the AnimGraph (convenience wrapper for add_anim_node).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "AnimBlueprint name"
+          },
+          "name": {
+            "type": "string",
+            "description": "State machine name"
+          },
+          "posX": {
+            "type": "number",
+            "description": "X position"
+          },
+          "posY": {
+            "type": "number",
+            "description": "Y position"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "animation.state.add",
+      "domain": "animation",
+      "kind": "command",
+      "description": "Add a state to a state machine graph in an Animation Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "AnimBlueprint name"
+          },
+          "graph": {
+            "type": "string",
+            "description": "State machine graph name"
+          },
+          "stateName": {
+            "type": "string",
+            "description": "New state name"
+          },
+          "posX": {
+            "type": "number",
+            "description": "X position"
+          },
+          "posY": {
+            "type": "number",
+            "description": "Y position"
+          },
+          "animationAsset": {
+            "type": "string",
+            "description": "Animation sequence to assign"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "stateName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "animation.state.animation.set",
+      "domain": "animation",
+      "kind": "command",
+      "description": "Set the animation sequence played in a state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "AnimBlueprint name"
+          },
+          "graph": {
+            "type": "string",
+            "description": "State machine graph name"
+          },
+          "stateName": {
+            "type": "string",
+            "description": "Target state name"
+          },
+          "animationAsset": {
+            "type": "string",
+            "description": "Animation sequence name"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "stateName",
+          "animationAsset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "animation.state.remove",
+      "domain": "animation",
+      "kind": "command",
+      "description": "Remove a state and its transitions from a state machine graph.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "AnimBlueprint name"
+          },
+          "graph": {
+            "type": "string",
+            "description": "State machine graph name"
+          },
+          "stateName": {
+            "type": "string",
+            "description": "State to remove"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "stateName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "animation.transition.add",
+      "domain": "animation",
+      "kind": "command",
+      "description": "Add a transition between two states in a state machine.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "AnimBlueprint name"
+          },
+          "graph": {
+            "type": "string",
+            "description": "State machine graph name"
+          },
+          "fromState": {
+            "type": "string",
+            "description": "Source state name"
+          },
+          "toState": {
+            "type": "string",
+            "description": "Target state name"
+          },
+          "crossfadeDuration": {
+            "type": "number",
+            "description": "Crossfade duration in seconds"
+          },
+          "priority": {
+            "type": "number",
+            "description": "Transition priority order"
+          },
+          "bBidirectional": {
+            "type": "boolean",
+            "description": "Bidirectional transition"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "fromState",
+          "toState"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "animation.transition.rule.set",
+      "domain": "animation",
+      "kind": "command",
+      "description": "Update properties on an existing transition between two states.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "AnimBlueprint name"
+          },
+          "graph": {
+            "type": "string",
+            "description": "State machine graph name"
+          },
+          "fromState": {
+            "type": "string",
+            "description": "Source state"
+          },
+          "toState": {
+            "type": "string",
+            "description": "Target state"
+          },
+          "crossfadeDuration": {
+            "type": "number",
+            "description": "Crossfade duration"
+          },
+          "priorityOrder": {
+            "type": "number",
+            "description": "Priority order"
+          },
+          "bBidirectional": {
+            "type": "boolean",
+            "description": "Bidirectional"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "fromState",
+          "toState"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+	"FileVersion": 3,
+	"Version": 3,
+	"VersionName": "0.3.0",
+	"FriendlyName": "UE_AI_integration",
+	"Description": "A domain-layered AI integration for Unreal Engine 5.3-5.7, exposing 212 editor and PIE runtime capabilities plus the UE Workflow DSL.",
+	"Category": "Editor",
+	"CreatedBy": "NodeNestor",
+	"CreatedByURL": "https://github.com/NodeNestor",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"SupportedTargetPlatforms": ["Win64", "Linux", "Mac"],
+	"Modules": [
+		{
+			"Name": "UE_AI_integration",
+			"Type": "Editor",
+			"LoadingPhase": "PostEngineInit",
+			"PlatformAllowList": ["Win64", "Linux", "Mac"]
+		}
+	],
+	"Plugins": [
+		{ "Name": "EditorScriptingUtilities", "Enabled": true, "Optional": true },
+		{ "Name": "EnhancedInput", "Enabled": true },
+		{ "Name": "Niagara", "Enabled": true },
+		{ "Name": "LevelSequenceEditor", "Enabled": true, "Optional": true }
+	]
+}

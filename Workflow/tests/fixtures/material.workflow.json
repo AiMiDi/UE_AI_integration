@@ -1,0 +1,36 @@
+{
+  "dsl": "ue.workflow",
+  "dslVersion": "1.0",
+  "workflowKind": "assetEdit",
+  "workflowId": "build-material",
+  "scope": {
+    "kind": "material",
+    "asset": "/Game/Materials/M_Agent",
+    "createIfMissing": true
+  },
+  "operations": [
+    {
+      "id": "constant",
+      "type": "content.material.expression.add",
+      "params": {
+        "expressionClass": "Constant",
+        "posX": 0,
+        "posY": 0
+      }
+    },
+    {
+      "id": "moveConstant",
+      "type": "content.material.expression.move",
+      "params": {
+        "posX": -300,
+        "posY": 80
+      },
+      "bindings": {
+        "/nodeId": {
+          "from": "constant",
+          "path": "/nodeId"
+        }
+      }
+    }
+  ]
+}

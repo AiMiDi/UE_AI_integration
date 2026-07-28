@@ -1,0 +1,2314 @@
+{
+  "schemaVersion": 2,
+  "domain": "scene",
+  "capabilities": [
+    {
+      "id": "scene.actor.blueprint.spawn",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Spawn an actor from a Blueprint asset. Provide the Blueprint name or full path (e.g. /Game/Blueprints/MyBP).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint_name": {
+            "type": "string",
+            "description": "Blueprint asset name or path"
+          },
+          "actor_name": {
+            "type": "string",
+            "description": "Label for the spawned actor"
+          },
+          "location": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z]"
+          },
+          "rotation": {
+            "type": "array",
+            "items": {},
+            "description": "[pitch, yaw, roll]"
+          }
+        },
+        "required": [
+          "blueprint_name",
+          "actor_name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.actor.delete",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Delete an actor from the level by name.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name or label of the actor to delete"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.actor.find",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Find actors whose name or label contains the given pattern (case-insensitive substring match).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string",
+            "description": "Substring pattern to match"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.actor.list",
+      "domain": "scene",
+      "kind": "query",
+      "description": "List all actors in the current editor level with their transforms.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.actor.properties.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Get all editable UPROPERTY values for an actor (bools, ints, floats, strings, enums).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Actor name or label"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.actor.property.set",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Set a single UPROPERTY on an actor by name. Supports bool, int, float, string, byte/enum.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Actor name or label"
+          },
+          "property": {
+            "type": "string",
+            "description": "Property name"
+          },
+          "value": {
+            "type": "string",
+            "description": "New value (strings, numbers, booleans all accepted)"
+          }
+        },
+        "required": [
+          "name",
+          "property",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.actor.spawn",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Spawn an actor in the editor level. Supported types: StaticMeshActor, PointLight, SpotLight, DirectionalLight, CameraActor.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Actor type to spawn"
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique actor name"
+          },
+          "location": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z] world location"
+          },
+          "rotation": {
+            "type": "array",
+            "items": {},
+            "description": "[pitch, yaw, roll] rotation"
+          },
+          "scale": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z] scale"
+          },
+          "static_mesh": {
+            "type": "string",
+            "description": "Asset path for StaticMeshActor mesh (e.g. /Engine/BasicShapes/Cube.Cube)"
+          }
+        },
+        "required": [
+          "type",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.actor.transform.set",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Set an actor's location, rotation, and/or scale. Only supplied fields are changed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Actor name or label"
+          },
+          "location": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z]"
+          },
+          "rotation": {
+            "type": "array",
+            "items": {},
+            "description": "[pitch, yaw, roll]"
+          },
+          "scale": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z]"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.console.execute",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Execute a UE console command in the editor (e.g. 'stat fps', 'r.ScreenPercentage 100'). Some commands are blocked for safety.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The console command to execute"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.foliage.clear",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Remove all foliage instances within a bounding region.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "bounds_min": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } minimum bounds corner"
+          },
+          "bounds_max": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } maximum bounds corner"
+          }
+        },
+        "required": [
+          "bounds_min",
+          "bounds_max"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.foliage.info",
+      "domain": "scene",
+      "kind": "query",
+      "description": "List all foliage types and their instance counts in the current level.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.foliage.scatter",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Scatter foliage instances of a static mesh randomly within bounds.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mesh": {
+            "type": "string",
+            "description": "Asset path of the Static Mesh to scatter"
+          },
+          "count": {
+            "type": "number",
+            "description": "Number of instances to scatter"
+          },
+          "bounds_min": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } minimum bounds corner"
+          },
+          "bounds_max": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } maximum bounds corner"
+          },
+          "min_scale": {
+            "type": "number",
+            "description": "Minimum random scale (default: 0.8)"
+          },
+          "max_scale": {
+            "type": "number",
+            "description": "Maximum random scale (default: 1.2)"
+          },
+          "align_to_normal": {
+            "type": "boolean",
+            "description": "Align instances to surface normal via trace (default: true)"
+          }
+        },
+        "required": [
+          "mesh",
+          "count",
+          "bounds_min",
+          "bounds_max"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.foliage.type.add",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Create and register a new foliage type asset from a static mesh.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mesh": {
+            "type": "string",
+            "description": "Asset path of the Static Mesh"
+          },
+          "min_scale": {
+            "type": "number",
+            "description": "Minimum uniform scale (default: 0.8)"
+          },
+          "max_scale": {
+            "type": "number",
+            "description": "Maximum uniform scale (default: 1.2)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Name for the foliage type asset (default: derived from mesh)"
+          }
+        },
+        "required": [
+          "mesh"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.level.info",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Get information about the currently loaded level: name, actor count, and world settings.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.level.open",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Load a map file into the editor. Path must start with /Game/ (e.g. /Game/Maps/MyLevel).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "level_path": {
+            "type": "string",
+            "description": "Content path to the level (e.g. /Game/Maps/MyLevel)"
+          }
+        },
+        "required": [
+          "level_path"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.navigation.bounds.add",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Spawn a NavMeshBoundsVolume at the given location and extent.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } center location"
+          },
+          "extent": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } half-extent of the bounds volume"
+          }
+        },
+        "required": [
+          "location",
+          "extent"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.navigation.build",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Rebuild navigation mesh within the specified bounds (or full rebuild if no bounds given).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "bounds_min": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } minimum bounds (optional, omit for full rebuild)"
+          },
+          "bounds_max": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } maximum bounds (optional, omit for full rebuild)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.navigation.info",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Get statistics about the current navigation mesh (tile count, bounds, etc.).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.navigation.modifier.add",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Spawn a Nav Modifier Volume that changes the navigation area class within a region.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } center location"
+          },
+          "extent": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } half-extent"
+          },
+          "area_class": {
+            "type": "string",
+            "description": "Nav area class: 'default', 'null' (blocked), 'obstacle'. Default: 'null'"
+          }
+        },
+        "required": [
+          "location",
+          "extent"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.navigation.path.test",
+      "domain": "scene",
+      "kind": "validation",
+      "description": "Test if a navigation path exists between two points and return the path details.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } start position"
+          },
+          "end": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "{ x, y, z } end position"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.output_log.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Read recent lines from the Unreal Editor output log. Supports optional text filter.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "number",
+            "description": "Number of lines to return (default 100, max 2000)"
+          },
+          "filter": {
+            "type": "string",
+            "description": "Case-insensitive substring filter"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "scene.pie.restart",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Restart Play In Editor. If PIE is running, the next session starts only after the current play world has fully stopped.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "scene.pie.start",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Request a Play In Editor session in the active level viewport.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "scene.pie.stop",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Request the active Play In Editor session to stop, or cancel a queued start.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "scene.viewport.capture",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Capture the active editor viewport as a JPEG image and return it as base64. Useful for visual inspection of the scene.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "width": {
+            "type": "number",
+            "description": "Output width in pixels (default 1024)"
+          },
+          "height": {
+            "type": "number",
+            "description": "Output height in pixels (default 576)"
+          },
+          "quality": {
+            "type": "number",
+            "description": "JPEG quality 1-100 (default 70)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "image"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "scene.world.arch.create",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Create a semicircular arch from cubes in the XZ plane.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "radius": {
+            "type": "number",
+            "description": "Arch radius in cm (default 300)"
+          },
+          "segments": {
+            "type": "number",
+            "description": "Number of segments (default 6)"
+          },
+          "location": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z]"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.world.castle.create",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Create a modular castle with outer walls, corner towers, a central keep, a gatehouse, and a moat ring.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "size": {
+            "type": "string",
+            "description": "small, medium, large, or epic (default medium)"
+          },
+          "location": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z]"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.world.house.create",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Create a house with walls, floor, roof, and door opening. Styles: modern, cottage.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "width": {
+            "type": "number",
+            "description": "Width in cm (default 1200)"
+          },
+          "depth": {
+            "type": "number",
+            "description": "Depth in cm (default 1000)"
+          },
+          "height": {
+            "type": "number",
+            "description": "Wall height in cm (default 600)"
+          },
+          "style": {
+            "type": "string",
+            "description": "modern or cottage (default modern)"
+          },
+          "location": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z]"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.world.maze.create",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Generate a solvable maze using recursive backtracking. Creates walls from cubes with an entrance and exit.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "number",
+            "description": "Rows (default 8)"
+          },
+          "cols": {
+            "type": "number",
+            "description": "Columns (default 8)"
+          },
+          "cell_size": {
+            "type": "number",
+            "description": "Cell size in cm (default 300)"
+          },
+          "wall_height": {
+            "type": "number",
+            "description": "Wall height in blocks (default 3)"
+          },
+          "location": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z]"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.world.pyramid.create",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Create a stepped pyramid from cubes. Each level shrinks by one block in X and Y.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "base_size": {
+            "type": "number",
+            "description": "Base size in blocks per side (default 3)"
+          },
+          "block_size": {
+            "type": "number",
+            "description": "Block size in cm (default 100)"
+          },
+          "location": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z]"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.world.staircase.create",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Create a staircase from cubes. Each step advances in X and rises in Z.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "steps": {
+            "type": "number",
+            "description": "Number of steps (default 5)"
+          },
+          "step_size": {
+            "type": "array",
+            "items": {},
+            "description": "[width, depth, height] per step in cm (default [100,100,50])"
+          },
+          "location": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z]"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.world.tower.create",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Create a tower. Styles: cylindrical, square, tapered. Blocks are placed as a shell at each level.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "height": {
+            "type": "number",
+            "description": "Tower height in levels (default 10)"
+          },
+          "base_size": {
+            "type": "number",
+            "description": "Tower base size in blocks (default 4)"
+          },
+          "block_size": {
+            "type": "number",
+            "description": "Block size in cm (default 100)"
+          },
+          "location": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z]"
+          },
+          "style": {
+            "type": "string",
+            "description": "cylindrical, square, or tapered (default cylindrical)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.world.town.create",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Generate a town with a street grid, randomized buildings, street lights, and a central plaza.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "size": {
+            "type": "string",
+            "description": "small, medium, large, or metropolis (default medium)"
+          },
+          "style": {
+            "type": "string",
+            "description": "modern, cottage, mixed, downtown (default mixed)"
+          },
+          "location": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z]"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.world.wall.create",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Create a wall from cubes. Specify length (blocks), height (blocks), orientation (x or y), and block_size.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "length": {
+            "type": "number",
+            "description": "Wall length in blocks (default 5)"
+          },
+          "height": {
+            "type": "number",
+            "description": "Wall height in blocks (default 2)"
+          },
+          "block_size": {
+            "type": "number",
+            "description": "Size of each block in cm (default 100)"
+          },
+          "orientation": {
+            "type": "string",
+            "description": "'x' or 'y' axis (default 'x')"
+          },
+          "location": {
+            "type": "array",
+            "items": {},
+            "description": "[x, y, z] origin"
+          },
+          "material": {
+            "type": "string",
+            "description": "Mesh asset path (default cube)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.pie.status",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Return the current PIE lifecycle state, session identifier, and generation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.pie.pause",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Pause the active PIE session and return its updated lifecycle state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.pie.resume",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Resume a paused PIE session and return its updated lifecycle state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.world.contexts.list",
+      "domain": "scene",
+      "kind": "query",
+      "description": "List Editor, PIE, Game, and Preview world contexts with stable world identifiers and write eligibility.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.object.find",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Find runtime UObjects in PIE or Game worlds and return session-scoped opaque object references.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "worldId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "class": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "class"
+            ]
+          },
+          {
+            "required": [
+              "name"
+            ]
+          },
+          {
+            "required": [
+              "path"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.object.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Read selected reflected properties from a session-scoped runtime object.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objectRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "objectRef"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.object.set",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Set one supported reflected property on a PIE or Game runtime object.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objectRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "property": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "description": "JSON-compatible value for the reflected property"
+          }
+        },
+        "required": [
+          "objectRef",
+          "property",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.object.call",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Invoke a permitted non-latent BlueprintCallable or BlueprintEvent UFunction on a PIE or Game object.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objectRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "function": {
+            "type": "string",
+            "minLength": 1
+          },
+          "args": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "objectRef",
+          "function"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.widget.tree.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Read a runtime UserWidget tree with object references and current widget state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objectRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "maxDepth": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 64
+          }
+        },
+        "required": [
+          "objectRef"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.widget.state.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Read runtime widget visibility, enabled state, geometry, focus, and interaction state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objectRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "objectRef"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.widget.hit_test",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Return the Slate hit-test path for a runtime widget or an explicit viewport position.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objectRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "position": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "x",
+              "y"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "objectRef"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.widget.focus.set",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Set keyboard focus to a runtime widget for a local Slate user.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objectRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "userIndex": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "objectRef"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.delegate.list",
+      "domain": "scene",
+      "kind": "query",
+      "description": "List supported dynamic delegates on a runtime object and report their signatures and binding state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objectRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "objectRef"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.delegate.bind",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Bind a signature-compatible function target to a supported dynamic runtime delegate.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objectRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "delegate": {
+            "type": "string",
+            "minLength": 1
+          },
+          "functionTargetRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "function": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "objectRef",
+          "delegate",
+          "functionTargetRef",
+          "function"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.delegate.unbind",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Remove one dynamic runtime delegate binding identified by target object and function.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objectRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "delegate": {
+            "type": "string",
+            "minLength": 1
+          },
+          "functionTargetRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "function": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "objectRef",
+          "delegate",
+          "functionTargetRef",
+          "function"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.delegate.is_bound",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Check whether one target function is bound to a supported dynamic runtime delegate.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objectRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "delegate": {
+            "type": "string",
+            "minLength": 1
+          },
+          "functionTargetRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "function": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "objectRef",
+          "delegate",
+          "functionTargetRef",
+          "function"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.delegate.broadcast",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Broadcast a supported dynamic multicast delegate with signature-validated arguments.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objectRef": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "delegate": {
+            "type": "string",
+            "minLength": 1
+          },
+          "args": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "objectRef",
+          "delegate"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.input.pointer",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Dispatch a real Slate pointer action through the Automation Driver to a runtime widget or viewport position.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "move",
+              "down",
+              "up",
+              "click",
+              "doubleClick",
+              "drag"
+            ]
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "position": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "x",
+              "y"
+            ],
+            "additionalProperties": false
+          },
+          "endPosition": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "x",
+              "y"
+            ],
+            "additionalProperties": false
+          },
+          "button": {
+            "type": "string",
+            "enum": [
+              "left",
+              "right",
+              "middle"
+            ]
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": [
+                  "target"
+                ]
+              },
+              {
+                "required": [
+                  "position"
+                ]
+              }
+            ]
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "drag"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "endPosition"
+              ]
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.input.key",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Dispatch a real Slate keyboard action through the Automation Driver, optionally targeting a runtime widget.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "press",
+              "release",
+              "type",
+              "chord"
+            ]
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string"
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "press",
+                    "release"
+                  ]
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "key"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "type"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "text"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "chord"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "required": [
+                "keys"
+              ]
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.input.mode.set",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Set the local player's input mode, focus widget, cursor visibility, and mouse lock behavior in PIE.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "gameOnly",
+              "uiOnly",
+              "gameAndUi"
+            ]
+          },
+          "playerIndex": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "widget": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "showCursor": {
+            "type": "boolean"
+          },
+          "lockMouse": {
+            "type": "string",
+            "enum": [
+              "doNotLock",
+              "lockOnCapture",
+              "lockAlways"
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    }
+  ]
+}

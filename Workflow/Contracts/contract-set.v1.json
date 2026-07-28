@@ -1,0 +1,20 @@
+{
+  "schema": "ue.workflow-contract-set.v1",
+  "contractApiVersion": "1",
+  "workflowSchema": "schema.v1.json",
+  "planSchema": "plan.schema.v1.json",
+  "resultSchema": "result.schema.v1.json",
+  "receiptSchema": "receipt.schema.v1.json",
+  "admission": "admission.v1.json",
+  "capabilityRoots": [
+    "../../Resources/Capabilities",
+    "../Capabilities"
+  ],
+  "files": [
+    "schema.v1.json",
+    "plan.schema.v1.json",
+    "result.schema.v1.json",
+    "receipt.schema.v1.json",
+    "admission.v1.json"
+  ]
+}
