@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { loadCapabilityCatalog } from "../capability-catalog.js";
 import { runDomainOperation } from "../domain-router.js";
 import { createLocalShutdownHandler } from "../index.js";
-import { createMcpServer, MCP_TOOL_NAMES, } from "../mcp-server.js";
+import { createMcpServer, handleCapabilities, handleContext, MCP_TOOL_NAMES, } from "../mcp-server.js";
 import { UEApiError, UEClient, } from "../ue-bridge.js";
 import { safeStringify } from "../helpers.js";
 import { handleWorkflowInput, parseWorkflowInput, runWorkflowAction, UE_WORKFLOW_INPUT_SCHEMA, UE_WORKFLOW_TOOL_SCHEMA, } from "../workflow-router.js";
@@ -79,8 +79,139 @@ test("registers exactly ten MCP tools without contacting Unreal Editor", () => {
         "saveOnSuccess",
         "confirmWrite",
         "details",
+        "detailLevel",
+        "sections",
     ]);
     assert.equal(networkCalls, 0);
+});
+test("pages and filters capability summaries without emitting schemas by default", async () => {
+    const catalog = loadCapabilityCatalog();
+    const noNetworkClient = {
+        getHealth: async () => {
+            throw new Error("not expected");
+        },
+        getCapabilities: async () => {
+            throw new Error("not expected");
+        },
+        execute: async () => {
+            throw new Error("not expected");
+        },
+        workflow: async () => {
+            throw new Error("not expected");
+        },
+    };
+    const defaultResponse = await handleCapabilities(catalog, noNetworkClient, {});
+    assert.equal(defaultResponse.content[0]?.type, "text");
+    if (defaultResponse.content[0]?.type !== "text") {
+        assert.fail("Expected capability catalog as MCP text content");
+    }
+    const defaultPayload = JSON.parse(defaultResponse.content[0].text);
+    assert.equal(defaultPayload.total, 212);
+    assert.equal(defaultPayload.offset, 0);
+    assert.equal(defaultPayload.limit, 25);
+    assert.equal(defaultPayload.hasMore, true);
+    assert.equal(defaultPayload.capabilities.length, 25);
+    assert.equal(defaultPayload.capabilities.some((capability) => Object.hasOwn(capability, "inputSchema")), false);
+    const filteredResponse = await handleCapabilities(catalog, noNetworkClient, {
+        domain: "scene",
+        query: "pie.",
+        kind: "command",
+        offset: 1,
+        limit: 2,
+    });
+    assert.equal(filteredResponse.content[0]?.type, "text");
+    if (filteredResponse.content[0]?.type !== "text") {
+        assert.fail("Expected filtered capability catalog as MCP text content");
+    }
+    const filteredPayload = JSON.parse(filteredResponse.content[0].text);
+    assert.equal(filteredPayload.offset, 1);
+    assert.equal(filteredPayload.limit, 2);
+    assert.ok(filteredPayload.total >= 3);
+    assert.equal(filteredPayload.capabilities.length, 2);
+    assert.ok(filteredPayload.capabilities.every((capability) => capability.id.includes("pie.") &&
+        capability.domain === "scene" &&
+        capability.kind === "command"));
+    const exactResponse = await handleCapabilities(catalog, noNetworkClient, { operation: "scene.pie.start" });
+    assert.equal(exactResponse.content[0]?.type, "text");
+    if (exactResponse.content[0]?.type !== "text") {
+        assert.fail("Expected exact capability as MCP text content");
+    }
+    const exactPayload = JSON.parse(exactResponse.content[0].text);
+    assert.equal(exactPayload.total, 1);
+    assert.equal(exactPayload.detail, "full");
+    assert.equal(exactPayload.capabilities.length, 1);
+    assert.ok(exactPayload.capabilities[0].inputSchema);
+});
+test("keeps ue_context directory-only by default and pages full schemas by domain", () => {
+    const catalog = loadCapabilityCatalog();
+    const directoryResponse = handleContext(catalog, {});
+    assert.equal(directoryResponse.content[0]?.type, "text");
+    if (directoryResponse.content[0]?.type !== "text") {
+        assert.fail("Expected context directory as MCP text content");
+    }
+    const directoryPayload = JSON.parse(directoryResponse.content[0].text);
+    assert.equal(directoryPayload.capabilityCount, 212);
+    assert.equal(Object.hasOwn(directoryPayload, "capabilities"), false);
+    const domainResponse = handleContext(catalog, { domain: "blueprint" });
+    assert.equal(domainResponse.content[0]?.type, "text");
+    if (domainResponse.content[0]?.type !== "text") {
+        assert.fail("Expected paged context as MCP text content");
+    }
+    const domainPayload = JSON.parse(domainResponse.content[0].text);
+    assert.equal(domainPayload.total, 58);
+    assert.equal(domainPayload.limit, 10);
+    assert.equal(domainPayload.capabilities.length, 10);
+    assert.ok(domainPayload.capabilities.every((capability) => Object.hasOwn(capability, "inputSchema")));
+});
+test("forwards live capability filters and pagination directly to the editor", async () => {
+    const catalog = loadCapabilityCatalog();
+    let receivedQuery;
+    const client = {
+        getHealth: async () => {
+            throw new Error("not expected");
+        },
+        getCapabilities: async (query) => {
+            receivedQuery = query;
+            return {
+                capabilities: [],
+                total: 0,
+                offset: query?.offset ?? 0,
+                limit: query?.limit ?? 25,
+                hasMore: false,
+                detail: query?.detail ?? "summary",
+            };
+        },
+        execute: async () => {
+            throw new Error("not expected");
+        },
+        workflow: async () => {
+            throw new Error("not expected");
+        },
+    };
+    await handleCapabilities(catalog, client, {
+        live: true,
+        domain: "production",
+        kind: "query",
+        readOnly: true,
+        expensive: false,
+        outputKind: "json",
+        query: "module",
+        offset: 5,
+        limit: 7,
+    });
+    assert.deepEqual(receivedQuery, {
+        query: "module",
+        domain: "production",
+        operation: undefined,
+        kind: "query",
+        readOnly: true,
+        destructive: undefined,
+        expensive: false,
+        outputKind: "json",
+        offset: 5,
+        limit: 7,
+        detail: "summary",
+    });
 });
 test("validates ue_workflow action-specific inputs without accepting file paths", () => {
     const workflow = {
@@ -97,7 +228,8 @@ test("validates ue_workflow action-specific inputs without accepting file paths"
     assert.equal(UE_WORKFLOW_INPUT_SCHEMA.safeParse({
         action: "plan",
         workflow,
-        details: true,
+        detailLevel: "standard",
+        sections: ["diagnostics"],
     }).success, true);
     assert.equal(UE_WORKFLOW_INPUT_SCHEMA.safeParse({
         action: "execute",
@@ -123,6 +255,12 @@ test("validates ue_workflow action-specific inputs without accepting file paths"
         { action: "plan", workflow, file: "workflow.json" },
         { action: "plan", workflow, runId: "run-1" },
         { action: "validate", workflow, approvePlanDigest: "not-applicable" },
+        {
+            action: "plan",
+            workflow,
+            details: false,
+            detailLevel: "summary",
+        },
     ]) {
         assert.equal(UE_WORKFLOW_INPUT_SCHEMA.safeParse(invalid).success, false);
     }
@@ -137,6 +275,8 @@ test("validates ue_workflow action-specific inputs without accepting file paths"
         "saveOnSuccess",
         "confirmWrite",
         "details",
+        "detailLevel",
+        "sections",
     ]);
 });
 test("rejects action-specific ue_workflow inputs before HTTP forwarding", async () => {
@@ -436,7 +576,7 @@ test("uses only HTTP endpoints and maps operations and workflows canonically", a
                 validationErrors: [],
             };
         }
-        else if (url.endsWith("/api/capabilities")) {
+        else if (url.includes("/api/capabilities")) {
             data = { capabilities: [] };
         }
         else if (url.endsWith("/api/execute")) {
@@ -465,6 +605,14 @@ test("uses only HTTP endpoints and maps operations and workflows canonically", a
     });
     await client.getHealth();
     await client.getCapabilities();
+    await client.getCapabilities({
+        domain: "scene",
+        query: "pie",
+        readOnly: false,
+        offset: 2,
+        limit: 3,
+        detail: "full",
+    });
     await client.execute("scene.actor.list", { tag: "AI" }, "request-001");
     await client.getWorkflowHandshake();
     await client.workflow({
@@ -484,6 +632,12 @@ test("uses only HTTP endpoints and maps operations and workflows canonically", a
         },
         {
             url: "http://127.0.0.1:19847/api/capabilities",
+            method: "GET",
+            body: undefined,
+        },
+        {
+            url: "http://127.0.0.1:19847/api/capabilities" +
+                "?domain=scene&query=pie&readOnly=false&offset=2&limit=3&detail=full",
             method: "GET",
             body: undefined,
         },

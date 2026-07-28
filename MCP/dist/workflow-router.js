@@ -5,6 +5,20 @@ const nonEmptyString = z
     .string()
     .min(1)
     .refine((value) => value.trim().length > 0, "Must not be blank");
+export const UE_WORKFLOW_DETAIL_LEVELS = [
+    "summary",
+    "standard",
+    "full",
+];
+export const UE_WORKFLOW_SECTIONS = [
+    "operations",
+    "finalizers",
+    "readBack",
+    "assetDiff",
+    "structures",
+    "rollback",
+    "diagnostics",
+];
 export const UE_WORKFLOW_TOOL_SCHEMA = z
     .object({
     action: z.enum(UE_WORKFLOW_ACTIONS),
@@ -17,11 +31,21 @@ export const UE_WORKFLOW_TOOL_SCHEMA = z
     saveOnSuccess: z.boolean().optional(),
     confirmWrite: z.boolean().optional(),
     details: z.boolean().optional(),
+    detailLevel: z.enum(UE_WORKFLOW_DETAIL_LEVELS).optional(),
+    sections: z.array(z.enum(UE_WORKFLOW_SECTIONS)).optional(),
 })
     .strict();
 export const UE_WORKFLOW_INPUT_SCHEMA = UE_WORKFLOW_TOOL_SCHEMA
     .strict()
     .superRefine((request, context) => {
+    if (request.details !== undefined &&
+        request.detailLevel !== undefined) {
+        context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["detailLevel"],
+            message: "details and detailLevel cannot be used together",
+        });
+    }
     if ((request.action === "validate" ||
         request.action === "plan" ||
         request.action === "execute") &&

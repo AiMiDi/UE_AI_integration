@@ -4,7 +4,7 @@
  * The MCP process never launches, owns, or shuts down Unreal Editor. It only
  * connects to an editor that is already running the plugin.
  */
-import type { CapabilityDescriptor } from "./capability-catalog.js";
+import type { CapabilityDescriptor, CapabilityDomain, CapabilityKind, CapabilityOutputKind } from "./capability-catalog.js";
 export declare const UE_PORT: number;
 export declare const UE_BASE_URL: string;
 export declare const REQUEST_TIMEOUT_MS: number;
@@ -37,8 +37,26 @@ export interface UEHealthData {
     [key: string]: unknown;
 }
 export interface UECapabilitiesData {
-    capabilities: CapabilityDescriptor[];
+    capabilities: Array<CapabilityDescriptor | Omit<CapabilityDescriptor, "inputSchema" | "dsl">>;
+    total: number;
+    offset: number;
+    limit: number;
+    hasMore: boolean;
+    detail: "summary" | "full";
     [key: string]: unknown;
+}
+export interface UECapabilityQuery {
+    query?: string;
+    domain?: CapabilityDomain;
+    operation?: string;
+    kind?: CapabilityKind;
+    readOnly?: boolean;
+    destructive?: boolean;
+    expensive?: boolean;
+    outputKind?: CapabilityOutputKind;
+    offset?: number;
+    limit?: number;
+    detail?: "summary" | "full";
 }
 export type UEExecuteData = Record<string, unknown>;
 export interface UEExecuteRequest {
@@ -56,6 +74,8 @@ export interface UEWorkflowRequest {
     saveOnSuccess?: boolean;
     confirmWrite?: boolean;
     details?: boolean;
+    detailLevel?: "summary" | "standard" | "full";
+    sections?: Array<"operations" | "finalizers" | "readBack" | "assetDiff" | "structures" | "rollback" | "diagnostics">;
 }
 export interface UEWorkflowHandshakeData {
     [key: string]: unknown;
@@ -78,7 +98,7 @@ export declare class UEClient {
     private readonly fetchImpl;
     constructor(options?: UEClientOptions);
     getHealth(): Promise<UEHealthData>;
-    getCapabilities(): Promise<UECapabilitiesData>;
+    getCapabilities(query?: UECapabilityQuery): Promise<UECapabilitiesData>;
     execute(id: string, params?: Record<string, unknown>, requestId?: string): Promise<UEExecuteData>;
     getWorkflowHandshake(): Promise<UEWorkflowHandshakeData>;
     workflow(request: UEWorkflowRequest): Promise<UEWorkflowData>;

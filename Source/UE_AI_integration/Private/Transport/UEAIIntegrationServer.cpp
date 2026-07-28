@@ -18,6 +18,88 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogUEAIIntegrationServer, Log, All);
 
+namespace
+{
+bool TryParseQueryBool(const TMap<FString, FString>& QueryParams, const FString& Name,
+                       TOptional<bool>& OutValue, FString& OutError)
+{
+	const FString* RawValue = QueryParams.Find(Name);
+	if (!RawValue)
+	{
+		return true;
+	}
+	if (*RawValue == TEXT("true"))
+	{
+		OutValue = true;
+		return true;
+	}
+	if (*RawValue == TEXT("false"))
+	{
+		OutValue = false;
+		return true;
+	}
+	OutError = FString::Printf(TEXT("Query parameter '%s' must be true or false."), *Name);
+	return false;
+}
+
+bool TryParseQueryInteger(const TMap<FString, FString>& QueryParams, const FString& Name,
+                          int32 DefaultValue, int32 MinValue, int32 MaxValue, int32& OutValue,
+                          FString& OutError)
+{
+	OutValue = DefaultValue;
+	const FString* RawValue = QueryParams.Find(Name);
+	if (!RawValue)
+	{
+		return true;
+	}
+	if (!RawValue->IsNumeric())
+	{
+		OutError = FString::Printf(TEXT("Query parameter '%s' must be an integer."), *Name);
+		return false;
+	}
+	const int64 Parsed = FCString::Atoi64(**RawValue);
+	if (Parsed < MinValue || Parsed > MaxValue)
+	{
+		OutError = FString::Printf(TEXT("Query parameter '%s' must be between %d and %d."), *Name,
+		                           MinValue, MaxValue);
+		return false;
+	}
+	OutValue = static_cast<int32>(Parsed);
+	return true;
+}
+
+bool DescriptorMatchesTrait(const TSharedPtr<FJsonObject>& Descriptor, const FString& TraitName,
+                            const TOptional<bool>& Expected)
+{
+	if (!Expected.IsSet())
+	{
+		return true;
+	}
+	const TSharedPtr<FJsonObject>* Traits = nullptr;
+	bool Actual = false;
+	return Descriptor.IsValid() && Descriptor->TryGetObjectField(TEXT("traits"), Traits) &&
+	       Traits && Traits->IsValid() && (*Traits)->TryGetBoolField(TraitName, Actual) &&
+	       Actual == Expected.GetValue();
+}
+
+TSharedPtr<FJsonObject> MakeCapabilitySummary(const TSharedPtr<FJsonObject>& Descriptor)
+{
+	TSharedPtr<FJsonObject> Summary = MakeShared<FJsonObject>();
+	static const TArray<FString> SummaryFields = {
+	    TEXT("id"),          TEXT("domain"), TEXT("kind"),
+	    TEXT("description"), TEXT("traits"), TEXT("output"),
+	};
+	for (const FString& FieldName : SummaryFields)
+	{
+		if (const TSharedPtr<FJsonValue>* Value = Descriptor->Values.Find(FieldName))
+		{
+			Summary->SetField(FieldName, *Value);
+		}
+	}
+	return Summary;
+}
+} // namespace
+
 FUEAIIntegrationServer::FUEAIIntegrationServer(
 	FMCPToolRegistry& InRegistry,
 	FMCPExecutor& InExecutor)
@@ -378,6 +460,22 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 	const FHttpServerRequest& Request,
 	const FHttpResultCallback& OnComplete)
 {
+	static const TSet<FString> SupportedQueryParams = {
+	    TEXT("query"),    TEXT("domain"),      TEXT("operation"), TEXT("kind"),
+	    TEXT("readOnly"), TEXT("destructive"), TEXT("expensive"), TEXT("outputKind"),
+	    TEXT("offset"),   TEXT("limit"),       TEXT("detail"),
+	};
+	for (const TPair<FString, FString>& QueryParam : Request.QueryParams)
+	{
+		if (!SupportedQueryParams.Contains(QueryParam.Key))
+		{
+			SendError(
+			    OnComplete, 422, TEXT("invalid_params"),
+			    FString::Printf(TEXT("Unknown capability query parameter '%s'."), *QueryParam.Key));
+			return true;
+		}
+	}
+
 	FString DomainFilter;
 	if (const FString* DomainValue = Request.QueryParams.Find(TEXT("domain")))
 	{
@@ -393,20 +491,144 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		}
 	}
 
-	TArray<TSharedPtr<FJsonValue>> CapabilityValues;
-	CapabilityValues.Reserve(Registry.GetCapabilityDescriptors().Num());
+	FString KindFilter;
+	if (const FString* KindValue = Request.QueryParams.Find(TEXT("kind")))
+	{
+		KindFilter = *KindValue;
+		if (KindFilter != TEXT("query") && KindFilter != TEXT("command") &&
+		    KindFilter != TEXT("validation"))
+		{
+			SendError(OnComplete, 422, TEXT("invalid_params"),
+			          TEXT("Query parameter 'kind' must be query, command, or validation."));
+			return true;
+		}
+	}
+
+	FString OutputKindFilter;
+	if (const FString* OutputKindValue = Request.QueryParams.Find(TEXT("outputKind")))
+	{
+		OutputKindFilter = *OutputKindValue;
+		if (OutputKindFilter != TEXT("json") && OutputKindFilter != TEXT("image"))
+		{
+			SendError(OnComplete, 422, TEXT("invalid_params"),
+			          TEXT("Query parameter 'outputKind' must be json or image."));
+			return true;
+		}
+	}
+
+	TOptional<bool> ReadOnlyFilter;
+	TOptional<bool> DestructiveFilter;
+	TOptional<bool> ExpensiveFilter;
+	FString ParseError;
+	if (!TryParseQueryBool(Request.QueryParams, TEXT("readOnly"), ReadOnlyFilter, ParseError) ||
+	    !TryParseQueryBool(Request.QueryParams, TEXT("destructive"), DestructiveFilter,
+	                       ParseError) ||
+	    !TryParseQueryBool(Request.QueryParams, TEXT("expensive"), ExpensiveFilter, ParseError))
+	{
+		SendError(OnComplete, 422, TEXT("invalid_params"), ParseError);
+		return true;
+	}
+
+	int32 Offset = 0;
+	int32 Limit = 25;
+	if (!TryParseQueryInteger(Request.QueryParams, TEXT("offset"), 0, 0, MAX_int32, Offset,
+	                          ParseError) ||
+	    !TryParseQueryInteger(Request.QueryParams, TEXT("limit"), 25, 1, 100, Limit, ParseError))
+	{
+		SendError(OnComplete, 422, TEXT("invalid_params"), ParseError);
+		return true;
+	}
+
+	FString Detail = TEXT("summary");
+	if (const FString* DetailValue = Request.QueryParams.Find(TEXT("detail")))
+	{
+		Detail = *DetailValue;
+		if (Detail != TEXT("summary") && Detail != TEXT("full"))
+		{
+			SendError(OnComplete, 422, TEXT("invalid_params"),
+			          TEXT("Query parameter 'detail' must be summary or full."));
+			return true;
+		}
+	}
+
+	const FString SearchQuery = Request.QueryParams.FindRef(TEXT("query")).TrimStartAndEnd();
+	const FString ExactOperation = Request.QueryParams.FindRef(TEXT("operation")).TrimStartAndEnd();
+	if (Request.QueryParams.Contains(TEXT("operation")) && ExactOperation.IsEmpty())
+	{
+		SendError(OnComplete, 422, TEXT("invalid_params"),
+		          TEXT("Query parameter 'operation' must be non-empty."));
+		return true;
+	}
+
+	TArray<TSharedPtr<FJsonObject>> FilteredDescriptors;
+	FilteredDescriptors.Reserve(Registry.GetCapabilityDescriptors().Num());
 	for (const TSharedPtr<FJsonObject>& Descriptor : Registry.GetCapabilityDescriptors())
 	{
-		if (!DomainFilter.IsEmpty()
-			&& Descriptor->GetStringField(TEXT("domain")) != DomainFilter)
+		if (!Descriptor.IsValid())
 		{
 			continue;
 		}
-		CapabilityValues.Add(MakeShared<FJsonValueObject>(Descriptor));
+		const FString Id = Descriptor->GetStringField(TEXT("id"));
+		const FString Domain = Descriptor->GetStringField(TEXT("domain"));
+		const FString Kind = Descriptor->GetStringField(TEXT("kind"));
+		const FString Description = Descriptor->GetStringField(TEXT("description"));
+		if ((!ExactOperation.IsEmpty() && Id != ExactOperation) ||
+		    (!DomainFilter.IsEmpty() && Domain != DomainFilter) ||
+		    (!KindFilter.IsEmpty() && Kind != KindFilter) ||
+		    (!SearchQuery.IsEmpty() && !Id.Contains(SearchQuery, ESearchCase::IgnoreCase) &&
+		     !Description.Contains(SearchQuery, ESearchCase::IgnoreCase)) ||
+		    !DescriptorMatchesTrait(Descriptor, TEXT("readOnly"), ReadOnlyFilter) ||
+		    !DescriptorMatchesTrait(Descriptor, TEXT("destructive"), DestructiveFilter) ||
+		    !DescriptorMatchesTrait(Descriptor, TEXT("expensive"), ExpensiveFilter))
+		{
+			continue;
+		}
+		if (!OutputKindFilter.IsEmpty())
+		{
+			const TSharedPtr<FJsonObject>* Output = nullptr;
+			if (!Descriptor->TryGetObjectField(TEXT("output"), Output) || !Output ||
+			    !Output->IsValid() || (*Output)->GetStringField(TEXT("kind")) != OutputKindFilter)
+			{
+				continue;
+			}
+		}
+		FilteredDescriptors.Add(Descriptor);
+	}
+	FilteredDescriptors.Sort(
+	    [](const TSharedPtr<FJsonObject>& Left, const TSharedPtr<FJsonObject>& Right)
+	    { return Left->GetStringField(TEXT("id")) < Right->GetStringField(TEXT("id")); });
+
+	if (!ExactOperation.IsEmpty() && FilteredDescriptors.IsEmpty())
+	{
+		SendError(OnComplete, 404, TEXT("capability_not_found"),
+		          FString::Printf(TEXT("Unknown capability '%s'."), *ExactOperation));
+		return true;
+	}
+
+	const int32 Total = FilteredDescriptors.Num();
+	if (!ExactOperation.IsEmpty())
+	{
+		Offset = 0;
+		Limit = 1;
+		Detail = TEXT("full");
+	}
+	const int32 PageEnd = Offset >= Total ? Total : FMath::Min(Total, Offset + Limit);
+	TArray<TSharedPtr<FJsonValue>> CapabilityValues;
+	CapabilityValues.Reserve(FMath::Max(0, PageEnd - Offset));
+	for (int32 Index = Offset; Index < PageEnd; ++Index)
+	{
+		const TSharedPtr<FJsonObject> Descriptor = FilteredDescriptors[Index];
+		CapabilityValues.Add(MakeShared<FJsonValueObject>(
+		    Detail == TEXT("full") ? Descriptor : MakeCapabilitySummary(Descriptor)));
 	}
 
 	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
 	Data->SetArrayField(TEXT("capabilities"), CapabilityValues);
+	Data->SetNumberField(TEXT("total"), Total);
+	Data->SetNumberField(TEXT("offset"), Offset);
+	Data->SetNumberField(TEXT("limit"), Limit);
+	Data->SetBoolField(TEXT("hasMore"), PageEnd < Total);
+	Data->SetStringField(TEXT("detail"), Detail);
 	SendSuccess(OnComplete, Data);
 	return true;
 }

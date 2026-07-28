@@ -74,8 +74,15 @@ export class UEClient {
     async getHealth() {
         return this.request("GET", "/api/health");
     }
-    async getCapabilities() {
-        return this.request("GET", "/api/capabilities");
+    async getCapabilities(query = {}) {
+        const search = new URLSearchParams();
+        for (const [key, value] of Object.entries(query)) {
+            if (value !== undefined) {
+                search.set(key, String(value));
+            }
+        }
+        const suffix = search.size > 0 ? `?${search.toString()}` : "";
+        return this.request("GET", `/api/capabilities${suffix}`);
     }
     async execute(id, params = {}, requestId) {
         const request = {

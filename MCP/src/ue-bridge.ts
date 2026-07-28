@@ -5,7 +5,12 @@
  * connects to an editor that is already running the plugin.
  */
 
-import type { CapabilityDescriptor } from "./capability-catalog.js";
+import type {
+  CapabilityDescriptor,
+  CapabilityDomain,
+  CapabilityKind,
+  CapabilityOutputKind,
+} from "./capability-catalog.js";
 
 function parsePositiveInteger(
   value: string | undefined,
@@ -75,8 +80,29 @@ export interface UEHealthData {
 }
 
 export interface UECapabilitiesData {
-  capabilities: CapabilityDescriptor[];
+  capabilities: Array<
+    CapabilityDescriptor | Omit<CapabilityDescriptor, "inputSchema" | "dsl">
+  >;
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  detail: "summary" | "full";
   [key: string]: unknown;
+}
+
+export interface UECapabilityQuery {
+  query?: string;
+  domain?: CapabilityDomain;
+  operation?: string;
+  kind?: CapabilityKind;
+  readOnly?: boolean;
+  destructive?: boolean;
+  expensive?: boolean;
+  outputKind?: CapabilityOutputKind;
+  offset?: number;
+  limit?: number;
+  detail?: "summary" | "full";
 }
 
 export type UEExecuteData = Record<string, unknown>;
@@ -106,6 +132,16 @@ export interface UEWorkflowRequest {
   saveOnSuccess?: boolean;
   confirmWrite?: boolean;
   details?: boolean;
+  detailLevel?: "summary" | "standard" | "full";
+  sections?: Array<
+    | "operations"
+    | "finalizers"
+    | "readBack"
+    | "assetDiff"
+    | "structures"
+    | "rollback"
+    | "diagnostics"
+  >;
 }
 
 export interface UEWorkflowHandshakeData {
@@ -175,8 +211,20 @@ export class UEClient {
     return this.request<UEHealthData>("GET", "/api/health");
   }
 
-  async getCapabilities(): Promise<UECapabilitiesData> {
-    return this.request<UECapabilitiesData>("GET", "/api/capabilities");
+  async getCapabilities(
+    query: UECapabilityQuery = {},
+  ): Promise<UECapabilitiesData> {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) {
+        search.set(key, String(value));
+      }
+    }
+    const suffix = search.size > 0 ? `?${search.toString()}` : "";
+    return this.request<UECapabilitiesData>(
+      "GET",
+      `/api/capabilities${suffix}`,
+    );
   }
 
   async execute(

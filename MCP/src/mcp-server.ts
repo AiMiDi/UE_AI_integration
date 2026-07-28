@@ -6,6 +6,8 @@ import {
   type CapabilityCatalog,
   type CapabilityDescriptor,
   type CapabilityDomain,
+  type CapabilityKind,
+  type CapabilityOutputKind,
   loadCapabilityCatalog,
 } from "./capability-catalog.js";
 import {
@@ -22,6 +24,7 @@ import {
 import {
   UEApiError,
   type UECapabilitiesData,
+  type UECapabilityQuery,
   type UEClient,
   type UEHealthData,
   type UEWorkflowData,
@@ -50,7 +53,7 @@ export type MCPToolName = (typeof MCP_TOOL_NAMES)[number];
 
 export interface UEConnectionClient {
   getHealth(): Promise<UEHealthData>;
-  getCapabilities(): Promise<UECapabilitiesData>;
+  getCapabilities(query?: UECapabilityQuery): Promise<UECapabilitiesData>;
   execute(
     id: string,
     params?: Record<string, unknown>,
@@ -70,106 +73,187 @@ export interface UEAIIntegrationMcpServer {
   registeredToolNames: readonly MCPToolName[];
 }
 
+type CapabilityDetail = "summary" | "full";
+
+interface CapabilityQueryArgs {
+  query?: string;
+  domain?: CapabilityDomain;
+  operation?: string;
+  kind?: CapabilityKind;
+  readOnly?: boolean;
+  destructive?: boolean;
+  expensive?: boolean;
+  outputKind?: CapabilityOutputKind;
+  offset?: number;
+  limit?: number;
+}
+
 function resolveLocalCapabilities(
   catalog: CapabilityCatalog,
-  domain?: CapabilityDomain,
-  operation?: string,
+  args: CapabilityQueryArgs,
 ): CapabilityDescriptor[] {
-  if (operation) {
-    const capability = domain
-      ? validateDomainOperation(catalog, domain, operation)
-      : catalog.get(operation);
+  if (args.operation) {
+    const capability = args.domain
+      ? validateDomainOperation(catalog, args.domain, args.operation)
+      : catalog.get(args.operation);
     if (!capability) {
       throw new UEApiError({
         code: "capability_not_found",
-        message: `Unknown capability "${operation}"`,
+        message: `Unknown capability "${args.operation}"`,
       });
     }
-    return [capability];
+    return capabilityMatches(capability, args) ? [capability] : [];
   }
-  return domain
-    ? [...catalog.forDomain(domain)]
-    : [...catalog.capabilities];
+  return [...catalog.capabilities]
+    .filter((capability) => capabilityMatches(capability, args))
+    .sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function filterLiveCapabilities(
-  capabilities: CapabilityDescriptor[],
-  domain?: CapabilityDomain,
-  operation?: string,
-): CapabilityDescriptor[] {
-  return capabilities.filter(
-    (capability) =>
-      (domain === undefined || capability.domain === domain) &&
-      (operation === undefined || capability.id === operation),
+function capabilityMatches(
+  capability: CapabilityDescriptor,
+  args: CapabilityQueryArgs,
+): boolean {
+  const query = args.query?.trim().toLocaleLowerCase();
+  return (
+    (args.domain === undefined || capability.domain === args.domain) &&
+    (args.operation === undefined || capability.id === args.operation) &&
+    (args.kind === undefined || capability.kind === args.kind) &&
+    (args.readOnly === undefined ||
+      capability.traits.readOnly === args.readOnly) &&
+    (args.destructive === undefined ||
+      capability.traits.destructive === args.destructive) &&
+    (args.expensive === undefined ||
+      capability.traits.expensive === args.expensive) &&
+    (args.outputKind === undefined ||
+      capability.output.kind === args.outputKind) &&
+    (query === undefined ||
+      query.length === 0 ||
+      capability.id.toLocaleLowerCase().includes(query) ||
+      capability.description.toLocaleLowerCase().includes(query))
   );
 }
 
-async function handleCapabilities(
+function summarizeCapability(capability: CapabilityDescriptor) {
+  return {
+    id: capability.id,
+    domain: capability.domain,
+    kind: capability.kind,
+    description: capability.description,
+    traits: capability.traits,
+    output: capability.output,
+  };
+}
+
+function pageLocalCapabilities(
+  catalog: CapabilityCatalog,
+  args: CapabilityQueryArgs,
+  detail: CapabilityDetail,
+  defaultLimit: number,
+  maxLimit: number,
+) {
+  const filtered = resolveLocalCapabilities(catalog, args);
+  const offset = args.operation ? 0 : (args.offset ?? 0);
+  const limit = args.operation
+    ? 1
+    : Math.min(args.limit ?? defaultLimit, maxLimit);
+  const page = filtered.slice(offset, offset + limit);
+  return {
+    total: filtered.length,
+    offset,
+    limit,
+    hasMore: offset + page.length < filtered.length,
+    detail: args.operation ? ("full" as const) : detail,
+    capabilities:
+      args.operation || detail === "full"
+        ? page
+        : page.map(summarizeCapability),
+  };
+}
+
+export async function handleCapabilities(
   catalog: CapabilityCatalog,
   client: UEConnectionClient,
   args: {
+    query?: string;
     domain?: CapabilityDomain;
     operation?: string;
+    kind?: CapabilityKind;
+    readOnly?: boolean;
+    destructive?: boolean;
+    expensive?: boolean;
+    outputKind?: CapabilityOutputKind;
+    offset?: number;
+    limit?: number;
+    detail?: CapabilityDetail;
     live?: boolean;
   },
 ): Promise<MCPResponse> {
   try {
-    const localCapabilities = resolveLocalCapabilities(
-      catalog,
-      args.domain,
-      args.operation,
-    );
-
     if (!args.live) {
       return formatJsonResponse({
         source: "local",
         ...catalog.summary(),
-        capabilities: localCapabilities,
+        ...pageLocalCapabilities(
+          catalog,
+          args,
+          args.detail ?? "summary",
+          25,
+          100,
+        ),
       });
     }
 
-    const live = await client.getCapabilities();
-    const capabilities = filterLiveCapabilities(
-      live.capabilities,
-      args.domain,
-      args.operation,
-    );
+    const live = await client.getCapabilities({
+      query: args.query,
+      domain: args.domain,
+      operation: args.operation,
+      kind: args.kind,
+      readOnly: args.readOnly,
+      destructive: args.destructive,
+      expensive: args.expensive,
+      outputKind: args.outputKind,
+      offset: args.offset ?? 0,
+      limit: args.operation ? 1 : (args.limit ?? 25),
+      detail: args.operation ? "full" : (args.detail ?? "summary"),
+    });
     return formatJsonResponse({
       source: "editor",
-      capabilityCount: capabilities.length,
-      capabilities,
+      ...live,
     });
   } catch (error) {
     return formatErrorResponse(error);
   }
 }
 
-function handleContext(
+export function handleContext(
   catalog: CapabilityCatalog,
   args: {
+    query?: string;
     domain?: CapabilityDomain;
     operation?: string;
+    kind?: CapabilityKind;
+    readOnly?: boolean;
+    destructive?: boolean;
+    expensive?: boolean;
+    outputKind?: CapabilityOutputKind;
+    offset?: number;
+    limit?: number;
   },
 ): MCPResponse {
   try {
-    if (args.domain === undefined && args.operation === undefined) {
+    if (Object.values(args).every((value) => value === undefined)) {
       return formatJsonResponse({
         source: "local-manifest",
         usage:
-          "Pass a domain for its capability schemas, or an operation dotted ID for one exact schema.",
+          "Pass filters for paged full schemas, or an operation dotted ID for one exact schema.",
         domains: CAPABILITY_DOMAINS,
         ...catalog.summary(),
       });
     }
 
-    const capabilities = resolveLocalCapabilities(
-      catalog,
-      args.domain,
-      args.operation,
-    );
     return formatJsonResponse({
       source: "local-manifest",
-      capabilities,
+      ...pageLocalCapabilities(catalog, args, "full", 10, 25),
     });
   } catch (error) {
     return formatErrorResponse(error);
@@ -183,7 +267,7 @@ export function createMcpServer(
   const client = options.client ?? (ueClient as UEClient);
   const server = new McpServer({
     name: "ue-ai-integration",
-    version: "0.3.0",
+    version: "0.3.1",
   });
 
   server.tool(
@@ -203,11 +287,25 @@ export function createMcpServer(
     "ue_capabilities",
     "List the locally shipped capability catalog offline, or compare against the running editor with live=true.",
     {
+      query: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("Search capability IDs and descriptions"),
       domain: z.enum(CAPABILITY_DOMAINS).optional(),
       operation: z
         .string()
         .optional()
         .describe("Optional dotted capability ID to inspect"),
+      kind: z.enum(["query", "command", "validation"]).optional(),
+      readOnly: z.boolean().optional(),
+      destructive: z.boolean().optional(),
+      expensive: z.boolean().optional(),
+      outputKind: z.enum(["json", "image"]).optional(),
+      offset: z.number().int().min(0).optional().default(0),
+      limit: z.number().int().min(1).max(100).optional().default(25),
+      detail: z.enum(["summary", "full"]).optional().default("summary"),
       live: z
         .boolean()
         .optional()
@@ -216,8 +314,17 @@ export function createMcpServer(
     },
     async (args) =>
       handleCapabilities(catalog, client, {
+        query: args.query,
         domain: args.domain,
         operation: args.operation,
+        kind: args.kind,
+        readOnly: args.readOnly,
+        destructive: args.destructive,
+        expensive: args.expensive,
+        outputKind: args.outputKind,
+        offset: args.offset,
+        limit: args.limit,
+        detail: args.detail,
         live: args.live,
       }),
   );
@@ -226,16 +333,37 @@ export function createMcpServer(
     "ue_context",
     "Read detailed operation schemas, traits, and output kinds from the local manifests.",
     {
+      query: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("Search capability IDs and descriptions"),
       domain: z.enum(CAPABILITY_DOMAINS).optional(),
       operation: z
         .string()
         .optional()
         .describe("Optional dotted capability ID to inspect"),
+      kind: z.enum(["query", "command", "validation"]).optional(),
+      readOnly: z.boolean().optional(),
+      destructive: z.boolean().optional(),
+      expensive: z.boolean().optional(),
+      outputKind: z.enum(["json", "image"]).optional(),
+      offset: z.number().int().min(0).optional(),
+      limit: z.number().int().min(1).max(25).optional(),
     },
     async (args) =>
       handleContext(catalog, {
+        query: args.query,
         domain: args.domain,
         operation: args.operation,
+        kind: args.kind,
+        readOnly: args.readOnly,
+        destructive: args.destructive,
+        expensive: args.expensive,
+        outputKind: args.outputKind,
+        offset: args.offset,
+        limit: args.limit,
       }),
   );
 
