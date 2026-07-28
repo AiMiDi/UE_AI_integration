@@ -359,7 +359,7 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		UWidgetBlueprint* WidgetBlueprint =
 			LoadWidgetBlueprintAdvanced(WidgetBlueprintPath);
 		if (!WidgetBlueprint)
@@ -376,15 +376,15 @@ public:
 		{
 			if (!MatchesOptionalFilter(
 					Params,
-					TEXT("widget_name"),
+					TEXT("widgetName"),
 					Binding.ObjectName)
 				|| !MatchesOptionalFilter(
 					Params,
-					TEXT("event_name"),
+					TEXT("eventName"),
 					Binding.PropertyName.ToString())
 				|| !MatchesOptionalFilter(
 					Params,
-					TEXT("function_name"),
+					TEXT("functionName"),
 					Binding.FunctionName.ToString()))
 			{
 				continue;
@@ -447,15 +447,15 @@ public:
 				GetConnectedHandlerFunction(EventNode);
 			if (!MatchesOptionalFilter(
 					Params,
-					TEXT("widget_name"),
+					TEXT("widgetName"),
 					EventNode->ComponentPropertyName.ToString())
 				|| !MatchesOptionalFilter(
 					Params,
-					TEXT("event_name"),
+					TEXT("eventName"),
 					EventNode->DelegatePropertyName.ToString())
 				|| !MatchesOptionalFilter(
 					Params,
-					TEXT("function_name"),
+					TEXT("functionName"),
 					HandlerFunction.ToString()))
 			{
 				continue;
@@ -493,7 +493,7 @@ public:
 		}
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetStringField(TEXT("widget_bp"), WidgetBlueprintPath);
+		Result->SetStringField(TEXT("widgetBp"), WidgetBlueprintPath);
 		Result->SetNumberField(TEXT("count"), Bindings.Num());
 		Result->SetArrayField(TEXT("bindings"), Bindings);
 		return FMCPToolResult::Ok(Result);
@@ -512,13 +512,13 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		const FString WidgetName =
-			Params->GetStringField(TEXT("widget_name"));
+			Params->GetStringField(TEXT("widgetName"));
 		const FString EventName =
-			Params->GetStringField(TEXT("event_name"));
+			Params->GetStringField(TEXT("eventName"));
 		FString FunctionName;
-		Params->TryGetStringField(TEXT("function_name"), FunctionName);
+		Params->TryGetStringField(TEXT("functionName"), FunctionName);
 
 		UWidgetBlueprint* WidgetBlueprint =
 			LoadWidgetBlueprintAdvanced(WidgetBlueprintPath);
@@ -609,11 +609,11 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		const FString ChildName =
-			Params->GetStringField(TEXT("child_name"));
+			Params->GetStringField(TEXT("childName"));
 		const FString NewName =
-			Params->GetStringField(TEXT("new_name"));
+			Params->GetStringField(TEXT("newName"));
 		UWidgetBlueprint* WidgetBlueprint =
 			LoadWidgetBlueprintAdvanced(WidgetBlueprintPath);
 		UWidget* Widget = FindWidgetAdvanced(WidgetBlueprint, ChildName);
@@ -629,7 +629,7 @@ public:
 			|| FindWidgetAdvanced(WidgetBlueprint, NewName))
 		{
 			return FMCPToolResult::Error(
-				TEXT("new_name is empty, invalid, or already in use."),
+				TEXT("newName is empty, invalid, or already in use."),
 				TEXT("invalid_params"),
 				422);
 		}
@@ -674,7 +674,7 @@ public:
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("old_name"), ChildName);
-		Result->SetStringField(TEXT("new_name"), NewName);
+		Result->SetStringField(TEXT("newName"), NewName);
 		return FinishWidgetMutation(
 			WidgetBlueprint,
 			Params,
@@ -696,13 +696,13 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		const FString ChildName =
-			Params->GetStringField(TEXT("child_name"));
+			Params->GetStringField(TEXT("childName"));
 		const FString NewName =
-			Params->GetStringField(TEXT("new_name"));
+			Params->GetStringField(TEXT("newName"));
 		FString ParentName;
-		Params->TryGetStringField(TEXT("parent_name"), ParentName);
+		Params->TryGetStringField(TEXT("parentName"), ParentName);
 
 		UWidgetBlueprint* WidgetBlueprint =
 			LoadWidgetBlueprintAdvanced(WidgetBlueprintPath);
@@ -719,7 +719,7 @@ public:
 			|| FindWidgetAdvanced(WidgetBlueprint, NewName))
 		{
 			return FMCPToolResult::Error(
-				TEXT("new_name is empty or already in use."),
+				TEXT("newName is empty or already in use."),
 				TEXT("invalid_params"),
 				422);
 		}
@@ -793,7 +793,7 @@ public:
 				REN_DontCreateRedirectors | REN_ForceNoResetLoaders))
 		{
 			return FMCPToolResult::Error(
-				TEXT("Copied widget could not be assigned new_name."));
+				TEXT("Copied widget could not be assigned newName."));
 		}
 		CopiedRoot->SetDisplayLabel(NewName);
 		UPanelSlot* NewSlot = DestinationParent->AddChild(CopiedRoot);
@@ -804,7 +804,7 @@ public:
 		}
 
 		double RequestedIndex = -1.0;
-		if (Params->TryGetNumberField(TEXT("new_index"), RequestedIndex))
+		if (Params->TryGetNumberField(TEXT("newIndex"), RequestedIndex))
 		{
 			const int32 NewIndex = FMath::Clamp(
 				static_cast<int32>(RequestedIndex),
@@ -843,11 +843,11 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		const FString ChildName =
-			Params->GetStringField(TEXT("child_name"));
+			Params->GetStringField(TEXT("childName"));
 		const FString NewParentName =
-			Params->GetStringField(TEXT("new_parent_name"));
+			Params->GetStringField(TEXT("newParentName"));
 		UWidgetBlueprint* WidgetBlueprint =
 			LoadWidgetBlueprintAdvanced(WidgetBlueprintPath);
 		UWidget* Child = FindWidgetAdvanced(WidgetBlueprint, ChildName);
@@ -890,7 +890,7 @@ public:
 		if (OldParent == NewParent)
 		{
 			double RequestedIndex = OldIndex;
-			Params->TryGetNumberField(TEXT("new_index"), RequestedIndex);
+			Params->TryGetNumberField(TEXT("newIndex"), RequestedIndex);
 			const int32 NewIndex = FMath::Clamp(
 				static_cast<int32>(RequestedIndex),
 				0,
@@ -904,7 +904,7 @@ public:
 			Result->SetStringField(TEXT("child"), ChildName);
 			Result->SetStringField(TEXT("parent"), NewParentName);
 			Result->SetNumberField(TEXT("old_index"), OldIndex);
-			Result->SetNumberField(TEXT("new_index"), NewIndex);
+			Result->SetNumberField(TEXT("newIndex"), NewIndex);
 			return FinishWidgetMutation(
 				WidgetBlueprint,
 				Params,
@@ -931,7 +931,7 @@ public:
 				TEXT("Failed to move the widget between panels."));
 		}
 		double RequestedIndex = -1.0;
-		if (Params->TryGetNumberField(TEXT("new_index"), RequestedIndex))
+		if (Params->TryGetNumberField(TEXT("newIndex"), RequestedIndex))
 		{
 			NewParent->ShiftChild(
 				FMath::Clamp(
@@ -966,13 +966,13 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		const FString HostName =
-			Params->GetStringField(TEXT("host_name"));
+			Params->GetStringField(TEXT("hostName"));
 		const FString SlotName =
-			Params->GetStringField(TEXT("slot_name"));
+			Params->GetStringField(TEXT("slotName"));
 		FString ContentName;
-		Params->TryGetStringField(TEXT("content_name"), ContentName);
+		Params->TryGetStringField(TEXT("contentName"), ContentName);
 
 		UWidgetBlueprint* WidgetBlueprint =
 			LoadWidgetBlueprintAdvanced(WidgetBlueprintPath);
@@ -1073,9 +1073,9 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		const FString WidgetName =
-			Params->GetStringField(TEXT("widget_name"));
+			Params->GetStringField(TEXT("widgetName"));
 		UWidgetBlueprint* WidgetBlueprint =
 			LoadWidgetBlueprintAdvanced(WidgetBlueprintPath);
 		UWidget* NewRoot =
@@ -1138,9 +1138,9 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		const FString WidgetName =
-			Params->GetStringField(TEXT("widget_name"));
+			Params->GetStringField(TEXT("widgetName"));
 		const FString SlotType =
 			Params->GetStringField(TEXT("slotType"));
 		const TSharedPtr<FJsonObject>* PropertiesPtr = nullptr;
@@ -1867,7 +1867,7 @@ bool ValidateWidgetAnimationKeys(
 		}
 		else
 		{
-			OutError = TEXT("Unsupported animation value_type.");
+			OutError = TEXT("Unsupported animation valueType.");
 			return false;
 		}
 	}
@@ -1886,10 +1886,10 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		FString AnimationFilter;
 		Params->TryGetStringField(
-			TEXT("animation_name"),
+			TEXT("animationName"),
 			AnimationFilter);
 		UWidgetBlueprint* WidgetBlueprint =
 			LoadWidgetBlueprintAdvanced(WidgetBlueprintPath);
@@ -1993,7 +1993,7 @@ public:
 		}
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetStringField(TEXT("widget_bp"), WidgetBlueprintPath);
+		Result->SetStringField(TEXT("widgetBp"), WidgetBlueprintPath);
 		Result->SetNumberField(TEXT("count"), Animations.Num());
 		Result->SetArrayField(TEXT("animations"), Animations);
 		return FMCPToolResult::Ok(Result);
@@ -2012,9 +2012,9 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		const FString AnimationName =
-			Params->GetStringField(TEXT("animation_name"));
+			Params->GetStringField(TEXT("animationName"));
 		UWidgetBlueprint* WidgetBlueprint =
 			LoadWidgetBlueprintAdvanced(WidgetBlueprintPath);
 		if (!WidgetBlueprint)
@@ -2028,7 +2028,7 @@ public:
 			|| FindWidgetAnimation(WidgetBlueprint, AnimationName))
 		{
 			return FMCPToolResult::Error(
-				TEXT("animation_name is empty or already in use."),
+				TEXT("animationName is empty or already in use."),
 				TEXT("invalid_params"),
 				422);
 		}
@@ -2036,9 +2036,9 @@ public:
 		double StartTime = 0.0;
 		double EndTime = 5.0;
 		double DisplayRate = 20.0;
-		Params->TryGetNumberField(TEXT("start_time"), StartTime);
-		Params->TryGetNumberField(TEXT("end_time"), EndTime);
-		Params->TryGetNumberField(TEXT("display_rate"), DisplayRate);
+		Params->TryGetNumberField(TEXT("startTime"), StartTime);
+		Params->TryGetNumberField(TEXT("endTime"), EndTime);
+		Params->TryGetNumberField(TEXT("displayRate"), DisplayRate);
 		if (StartTime < 0.0
 			|| EndTime <= StartTime
 			|| DisplayRate <= 0.0)
@@ -2102,15 +2102,15 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		const FString AnimationName =
-			Params->GetStringField(TEXT("animation_name"));
+			Params->GetStringField(TEXT("animationName"));
 		const FString WidgetName =
-			Params->GetStringField(TEXT("widget_name"));
+			Params->GetStringField(TEXT("widgetName"));
 		const FString PropertyName =
 			Params->GetStringField(TEXT("property"));
 		const FString ValueType =
-			Params->GetStringField(TEXT("value_type"));
+			Params->GetStringField(TEXT("valueType"));
 		const TArray<TSharedPtr<FJsonValue>>* Keys = nullptr;
 		if (!Params->TryGetArrayField(TEXT("keys"), Keys)
 			|| !Keys
@@ -2153,7 +2153,7 @@ public:
 		{
 			return FMCPToolResult::Error(
 				FString::Printf(
-					TEXT("value_type '%s' is incompatible with property '%s' of type '%s'."),
+					TEXT("valueType '%s' is incompatible with property '%s' of type '%s'."),
 					*ValueType,
 					*PropertyName,
 					*Property->GetCPPType()),
@@ -2518,7 +2518,7 @@ public:
 		else
 		{
 			return FMCPToolResult::Error(
-				TEXT("Unsupported animation value_type."),
+				TEXT("Unsupported animation valueType."),
 				TEXT("invalid_params"),
 				422);
 		}
@@ -2553,9 +2553,9 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		const FString AnimationName =
-			Params->GetStringField(TEXT("animation_name"));
+			Params->GetStringField(TEXT("animationName"));
 		UWidgetBlueprint* WidgetBlueprint =
 			LoadWidgetBlueprintAdvanced(WidgetBlueprintPath);
 		UWidgetAnimation* Animation =
@@ -2657,7 +2657,7 @@ FVector2D ReadPreviewSize(
 	TArray<double> PreviewSize;
 	if (TryReadNumberArrayAdvanced(
 			Params,
-			TEXT("preview_size"),
+			TEXT("previewSize"),
 			2,
 			PreviewSize)
 		&& PreviewSize[0] > 0.0
@@ -2726,7 +2726,7 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		UWidgetBlueprint* WidgetBlueprint =
 			LoadWidgetBlueprintAdvanced(WidgetBlueprintPath);
 		if (!WidgetBlueprint)
@@ -2762,7 +2762,7 @@ public:
 		const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBlueprintPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		UWidgetBlueprint* WidgetBlueprint =
 			LoadWidgetBlueprintAdvanced(WidgetBlueprintPath);
 		UUserWidget* DefaultWidget =
@@ -2776,15 +2776,15 @@ public:
 		}
 
 		const bool bHasMode =
-			Params->HasField(TEXT("design_size_mode"));
+			Params->HasField(TEXT("designSizeMode"));
 		const bool bHasDesignTimeSize =
-			Params->HasField(TEXT("design_time_size"));
+			Params->HasField(TEXT("designTimeSize"));
 		const bool bHasPreviewSize =
-			Params->HasField(TEXT("preview_size"));
+			Params->HasField(TEXT("previewSize"));
 		if (!bHasMode && !bHasDesignTimeSize && !bHasPreviewSize)
 		{
 			return FMCPToolResult::Error(
-				TEXT("At least one designer setting or preview_size must be supplied."),
+				TEXT("At least one designer setting or previewSize must be supplied."),
 				TEXT("invalid_params"),
 				422);
 		}
@@ -2793,14 +2793,14 @@ public:
 		FString ModeValue;
 		if (bHasMode
 			&& Params->TryGetStringField(
-				TEXT("design_size_mode"),
+				TEXT("designSizeMode"),
 				ModeValue))
 		{
 			EDesignPreviewSizeMode NewMode;
 			if (!TryParseDesignPreviewSizeMode(ModeValue, NewMode))
 			{
 				return FMCPToolResult::Error(
-					TEXT("design_size_mode is invalid."),
+					TEXT("designSizeMode is invalid."),
 					TEXT("invalid_params"),
 					422);
 			}
@@ -2813,14 +2813,14 @@ public:
 		{
 			if (!TryReadNumberArrayAdvanced(
 					Params,
-					TEXT("design_time_size"),
+					TEXT("designTimeSize"),
 					2,
 					DesignTimeSize)
 				|| DesignTimeSize[0] <= 0.0
 				|| DesignTimeSize[1] <= 0.0)
 			{
 				return FMCPToolResult::Error(
-					TEXT("design_time_size must contain two positive numbers."),
+					TEXT("designTimeSize must contain two positive numbers."),
 					TEXT("invalid_params"),
 					422);
 			}
@@ -2834,14 +2834,14 @@ public:
 			TArray<double> PreviewSize;
 			if (!TryReadNumberArrayAdvanced(
 					Params,
-					TEXT("preview_size"),
+					TEXT("previewSize"),
 					2,
 					PreviewSize)
 				|| PreviewSize[0] <= 0.0
 				|| PreviewSize[1] <= 0.0)
 			{
 				return FMCPToolResult::Error(
-					TEXT("preview_size must contain two positive numbers."),
+					TEXT("previewSize must contain two positive numbers."),
 					TEXT("invalid_params"),
 					422);
 			}

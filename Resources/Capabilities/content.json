@@ -14,14 +14,14 @@
             "type": "string",
             "description": "Name for the Data Table asset"
           },
-          "row_struct": {
+          "rowStruct": {
             "type": "string",
             "description": "Row struct path or name (e.g. '/Script/Engine.DataTableRowHandle' or custom struct path)"
           }
         },
         "required": [
           "name",
-          "row_struct"
+          "rowStruct"
         ],
         "additionalProperties": false
       },
@@ -46,14 +46,14 @@
             "type": "string",
             "description": "Asset path of the Data Table"
           },
-          "csv_path": {
+          "csvPath": {
             "type": "string",
             "description": "Absolute file path to the CSV file"
           }
         },
         "required": [
           "table",
-          "csv_path"
+          "csvPath"
         ],
         "additionalProperties": false
       },
@@ -78,7 +78,7 @@
             "type": "string",
             "description": "Asset path of the Data Table"
           },
-          "row_name": {
+          "rowName": {
             "type": "string",
             "description": "Name for the new row"
           },
@@ -90,7 +90,7 @@
         },
         "required": [
           "table",
-          "row_name",
+          "rowName",
           "values"
         ],
         "additionalProperties": false
@@ -143,14 +143,14 @@
             "type": "string",
             "description": "Asset path of the Data Table"
           },
-          "row_name": {
+          "rowName": {
             "type": "string",
             "description": "Name of the row to remove"
           }
         },
         "required": [
           "table",
-          "row_name"
+          "rowName"
         ],
         "additionalProperties": false
       },
@@ -1078,14 +1078,14 @@
             "type": "string",
             "description": "Asset path of the Niagara System"
           },
-          "emitter_template": {
+          "emitterTemplate": {
             "type": "string",
             "description": "Asset path of the Niagara Emitter to add as template"
           }
         },
         "required": [
           "system",
-          "emitter_template"
+          "emitterTemplate"
         ],
         "additionalProperties": false
       },
@@ -1110,7 +1110,7 @@
             "type": "string",
             "description": "Name or label of the Niagara actor in the level"
           },
-          "param_name": {
+          "paramName": {
             "type": "string",
             "description": "Parameter name (e.g. 'SpawnRate', 'Color')"
           },
@@ -1118,14 +1118,14 @@
             "type": "string",
             "description": "Value as string. For vectors use 'x,y,z'. For colors use 'r,g,b,a' (0-1 range). For numbers, just the number."
           },
-          "param_type": {
+          "paramType": {
             "type": "string",
             "description": "Type: float, int, bool, vector, color. Default: float"
           }
         },
         "required": [
           "actor",
-          "param_name",
+          "paramName",
           "value"
         ],
         "additionalProperties": false
@@ -1303,11 +1303,11 @@
             "type": "string",
             "description": "Name for the Widget Blueprint asset"
           },
-          "package_path": {
+          "packagePath": {
             "type": "string",
             "description": "Optional package directory; Workflow scope injection uses this to preserve scope.asset exactly"
           },
-          "parent_class": {
+          "parentClass": {
             "type": "string",
             "description": "Parent class (default: 'UserWidget')"
           }
@@ -1367,43 +1367,43 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "description": "Asset path of the Widget Blueprint"
           },
-          "child_class": {
+          "childClass": {
             "type": "string",
             "description": "Widget class: Button, TextBlock, Image, VerticalBox, HorizontalBox, etc."
           },
           "class": {
             "type": "string",
-            "description": "Workflow DSL alias for child_class"
+            "description": "Workflow DSL alias for childClass"
           },
-          "child_name": {
+          "childName": {
             "type": "string",
             "description": "Name for the new widget"
           },
           "name": {
             "type": "string",
-            "description": "Workflow DSL alias for child_name"
+            "description": "Workflow DSL alias for childName"
           },
-          "parent_name": {
+          "parentName": {
             "type": "string",
             "description": "Name of the parent widget in the tree (default: root)"
           },
           "parent": {
             "type": "string",
-            "description": "Workflow DSL alias for parent_name"
+            "description": "Workflow DSL alias for parentName"
           }
         },
         "required": [
-          "widget_bp"
+          "widgetBp"
         ],
         "anyOf": [
           {
             "required": [
-              "child_class",
-              "child_name"
+              "childClass",
+              "childName"
             ]
           },
           {
@@ -1441,28 +1441,28 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "description": "Asset path of the Widget Blueprint"
           },
-          "widget_name": {
+          "widgetName": {
             "type": "string",
             "description": "Name of the widget to bind"
           },
-          "event_name": {
+          "eventName": {
             "type": "string",
             "description": "Event delegate name (e.g. 'OnClicked', 'OnPressed', 'OnValueChanged')"
           },
-          "function_name": {
+          "functionName": {
             "type": "string",
             "description": "Name of the function to bind to (must exist in the Blueprint graph)"
           }
         },
         "required": [
-          "widget_bp",
-          "widget_name",
-          "event_name",
-          "function_name"
+          "widgetBp",
+          "widgetName",
+          "eventName",
+          "functionName"
         ],
         "additionalProperties": false
       },
@@ -1492,11 +1492,11 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "description": "Asset path of the Widget Blueprint"
           },
-          "widget_name": {
+          "widgetName": {
             "type": "string",
             "description": "Name of the target widget"
           },
@@ -1510,8 +1510,8 @@
           }
         },
         "required": [
-          "widget_bp",
-          "widget_name",
+          "widgetBp",
+          "widgetName",
           "property",
           "value"
         ],
@@ -1543,11 +1543,11 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "description": "Asset path of the Widget Blueprint"
           },
-          "widget_name": {
+          "widgetName": {
             "type": "string",
             "description": "Name of the target widget"
           },
@@ -1599,22 +1599,22 @@
             "minItems": 4,
             "maxItems": 4
           },
-          "auto_size": {
+          "autoSize": {
             "type": "boolean",
             "description": "Whether the Canvas slot sizes to the widget content"
           },
-          "z_order": {
+          "zOrder": {
             "type": "integer",
             "description": "Canvas slot Z order"
           }
         },
         "required": [
-          "widget_bp"
+          "widgetBp"
         ],
         "anyOf": [
           {
             "required": [
-              "widget_name"
+              "widgetName"
             ]
           },
           {
@@ -1651,18 +1651,18 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "description": "Asset path of the Widget Blueprint"
           },
-          "child_name": {
+          "childName": {
             "type": "string",
             "description": "Name of the child widget to remove"
           }
         },
         "required": [
-          "widget_bp",
-          "child_name"
+          "widgetBp",
+          "childName"
         ],
         "additionalProperties": false
       },
@@ -1692,24 +1692,24 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "description": "Asset path of the Widget Blueprint"
           },
-          "child_name": {
+          "childName": {
             "type": "string",
             "description": "Name of the child widget to reorder"
           },
-          "new_index": {
+          "newIndex": {
             "type": "integer",
             "minimum": 0,
             "description": "Zero-based destination index"
           }
         },
         "required": [
-          "widget_bp",
-          "child_name",
-          "new_index"
+          "widgetBp",
+          "childName",
+          "newIndex"
         ],
         "additionalProperties": false
       },
@@ -1739,13 +1739,13 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "description": "Asset path of the Widget Blueprint"
           }
         },
         "required": [
-          "widget_bp"
+          "widgetBp"
         ],
         "additionalProperties": false
       },
@@ -1775,25 +1775,25 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "widget_name": {
+          "widgetName": {
             "type": "string",
             "minLength": 1
           },
-          "event_name": {
+          "eventName": {
             "type": "string",
             "minLength": 1
           },
-          "function_name": {
+          "functionName": {
             "type": "string",
             "minLength": 1
           }
         },
         "required": [
-          "widget_bp"
+          "widgetBp"
         ],
         "additionalProperties": false
       },
@@ -1823,27 +1823,27 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "widget_name": {
+          "widgetName": {
             "type": "string",
             "minLength": 1
           },
-          "event_name": {
+          "eventName": {
             "type": "string",
             "minLength": 1
           },
-          "function_name": {
+          "functionName": {
             "type": "string",
             "minLength": 1
           }
         },
         "required": [
-          "widget_bp",
-          "widget_name",
-          "event_name"
+          "widgetBp",
+          "widgetName",
+          "eventName"
         ],
         "additionalProperties": false
       },
@@ -1873,23 +1873,23 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "child_name": {
+          "childName": {
             "type": "string",
             "minLength": 1
           },
-          "new_name": {
+          "newName": {
             "type": "string",
             "minLength": 1
           }
         },
         "required": [
-          "widget_bp",
-          "child_name",
-          "new_name"
+          "widgetBp",
+          "childName",
+          "newName"
         ],
         "additionalProperties": false
       },
@@ -1919,31 +1919,31 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "child_name": {
+          "childName": {
             "type": "string",
             "minLength": 1
           },
-          "new_name": {
+          "newName": {
             "type": "string",
             "minLength": 1
           },
-          "parent_name": {
+          "parentName": {
             "type": "string",
             "minLength": 1
           },
-          "new_index": {
+          "newIndex": {
             "type": "integer",
             "minimum": 0
           }
         },
         "required": [
-          "widget_bp",
-          "child_name",
-          "new_name"
+          "widgetBp",
+          "childName",
+          "newName"
         ],
         "additionalProperties": false
       },
@@ -1973,27 +1973,27 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "child_name": {
+          "childName": {
             "type": "string",
             "minLength": 1
           },
-          "new_parent_name": {
+          "newParentName": {
             "type": "string",
             "minLength": 1
           },
-          "new_index": {
+          "newIndex": {
             "type": "integer",
             "minimum": 0
           }
         },
         "required": [
-          "widget_bp",
-          "child_name",
-          "new_parent_name"
+          "widgetBp",
+          "childName",
+          "newParentName"
         ],
         "additionalProperties": false
       },
@@ -2023,26 +2023,26 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "host_name": {
+          "hostName": {
             "type": "string",
             "minLength": 1
           },
-          "slot_name": {
+          "slotName": {
             "type": "string",
             "minLength": 1
           },
-          "content_name": {
+          "contentName": {
             "type": "string"
           }
         },
         "required": [
-          "widget_bp",
-          "host_name",
-          "slot_name"
+          "widgetBp",
+          "hostName",
+          "slotName"
         ],
         "additionalProperties": false
       },
@@ -2072,18 +2072,18 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "widget_name": {
+          "widgetName": {
             "type": "string",
             "minLength": 1
           }
         },
         "required": [
-          "widget_bp",
-          "widget_name"
+          "widgetBp",
+          "widgetName"
         ],
         "additionalProperties": false
       },
@@ -2113,11 +2113,11 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "widget_name": {
+          "widgetName": {
             "type": "string",
             "minLength": 1
           },
@@ -2235,8 +2235,8 @@
           }
         },
         "required": [
-          "widget_bp",
-          "widget_name",
+          "widgetBp",
+          "widgetName",
           "slotType",
           "properties"
         ],
@@ -2500,17 +2500,17 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "animation_name": {
+          "animationName": {
             "type": "string",
             "minLength": 1
           }
         },
         "required": [
-          "widget_bp"
+          "widgetBp"
         ],
         "additionalProperties": false
       },
@@ -2540,30 +2540,30 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "animation_name": {
+          "animationName": {
             "type": "string",
             "minLength": 1
           },
-          "start_time": {
+          "startTime": {
             "type": "number",
             "minimum": 0
           },
-          "end_time": {
+          "endTime": {
             "type": "number",
             "minimum": 0
           },
-          "display_rate": {
+          "displayRate": {
             "type": "number",
             "exclusiveMinimum": 0
           }
         },
         "required": [
-          "widget_bp",
-          "animation_name"
+          "widgetBp",
+          "animationName"
         ],
         "additionalProperties": false
       },
@@ -2593,15 +2593,15 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "animation_name": {
+          "animationName": {
             "type": "string",
             "minLength": 1
           },
-          "widget_name": {
+          "widgetName": {
             "type": "string",
             "minLength": 1
           },
@@ -2609,7 +2609,7 @@
             "type": "string",
             "minLength": 1
           },
-          "value_type": {
+          "valueType": {
             "type": "string",
             "enum": [
               "float",
@@ -2631,7 +2631,7 @@
                   "minimum": 0
                 },
                 "value": {
-                  "description": "Typed JSON key value matching value_type"
+                  "description": "Typed JSON key value matching valueType"
                 }
               },
               "required": [
@@ -2643,11 +2643,11 @@
           }
         },
         "required": [
-          "widget_bp",
-          "animation_name",
-          "widget_name",
+          "widgetBp",
+          "animationName",
+          "widgetName",
           "property",
-          "value_type",
+          "valueType",
           "keys"
         ],
         "additionalProperties": false
@@ -2678,18 +2678,18 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "animation_name": {
+          "animationName": {
             "type": "string",
             "minLength": 1
           }
         },
         "required": [
-          "widget_bp",
-          "animation_name"
+          "widgetBp",
+          "animationName"
         ],
         "additionalProperties": false
       },
@@ -2719,11 +2719,11 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "preview_size": {
+          "previewSize": {
             "type": "array",
             "items": {
               "type": "number",
@@ -2734,7 +2734,7 @@
           }
         },
         "required": [
-          "widget_bp"
+          "widgetBp"
         ],
         "additionalProperties": false
       },
@@ -2764,11 +2764,11 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "widget_bp": {
+          "widgetBp": {
             "type": "string",
             "minLength": 1
           },
-          "design_size_mode": {
+          "designSizeMode": {
             "type": "string",
             "enum": [
               "FillScreen",
@@ -2778,7 +2778,7 @@
               "DesiredOnScreen"
             ]
           },
-          "design_time_size": {
+          "designTimeSize": {
             "type": "array",
             "items": {
               "type": "number",
@@ -2787,7 +2787,7 @@
             "minItems": 2,
             "maxItems": 2
           },
-          "preview_size": {
+          "previewSize": {
             "type": "array",
             "items": {
               "type": "number",
@@ -2798,22 +2798,22 @@
           }
         },
         "required": [
-          "widget_bp"
+          "widgetBp"
         ],
         "anyOf": [
           {
             "required": [
-              "design_size_mode"
+              "designSizeMode"
             ]
           },
           {
             "required": [
-              "design_time_size"
+              "designTimeSize"
             ]
           },
           {
             "required": [
-              "preview_size"
+              "previewSize"
             ]
           }
         ],
@@ -3343,6 +3343,52 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "confirmWrite"
+      }
+    },
+    {
+      "id": "content.widget.event.ensure_handler",
+      "domain": "content",
+      "kind": "command",
+      "description": "Ensure a Widget Blueprint multicast event has an exact delegate-shaped handler FunctionGraph, a component-bound event node, a direct handler call, and a verified generated binding.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "widgetBp": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Widget Blueprint package or object path"
+          },
+          "widget": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Widget variable name in the Widget Tree"
+          },
+          "event": {
+            "type": "string",
+            "minLength": 1,
+            "description": "FMulticastDelegateProperty name on the widget class"
+          },
+          "handlerFunctionName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "FunctionGraph name to create or verify"
+          }
+        },
+        "required": [
+          "widgetBp",
+          "widget",
+          "event",
+          "handlerFunctionName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
       }
     }
   ]

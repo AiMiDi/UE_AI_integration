@@ -321,9 +321,9 @@ public:
 		}
 
 		UClass* ParentClass = UUserWidget::StaticClass();
-		if (Params->HasField(TEXT("parent_class")))
+		if (Params->HasField(TEXT("parentClass")))
 		{
-			FString ParentClassName = Params->GetStringField(TEXT("parent_class"));
+			FString ParentClassName = Params->GetStringField(TEXT("parentClass"));
 			UClass* CustomParent = ResolveWidgetClass(ParentClassName);
 			if (CustomParent && CustomParent->IsChildOf(UUserWidget::StaticClass()))
 			{
@@ -332,12 +332,12 @@ public:
 		}
 
 		FString PackageDirectory = TEXT("/Game/UI");
-		Params->TryGetStringField(TEXT("package_path"), PackageDirectory);
+		Params->TryGetStringField(TEXT("packagePath"), PackageDirectory);
 		PackageDirectory.RemoveFromEnd(TEXT("/"));
 		if (!PackageDirectory.StartsWith(TEXT("/Game")))
 		{
 			return FMCPToolResult::Error(
-				TEXT("Parameter 'package_path' must start with '/Game'."),
+				TEXT("Parameter 'packagePath' must start with '/Game'."),
 				TEXT("invalid_params"),
 				422);
 		}
@@ -401,7 +401,7 @@ public:
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("path"), PackagePath);
 		Result->SetStringField(TEXT("name"), Name);
-		Result->SetStringField(TEXT("parent_class"), ParentClass->GetName());
+		Result->SetStringField(TEXT("parentClass"), ParentClass->GetName());
 		AddExecutionMetadata(Result, Params, bSaved);
 		return FMCPToolResult::Ok(Result);
 	}
@@ -420,26 +420,26 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		FString WidgetBPPath = Params->GetStringField(TEXT("widget_bp"));
+		FString WidgetBPPath = Params->GetStringField(TEXT("widgetBp"));
 		FString ChildClassName;
-		if (!Params->TryGetStringField(TEXT("child_class"), ChildClassName))
+		if (!Params->TryGetStringField(TEXT("childClass"), ChildClassName))
 		{
 			Params->TryGetStringField(TEXT("class"), ChildClassName);
 		}
 		FString ChildName;
-		if (!Params->TryGetStringField(TEXT("child_name"), ChildName))
+		if (!Params->TryGetStringField(TEXT("childName"), ChildName))
 		{
 			Params->TryGetStringField(TEXT("name"), ChildName);
 		}
 		FString ParentName;
-		if (!Params->TryGetStringField(TEXT("parent_name"), ParentName))
+		if (!Params->TryGetStringField(TEXT("parentName"), ParentName))
 		{
 			Params->TryGetStringField(TEXT("parent"), ParentName);
 		}
 		if (ChildClassName.IsEmpty() || ChildName.IsEmpty())
 		{
 			return FMCPToolResult::Error(
-				TEXT("Parameters 'child_class'/'class' and 'child_name'/'name' are required."),
+				TEXT("Parameters 'childClass'/'class' and 'childName'/'name' are required."),
 				TEXT("invalid_params"),
 				422);
 		}
@@ -467,7 +467,7 @@ public:
 				FString::Printf(
 					TEXT("Widget '%s' already exists in the Widget Blueprint."),
 					*ChildName),
-				TEXT("duplicate_widget_name"),
+				TEXT("duplicate_widgetName"),
 				409);
 		}
 
@@ -534,9 +534,9 @@ public:
 		WidgetBP->MarkPackageDirty();
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetStringField(TEXT("widget_bp"), WidgetBPPath);
-		Result->SetStringField(TEXT("child_name"), ChildName);
-		Result->SetStringField(TEXT("child_class"), ChildClassName);
+		Result->SetStringField(TEXT("widgetBp"), WidgetBPPath);
+		Result->SetStringField(TEXT("childName"), ChildName);
+		Result->SetStringField(TEXT("childClass"), ChildClassName);
 		Result->SetStringField(TEXT("parent"), ParentWidget->GetName());
 		Result->SetBoolField(TEXT("has_slot"), true);
 		Result->SetObjectField(
@@ -560,8 +560,8 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		FString WidgetBPPath = Params->GetStringField(TEXT("widget_bp"));
-		FString WidgetName = Params->GetStringField(TEXT("widget_name"));
+		FString WidgetBPPath = Params->GetStringField(TEXT("widgetBp"));
+		FString WidgetName = Params->GetStringField(TEXT("widgetName"));
 		FString Property = Params->GetStringField(TEXT("property"));
 		FString Value = Params->GetStringField(TEXT("value"));
 
@@ -668,9 +668,9 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		const FString WidgetBPPath = Params->GetStringField(TEXT("widget_bp"));
+		const FString WidgetBPPath = Params->GetStringField(TEXT("widgetBp"));
 		FString WidgetName;
-		Params->TryGetStringField(TEXT("widget_name"), WidgetName);
+		Params->TryGetStringField(TEXT("widgetName"), WidgetName);
 		if (WidgetName.IsEmpty()
 			&& Params->HasTypedField<EJson::Object>(TEXT("target")))
 		{
@@ -696,7 +696,7 @@ public:
 		if (WidgetName.IsEmpty())
 		{
 			return FMCPToolResult::Error(
-				TEXT("Parameter 'widget_name' or typed 'target' is required."),
+				TEXT("Parameter 'widgetName' or typed 'target' is required."),
 				TEXT("invalid_params"),
 				422);
 		}
@@ -791,13 +791,13 @@ public:
 		}
 
 		bool bAutoSize = false;
-		if (Params->TryGetBoolField(TEXT("auto_size"), bAutoSize))
+		if (Params->TryGetBoolField(TEXT("autoSize"), bAutoSize))
 		{
 			CanvasSlot->SetAutoSize(bAutoSize);
 		}
 
 		double ZOrder = 0.0;
-		if (Params->TryGetNumberField(TEXT("z_order"), ZOrder))
+		if (Params->TryGetNumberField(TEXT("zOrder"), ZOrder))
 		{
 			CanvasSlot->SetZOrder(static_cast<int32>(ZOrder));
 		}
@@ -841,8 +841,8 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		const FString WidgetBPPath = Params->GetStringField(TEXT("widget_bp"));
-		const FString ChildName = Params->GetStringField(TEXT("child_name"));
+		const FString WidgetBPPath = Params->GetStringField(TEXT("widgetBp"));
+		const FString ChildName = Params->GetStringField(TEXT("childName"));
 
 		UWidgetBlueprint* WidgetBP =
 			LoadWidgetBlueprint(WidgetBPPath);
@@ -898,7 +898,7 @@ public:
 		WidgetBP->MarkPackageDirty();
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetStringField(TEXT("child_name"), ChildName);
+		Result->SetStringField(TEXT("childName"), ChildName);
 		Result->SetStringField(TEXT("parent"), ParentName);
 		Result->SetNumberField(TEXT("former_index"), ChildIndex);
 		Result->SetBoolField(TEXT("removed"), true);
@@ -920,9 +920,9 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		const FString WidgetBPPath = Params->GetStringField(TEXT("widget_bp"));
-		const FString ChildName = Params->GetStringField(TEXT("child_name"));
-		const int32 NewIndex = Params->GetIntegerField(TEXT("new_index"));
+		const FString WidgetBPPath = Params->GetStringField(TEXT("widgetBp"));
+		const FString ChildName = Params->GetStringField(TEXT("childName"));
+		const int32 NewIndex = Params->GetIntegerField(TEXT("newIndex"));
 
 		UWidgetBlueprint* WidgetBP =
 			LoadWidgetBlueprint(WidgetBPPath);
@@ -960,7 +960,7 @@ public:
 		{
 			return FMCPToolResult::Error(
 				FString::Printf(
-					TEXT("new_index must be between 0 and %d."),
+					TEXT("newIndex must be between 0 and %d."),
 					Parent->GetChildrenCount() - 1),
 				TEXT("invalid_params"),
 				422);
@@ -980,7 +980,7 @@ public:
 			MakeWidgetRef(WidgetBPPath, Child));
 		Result->SetStringField(TEXT("parent"), Parent->GetName());
 		Result->SetNumberField(TEXT("old_index"), OldIndex);
-		Result->SetNumberField(TEXT("new_index"), NewIndex);
+		Result->SetNumberField(TEXT("newIndex"), NewIndex);
 		AddExecutionMetadata(Result, Params);
 		return FMCPToolResult::Ok(Result);
 	}
@@ -999,7 +999,7 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		const FString WidgetBPPath = Params->GetStringField(TEXT("widget_bp"));
+		const FString WidgetBPPath = Params->GetStringField(TEXT("widgetBp"));
 		UWidgetBlueprint* WidgetBP =
 			LoadWidgetBlueprint(WidgetBPPath);
 		if (!WidgetBP || !WidgetBP->WidgetTree
@@ -1024,7 +1024,7 @@ public:
 			});
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetStringField(TEXT("widget_bp"), WidgetBPPath);
+		Result->SetStringField(TEXT("widgetBp"), WidgetBPPath);
 		Result->SetNumberField(TEXT("count"), WidgetCount);
 		TArray<TSharedPtr<FJsonValue>> Bindings;
 		for (const FDelegateEditorBinding& Binding : WidgetBP->Bindings)
@@ -1106,13 +1106,13 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		const FString WidgetBPPath =
-			Params->GetStringField(TEXT("widget_bp"));
+			Params->GetStringField(TEXT("widgetBp"));
 		const FString WidgetName =
-			Params->GetStringField(TEXT("widget_name"));
+			Params->GetStringField(TEXT("widgetName"));
 		const FString EventName =
-			Params->GetStringField(TEXT("event_name"));
+			Params->GetStringField(TEXT("eventName"));
 		const FString FunctionName =
-			Params->GetStringField(TEXT("function_name"));
+			Params->GetStringField(TEXT("functionName"));
 
 		UWidgetBlueprint* WidgetBP = LoadWidgetBlueprint(WidgetBPPath);
 		if (!WidgetBP || !WidgetBP->WidgetTree)
@@ -1284,6 +1284,162 @@ public:
 	}
 };
 
+class FTool_EnsureWidgetEventHandler final : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("content.widget.event.ensure_handler");
+	}
+
+	FMCPToolResult Execute(
+		const TSharedPtr<FJsonObject>& Params) override
+	{
+		const FString WidgetBlueprintPath =
+			Params->GetStringField(TEXT("widgetBp"));
+		const FString WidgetName =
+			Params->GetStringField(TEXT("widget"));
+		const FString EventName =
+			Params->GetStringField(TEXT("event"));
+		const FString HandlerFunctionName =
+			Params->GetStringField(TEXT("handlerFunctionName"));
+
+		UWidgetBlueprint* WidgetBlueprint =
+			LoadWidgetBlueprint(WidgetBlueprintPath);
+		if (!WidgetBlueprint || !WidgetBlueprint->WidgetTree)
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Widget Blueprint not found at '%s'."),
+					*WidgetBlueprintPath),
+				TEXT("target_not_found"),
+				404);
+		}
+
+		UEAIIntegration::WidgetEventBindings::FEnsureHandlerResult
+			EnsureResult;
+		FString EnsureError;
+		FString EnsureErrorCode;
+		if (!UEAIIntegration::WidgetEventBindings::EnsureHandler(
+				WidgetBlueprint,
+				WidgetName,
+				EventName,
+				HandlerFunctionName,
+				EnsureResult,
+				EnsureError,
+				EnsureErrorCode))
+		{
+			const int32 HttpStatus =
+				EnsureErrorCode == TEXT("target_not_found")
+				? 404
+				: EnsureErrorCode == TEXT("invalid_params")
+					|| EnsureErrorCode == TEXT("invalid_target")
+					|| EnsureErrorCode == TEXT("signature_mismatch")
+				? 422
+				: 500;
+			return FMCPToolResult::Error(
+				EnsureError,
+				EnsureErrorCode.IsEmpty()
+					? TEXT("execution_failed")
+					: EnsureErrorCode,
+				HttpStatus);
+		}
+
+		TSharedPtr<FJsonObject> Signature =
+			MakeShared<FJsonObject>();
+		Signature->SetStringField(
+			TEXT("functionPath"),
+			EnsureResult.SignatureFunctionPath);
+		TArray<TSharedPtr<FJsonValue>> SignatureParameters;
+		for (const UEAIIntegration::WidgetEventBindings::
+			FSignatureParameter& Parameter :
+			EnsureResult.SignatureParameters)
+		{
+			TSharedPtr<FJsonObject> ParameterJson =
+				MakeShared<FJsonObject>();
+			ParameterJson->SetStringField(
+				TEXT("name"),
+				Parameter.Name.ToString());
+			ParameterJson->SetStringField(
+				TEXT("type"),
+				Parameter.Type);
+			ParameterJson->SetBoolField(
+				TEXT("out"),
+				Parameter.bOut);
+			ParameterJson->SetBoolField(
+				TEXT("reference"),
+				Parameter.bReference);
+			ParameterJson->SetBoolField(
+				TEXT("return"),
+				Parameter.bReturn);
+			SignatureParameters.Add(
+				MakeShared<FJsonValueObject>(ParameterJson));
+		}
+		Signature->SetArrayField(
+			TEXT("parameters"),
+			SignatureParameters);
+
+		TSharedPtr<FJsonObject> Evidence =
+			MakeShared<FJsonObject>();
+		Evidence->SetStringField(
+			TEXT("handlerGraph"),
+			EnsureResult.HandlerGraphName.ToString());
+		Evidence->SetStringField(
+			TEXT("handlerFunctionPath"),
+			EnsureResult.HandlerFunctionPath);
+		Evidence->SetStringField(
+			TEXT("eventNodeId"),
+			EnsureResult.EventNodeGuid.ToString(
+				EGuidFormats::Digits));
+		Evidence->SetStringField(
+			TEXT("callNodeId"),
+			EnsureResult.CallNodeGuid.ToString(
+				EGuidFormats::Digits));
+		Evidence->SetStringField(
+			TEXT("generatedBindingFunction"),
+			EnsureResult.GeneratedBindingFunction.ToString());
+		Evidence->SetBoolField(
+			TEXT("createdHandlerGraph"),
+			EnsureResult.bCreatedHandlerGraph);
+		Evidence->SetBoolField(
+			TEXT("createdEventNode"),
+			EnsureResult.bCreatedEventNode);
+		Evidence->SetBoolField(
+			TEXT("createdCallNode"),
+			EnsureResult.bCreatedCallNode);
+		Evidence->SetBoolField(
+			TEXT("generatedBinding"),
+			EnsureResult.bGeneratedBinding);
+		Evidence->SetNumberField(
+			TEXT("execEdgeCount"),
+			EnsureResult.ExecEdgeCount);
+		Evidence->SetNumberField(
+			TEXT("parameterEdgeCount"),
+			EnsureResult.ParameterEdgeCount);
+
+		TSharedPtr<FJsonObject> Result =
+			MakeShared<FJsonObject>();
+		Result->SetBoolField(
+			TEXT("changed"),
+			EnsureResult.bChanged);
+		Result->SetBoolField(
+			TEXT("created"),
+			EnsureResult.bCreated);
+		Result->SetBoolField(
+			TEXT("repaired"),
+			EnsureResult.bRepaired);
+		Result->SetBoolField(
+			TEXT("compiled"),
+			EnsureResult.bCompiled);
+		Result->SetBoolField(
+			TEXT("verified"),
+			EnsureResult.bVerified);
+		Result->SetObjectField(TEXT("signature"), Signature);
+		Result->SetObjectField(TEXT("evidence"), Evidence);
+		return FMCPToolResult::Ok(Result);
+	}
+};
+
 // ─────────────────────────────────────────────────────────────
 // Registration
 // ─────────────────────────────────────────────────────────────
@@ -1302,6 +1458,8 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_GetWidgetHierarchy>());
 		Registry.Register(MakeShared<FTool_ListWidgetBlueprints>());
 		Registry.Register(MakeShared<FTool_BindWidgetEvent>());
+		Registry.Register(
+			MakeShared<FTool_EnsureWidgetEventHandler>());
 		RegisterAdvancedUITools(Registry);
 	}
 }

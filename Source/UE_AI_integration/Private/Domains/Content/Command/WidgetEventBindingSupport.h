@@ -19,6 +19,37 @@ struct FUpsertResult
 	FGuid CallNodeGuid;
 };
 
+struct FSignatureParameter
+{
+	FName Name;
+	FString Type;
+	bool bOut = false;
+	bool bReference = false;
+	bool bReturn = false;
+};
+
+struct FEnsureHandlerResult
+{
+	bool bChanged = false;
+	bool bCreated = false;
+	bool bRepaired = false;
+	bool bCompiled = false;
+	bool bVerified = false;
+	bool bCreatedHandlerGraph = false;
+	bool bCreatedEventNode = false;
+	bool bCreatedCallNode = false;
+	bool bGeneratedBinding = false;
+	int32 ExecEdgeCount = 0;
+	int32 ParameterEdgeCount = 0;
+	FName HandlerGraphName;
+	FName GeneratedBindingFunction;
+	FString SignatureFunctionPath;
+	FString HandlerFunctionPath;
+	FGuid EventNodeGuid;
+	FGuid CallNodeGuid;
+	TArray<FSignatureParameter> SignatureParameters;
+};
+
 /**
  * Creates or repairs a graph-backed UMG multicast event binding.
  *
@@ -34,6 +65,21 @@ bool Upsert(
 	const FString& FunctionName,
 	bool bAllowDeferredCompile,
 	FUpsertResult& OutResult,
+	FString& OutError,
+	FString& OutErrorCode);
+
+/**
+ * Ensures a complete, compiled component-event handler:
+ * exact delegate-shaped function graph, component-bound event, and a direct
+ * handler call. The operation is transactional and removes every graph/node
+ * it created if compilation or verification fails.
+ */
+bool EnsureHandler(
+	UWidgetBlueprint* WidgetBlueprint,
+	const FString& WidgetName,
+	const FString& EventName,
+	const FString& HandlerFunctionName,
+	FEnsureHandlerResult& OutResult,
 	FString& OutError,
 	FString& OutErrorCode);
 
