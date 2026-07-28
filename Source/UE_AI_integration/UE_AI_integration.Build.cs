@@ -46,6 +46,7 @@ public class UE_AI_integration : ModuleRules
 			// Materials
 			"MaterialEditor",
 			"RHI",
+			"RenderCore",
 
 			// Animation
 			"AnimGraph",

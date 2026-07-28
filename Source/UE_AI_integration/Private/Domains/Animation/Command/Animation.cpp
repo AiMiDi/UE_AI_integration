@@ -892,6 +892,9 @@ public:
 // ============================================================
 namespace UEAIIntegrationTools
 {
+	void RegisterAnimationInspectionQueryTools(FMCPToolRegistry& Registry);
+	void RegisterAnimationInspectionValidationTools(FMCPToolRegistry& Registry);
+
 	void RegisterAnimationTools(FMCPToolRegistry& Registry)
 	{
 		Registry.Register(MakeShared<FTool_CreateAnimBlueprint>());
@@ -904,5 +907,7 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_SetStateAnimation>());
 		Registry.Register(MakeShared<FTool_CreateBlendSpace>());
 		Registry.Register(MakeShared<FTool_SetBlendSpaceSamples>());
+		RegisterAnimationInspectionQueryTools(Registry);
+		RegisterAnimationInspectionValidationTools(Registry);
 	}
 }

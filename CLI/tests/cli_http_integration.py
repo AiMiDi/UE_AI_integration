@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
+import base64
+import hashlib
 import json
+import os
 import subprocess
 import tempfile
 import threading
@@ -41,6 +44,38 @@ def main() -> int:
             length = int(self.headers.get("Content-Length", "0"))
             request = json.loads(self.rfile.read(length))
             requests.append(request)
+            if self.path == "/api/execute":
+                artifact_content = b"cli artifact\n"
+                offset = int(request.get("params", {}).get("offset", 0))
+                chunk = artifact_content[offset : offset + 5]
+                next_offset = offset + len(chunk)
+                body = json.dumps(
+                    {
+                        "ok": True,
+                        "data": {
+                            "schema": "ue.artifact.v1",
+                            "artifactId": "artifact-cli-integration",
+                            "kind": "file",
+                            "mimeType": "application/octet-stream",
+                            "sizeBytes": len(artifact_content),
+                            "sha256": hashlib.sha256(
+                                artifact_content
+                            ).hexdigest(),
+                            "offset": offset,
+                            "nextOffset": next_offset,
+                            "eof": next_offset >= len(artifact_content),
+                            "contentBase64": base64.b64encode(chunk).decode(
+                                "ascii"
+                            ),
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             action = request["action"]
             statuses = {
                 "execute": "pending",
@@ -74,6 +109,36 @@ def main() -> int:
     endpoint = f"http://127.0.0.1:{server.server_port}"
 
     try:
+        precedence_environment = os.environ.copy()
+        precedence_environment["UE_PORT"] = "65535"
+        explicit_endpoint = subprocess.run(
+            common
+            + [
+                "doctor",
+                "--endpoint",
+                "http://127.0.0.1:9847",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=precedence_environment,
+        )
+        assert (
+            json.loads(explicit_endpoint.stdout)["editor"]["endpoint"]
+            == "http://127.0.0.1:9847"
+        )
+        environment_endpoint = subprocess.run(
+            common + ["doctor"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=precedence_environment,
+        )
+        assert (
+            json.loads(environment_endpoint.stdout)["editor"]["endpoint"]
+            == "http://127.0.0.1:65535"
+        )
+
         with tempfile.TemporaryDirectory(prefix="ue-workflow-cli-") as temporary:
             receipt_path = Path(temporary) / "receipt.json"
 
@@ -116,12 +181,36 @@ def main() -> int:
             run("rollback", "--receipt", str(receipt_path))
             final_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             assert final_receipt["status"] == "rolledBack"
+
+            artifact_path = Path(temporary) / "artifact.bin"
+            exported = run(
+                "operation",
+                "run",
+                "production.job.artifact.get",
+                "--params",
+                '{"jobId":"job-cli-integration","artifactId":"artifact-cli-integration"}',
+                "--request-id",
+                "request-cli-integration",
+                "--output",
+                str(artifact_path),
+            )
+            assert artifact_path.read_bytes() == b"cli artifact\n"
+            assert "contentBase64" not in exported["data"]
+            assert exported["data"]["artifactExport"]["bytes"] == 13
+            assert exported["data"]["artifactExport"]["chunks"] == 3
+            assert exported["data"]["artifactExport"][
+                "verifiedAgainstReceipt"
+            ]
+            assert exported["data"]["artifactExport"]["sha256"] == (
+                "sha256:"
+                + hashlib.sha256(b"cli artifact\n").hexdigest()
+            )
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
-    assert [request["action"] for request in requests] == [
+    assert [request["action"] for request in requests[:4]] == [
         "execute",
         "status",
         "resume",
@@ -134,6 +223,11 @@ def main() -> int:
     assert requests[2]["detailLevel"] == "full"
     assert "details" not in requests[2]
     assert requests[3]["approvePlanDigest"] == plan_digest
+    assert requests[4]["capability"] == "production.job.artifact.get"
+    assert requests[4]["requestId"] == "request-cli-integration"
+    assert requests[5]["params"]["offset"] == 5
+    assert "requestId" not in requests[5]
+    assert requests[6]["params"]["offset"] == 10
     return 0
 
 

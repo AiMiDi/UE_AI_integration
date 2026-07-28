@@ -1479,7 +1479,36 @@ public:
                         }
                     }
 
-                    digest_capabilities.push_back(entry);
+                    const auto admission =
+                        capability.dsl.value("admission", std::string{ "none" });
+                    if (admission == "editStep"
+                        || admission == "finalizer"
+                        || admission == "observeOnly")
+                    {
+                        json digest_entry = {
+                            { "id", capability.id },
+                            { "domain", capability.domain },
+                            { "kind", entry.value("kind", std::string{}) },
+                            { "inputSchema", capability.input_schema },
+                            { "dsl", capability.dsl },
+                        };
+                        if (const auto output = entry.find("output");
+                            output != entry.end())
+                        {
+                            digest_entry["output"] = *output;
+                        }
+                        if (const auto traits = entry.find("traits");
+                            traits != entry.end())
+                        {
+                            digest_entry["traits"] = *traits;
+                        }
+                        if (const auto requirements = entry.find("requires");
+                            requirements != entry.end())
+                        {
+                            digest_entry["requires"] = *requirements;
+                        }
+                        digest_capabilities.push_back(std::move(digest_entry));
+                    }
                     capabilities_.emplace(id, std::move(capability));
                 }
             }
@@ -2688,6 +2717,47 @@ const char* SeverityName(Severity severity) noexcept
     default:
         return "error";
     }
+}
+
+std::optional<std::string> Sha256File(
+    const std::filesystem::path& path)
+{
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream)
+    {
+        return std::nullopt;
+    }
+
+    Sha256 hasher;
+    std::array<std::uint8_t, 64 * 1024> buffer{};
+    while (stream)
+    {
+        stream.read(
+            reinterpret_cast<char*>(buffer.data()),
+            static_cast<std::streamsize>(buffer.size()));
+        const auto count = stream.gcount();
+        if (count > 0)
+        {
+            hasher.update(
+                buffer.data(),
+                static_cast<std::size_t>(count));
+        }
+    }
+    if (!stream.eof())
+    {
+        return std::nullopt;
+    }
+
+    const auto digest = hasher.finish();
+    constexpr char hex[] = "0123456789abcdef";
+    std::string result = "sha256:";
+    result.reserve(71);
+    for (const auto byte : digest)
+    {
+        result.push_back(hex[(byte >> 4) & 0x0f]);
+        result.push_back(hex[byte & 0x0f]);
+    }
+    return result;
 }
 
 } // namespace ue::workflow

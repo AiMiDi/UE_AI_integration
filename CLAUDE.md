@@ -27,9 +27,9 @@ names, MCP routing and documentation must agree with it.
 
 ## Invariants
 
-- There are exactly 212 capability IDs.
-- Domain counts are Blueprint 58, Scene 54, Content 59, Animation 10, AI 9,
-  Production 22.
+- The catalog contains six domain manifests. Capability and per-domain counts
+  are derived from those manifests and may grow; every previously shipped ID
+  remains a compatibility contract.
 - Capability IDs are lower-case dotted identifiers.
 - A manifest entry and an implementation must have a one-to-one mapping.
 - Domain code contains no UE version macros.

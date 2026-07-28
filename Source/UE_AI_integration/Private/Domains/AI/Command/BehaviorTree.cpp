@@ -627,6 +627,9 @@ public:
 // ─────────────────────────────────────────────────────────────
 namespace UEAIIntegrationTools
 {
+	void RegisterAIInspectionQueryTools(FMCPToolRegistry& Registry);
+	void RegisterAIInspectionValidationTools(FMCPToolRegistry& Registry);
+
 	void RegisterBehaviorTreeTools(FMCPToolRegistry& Registry)
 	{
 		Registry.Register(MakeShared<FTool_CreateBehaviorTree>());
@@ -638,5 +641,7 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_AddBTSelector>());
 		Registry.Register(MakeShared<FTool_AddBTSequence>());
 		Registry.Register(MakeShared<FTool_LinkBlackboardToTree>());
+		RegisterAIInspectionQueryTools(Registry);
+		RegisterAIInspectionValidationTools(Registry);
 	}
 }

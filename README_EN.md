@@ -13,8 +13,8 @@ but those versions have not all been compiled locally.
 
 ## Highlights
 
-- 212 manifest-driven Editor and PIE runtime capabilities.
-- Eleven stable MCP tools instead of exposing all 212 capabilities as tools.
+- 287 manifest-driven Editor and PIE runtime capabilities.
+- Eleven stable MCP tools instead of exposing all 287 capabilities as tools.
 - Six domain routers: Blueprint, Scene, Content, Animation, AI, and Production.
 - Dedicated PIE lifecycle, runtime object/widget/delegate, real input, and
   scenario operations.
@@ -24,11 +24,14 @@ but those versions have not all been compiled locally.
   the Game Thread.
 - The MCP bridge only connects to an already-running Unreal Editor. It never
   starts or terminates the Editor.
-- The server listens on `127.0.0.1:9847` by default. Clients can override the
-  port with `UE_PORT`.
+- The server listens on `127.0.0.1:9847` by default. The Editor, CLI, and MCP
+  bridge use the same `UE_PORT` environment override.
 - [UE Workflow DSL/CLI](docs/UE_WORKFLOW_DSL.md) combines deterministic
   single-asset edits into one planned, approved, and reversible execution;
   debugging sessions and long-running jobs stay outside Workflow.
+- [UE Engineering Copilot](docs/UE_ENGINEERING_COPILOT.md) adds performance and
+  trace evidence, automated tests, Blueprint analysis, asset auditing,
+  world/rendering diagnostics, and durable production jobs.
 - Workflow returns compact summaries by default; readback, diff, and structure
   snapshots are retrieved as explicit sections.
 - Capability discovery supports search, trait filters, and pagination, with at
@@ -57,12 +60,12 @@ manifests and does not infer categories from operation names.
 
 | Domain | Count | Scope |
 |---|---:|---|
-| Blueprint | 58 | Asset lifecycle, graphs, variables, components, interfaces, discovery, diff, validation |
-| Scene | 54 | Actors, PIE runtime, widget/delegate/input, viewport, world generation, foliage, navigation |
-| Content | 59 | Materials, DataTables, user types, Niagara, UMG authoring and animation |
-| Animation | 10 | Animation Blueprints, states, transitions, BlendSpaces |
-| AI | 9 | Behavior Trees and Blackboards |
-| Production | 22 | Sequencer, scenarios, module provenance, build, cook, and package |
+| Blueprint | 61 | Asset lifecycle, graphs, variables, components, call graphs, rule scans, diff, validation |
+| Scene | 74 | Actors, PIE runtime, World Partition, Data Layers, HLOD, PCG, rendering diagnostics |
+| Content | 69 | Asset query/dependency/audit, safe changes, materials, Niagara, and UMG |
+| Animation | 19 | Animation Blueprint, state machine, and BlendSpace authoring, inspection, validation, and diff |
+| AI | 17 | Behavior Tree and Blackboard authoring, inspection, references, validation, and diff |
+| Production | 47 | Durable jobs, trace, performance, tests, cook/package, source control, DDC, and BuildGraph |
 
 ## Requirements
 

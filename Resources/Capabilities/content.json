@@ -2836,6 +2836,514 @@
         "deferCompile": true,
         "risk": "safeWrite"
       }
+    },
+    {
+      "id": "content.asset.search",
+      "domain": "content",
+      "kind": "query",
+      "description": "Search Asset Registry metadata with deterministic ordering, offset pagination and bounded optional tags.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "pathPrefix": {
+            "type": "string"
+          },
+          "class": {
+            "type": "string"
+          },
+          "includeTags": {
+            "type": "boolean"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.asset.get",
+      "domain": "content",
+      "kind": "query",
+      "description": "Read one Asset Registry record and return a stable snapshot digest.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "includeTags": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.asset.dependencies",
+      "domain": "content",
+      "kind": "query",
+      "description": "Return a bounded package dependency graph for an asset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxDepth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.asset.referencers",
+      "domain": "content",
+      "kind": "query",
+      "description": "Return a bounded package referencer graph for an asset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxDepth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.asset.audit",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Audit a bounded content scope for redirectors and oversized packages using ue.finding.v1 records.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pathPrefix": {
+            "type": "string",
+            "pattern": "^/Game(?:/.*)?$"
+          },
+          "maxPackageBytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.static_mesh.inspect",
+      "domain": "content",
+      "kind": "query",
+      "description": "Inspect Static Mesh LODs, Nanite, collision, UV, lightmap, material, bounds and resource-size metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.texture.inspect",
+      "domain": "content",
+      "kind": "query",
+      "description": "Inspect Texture2D dimensions, format, compression, color space, mips, virtual-texture state and resource size.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.asset.change.plan",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Normalize and preflight up to 100 asset import, reimport, copy, move, rename, delete or redirector-fix actions and return an exact plan digest.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "properties": {
+              "persistence": {
+                "type": "string",
+                "enum": [
+                  "dirtyOnly",
+                  "saveOnSuccess"
+                ]
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "import",
+                        "reimport",
+                        "copy",
+                        "move",
+                        "rename",
+                        "delete",
+                        "fixRedirectors"
+                      ]
+                    },
+                    "source": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "destination": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sourceFile": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 100
+              }
+            },
+            "required": [
+              "actions"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "request"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.asset.change.execute",
+      "domain": "content",
+      "kind": "command",
+      "description": "Re-plan against current state and execute an approved asset change batch with one explicit persistence policy.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "properties": {
+              "persistence": {
+                "type": "string",
+                "enum": [
+                  "dirtyOnly",
+                  "saveOnSuccess"
+                ]
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "import",
+                        "reimport",
+                        "copy",
+                        "move",
+                        "rename",
+                        "delete",
+                        "fixRedirectors"
+                      ]
+                    },
+                    "source": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "destination": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sourceFile": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 100
+              }
+            },
+            "required": [
+              "actions"
+            ],
+            "additionalProperties": false
+          },
+          "approvePlanDigest": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "request",
+          "approvePlanDigest",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      }
+    },
+    {
+      "id": "content.asset.change.rollback",
+      "domain": "content",
+      "kind": "command",
+      "description": "Rollback an eligible asset change receipt in the same Editor process; reimport and redirector-fix receipts explicitly report unavailable.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "receiptId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "receiptId",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      }
     }
   ]
 }

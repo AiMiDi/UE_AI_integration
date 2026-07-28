@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -75,5 +76,7 @@ private:
 [[nodiscard]] std::string_view PlannerVersion() noexcept;
 [[nodiscard]] std::string_view DslVersion() noexcept;
 [[nodiscard]] const char* SeverityName(Severity severity) noexcept;
+[[nodiscard]] std::optional<std::string> Sha256File(
+    const std::filesystem::path& path);
 
 } // namespace ue::workflow

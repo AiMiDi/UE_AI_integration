@@ -34,6 +34,13 @@ public:
 		const TSharedPtr<FJsonObject>& Params,
 		TArray<FString>& OutErrors) const;
 
+	/** Return the immutable manifest input schema for executor-level context injection. */
+	const TSharedPtr<FJsonObject>* FindInputSchema(
+		const FString& CapabilityId) const
+	{
+		return CapabilitySchemas.Find(CapabilityId);
+	}
+
 	/** Manifest descriptors are authoritative for the public capability API. */
 	const TArray<TSharedPtr<FJsonObject>>& GetCapabilityDescriptors() const
 	{

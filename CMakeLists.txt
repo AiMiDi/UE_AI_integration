@@ -22,3 +22,7 @@ install(
     DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Capabilities/"
     DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow/Capabilities"
 )
+install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Contracts/"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow/Contracts/Engineering"
+)

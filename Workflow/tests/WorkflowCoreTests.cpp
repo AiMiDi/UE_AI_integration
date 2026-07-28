@@ -80,6 +80,27 @@ json minimal_workflow(std::string scope_kind, std::string asset)
 int main()
 {
     const std::filesystem::path root = UE_WORKFLOW_TEST_ROOT;
+    const auto hash_fixture =
+        std::filesystem::temp_directory_path()
+        / ("ue-workflow-sha256-"
+            + std::to_string(
+                std::chrono::steady_clock::now()
+                    .time_since_epoch()
+                    .count())
+            + ".txt");
+    {
+        std::ofstream stream(hash_fixture, std::ios::binary | std::ios::trunc);
+        stream << "abc";
+    }
+    const auto file_digest = ue::workflow::Sha256File(hash_fixture);
+    require(
+        file_digest
+            == "sha256:ba7816bf8f01cfea414140de5dae2223"
+               "b00361a396177a9cb410ff61f20015ad",
+        "streaming file SHA-256 is stable");
+    std::error_code hash_cleanup_error;
+    std::filesystem::remove(hash_fixture, hash_cleanup_error);
+
     ue::workflow::Engine engine;
     const auto loaded = engine.Load({
         root / "Workflow" / "Contracts",
@@ -596,6 +617,92 @@ int main()
     require(!copy_error, "contract mutation fixture copied");
     if (!copy_error)
     {
+        const auto mutation_capabilities = mutation_root / "Capabilities";
+        std::filesystem::copy(
+            root / "Resources" / "Capabilities",
+            mutation_capabilities,
+            std::filesystem::copy_options::recursive |
+                std::filesystem::copy_options::overwrite_existing,
+            copy_error);
+        require(!copy_error, "capability mutation fixture copied");
+        if (!copy_error)
+        {
+            const auto content_path = mutation_capabilities / "content.json";
+            auto content_manifest = json::parse(read_file(content_path));
+            content_manifest["capabilities"].push_back({
+                { "id", "content.test.nonworkflow" },
+                { "domain", "content" },
+                { "kind", "query" },
+                { "description", "Test-only non-workflow capability." },
+                { "inputSchema", {
+                    { "type", "object" },
+                    { "properties", json::object() },
+                    { "additionalProperties", false },
+                } },
+                { "traits", {
+                    { "readOnly", true },
+                    { "destructive", false },
+                    { "expensive", false },
+                } },
+                { "output", {
+                    { "kind", "json" },
+                } },
+                { "dsl", {
+                    { "admission", "none" },
+                    { "scopeKinds", json::array() },
+                    { "transactionDomain", "none" },
+                    { "deferCompile", false },
+                    { "risk", "readOnly" },
+                } },
+            });
+            {
+                std::ofstream stream(
+                    content_path,
+                    std::ios::binary | std::ios::trunc);
+                stream << content_manifest.dump(2) << "\n";
+            }
+
+            ue::workflow::Engine nonworkflow_engine;
+            const auto nonworkflow_loaded = nonworkflow_engine.Load({
+                mutation_root,
+                { mutation_capabilities },
+            });
+            require(nonworkflow_loaded.ok, "non-workflow capability fixture loads");
+            require(
+                nonworkflow_engine.CapabilityCount() == engine.CapabilityCount() + 1,
+                "non-workflow capability remains discoverable");
+            require(
+                nonworkflow_engine.ContractSetDigest() == engine.ContractSetDigest(),
+                "non-workflow capability does not churn workflow contract digest");
+
+            auto& added = content_manifest["capabilities"].back();
+            added["dsl"] = {
+                { "admission", "observeOnly" },
+                { "scopeKinds", json::array({ "widgetBlueprint" }) },
+                { "transactionDomain", "asset" },
+                { "deferCompile", false },
+                { "risk", "readOnly" },
+            };
+            {
+                std::ofstream stream(
+                    content_path,
+                    std::ios::binary | std::ios::trunc);
+                stream << content_manifest.dump(2) << "\n";
+            }
+            ue::workflow::Engine workflow_surface_engine;
+            const auto workflow_surface_loaded = workflow_surface_engine.Load({
+                mutation_root,
+                { mutation_capabilities },
+            });
+            require(
+                workflow_surface_loaded.ok,
+                "workflow-admitted capability fixture loads");
+            require(
+                workflow_surface_engine.ContractSetDigest()
+                    != engine.ContractSetDigest(),
+                "workflow-admitted capability participates in contract digest");
+        }
+
         const auto receipt_path = mutation_root / "receipt.schema.v1.json";
         auto receipt = json::parse(read_file(receipt_path));
         receipt["title"] = "Mutated receipt contract";

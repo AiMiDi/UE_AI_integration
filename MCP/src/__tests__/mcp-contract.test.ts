@@ -214,7 +214,7 @@ test("pages and filters capability summaries without emitting schemas by default
     assert.fail("Expected capability catalog as MCP text content");
   }
   const defaultPayload = JSON.parse(defaultResponse.content[0].text);
-  assert.equal(defaultPayload.total, 212);
+  assert.equal(defaultPayload.total, catalog.summary().capabilityCount);
   assert.equal(defaultPayload.offset, 0);
   assert.equal(defaultPayload.limit, 25);
   assert.equal(defaultPayload.hasMore, true);
@@ -280,7 +280,10 @@ test("keeps ue_context directory-only by default and pages full schemas by domai
     assert.fail("Expected context directory as MCP text content");
   }
   const directoryPayload = JSON.parse(directoryResponse.content[0].text);
-  assert.equal(directoryPayload.capabilityCount, 212);
+  assert.equal(
+    directoryPayload.capabilityCount,
+    catalog.summary().capabilityCount,
+  );
   assert.equal(Object.hasOwn(directoryPayload, "capabilities"), false);
 
   const domainResponse = handleContext(catalog, { domain: "blueprint" });
@@ -289,7 +292,10 @@ test("keeps ue_context directory-only by default and pages full schemas by domai
     assert.fail("Expected paged context as MCP text content");
   }
   const domainPayload = JSON.parse(domainResponse.content[0].text);
-  assert.equal(domainPayload.total, 58);
+  assert.equal(
+    domainPayload.total,
+    catalog.forDomain("blueprint").length,
+  );
   assert.equal(domainPayload.limit, 10);
   assert.equal(domainPayload.capabilities.length, 10);
   assert.ok(
@@ -333,6 +339,8 @@ test("forwards live capability filters and pagination directly to the editor", a
     readOnly: true,
     expensive: false,
     outputKind: "json",
+    risk: "readOnly",
+    availableOnly: true,
     query: "module",
     offset: 5,
     limit: 7,
@@ -347,6 +355,8 @@ test("forwards live capability filters and pagination directly to the editor", a
     destructive: undefined,
     expensive: false,
     outputKind: "json",
+    risk: "readOnly",
+    availableOnly: true,
     offset: 5,
     limit: 7,
     detail: "summary",

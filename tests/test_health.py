@@ -10,7 +10,7 @@ import sys
 from mcp_client import MCPApiError, UEAIIntegrationClient
 
 
-EXPECTED_DOMAIN_COUNTS = {
+BASELINE_DOMAIN_COUNTS = {
     "blueprint": 58,
     "scene": 54,
     "content": 59,
@@ -44,7 +44,7 @@ def main() -> int:
     print(f"  engineVersion:{health.get('engineVersion')}")
     print(f"  projectName:  {health.get('projectName')}")
     print(f"  capabilities: {len(capabilities)}")
-    for domain, expected in EXPECTED_DOMAIN_COUNTS.items():
+    for domain, expected in BASELINE_DOMAIN_COUNTS.items():
         print(f"  {domain:10} {counts[domain]:3} / {expected}")
 
     errors: list[str] = []
@@ -54,15 +54,24 @@ def main() -> int:
         errors.append(f"unexpected plugin: {health.get('plugin')!r}")
     if health.get("version") != "0.3.0":
         errors.append(f"unexpected version: {health.get('version')!r}")
-    if health.get("capabilityCount") != 212:
+    if health.get("capabilityCount") != len(capabilities):
         errors.append(
-            f"health reported {health.get('capabilityCount')!r} capabilities"
+            "health and catalog disagree: "
+            f"{health.get('capabilityCount')!r} vs {len(capabilities)}"
         )
-    if len(capabilities) != 212:
-        errors.append(f"expected 212 capabilities, got {len(capabilities)}")
-    if dict(counts) != EXPECTED_DOMAIN_COUNTS:
+    if len(capabilities) < sum(BASELINE_DOMAIN_COUNTS.values()):
         errors.append(
-            f"domain counts differ: expected {EXPECTED_DOMAIN_COUNTS}, got {dict(counts)}"
+            "capability catalog regressed below the shipped 212-operation baseline"
+        )
+    for domain, baseline in BASELINE_DOMAIN_COUNTS.items():
+        if counts[domain] < baseline:
+            errors.append(
+                f"{domain} regressed below baseline {baseline}: {counts[domain]}"
+            )
+    if health.get("domainCounts") != dict(counts):
+        errors.append(
+            "health domain counts differ from catalog: "
+            f"{health.get('domainCounts')!r} vs {dict(counts)!r}"
         )
 
     if errors:

@@ -49,6 +49,7 @@ function capabilityMatches(capability, args) {
             capability.traits.expensive === args.expensive) &&
         (args.outputKind === undefined ||
             capability.output.kind === args.outputKind) &&
+        (args.risk === undefined || capability.dsl?.risk === args.risk) &&
         (query === undefined ||
             query.length === 0 ||
             capability.id.toLocaleLowerCase().includes(query) ||
@@ -62,6 +63,10 @@ function summarizeCapability(capability) {
         description: capability.description,
         traits: capability.traits,
         output: capability.output,
+        ...(capability.dsl === undefined ? {} : { risk: capability.dsl.risk }),
+        ...(capability.requires === undefined
+            ? {}
+            : { requires: capability.requires }),
     };
 }
 function pageLocalCapabilities(catalog, args, detail, defaultLimit, maxLimit) {
@@ -85,6 +90,12 @@ function pageLocalCapabilities(catalog, args, detail, defaultLimit, maxLimit) {
 export async function handleCapabilities(catalog, client, args) {
     try {
         if (!args.live) {
+            if (args.availableOnly) {
+                throw new UEApiError({
+                    code: "editor_required",
+                    message: "availableOnly requires live=true because plugin and module availability is Editor-specific.",
+                });
+            }
             return formatJsonResponse({
                 source: "local",
                 ...catalog.summary(),
@@ -100,6 +111,8 @@ export async function handleCapabilities(catalog, client, args) {
             destructive: args.destructive,
             expensive: args.expensive,
             outputKind: args.outputKind,
+            risk: args.risk,
+            availableOnly: args.availableOnly,
             offset: args.offset ?? 0,
             limit: args.operation ? 1 : (args.limit ?? 25),
             detail: args.operation ? "full" : (args.detail ?? "summary"),
@@ -165,6 +178,14 @@ export function createMcpServer(options = {}) {
         destructive: z.boolean().optional(),
         expensive: z.boolean().optional(),
         outputKind: z.enum(["json", "image"]).optional(),
+        risk: z
+            .enum(["readOnly", "safeWrite", "confirmWrite", "notOpen"])
+            .optional(),
+        availableOnly: z
+            .boolean()
+            .optional()
+            .default(false)
+            .describe("With live=true, return only capabilities available in the current Editor."),
         offset: z.number().int().min(0).optional().default(0),
         limit: z.number().int().min(1).max(100).optional().default(25),
         detail: z.enum(["summary", "full"]).optional().default("summary"),
@@ -182,6 +203,8 @@ export function createMcpServer(options = {}) {
         destructive: args.destructive,
         expensive: args.expensive,
         outputKind: args.outputKind,
+        risk: args.risk,
+        availableOnly: args.availableOnly,
         offset: args.offset,
         limit: args.limit,
         detail: args.detail,
@@ -204,6 +227,9 @@ export function createMcpServer(options = {}) {
         destructive: z.boolean().optional(),
         expensive: z.boolean().optional(),
         outputKind: z.enum(["json", "image"]).optional(),
+        risk: z
+            .enum(["readOnly", "safeWrite", "confirmWrite", "notOpen"])
+            .optional(),
         offset: z.number().int().min(0).optional(),
         limit: z.number().int().min(1).max(25).optional(),
     }, async (args) => handleContext(catalog, {
@@ -215,6 +241,7 @@ export function createMcpServer(options = {}) {
         destructive: args.destructive,
         expensive: args.expensive,
         outputKind: args.outputKind,
+        risk: args.risk,
         offset: args.offset,
         limit: args.limit,
     }));

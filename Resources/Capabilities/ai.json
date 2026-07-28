@@ -294,6 +294,86 @@
       "output": {
         "kind": "json"
       }
+    },
+    {
+      "id": "ai.asset.list",
+      "domain": "ai",
+      "kind": "query",
+      "description": "List Behavior Tree and Blackboard assets with bounded results.",
+      "inputSchema": { "type": "object", "properties": { "type": { "type": "string", "enum": ["all", "behaviorTree", "blackboard"] }, "packagePath": { "type": "string" }, "limit": { "type": "integer", "minimum": 1, "maximum": 500 } }, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "ai.behavior_tree.get",
+      "domain": "ai",
+      "kind": "query",
+      "description": "Get a stable Behavior Tree topology snapshot.",
+      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "ai.behavior_tree.validate",
+      "domain": "ai",
+      "kind": "validation",
+      "description": "Validate Behavior Tree root, Blackboard binding, topology, and referenced node instances.",
+      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "ai.behavior_tree.diff",
+      "domain": "ai",
+      "kind": "validation",
+      "description": "Diff two stable Behavior Tree snapshots.",
+      "inputSchema": { "type": "object", "properties": { "left": { "type": "string" }, "right": { "type": "string" } }, "required": ["left", "right"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "ai.behavior_tree.references",
+      "domain": "ai",
+      "kind": "query",
+      "description": "List the Blackboard asset and statically referenced Behavior Tree node classes.",
+      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "ai.blackboard.get",
+      "domain": "ai",
+      "kind": "query",
+      "description": "Get a stable Blackboard parent and key snapshot.",
+      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "ai.blackboard.validate",
+      "domain": "ai",
+      "kind": "validation",
+      "description": "Validate Blackboard key names, key classes, duplicates, and parent cycles.",
+      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "ai.blackboard.diff",
+      "domain": "ai",
+      "kind": "validation",
+      "description": "Diff two stable Blackboard snapshots.",
+      "inputSchema": { "type": "object", "properties": { "left": { "type": "string" }, "right": { "type": "string" } }, "required": ["left", "right"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
     }
   ]
 }

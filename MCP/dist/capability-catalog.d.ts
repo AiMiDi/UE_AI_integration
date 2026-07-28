@@ -4,6 +4,15 @@ export type CapabilityKind = "query" | "command" | "validation";
 export type CapabilityOutputKind = "json" | "image";
 export type CapabilityDslAdmission = "editStep" | "finalizer" | "observeOnly" | "interactiveOnly" | "none";
 export type CapabilityDslRisk = "readOnly" | "safeWrite" | "confirmWrite" | "notOpen";
+export interface CapabilityRequirements {
+    plugins?: string[];
+    modules?: string[];
+    platforms?: string[];
+    engine?: {
+        min?: string;
+        maxExclusive?: string;
+    };
+}
 export interface CapabilityInputSchema {
     type: "object";
     properties: Record<string, unknown>;
@@ -33,6 +42,7 @@ export interface CapabilityDescriptor {
         kind: CapabilityOutputKind;
     };
     dsl?: CapabilityDslMetadata;
+    requires?: CapabilityRequirements;
 }
 export interface CapabilityManifest {
     schemaVersion: 2;

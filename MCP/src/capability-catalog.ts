@@ -26,6 +26,16 @@ export type CapabilityDslRisk =
   | "confirmWrite"
   | "notOpen";
 
+export interface CapabilityRequirements {
+  plugins?: string[];
+  modules?: string[];
+  platforms?: string[];
+  engine?: {
+    min?: string;
+    maxExclusive?: string;
+  };
+}
+
 export interface CapabilityInputSchema {
   type: "object";
   properties: Record<string, unknown>;
@@ -57,6 +67,7 @@ export interface CapabilityDescriptor {
     kind: CapabilityOutputKind;
   };
   dsl?: CapabilityDslMetadata;
+  requires?: CapabilityRequirements;
 }
 
 export interface CapabilityManifest {
@@ -186,6 +197,101 @@ function parseDslMetadata(
   };
 }
 
+function parseStringArray(
+  value: unknown,
+  location: string,
+): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    !Array.isArray(value) ||
+    value.some(
+      (item) => typeof item !== "string" || item.trim().length === 0,
+    )
+  ) {
+    throw new CapabilityManifestError(
+      `${location} must be an array of non-empty strings`,
+    );
+  }
+  return [...new Set(value as string[])];
+}
+
+function parseRequirements(
+  value: unknown,
+  location: string,
+): CapabilityRequirements | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const requirements = requireRecord(value, location);
+  const allowedFields = new Set([
+    "plugins",
+    "modules",
+    "platforms",
+    "engine",
+  ]);
+  for (const field of Object.keys(requirements)) {
+    if (!allowedFields.has(field)) {
+      throw new CapabilityManifestError(
+        `${location}.${field} is not a supported requirement`,
+      );
+    }
+  }
+
+  let engine: CapabilityRequirements["engine"];
+  if (requirements.engine !== undefined) {
+    const engineRecord = requireRecord(
+      requirements.engine,
+      `${location}.engine`,
+    );
+    for (const field of Object.keys(engineRecord)) {
+      if (field !== "min" && field !== "maxExclusive") {
+        throw new CapabilityManifestError(
+          `${location}.engine.${field} is not supported`,
+        );
+      }
+    }
+    const min =
+      engineRecord.min === undefined
+        ? undefined
+        : requireString(engineRecord, "min", `${location}.engine`);
+    const maxExclusive =
+      engineRecord.maxExclusive === undefined
+        ? undefined
+        : requireString(
+            engineRecord,
+            "maxExclusive",
+            `${location}.engine`,
+          );
+    engine = {
+      ...(min === undefined ? {} : { min }),
+      ...(maxExclusive === undefined ? {} : { maxExclusive }),
+    };
+  }
+
+  const plugins = parseStringArray(
+    requirements.plugins,
+    `${location}.plugins`,
+  );
+  const modules = parseStringArray(
+    requirements.modules,
+    `${location}.modules`,
+  );
+  const platforms = parseStringArray(
+    requirements.platforms,
+    `${location}.platforms`,
+  );
+
+  return {
+    ...(plugins === undefined ? {} : { plugins }),
+    ...(modules === undefined ? {} : { modules }),
+    ...(platforms === undefined ? {} : { platforms }),
+    ...(engine === undefined ? {} : { engine }),
+  };
+}
+
 function parseCapability(
   value: unknown,
   domain: CapabilityDomain,
@@ -286,6 +392,14 @@ function parseCapability(
       ? {}
       : {
           dsl: parseDslMetadata(capability.dsl, `${location}.dsl`),
+        }),
+    ...(capability.requires === undefined
+      ? {}
+      : {
+          requires: parseRequirements(
+            capability.requires,
+            `${location}.requires`,
+          ),
         }),
   };
 }

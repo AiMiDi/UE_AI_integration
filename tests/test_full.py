@@ -59,8 +59,11 @@ def main() -> int:
     for failure in failures:
         print(f"FAIL: {failure}")
 
-    if len(capabilities) != 212:
-        print(f"FAIL: expected 212 capabilities, got {len(capabilities)}")
+    if len(capabilities) < 212:
+        print(
+            "FAIL: capability catalog regressed below the 212-operation baseline, "
+            f"got {len(capabilities)}"
+        )
         return 1
     return 1 if failures else 0
 

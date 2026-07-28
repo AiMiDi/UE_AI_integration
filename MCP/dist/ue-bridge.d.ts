@@ -4,7 +4,7 @@
  * The MCP process never launches, owns, or shuts down Unreal Editor. It only
  * connects to an editor that is already running the plugin.
  */
-import type { CapabilityDescriptor, CapabilityDomain, CapabilityKind, CapabilityOutputKind } from "./capability-catalog.js";
+import type { CapabilityDescriptor, CapabilityDomain, CapabilityDslRisk, CapabilityKind, CapabilityOutputKind } from "./capability-catalog.js";
 export declare const UE_PORT: number;
 export declare const UE_BASE_URL: string;
 export declare const REQUEST_TIMEOUT_MS: number;
@@ -54,6 +54,8 @@ export interface UECapabilityQuery {
     destructive?: boolean;
     expensive?: boolean;
     outputKind?: CapabilityOutputKind;
+    risk?: CapabilityDslRisk;
+    availableOnly?: boolean;
     offset?: number;
     limit?: number;
     detail?: "summary" | "full";

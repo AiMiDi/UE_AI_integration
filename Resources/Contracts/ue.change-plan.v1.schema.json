@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ue-ai-integration.local/contracts/ue.change-plan.v1.schema.json",
+  "title": "UE non-workflow change plan",
+  "type": "object",
+  "required": [
+    "schema",
+    "domain",
+    "risk",
+    "persistence",
+    "planDigest"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ue.change-plan.v1"
+    },
+    "domain": {
+      "type": "string",
+      "minLength": 1
+    },
+    "action": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "string"
+    },
+    "risk": {
+      "enum": [
+        "safeWrite",
+        "confirmWrite"
+      ]
+    },
+    "persistence": {
+      "enum": [
+        "dirtyOnly",
+        "sessionOnly",
+        "saveOnSuccess",
+        "external"
+      ]
+    },
+    "rollbackBoundary": {
+      "type": "string"
+    },
+    "changesState": {
+      "type": "boolean"
+    },
+    "planDigest": {
+      "type": "string",
+      "pattern": "^(sha256:)?[a-fA-F0-9]{64}$"
+    }
+  },
+  "additionalProperties": true
+}

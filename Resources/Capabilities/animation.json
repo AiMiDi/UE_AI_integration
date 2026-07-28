@@ -458,6 +458,96 @@
       "output": {
         "kind": "json"
       }
+    },
+    {
+      "id": "animation.asset.list",
+      "domain": "animation",
+      "kind": "query",
+      "description": "List Animation Blueprints, Blend Spaces, or animation assets with bounded results.",
+      "inputSchema": { "type": "object", "properties": { "type": { "type": "string", "enum": ["all", "animBlueprint", "blendSpace", "animationAsset"] }, "packagePath": { "type": "string" }, "limit": { "type": "integer", "minimum": 1, "maximum": 500 } }, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "animation.asset.get",
+      "domain": "animation",
+      "kind": "query",
+      "description": "Get a stable snapshot for a supported animation asset.",
+      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "animation.blueprint.get",
+      "domain": "animation",
+      "kind": "query",
+      "description": "Get a stable Animation Blueprint graph and state-machine snapshot.",
+      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "animation.blueprint.validate",
+      "domain": "animation",
+      "kind": "validation",
+      "description": "Validate Animation Blueprint Skeleton, state, transition endpoint, and rule-graph structure.",
+      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "animation.blueprint.diff",
+      "domain": "animation",
+      "kind": "validation",
+      "description": "Diff two stable Animation Blueprint snapshots.",
+      "inputSchema": { "type": "object", "properties": { "left": { "type": "string" }, "right": { "type": "string" } }, "required": ["left", "right"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "animation.state_machine.get",
+      "domain": "animation",
+      "kind": "query",
+      "description": "Get one state-machine topology from an Animation Blueprint.",
+      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" }, "stateMachine": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "animation.blend_space.get",
+      "domain": "animation",
+      "kind": "query",
+      "description": "Get a stable Blend Space axes and samples snapshot.",
+      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "animation.blend_space.validate",
+      "domain": "animation",
+      "kind": "validation",
+      "description": "Validate Blend Space axes, sample ranges, animations, and Skeleton compatibility.",
+      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "animation.blend_space.diff",
+      "domain": "animation",
+      "kind": "validation",
+      "description": "Diff two stable Blend Space snapshots.",
+      "inputSchema": { "type": "object", "properties": { "left": { "type": "string" }, "right": { "type": "string" } }, "required": ["left", "right"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
     }
   ]
 }

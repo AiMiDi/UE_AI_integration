@@ -2285,6 +2285,148 @@
       "output": {
         "kind": "json"
       }
+    },
+    {
+      "id": "blueprint.scan",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Run bounded static engineering rules over one Blueprint or a Blueprint path scope and return stable ue.finding.v1 records.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pathPrefix": {
+            "type": "string",
+            "pattern": "^/Game(?:/.*)?$"
+          },
+          "assetLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "findingLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "blueprint.call_graph.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Build a bounded cross-asset Blueprint and native function call graph using stable asset, graph, node GUID and function identities.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pathPrefix": {
+            "type": "string",
+            "pattern": "^/Game(?:/.*)?$"
+          },
+          "assetLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "nodeLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "blueprint.findings.correlate",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Correlate a prior Blueprint scan with explicitly supplied runtime node evidence; absent providers remain unavailable rather than being treated as clean.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scanId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "observedNodeIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 5000
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "scanId",
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
     }
   ]
 }

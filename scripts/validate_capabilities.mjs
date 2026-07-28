@@ -19,7 +19,7 @@ const legacyHandlersRoot = path.join(
   "Handlers"
 );
 
-const expectedCounts = Object.freeze({
+const baselineCounts = Object.freeze({
   blueprint: 58,
   scene: 54,
   content: 59,
@@ -27,7 +27,7 @@ const expectedCounts = Object.freeze({
   ai: 9,
   production: 22
 });
-const expectedCapabilityTotal = 212;
+const baselineCapabilityTotal = 212;
 const addedCapabilityIds = new Set([
   "blueprint.asset.compile",
   "blueprint.asset.save",
@@ -77,11 +77,11 @@ const addedCapabilityIds = new Set([
   "production.build.target",
   "production.build.job.get"
 ]);
-const expectedDomains = new Set(Object.keys(expectedCounts));
+const expectedDomains = new Set(Object.keys(baselineCounts));
 const validKinds = new Set(["query", "command", "validation"]);
 const validOutputKinds = new Set(["json", "image"]);
 const validBuckets = new Set(["Query", "Command", "Validation"]);
-const idPattern = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*){2,}$/;
+const idPattern = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/;
 const errors = [];
 
 function fail(message) {
@@ -110,7 +110,8 @@ const manifestIds = new Set();
 const manifestById = new Map();
 let manifestTotal = 0;
 
-for (const [domain, expectedCount] of Object.entries(expectedCounts)) {
+const actualDomainCounts = {};
+for (const [domain, baselineCount] of Object.entries(baselineCounts)) {
   const manifestPath = path.join(manifestsRoot, `${domain}.json`);
   if (!fs.existsSync(manifestPath)) {
     fail(`Missing manifest: ${path.relative(projectRoot, manifestPath)}`);
@@ -135,11 +136,12 @@ for (const [domain, expectedCount] of Object.entries(expectedCounts)) {
     fail(`${domain}.json capabilities must be an array`);
     continue;
   }
-  if (manifest.capabilities.length !== expectedCount) {
+  if (manifest.capabilities.length < baselineCount) {
     fail(
-      `${domain}.json expected ${expectedCount} capabilities, found ${manifest.capabilities.length}`
+      `${domain}.json must preserve at least ${baselineCount} shipped capabilities, found ${manifest.capabilities.length}`
     );
   }
+  actualDomainCounts[domain] = manifest.capabilities.length;
 
   for (const [index, capability] of manifest.capabilities.entries()) {
     const location = `${domain}.json capabilities[${index}]`;
@@ -207,6 +209,59 @@ for (const [domain, expectedCount] of Object.entries(expectedCounts)) {
     ) {
       fail(`${location}.output.kind must be json or image`);
     }
+    if (capability.requires !== undefined) {
+      if (!isPlainObject(capability.requires)) {
+        fail(`${location}.requires must be an object`);
+      } else {
+        const allowedRequirementFields = new Set([
+          "plugins",
+          "modules",
+          "platforms",
+          "engine"
+        ]);
+        for (const field of Object.keys(capability.requires)) {
+          if (!allowedRequirementFields.has(field)) {
+            fail(`${location}.requires.${field} is not supported`);
+          }
+        }
+        for (const field of ["plugins", "modules", "platforms"]) {
+          const value = capability.requires[field];
+          if (
+            value !== undefined &&
+            (!Array.isArray(value) ||
+              value.some(
+                (item) =>
+                  typeof item !== "string" || item.trim().length === 0
+              ))
+          ) {
+            fail(
+              `${location}.requires.${field} must be an array of non-empty strings`
+            );
+          }
+        }
+        if (capability.requires.engine !== undefined) {
+          const engine = capability.requires.engine;
+          if (!isPlainObject(engine)) {
+            fail(`${location}.requires.engine must be an object`);
+          } else {
+            for (const field of Object.keys(engine)) {
+              if (field !== "min" && field !== "maxExclusive") {
+                fail(
+                  `${location}.requires.engine.${field} is not supported`
+                );
+              } else if (
+                typeof engine[field] !== "string" ||
+                engine[field].trim().length === 0
+              ) {
+                fail(
+                  `${location}.requires.engine.${field} must be a non-empty string`
+                );
+              }
+            }
+          }
+        }
+      }
+    }
   }
   manifestTotal += manifest.capabilities.length;
 }
@@ -217,19 +272,16 @@ const unexpectedManifestFiles = fs.existsSync(manifestsRoot)
       .filter(
         (name) =>
           name.endsWith(".json") &&
-          !Object.hasOwn(expectedCounts, path.basename(name, ".json"))
+          !Object.hasOwn(baselineCounts, path.basename(name, ".json"))
       )
   : [];
 if (unexpectedManifestFiles.length > 0) {
   fail(`Unexpected capability manifests: ${unexpectedManifestFiles.join(", ")}`);
 }
 
-if (
-  manifestTotal !== expectedCapabilityTotal ||
-  manifestIds.size !== expectedCapabilityTotal
-) {
+if (manifestTotal < baselineCapabilityTotal || manifestIds.size !== manifestTotal) {
   fail(
-    `Manifest catalog must contain ${expectedCapabilityTotal} unique capabilities; total=${manifestTotal}, unique=${manifestIds.size}`
+    `Manifest catalog must preserve at least ${baselineCapabilityTotal} unique capabilities; total=${manifestTotal}, unique=${manifestIds.size}`
   );
 }
 for (const id of addedCapabilityIds) {
@@ -315,12 +367,9 @@ for (const handlerPath of handlerFiles) {
   }
 }
 
-if (
-  handlerIdTotal !== expectedCapabilityTotal ||
-  handlerIds.size !== expectedCapabilityTotal
-) {
+if (handlerIdTotal !== manifestTotal || handlerIds.size !== manifestIds.size) {
   fail(
-    `Handlers must expose ${expectedCapabilityTotal} unique capabilities; total=${handlerIdTotal}, unique=${handlerIds.size}`
+    `Handlers must exactly match the manifest catalog; manifest=${manifestTotal}, handlerTotal=${handlerIdTotal}, handlerUnique=${handlerIds.size}`
   );
 }
 const missingFromHandlers = [...manifestIds].filter((id) => !handlerIds.has(id));
@@ -348,10 +397,10 @@ console.log(
     {
       ok: true,
       schemaVersion: 2,
-      manifests: Object.keys(expectedCounts).length,
+      manifests: Object.keys(baselineCounts).length,
       handlers: handlerFiles.length,
       capabilities: manifestIds.size,
-      domainCounts: expectedCounts,
+      domainCounts: actualDomainCounts,
       kindCounts
     },
     null,

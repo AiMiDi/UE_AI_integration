@@ -9,6 +9,7 @@ class FMCPToolRegistry;
 namespace UEAIIntegration::Infrastructure
 {
 class FPIESessionController;
+class FProductionJobRuntime;
 
 /**
  * Owns the asynchronous production jobs exposed by the production domain.
@@ -36,6 +37,9 @@ public:
 	FMCPToolResult GetLoadedModule(const TSharedPtr<FJsonObject>& Params) const;
 	FMCPToolResult StartBuild(const TSharedPtr<FJsonObject>& Params);
 	FMCPToolResult GetBuildJob(const TSharedPtr<FJsonObject>& Params) const;
+	FMCPToolResult ExecuteProductionJobOperation(
+		const FString& CapabilityId,
+		const TSharedPtr<FJsonObject>& Params);
 
 private:
 	struct FScenarioArtifact
@@ -136,5 +140,6 @@ private:
 	FString LastLiveCodingPatchResult = TEXT("none");
 	FDelegateHandle LiveCodingPatchHandle;
 	FDateTime InitializedAtUtc;
+	TUniquePtr<FProductionJobRuntime> JobRuntime;
 };
 }

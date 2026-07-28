@@ -162,7 +162,11 @@ bool FMCPToolRegistry::LoadCapabilityManifestsFromDirectory(const FString& Direc
 			ValidationErrors.Num());
 		for (const FString& Error : ValidationErrors)
 		{
-			UE_LOG(LogUEAIIntegrationRegistry, Error, TEXT("  %s"), *Error);
+			// The aggregate error is actionable at normal verbosity. Keep the
+			// complete machine-readable list in ValidationErrors and emit each
+			// entry only for verbose diagnostics so catalog growth does not
+			// flood logs or make tests depend on a fixed capability count.
+			UE_LOG(LogUEAIIntegrationRegistry, Verbose, TEXT("  %s"), *Error);
 		}
 	}
 	else

@@ -6,6 +6,7 @@
 #include "HAL/PlatformFileManager.h"
 #include "HAL/PlatformMisc.h"
 #include "Infrastructure/PIESessionController.h"
+#include "Infrastructure/ProductionJobRuntime.h"
 #include "Interfaces/IPluginManager.h"
 #include "JsonUtils/JsonPointer.h"
 #include "Misc/App.h"
@@ -77,7 +78,8 @@ namespace
 			*FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower));
 	}
 
-	TSharedPtr<FJsonObject> CopyObject(const TSharedPtr<FJsonObject>& Source)
+	TSharedPtr<FJsonObject> CopyControllerJsonObject(
+		const TSharedPtr<FJsonObject>& Source)
 	{
 		TSharedPtr<FJsonObject> Copy = MakeShared<FJsonObject>();
 		if (Source.IsValid())
@@ -280,6 +282,7 @@ FProductionRuntimeController::FProductionRuntimeController(
 	: Registry(InRegistry)
 	, PIEController(InPIEController)
 	, InitializedAtUtc(FDateTime::UtcNow())
+	, JobRuntime(MakeUnique<FProductionJobRuntime>())
 {
 	IFileManager::Get().MakeDirectory(*ScenarioDirectory(), true);
 }
@@ -326,6 +329,24 @@ void FProductionRuntimeController::Tick(float DeltaTime)
 {
 	TickScenario();
 	TickBuild();
+	if (JobRuntime.IsValid())
+	{
+		JobRuntime->Tick(DeltaTime);
+	}
+}
+
+FMCPToolResult FProductionRuntimeController::ExecuteProductionJobOperation(
+	const FString& CapabilityId,
+	const TSharedPtr<FJsonObject>& Params)
+{
+	if (!JobRuntime.IsValid())
+	{
+		return FMCPToolResult::Error(
+			TEXT("The production job runtime is unavailable."),
+			TEXT("job_runtime_unavailable"),
+			503);
+	}
+	return JobRuntime->Execute(CapabilityId, Params);
 }
 
 FMCPToolResult FProductionRuntimeController::ValidateScenario(
@@ -1400,7 +1421,9 @@ bool FProductionRuntimeController::ExecuteScenarioStep(
 	TSharedPtr<FJsonObject> ToolParams = MakeShared<FJsonObject>();
 	if (Step->HasTypedField<EJson::Object>(TEXT("params")))
 	{
-		ToolParams = CopyObject(Step->GetObjectField(TEXT("params")));
+		ToolParams =
+			CopyControllerJsonObject(
+				Step->GetObjectField(TEXT("params")));
 	}
 	TSharedPtr<FJsonValue> ResolvedParamsValue;
 	if (!ResolveScenarioValue(
@@ -1481,7 +1504,8 @@ bool FProductionRuntimeController::ExecuteScenarioStep(
 	Receipt->SetNumberField(
 		TEXT("elapsedMs"),
 		(FPlatformTime::Seconds() - Run.StepStartedAtSeconds) * 1000.0);
-	TSharedPtr<FJsonObject> ReceiptData = CopyObject(StepResult);
+	TSharedPtr<FJsonObject> ReceiptData =
+		CopyControllerJsonObject(StepResult);
 	ReceiptData->RemoveField(TEXT("image_base64"));
 	Receipt->SetObjectField(TEXT("data"), ReceiptData);
 	Run.StepReceipts.Add(MakeShared<FJsonValueObject>(Receipt));

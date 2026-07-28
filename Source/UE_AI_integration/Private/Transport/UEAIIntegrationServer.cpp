@@ -4,8 +4,10 @@
 #include "Dom/JsonValue.h"
 #include "HttpServerModule.h"
 #include "Interfaces/IPluginManager.h"
+#include "HAL/PlatformProperties.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
+#include "Modules/ModuleManager.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Tools/MCPToolRegistry.h"
@@ -82,12 +84,137 @@ bool DescriptorMatchesTrait(const TSharedPtr<FJsonObject>& Descriptor, const FSt
 	       Actual == Expected.GetValue();
 }
 
+int32 CompareEngineVersionComponents(
+	const FEngineVersion& Left,
+	const FEngineVersion& Right)
+{
+	if (Left.GetMajor() != Right.GetMajor())
+	{
+		return Left.GetMajor() < Right.GetMajor() ? -1 : 1;
+	}
+	if (Left.GetMinor() != Right.GetMinor())
+	{
+		return Left.GetMinor() < Right.GetMinor() ? -1 : 1;
+	}
+	if (Left.GetPatch() != Right.GetPatch())
+	{
+		return Left.GetPatch() < Right.GetPatch() ? -1 : 1;
+	}
+	return 0;
+}
+
+TSharedPtr<FJsonObject> DecorateCapabilityAvailability(
+	const TSharedPtr<FJsonObject>& Descriptor)
+{
+	TSharedPtr<FJsonObject> Decorated = MakeShared<FJsonObject>();
+	if (Descriptor.IsValid())
+	{
+		Decorated->Values = Descriptor->Values;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> Reasons;
+	const TSharedPtr<FJsonObject>* Requirements = nullptr;
+	if (Descriptor.IsValid()
+		&& Descriptor->TryGetObjectField(TEXT("requires"), Requirements)
+		&& Requirements
+		&& Requirements->IsValid())
+	{
+		if ((*Requirements)->HasTypedField<EJson::Array>(TEXT("plugins")))
+		{
+			for (const TSharedPtr<FJsonValue>& Value :
+				(*Requirements)->GetArrayField(TEXT("plugins")))
+			{
+				const FString PluginName = Value->AsString();
+				const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(PluginName);
+				if (!Plugin.IsValid() || !Plugin->IsEnabled())
+				{
+					Reasons.Add(MakeShared<FJsonValueString>(
+						FString::Printf(TEXT("plugin:%s"), *PluginName)));
+				}
+			}
+		}
+
+		if ((*Requirements)->HasTypedField<EJson::Array>(TEXT("modules")))
+		{
+			for (const TSharedPtr<FJsonValue>& Value :
+				(*Requirements)->GetArrayField(TEXT("modules")))
+			{
+				const FString ModuleName = Value->AsString();
+				if (!FModuleManager::Get().ModuleExists(*ModuleName))
+				{
+					Reasons.Add(MakeShared<FJsonValueString>(
+						FString::Printf(TEXT("module:%s"), *ModuleName)));
+				}
+			}
+		}
+
+		if ((*Requirements)->HasTypedField<EJson::Array>(TEXT("platforms")))
+		{
+			bool bPlatformMatched = false;
+			const FString PlatformName = UTF8_TO_TCHAR(FPlatformProperties::PlatformName());
+			const FString IniPlatformName =
+				UTF8_TO_TCHAR(FPlatformProperties::IniPlatformName());
+			for (const TSharedPtr<FJsonValue>& Value :
+				(*Requirements)->GetArrayField(TEXT("platforms")))
+			{
+				const FString RequiredPlatform = Value->AsString();
+				if (RequiredPlatform.Equals(PlatformName, ESearchCase::IgnoreCase)
+					|| RequiredPlatform.Equals(IniPlatformName, ESearchCase::IgnoreCase))
+				{
+					bPlatformMatched = true;
+					break;
+				}
+			}
+			if (!bPlatformMatched)
+			{
+				Reasons.Add(MakeShared<FJsonValueString>(
+					FString::Printf(TEXT("platform:%s"), *PlatformName)));
+			}
+		}
+
+		const TSharedPtr<FJsonObject>* EngineRequirement = nullptr;
+		if ((*Requirements)->TryGetObjectField(
+				TEXT("engine"), EngineRequirement)
+			&& EngineRequirement
+			&& EngineRequirement->IsValid())
+		{
+			FString MinimumText;
+			FEngineVersion Minimum;
+			if ((*EngineRequirement)->TryGetStringField(TEXT("min"), MinimumText)
+				&& (!FEngineVersion::Parse(MinimumText, Minimum)
+					|| CompareEngineVersionComponents(
+						FEngineVersion::Current(), Minimum) < 0))
+			{
+				Reasons.Add(MakeShared<FJsonValueString>(
+					FString::Printf(TEXT("engineMin:%s"), *MinimumText)));
+			}
+
+			FString MaximumText;
+			FEngineVersion Maximum;
+			if ((*EngineRequirement)->TryGetStringField(
+					TEXT("maxExclusive"), MaximumText)
+				&& (!FEngineVersion::Parse(MaximumText, Maximum)
+					|| CompareEngineVersionComponents(
+						FEngineVersion::Current(), Maximum) >= 0))
+			{
+				Reasons.Add(MakeShared<FJsonValueString>(
+					FString::Printf(TEXT("engineMaxExclusive:%s"), *MaximumText)));
+			}
+		}
+	}
+
+	Decorated->SetBoolField(TEXT("available"), Reasons.IsEmpty());
+	Decorated->SetArrayField(TEXT("availabilityReasons"), Reasons);
+	return Decorated;
+}
+
 TSharedPtr<FJsonObject> MakeCapabilitySummary(const TSharedPtr<FJsonObject>& Descriptor)
 {
 	TSharedPtr<FJsonObject> Summary = MakeShared<FJsonObject>();
 	static const TArray<FString> SummaryFields = {
 	    TEXT("id"),          TEXT("domain"), TEXT("kind"),
-	    TEXT("description"), TEXT("traits"), TEXT("output"),
+	    TEXT("description"), TEXT("traits"), TEXT("output"), TEXT("requires"),
+	    TEXT("available"), TEXT("availabilityReasons"),
 	};
 	for (const FString& FieldName : SummaryFields)
 	{
@@ -95,6 +222,15 @@ TSharedPtr<FJsonObject> MakeCapabilitySummary(const TSharedPtr<FJsonObject>& Des
 		{
 			Summary->SetField(FieldName, *Value);
 		}
+	}
+	const TSharedPtr<FJsonObject>* Dsl = nullptr;
+	FString Risk;
+	if (Descriptor->TryGetObjectField(TEXT("dsl"), Dsl)
+		&& Dsl
+		&& Dsl->IsValid()
+		&& (*Dsl)->TryGetStringField(TEXT("risk"), Risk))
+	{
+		Summary->SetStringField(TEXT("risk"), Risk);
 	}
 	return Summary;
 }
@@ -463,6 +599,7 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 	static const TSet<FString> SupportedQueryParams = {
 	    TEXT("query"),    TEXT("domain"),      TEXT("operation"), TEXT("kind"),
 	    TEXT("readOnly"), TEXT("destructive"), TEXT("expensive"), TEXT("outputKind"),
+	    TEXT("risk"),     TEXT("availableOnly"),
 	    TEXT("offset"),   TEXT("limit"),       TEXT("detail"),
 	};
 	for (const TPair<FString, FString>& QueryParam : Request.QueryParams)
@@ -516,14 +653,36 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		}
 	}
 
+	FString RiskFilter;
+	if (const FString* RiskValue = Request.QueryParams.Find(TEXT("risk")))
+	{
+		RiskFilter = *RiskValue;
+		if (RiskFilter != TEXT("readOnly")
+			&& RiskFilter != TEXT("safeWrite")
+			&& RiskFilter != TEXT("confirmWrite")
+			&& RiskFilter != TEXT("notOpen"))
+		{
+			SendError(
+				OnComplete,
+				422,
+				TEXT("invalid_params"),
+				TEXT(
+					"Query parameter 'risk' must be readOnly, safeWrite, confirmWrite, or notOpen."));
+			return true;
+		}
+	}
+
 	TOptional<bool> ReadOnlyFilter;
 	TOptional<bool> DestructiveFilter;
 	TOptional<bool> ExpensiveFilter;
+	TOptional<bool> AvailableOnlyFilter;
 	FString ParseError;
 	if (!TryParseQueryBool(Request.QueryParams, TEXT("readOnly"), ReadOnlyFilter, ParseError) ||
 	    !TryParseQueryBool(Request.QueryParams, TEXT("destructive"), DestructiveFilter,
 	                       ParseError) ||
-	    !TryParseQueryBool(Request.QueryParams, TEXT("expensive"), ExpensiveFilter, ParseError))
+	    !TryParseQueryBool(Request.QueryParams, TEXT("expensive"), ExpensiveFilter, ParseError) ||
+	    !TryParseQueryBool(
+		    Request.QueryParams, TEXT("availableOnly"), AvailableOnlyFilter, ParseError))
 	{
 		SendError(OnComplete, 422, TEXT("invalid_params"), ParseError);
 		return true;
@@ -568,31 +727,51 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		{
 			continue;
 		}
-		const FString Id = Descriptor->GetStringField(TEXT("id"));
-		const FString Domain = Descriptor->GetStringField(TEXT("domain"));
-		const FString Kind = Descriptor->GetStringField(TEXT("kind"));
-		const FString Description = Descriptor->GetStringField(TEXT("description"));
+		const TSharedPtr<FJsonObject> DecoratedDescriptor =
+			DecorateCapabilityAvailability(Descriptor);
+		const FString Id = DecoratedDescriptor->GetStringField(TEXT("id"));
+		const FString Domain = DecoratedDescriptor->GetStringField(TEXT("domain"));
+		const FString Kind = DecoratedDescriptor->GetStringField(TEXT("kind"));
+		const FString Description =
+			DecoratedDescriptor->GetStringField(TEXT("description"));
+
+		FString DescriptorRisk;
+		const TSharedPtr<FJsonObject>* Dsl = nullptr;
+		if (DecoratedDescriptor->TryGetObjectField(TEXT("dsl"), Dsl)
+			&& Dsl
+			&& Dsl->IsValid())
+		{
+			(*Dsl)->TryGetStringField(TEXT("risk"), DescriptorRisk);
+		}
+
+		bool bAvailable = true;
+		DecoratedDescriptor->TryGetBoolField(TEXT("available"), bAvailable);
 		if ((!ExactOperation.IsEmpty() && Id != ExactOperation) ||
 		    (!DomainFilter.IsEmpty() && Domain != DomainFilter) ||
 		    (!KindFilter.IsEmpty() && Kind != KindFilter) ||
+		    (!RiskFilter.IsEmpty() && DescriptorRisk != RiskFilter) ||
+		    (AvailableOnlyFilter.Get(false) && !bAvailable) ||
 		    (!SearchQuery.IsEmpty() && !Id.Contains(SearchQuery, ESearchCase::IgnoreCase) &&
 		     !Description.Contains(SearchQuery, ESearchCase::IgnoreCase)) ||
-		    !DescriptorMatchesTrait(Descriptor, TEXT("readOnly"), ReadOnlyFilter) ||
-		    !DescriptorMatchesTrait(Descriptor, TEXT("destructive"), DestructiveFilter) ||
-		    !DescriptorMatchesTrait(Descriptor, TEXT("expensive"), ExpensiveFilter))
+		    !DescriptorMatchesTrait(
+			    DecoratedDescriptor, TEXT("readOnly"), ReadOnlyFilter) ||
+		    !DescriptorMatchesTrait(
+			    DecoratedDescriptor, TEXT("destructive"), DestructiveFilter) ||
+		    !DescriptorMatchesTrait(
+			    DecoratedDescriptor, TEXT("expensive"), ExpensiveFilter))
 		{
 			continue;
 		}
 		if (!OutputKindFilter.IsEmpty())
 		{
 			const TSharedPtr<FJsonObject>* Output = nullptr;
-			if (!Descriptor->TryGetObjectField(TEXT("output"), Output) || !Output ||
+			if (!DecoratedDescriptor->TryGetObjectField(TEXT("output"), Output) || !Output ||
 			    !Output->IsValid() || (*Output)->GetStringField(TEXT("kind")) != OutputKindFilter)
 			{
 				continue;
 			}
 		}
-		FilteredDescriptors.Add(Descriptor);
+		FilteredDescriptors.Add(DecoratedDescriptor);
 	}
 	FilteredDescriptors.Sort(
 	    [](const TSharedPtr<FJsonObject>& Left, const TSharedPtr<FJsonObject>& Right)

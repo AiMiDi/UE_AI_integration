@@ -23,6 +23,10 @@ public:
 	virtual FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		++ExecuteCount;
+		if (Params.IsValid())
+		{
+			Params->TryGetStringField(TEXT("requestId"), LastRequestId);
+		}
 		if (bFails)
 		{
 			return FMCPToolResult::Error(TEXT("Expected test failure."));
@@ -31,11 +35,13 @@ public:
 	}
 
 	int32 GetExecuteCount() const { return ExecuteCount; }
+	const FString& GetLastRequestId() const { return LastRequestId; }
 
 private:
 	FString Id;
 	bool bFails = false;
 	int32 ExecuteCount = 0;
+	FString LastRequestId;
 };
 }
 
@@ -50,10 +56,6 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 		TEXT("Capability catalog is degraded"),
 		EAutomationExpectedErrorFlags::Contains,
 		2);
-	AddExpectedError(
-		TEXT("has no registered implementation."),
-		EAutomationExpectedErrorFlags::Contains,
-		424);
 
 	FMCPToolRegistry DegradedRegistry;
 	DegradedRegistry.LoadCapabilityManifests();
@@ -70,6 +72,7 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 	FMCPToolRegistry Registry;
 	Registry.LoadCapabilityManifests();
 	TSharedPtr<FExecutorTestTool> IdempotentTool;
+	TSharedPtr<FExecutorTestTool> ContextRequestIdTool;
 	for (const TSharedPtr<FJsonObject>& Descriptor : Registry.GetCapabilityDescriptors())
 	{
 		const FString Id = Descriptor->GetStringField(TEXT("id"));
@@ -81,6 +84,10 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 		if (Id == TEXT("production.build.status"))
 		{
 			IdempotentTool = Tool;
+		}
+		if (Id == TEXT("content.asset.change.rollback"))
+		{
+			ContextRequestIdTool = Tool;
 		}
 		Registry.Register(Tool);
 		Registry.EndDomainRegistration();
@@ -142,6 +149,94 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 		TEXT("requestId conflict code"),
 		ConflictResult.Error.Code,
 		FString(TEXT("idempotency_conflict")));
+
+	TSharedPtr<FJsonObject> ChangeParams = MakeShared<FJsonObject>();
+	ChangeParams->SetStringField(TEXT("receiptId"), TEXT("asset-run-fixture"));
+	ChangeParams->SetBoolField(TEXT("confirmWrite"), true);
+	FMCPExecutionContext MissingContextRequestId;
+	MissingContextRequestId.Capability = TEXT("content.asset.change.rollback");
+	MissingContextRequestId.Params = ChangeParams;
+	const FMCPResult MissingRequestId =
+		Executor.Execute(MissingContextRequestId);
+	TestFalse(TEXT("Context requestId is required when declared"), MissingRequestId.bOk);
+	TestEqual(
+		TEXT("Missing context requestId code"),
+		MissingRequestId.Error.Code,
+		FString(TEXT("request_id_required")));
+
+	FMCPExecutionContext InjectedContextRequestId = MissingContextRequestId;
+	InjectedContextRequestId.RequestId = TEXT("asset-change-request");
+	const FMCPResult InjectedRequestId =
+		Executor.Execute(InjectedContextRequestId);
+	TestTrue(TEXT("Context requestId is injected into capability params"), InjectedRequestId.bOk);
+	TestTrue(TEXT("RequestId injection fixture tool is registered"), ContextRequestIdTool.IsValid());
+	if (ContextRequestIdTool.IsValid())
+	{
+		TestEqual(
+			TEXT("Handler receives the envelope requestId"),
+			ContextRequestIdTool->GetLastRequestId(),
+			InjectedContextRequestId.RequestId);
+	}
+	FMCPExecutionContext LegacyDuplicatedRequestId = InjectedContextRequestId;
+	LegacyDuplicatedRequestId.Params =
+		MakeShared<FJsonObject>(*ChangeParams);
+	LegacyDuplicatedRequestId.Params->SetStringField(
+		TEXT("requestId"),
+		InjectedContextRequestId.RequestId);
+	const FMCPResult LegacyDuplicatedReplay =
+		Executor.Execute(LegacyDuplicatedRequestId);
+	TestTrue(
+		TEXT("Legacy matching params.requestId replays the envelope request"),
+		LegacyDuplicatedReplay.bOk);
+	if (ContextRequestIdTool.IsValid())
+	{
+		TestEqual(
+			TEXT("Legacy duplicate does not execute the handler twice"),
+			ContextRequestIdTool->GetExecuteCount(),
+			1);
+	}
+
+	FMCPExecutionContext MismatchedContextRequestId = MissingContextRequestId;
+	MismatchedContextRequestId.RequestId = TEXT("asset-change-request-mismatch");
+	MismatchedContextRequestId.Params =
+		MakeShared<FJsonObject>(*ChangeParams);
+	MismatchedContextRequestId.Params->SetStringField(
+		TEXT("requestId"),
+		TEXT("different-request"));
+	const FMCPResult MismatchedRequestId =
+		Executor.Execute(MismatchedContextRequestId);
+	TestFalse(TEXT("Conflicting params requestId is rejected"), MismatchedRequestId.bOk);
+	TestEqual(
+		TEXT("Conflicting params requestId code"),
+		MismatchedRequestId.Error.Code,
+		FString(TEXT("request_id_mismatch")));
+
+	TSharedPtr<FJsonObject> LegacyCookParams = MakeShared<FJsonObject>();
+	LegacyCookParams->SetStringField(TEXT("platform"), TEXT("Win64"));
+	const FMCPResult LegacyCook = Executor.Execute(
+		{TEXT("production.project.cook"), LegacyCookParams});
+	TestTrue(
+		TEXT("Legacy cook remains callable without requestId"),
+		LegacyCook.bOk);
+
+	TSharedPtr<FJsonObject> LegacyPackageParams = MakeShared<FJsonObject>();
+	LegacyPackageParams->SetStringField(TEXT("platform"), TEXT("Win64"));
+	LegacyPackageParams->SetStringField(TEXT("output_dir"), TEXT("LegacyPackage"));
+	const FMCPResult LegacyPackage = Executor.Execute(
+		{TEXT("production.project.package"), LegacyPackageParams});
+	TestTrue(
+		TEXT("Legacy package remains callable without requestId"),
+		LegacyPackage.bOk);
+
+	TSharedPtr<FJsonObject> LegacyCommandletParams = MakeShared<FJsonObject>();
+	LegacyCommandletParams->SetStringField(
+		TEXT("commandlet_name"),
+		TEXT("ResavePackages"));
+	const FMCPResult LegacyCommandlet = Executor.Execute(
+		{TEXT("production.commandlet.run"), LegacyCommandletParams});
+	TestTrue(
+		TEXT("Allowlisted legacy commandlet remains callable without requestId"),
+		LegacyCommandlet.bOk);
 
 	return true;
 }

@@ -11,17 +11,20 @@ MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与
 
 ## 核心特性
 
-- 212 项 manifest 驱动的 Editor 与 PIE Runtime 能力。
-- 十一个稳定的 MCP 工具，不把 212 项能力直接展开成工具列表。
+- 287 项 manifest 驱动的 Editor 与 PIE Runtime 能力。
+- 十一个稳定的 MCP 工具，不把 287 项能力直接展开成工具列表。
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
 - 专用 PIE 生命周期、Runtime 对象/Widget/Delegate/真实输入与 Scenario 能力。
 - Blueprint/UMG 写入返回编译、保存、重载和读回验证证据。
 - 统一的 HTTP envelope、状态码和参数错误模型。
 - 查询、命令与校验分层，所有 UObject 操作进入 Game Thread 队列。
 - MCP 只连接已经运行的 Unreal Editor，不负责启动或关闭 Editor。
-- 默认监听 `127.0.0.1:9847`，客户端可通过 `UE_PORT` 覆盖端口。
+- 默认监听 `127.0.0.1:9847`；启动 Editor、CLI 与 MCP 时可通过同一个
+  `UE_PORT` 覆盖端口。
 - [UE Workflow DSL/CLI](docs/UE_WORKFLOW_DSL.md) 将单资产连续编辑合并为一次
   可规划、可审批、可回滚的执行；调试和长任务不进入 Workflow。
+- [UE Engineering Copilot](docs/UE_ENGINEERING_COPILOT.md) 提供性能/Trace、
+  自动化测试、Blueprint 分析、资产审计、大世界/渲染诊断以及生产任务闭环。
 - Workflow 默认返回压缩摘要；完整 ReadBack、Diff 与结构快照按 section 获取。
 - capability 目录支持搜索、trait 过滤与分页，默认最多返回 25 项摘要。
 
@@ -46,12 +49,12 @@ UE_AI_integration Editor Module
 
 | Domain | 数量 | 能力范围 |
 |---|---:|---|
-| Blueprint | 58 | 资产生命周期、Graph、变量、组件、接口、Discovery、Diff、Validation |
-| Scene | 54 | Actor、PIE Runtime、Widget/Delegate/Input、Viewport、WorldGen、Foliage、Navigation |
-| Content | 59 | Material、DataTable、UserTypes、Niagara、UMG Authoring/Animation |
-| Animation | 10 | AnimBlueprint、State、Transition、BlendSpace |
-| AI | 9 | Behavior Tree、Blackboard |
-| Production | 22 | Sequencer、Scenario、模块溯源、Build、Cook、Package |
+| Blueprint | 61 | 资产生命周期、Graph、变量、组件、调用图、规则扫描、Diff、Validation |
+| Scene | 74 | Actor、PIE Runtime、World Partition、Data Layer、HLOD、PCG、渲染诊断 |
+| Content | 69 | 资产查询/依赖/审计、安全变更、Material、Niagara、UMG |
+| Animation | 19 | AnimBlueprint、状态机与 BlendSpace 的创建、读取、校验和 Diff |
+| AI | 17 | Behavior Tree 与 Blackboard 的创建、读取、引用、校验和 Diff |
+| Production | 47 | Durable Job、Trace、性能、测试、Cook/Package、Source Control、DDC、BuildGraph |
 
 ## 环境要求
 

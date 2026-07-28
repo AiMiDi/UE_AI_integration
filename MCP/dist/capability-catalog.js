@@ -76,6 +76,61 @@ function parseDslMetadata(value, location) {
         risk: dsl.risk,
     };
 }
+function parseStringArray(value, location) {
+    if (value === undefined) {
+        return undefined;
+    }
+    if (!Array.isArray(value) ||
+        value.some((item) => typeof item !== "string" || item.trim().length === 0)) {
+        throw new CapabilityManifestError(`${location} must be an array of non-empty strings`);
+    }
+    return [...new Set(value)];
+}
+function parseRequirements(value, location) {
+    if (value === undefined) {
+        return undefined;
+    }
+    const requirements = requireRecord(value, location);
+    const allowedFields = new Set([
+        "plugins",
+        "modules",
+        "platforms",
+        "engine",
+    ]);
+    for (const field of Object.keys(requirements)) {
+        if (!allowedFields.has(field)) {
+            throw new CapabilityManifestError(`${location}.${field} is not a supported requirement`);
+        }
+    }
+    let engine;
+    if (requirements.engine !== undefined) {
+        const engineRecord = requireRecord(requirements.engine, `${location}.engine`);
+        for (const field of Object.keys(engineRecord)) {
+            if (field !== "min" && field !== "maxExclusive") {
+                throw new CapabilityManifestError(`${location}.engine.${field} is not supported`);
+            }
+        }
+        const min = engineRecord.min === undefined
+            ? undefined
+            : requireString(engineRecord, "min", `${location}.engine`);
+        const maxExclusive = engineRecord.maxExclusive === undefined
+            ? undefined
+            : requireString(engineRecord, "maxExclusive", `${location}.engine`);
+        engine = {
+            ...(min === undefined ? {} : { min }),
+            ...(maxExclusive === undefined ? {} : { maxExclusive }),
+        };
+    }
+    const plugins = parseStringArray(requirements.plugins, `${location}.plugins`);
+    const modules = parseStringArray(requirements.modules, `${location}.modules`);
+    const platforms = parseStringArray(requirements.platforms, `${location}.platforms`);
+    return {
+        ...(plugins === undefined ? {} : { plugins }),
+        ...(modules === undefined ? {} : { modules }),
+        ...(platforms === undefined ? {} : { platforms }),
+        ...(engine === undefined ? {} : { engine }),
+    };
+}
 function parseCapability(value, domain, index, manifestPath) {
     const location = `${manifestPath}.capabilities[${index}]`;
     const capability = requireRecord(value, location);
@@ -134,6 +189,11 @@ function parseCapability(value, domain, index, manifestPath) {
             ? {}
             : {
                 dsl: parseDslMetadata(capability.dsl, `${location}.dsl`),
+            }),
+        ...(capability.requires === undefined
+            ? {}
+            : {
+                requires: parseRequirements(capability.requires, `${location}.requires`),
             }),
     };
 }

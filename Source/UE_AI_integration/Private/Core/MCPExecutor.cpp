@@ -7,6 +7,13 @@ namespace
 {
 	constexpr int32 MaxIdempotencyRecords = 256;
 
+	bool AllowsLegacyRequestIdOmission(const FString& Capability)
+	{
+		return Capability == TEXT("production.project.cook")
+			|| Capability == TEXT("production.project.package")
+			|| Capability == TEXT("production.commandlet.run");
+	}
+
 	FString CanonicalizeJsonValue(const TSharedPtr<FJsonValue>& Value)
 	{
 		if (!Value.IsValid() || Value->IsNull())
@@ -149,8 +156,64 @@ FMCPResult FMCPExecutor::ExecuteUncached(const FMCPExecutionContext& Context) co
 			404);
 	}
 
+	TSharedPtr<FJsonObject> EffectiveParams =
+		Context.Params.IsValid()
+			? MakeShared<FJsonObject>(*Context.Params)
+			: MakeShared<FJsonObject>();
+	const TSharedPtr<FJsonObject>* InputSchema =
+		Registry.FindInputSchema(Context.Capability);
+	const TSharedPtr<FJsonObject>* Properties = nullptr;
+	const bool bAcceptsRequestId =
+		InputSchema
+		&& InputSchema->IsValid()
+		&& (*InputSchema)->TryGetObjectField(TEXT("properties"), Properties)
+		&& Properties
+		&& Properties->IsValid()
+		&& (*Properties)->HasField(TEXT("requestId"));
+	if (bAcceptsRequestId)
+	{
+		const bool bAllowsLegacyOmission =
+			AllowsLegacyRequestIdOmission(Context.Capability);
+		if (Context.RequestId.IsEmpty() && !bAllowsLegacyOmission)
+		{
+			return FMCPResult::Fail(
+				TEXT("request_id_required"),
+				TEXT(
+					"This capability requires requestId in the /api/execute envelope."),
+				422);
+		}
+		FString LegacyParamRequestId;
+		if (Context.RequestId.IsEmpty()
+			&& EffectiveParams->TryGetStringField(
+				TEXT("requestId"),
+				LegacyParamRequestId)
+			&& !LegacyParamRequestId.IsEmpty())
+		{
+			return FMCPResult::Fail(
+				TEXT("request_id_required"),
+				TEXT(
+					"requestId must be supplied in the /api/execute envelope."),
+				422);
+		}
+		if (!Context.RequestId.IsEmpty())
+		{
+			FString ParamRequestId;
+			if (EffectiveParams->TryGetStringField(TEXT("requestId"), ParamRequestId)
+				&& ParamRequestId != Context.RequestId)
+			{
+				return FMCPResult::Fail(
+					TEXT("request_id_mismatch"),
+					TEXT(
+						"params.requestId must match the /api/execute envelope requestId."),
+					409);
+			}
+			EffectiveParams->SetStringField(TEXT("requestId"), Context.RequestId);
+		}
+	}
+
 	TArray<FString> ParamErrors;
-	if (!Registry.ValidateParams(Context.Capability, Context.Params, ParamErrors))
+	if (!Registry.ValidateParams(
+			Context.Capability, EffectiveParams, ParamErrors))
 	{
 		return FMCPResult::Fail(
 			TEXT("invalid_params"),
@@ -160,7 +223,7 @@ FMCPResult FMCPExecutor::ExecuteUncached(const FMCPExecutionContext& Context) co
 	}
 
 	const FMCPToolResult ToolResult =
-		Registry.ExecuteTool(Context.Capability, Context.Params);
+		Registry.ExecuteTool(Context.Capability, EffectiveParams);
 	if (!ToolResult.bSuccess)
 	{
 		return FMCPResult::Fail(
@@ -177,8 +240,18 @@ FMCPResult FMCPExecutor::ExecuteUncached(const FMCPExecutionContext& Context) co
 
 FString FMCPExecutor::MakePayloadKey(const FMCPExecutionContext& Context)
 {
-	const TSharedPtr<FJsonObject> Params =
-		Context.Params.IsValid() ? Context.Params : MakeShared<FJsonObject>();
+	TSharedPtr<FJsonObject> Params =
+		Context.Params.IsValid()
+			? MakeShared<FJsonObject>(*Context.Params)
+			: MakeShared<FJsonObject>();
+	FString ParamRequestId;
+	if (Params->TryGetStringField(TEXT("requestId"), ParamRequestId)
+		&& ParamRequestId == Context.RequestId)
+	{
+		// requestId belongs to the execution envelope. Accept a legacy duplicate
+		// in params without treating an otherwise identical retry as a conflict.
+		Params->RemoveField(TEXT("requestId"));
+	}
 	const FString CanonicalParams =
 		CanonicalizeJsonValue(MakeShared<FJsonValueObject>(Params));
 	return FString::Printf(

@@ -34,9 +34,9 @@ def main() -> int:
 
     def catalog() -> str:
         capabilities = client.capabilities()
-        assert len(capabilities) == 212, len(capabilities)
-        assert len({item["id"] for item in capabilities}) == 212
-        return "212 unique capabilities"
+        assert len(capabilities) >= 212, len(capabilities)
+        assert len({item["id"] for item in capabilities}) == len(capabilities)
+        return f"{len(capabilities)} unique capabilities"
 
     def list_blueprints() -> str:
         data = client.execute(

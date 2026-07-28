@@ -5,6 +5,7 @@
 #include "Infrastructure/ProductionRuntimeController.h"
 #include "Tools/MCPToolRegistry.h"
 #include "UEAIIntegrationServer.h"
+#include "HAL/PlatformMisc.h"
 
 // Constructor and destructor are out-of-line because the subsystem owns
 // forward-declared unique pointers. Keeping construction here also prevents
@@ -28,8 +29,11 @@ namespace UEAIIntegrationTools
 	void RegisterSnapshotTools(FMCPToolRegistry& Registry);
 	void RegisterValidationTools(FMCPToolRegistry& Registry);
 	void RegisterDiscoveryTools(FMCPToolRegistry& Registry);
+	void RegisterBlueprintAnalysisTools(FMCPToolRegistry& Registry);
 	void RegisterUserTypeTools(FMCPToolRegistry& Registry);
 	void RegisterDiffTools(FMCPToolRegistry& Registry);
+	void RegisterContentAssetReadTools(FMCPToolRegistry& Registry);
+	void RegisterContentAssetChangeTools(FMCPToolRegistry& Registry);
 	void RegisterMaterialReadTools(FMCPToolRegistry& Registry);
 	void RegisterMaterialMutationTools(FMCPToolRegistry& Registry);
 	void RegisterAnimationTools(FMCPToolRegistry& Registry);
@@ -80,6 +84,7 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	UEAIIntegrationTools::RegisterSnapshotTools(*Registry);
 	UEAIIntegrationTools::RegisterValidationTools(*Registry);
 	UEAIIntegrationTools::RegisterDiscoveryTools(*Registry);
+	UEAIIntegrationTools::RegisterBlueprintAnalysisTools(*Registry);
 	UEAIIntegrationTools::RegisterDiffTools(*Registry);
 	Registry->EndDomainRegistration();
 
@@ -93,6 +98,8 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Registry->EndDomainRegistration();
 
 	Registry->BeginDomainRegistration(TEXT("content"));
+	UEAIIntegrationTools::RegisterContentAssetReadTools(*Registry);
+	UEAIIntegrationTools::RegisterContentAssetChangeTools(*Registry);
 	UEAIIntegrationTools::RegisterUserTypeTools(*Registry);
 	UEAIIntegrationTools::RegisterMaterialReadTools(*Registry);
 	UEAIIntegrationTools::RegisterMaterialMutationTools(*Registry);
@@ -121,8 +128,29 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Registry->LoadCapabilityManifests();
 
 	Executor = MakeUnique<FMCPExecutor>(*Registry);
+	int32 ServerPort = 9847;
+	const FString ConfiguredPort =
+		FPlatformMisc::GetEnvironmentVariable(TEXT("UE_PORT"));
+	if (!ConfiguredPort.IsEmpty())
+	{
+		const int32 ParsedPort = FCString::Atoi(*ConfiguredPort);
+		if (ParsedPort > 0 && ParsedPort <= 65535)
+		{
+			ServerPort = ParsedPort;
+		}
+		else
+		{
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("[UE_AI_integration] Ignoring invalid UE_PORT value '%s'; using default port %d."),
+				*ConfiguredPort,
+				ServerPort);
+		}
+	}
+
 	Server = MakeUnique<FUEAIIntegrationServer>(*Registry, *Executor);
-	if (Server->Start(9847))
+	if (Server->Start(ServerPort))
 	{
 		UE_LOG(
 			LogTemp,
@@ -135,7 +163,11 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 	else
 	{
-		UE_LOG(LogTemp, Error, TEXT("[UE_AI_integration] Failed to start server on port 9847."));
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("[UE_AI_integration] Failed to start server on port %d."),
+			ServerPort);
 	}
 }
 

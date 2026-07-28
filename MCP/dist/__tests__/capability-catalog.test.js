@@ -15,22 +15,24 @@ afterEach(() => {
         rmSync(directory, { recursive: true, force: true });
     }
 });
-test("loads all six shipped manifests offline with stable catalog counts", () => {
+test("loads all six shipped manifests without regressing the shipped baseline", () => {
     const catalog = loadCapabilityCatalog();
-    assert.deepEqual(catalog.summary(), {
-        schemaVersion: 2,
-        capabilityCount: 212,
-        domainCounts: {
-            blueprint: 58,
-            scene: 54,
-            content: 59,
-            animation: 10,
-            ai: 9,
-            production: 22,
-        },
-    });
+    const summary = catalog.summary();
+    const baselines = {
+        blueprint: 58,
+        scene: 54,
+        content: 59,
+        animation: 10,
+        ai: 9,
+        production: 22,
+    };
+    assert.equal(summary.schemaVersion, 2);
+    assert.ok(summary.capabilityCount >= 212);
+    for (const domain of CAPABILITY_DOMAINS) {
+        assert.ok(summary.domainCounts[domain] >= baselines[domain]);
+    }
     assert.equal(catalog.manifests.size, CAPABILITY_DOMAINS.length);
-    assert.equal(new Set(catalog.capabilities.map((capability) => capability.id)).size, 212);
+    assert.equal(new Set(catalog.capabilities.map((capability) => capability.id)).size, summary.capabilityCount);
     for (const operation of [
         "scene.pie.restart",
         "scene.pie.start",
@@ -138,6 +140,15 @@ test("preserves optional workflow DSL admission metadata", () => {
                         deferCompile: true,
                         risk: "safeWrite",
                     },
+                    requires: {
+                        plugins: ["EditorScriptingUtilities"],
+                        modules: ["AssetRegistry"],
+                        platforms: ["Windows"],
+                        engine: {
+                            min: "5.3.0",
+                            maxExclusive: "5.4.0",
+                        },
+                    },
                 },
                 {
                     id: "blueprint.asset.get",
@@ -175,6 +186,15 @@ test("preserves optional workflow DSL admission metadata", () => {
         risk: "safeWrite",
     });
     assert.equal(catalog.get("blueprint.asset.get")?.dsl, undefined);
+    assert.deepEqual(catalog.get("blueprint.asset.create")?.requires, {
+        plugins: ["EditorScriptingUtilities"],
+        modules: ["AssetRegistry"],
+        platforms: ["Windows"],
+        engine: {
+            min: "5.3.0",
+            maxExclusive: "5.4.0",
+        },
+    });
 });
 test("reports a clear error when a required manifest is missing", () => {
     const directory = createTemporaryDirectory();

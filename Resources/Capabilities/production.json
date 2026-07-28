@@ -95,11 +95,40 @@
         "properties": {
           "commandlet_name": {
             "type": "string",
-            "description": "Name of the commandlet to run"
+            "enum": [
+              "FixupRedirects",
+              "ResavePackages",
+              "WorldPartitionBuilderCommandlet"
+            ],
+            "description": "Allowlisted commandlet name"
           },
           "args": {
             "type": "string",
-            "description": "Additional command-line arguments for the commandlet"
+            "maxLength": 4096,
+            "description": "Deprecated bounded argument string. Prefer arguments."
+          },
+          "arguments": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "description": "Structured commandlet argument tokens."
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit confirmation required for requestId-based calls. Omission is accepted only by the legacy no-requestId compatibility adapter."
+          },
+          "timeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 21600
           }
         },
         "required": [
@@ -120,7 +149,7 @@
         "scopeKinds": [],
         "transactionDomain": "job",
         "deferCompile": false,
-        "risk": "notOpen"
+        "risk": "confirmWrite"
       }
     },
     {
@@ -133,11 +162,46 @@
         "properties": {
           "platform": {
             "type": "string",
-            "description": "Target platform: 'Win64', 'Linux', 'Mac', 'Android', 'IOS'"
+            "enum": [
+              "Win64",
+              "Linux",
+              "Mac",
+              "Android",
+              "IOS"
+            ]
           },
           "config": {
             "type": "string",
-            "description": "Build config: 'Development', 'Shipping', 'DebugGame'. Default: 'Development'"
+            "enum": [
+              "Development",
+              "Shipping",
+              "DebugGame"
+            ]
+          },
+          "cookMode": {
+            "type": "string",
+            "enum": [
+              "byTheBook",
+              "iterate"
+            ]
+          },
+          "maps": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "timeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 21600
           }
         },
         "required": [
@@ -171,15 +235,40 @@
         "properties": {
           "platform": {
             "type": "string",
-            "description": "Target platform: 'Win64', 'Linux', 'Mac', 'Android', 'IOS'"
+            "enum": [
+              "Win64",
+              "Linux",
+              "Mac",
+              "Android",
+              "IOS"
+            ]
           },
-          "output_dir": {
-            "type": "string",
-            "description": "Directory to output the packaged build"
+      "output_dir": {
+        "type": "string",
+        "description": "Relative directory below Saved/UEAIIntegration/Packages, or an absolute path inside that root"
           },
           "config": {
             "type": "string",
-            "description": "Build config: 'Development', 'Shipping'. Default: 'Shipping'"
+            "enum": [
+              "Development",
+              "Shipping"
+            ]
+          },
+          "pak": {
+            "type": "boolean"
+          },
+          "ioStore": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "timeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 21600
           }
         },
         "required": [
@@ -934,6 +1023,1116 @@
       },
       "output": {
         "kind": "json"
+      }
+    },
+    {
+      "id": "production.job.status",
+      "domain": "production",
+      "kind": "query",
+      "description": "Return a compact ue.job.v1 status for a durable production job.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.job.cancel",
+      "domain": "production",
+      "kind": "command",
+      "description": "Cancel one active durable production job.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.job.result.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Return terminal diagnostics, result, and artifact refs for a production job.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.job.log.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Read a bounded cursor-based chunk from a production job log.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cursor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxChars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65536
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.job.artifact.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Read at most one MiB from a job-owned artifact using offset-based chunks.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "artifactId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1048576
+          }
+        },
+        "required": [
+          "jobId",
+          "artifactId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.trace.start",
+      "domain": "production",
+      "kind": "command",
+      "description": "Start a bounded Unreal Trace file recording and return a durable trace job.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "channels": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "maxLength": 64
+            }
+          },
+          "excludeTail": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.trace.status",
+      "domain": "production",
+      "kind": "query",
+      "description": "Return status for an Unreal Trace recording.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "traceId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "traceId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.trace.stop",
+      "domain": "production",
+      "kind": "command",
+      "description": "Stop one active Unreal Trace and finalize its .utrace artifact.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "traceId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "traceId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.trace.analyze",
+      "domain": "production",
+      "kind": "command",
+      "description": "Create a bounded analysis receipt for a completed trace without inlining trace data.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "traceId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "traceId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.performance.run",
+      "domain": "production",
+      "kind": "command",
+      "description": "Run a warmup plus frame-window performance sample with p50/p95/p99 metrics.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "warmupSeconds": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 300
+          },
+          "sampleSeconds": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 3600
+          },
+          "budgetMs": {
+            "type": "number",
+            "minimum": 0.01,
+            "maximum": 10000
+          },
+          "captureTrace": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.performance.result.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Return one durable performance run and its bounded metric summaries.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.performance.compare",
+      "domain": "production",
+      "kind": "validation",
+      "description": "Compare context-compatible performance runs and return pass, fail, or inconclusive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "baselineRunId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "candidateRunId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "metric": {
+            "type": "string",
+            "enum": [
+              "frameMs",
+              "gameMs",
+              "renderMs",
+              "rhiMs",
+              "gpuMs"
+            ]
+          },
+          "maxRegressionPercent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "absoluteBudgetMs": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "baselineRunId",
+          "candidateRunId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.test.list",
+      "domain": "production",
+      "kind": "query",
+      "description": "List available Automation or Functional tests with bounded pagination.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runner": {
+            "type": "string",
+            "enum": [
+              "automation",
+              "functional",
+              "gauntlet"
+            ]
+          },
+          "filter": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.test.run",
+      "domain": "production",
+      "kind": "command",
+      "description": "Run Automation, Functional, or Gauntlet tests as a durable constrained job.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runner": {
+            "type": "string",
+            "enum": [
+              "automation",
+              "functional",
+              "gauntlet"
+            ]
+          },
+          "test": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "Win64",
+              "Linux",
+              "Mac"
+            ]
+          },
+          "config": {
+            "type": "string",
+            "enum": [
+              "Development",
+              "Shipping",
+              "DebugGame"
+            ]
+          },
+          "timeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 21600
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "runner",
+          "test"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.test.result.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Return a durable test report with JSON, JUnit, log, and screenshot artifact refs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.source_control.repository.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Return bounded Git repository, branch, head, and remote context without credentials.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "external",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.source_control.status",
+      "domain": "production",
+      "kind": "query",
+      "description": "Return bounded porcelain-v2 Git status for the current project repository.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "external",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.source_control.diff",
+      "domain": "production",
+      "kind": "query",
+      "description": "Return a bounded Git diff for explicit project-relative files.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "staged": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          "contextLines": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 20
+          },
+          "maxChars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 262144
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "external",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.source_control.change.plan",
+      "domain": "production",
+      "kind": "validation",
+      "description": "Plan a constrained Git write and return a ue.change-plan.v1 digest.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "stage",
+              "unstage",
+              "restore",
+              "createBranch",
+              "switch",
+              "commit",
+              "fetch",
+              "pull",
+              "push"
+            ]
+          },
+          "files": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          "branch": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "remote": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "external",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.source_control.change.execute",
+      "domain": "production",
+      "kind": "command",
+      "description": "Execute exactly one approved constrained Git change as a durable job.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "stage",
+                  "unstage",
+                  "restore",
+                  "createBranch",
+                  "switch",
+                  "commit",
+                  "fetch",
+                  "pull",
+                  "push"
+                ]
+              },
+              "files": {
+                "type": "array",
+                "maxItems": 500,
+                "items": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              },
+              "branch": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 1000
+              },
+              "remote": {
+                "type": "string",
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          "approvePlanDigest": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 71
+          },
+          "confirmWrite": {
+            "const": true
+          },
+          "confirmExternal": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "timeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 3600
+          }
+        },
+        "required": [
+          "request",
+          "approvePlanDigest",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "external",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.ddc.status",
+      "domain": "production",
+      "kind": "query",
+      "description": "Return project-local Derived Data Cache size and cleanup safety policy.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.ddc.job.start",
+      "domain": "production",
+      "kind": "command",
+      "description": "Fill, verify, or explicitly clean only project-local DDC through a durable job.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "fill",
+              "verify",
+              "cleanProjectLocal"
+            ]
+          },
+          "confirmWrite": {
+            "const": true
+          },
+          "confirmDestructive": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "timeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 21600
+          }
+        },
+        "required": [
+          "action",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.buildgraph.validate",
+      "domain": "production",
+      "kind": "validation",
+      "description": "Validate a local BuildGraph script, target, and bounded scalar properties.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "script": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "script",
+          "target"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.buildgraph.run",
+      "domain": "production",
+      "kind": "command",
+      "description": "Run one validated local BuildGraph target as a durable constrained job.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "script": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "confirmBuild": {
+            "const": true
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "timeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 21600
+          }
+        },
+        "required": [
+          "script",
+          "target",
+          "confirmBuild"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.horde.context.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Report bounded Horde configuration and availability without exposing credentials or claiming submission support.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
       }
     }
   ]

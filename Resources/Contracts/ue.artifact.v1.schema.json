@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ue-ai-integration.local/contracts/ue.artifact.v1.schema.json",
+  "title": "UE job artifact",
+  "type": "object",
+  "required": [
+    "schema",
+    "artifactId",
+    "kind",
+    "mimeType",
+    "sizeBytes"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ue.artifact.v1"
+    },
+    "artifactId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "jobId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mimeType": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sizeBytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^(sha256:)?[a-fA-F0-9]{64}$"
+    },
+    "sha256Deferred": {
+      "const": true,
+      "description": "The producer intentionally deferred hashing; consumers should compute a digest after exporting all verified chunks."
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "createdAt": {
+      "type": "string"
+    },
+    "contentBase64": {
+      "type": "string"
+    }
+  },
+  "anyOf": [
+    {
+      "required": [
+        "sha256"
+      ]
+    },
+    {
+      "required": [
+        "sha256Deferred"
+      ]
+    }
+  ],
+  "additionalProperties": true
+}

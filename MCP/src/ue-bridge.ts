@@ -8,6 +8,7 @@
 import type {
   CapabilityDescriptor,
   CapabilityDomain,
+  CapabilityDslRisk,
   CapabilityKind,
   CapabilityOutputKind,
 } from "./capability-catalog.js";
@@ -100,6 +101,8 @@ export interface UECapabilityQuery {
   destructive?: boolean;
   expensive?: boolean;
   outputKind?: CapabilityOutputKind;
+  risk?: CapabilityDslRisk;
+  availableOnly?: boolean;
   offset?: number;
   limit?: number;
   detail?: "summary" | "full";

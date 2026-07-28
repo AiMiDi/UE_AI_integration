@@ -946,6 +946,9 @@ public:
 
 namespace UEAIIntegrationTools
 {
+	void RegisterSceneEngineeringQueryTools(FMCPToolRegistry& Registry);
+	void RegisterSceneEngineeringCommandTools(FMCPToolRegistry& Registry);
+
 	void RegisterWorldGenTools(FMCPToolRegistry& Registry)
 	{
 		Registry.Register(MakeShared<FTool_CreateWall>());
@@ -957,5 +960,7 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_CreateCastle>());
 		Registry.Register(MakeShared<FTool_CreateTown>());
 		Registry.Register(MakeShared<FTool_CreateHouse>());
+		RegisterSceneEngineeringQueryTools(Registry);
+		RegisterSceneEngineeringCommandTools(Registry);
 	}
 }

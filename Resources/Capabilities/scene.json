@@ -2309,6 +2309,292 @@
       "output": {
         "kind": "json"
       }
+    },
+    {
+      "id": "scene.world_partition.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Describe the current editor world's World Partition and streaming state.",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.world_partition.cells.list",
+      "domain": "scene",
+      "kind": "query",
+      "description": "List bounded generated World Partition runtime cells and their current states.",
+      "inputSchema": { "type": "object", "properties": { "limit": { "type": "integer", "minimum": 1, "maximum": 500 } }, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.world_partition.streaming_sources.list",
+      "domain": "scene",
+      "kind": "query",
+      "description": "List active World Partition streaming sources.",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.world_partition.streaming.audit",
+      "domain": "scene",
+      "kind": "validation",
+      "description": "Audit the current World Partition streaming configuration and observed sources.",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.data_layer.list",
+      "domain": "scene",
+      "kind": "query",
+      "description": "List Data Layer instances and effective runtime state in the current world.",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.data_layer.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Get one Data Layer instance by short name, full name, instance name, or path.",
+      "inputSchema": { "type": "object", "properties": { "dataLayer": { "type": "string" } }, "required": ["dataLayer"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.hlod.audit",
+      "domain": "scene",
+      "kind": "validation",
+      "description": "Audit World Partition HLOD actor presence without starting a build.",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.pcg.inspect",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Inspect PCG components through optional-module reflection; returns unavailable when PCG is not loaded.",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "requires": {
+        "plugins": ["PCG"],
+        "modules": ["PCG"]
+      },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.render.context.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Get the active RHI, adapter, feature level, world, and ray tracing hardware signal.",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.render.feature.audit",
+      "domain": "scene",
+      "kind": "validation",
+      "description": "Audit current Lumen, Nanite, VSM, hardware ray tracing, and TSR CVar/RHI evidence.",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.render.memory.sample",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Take one instantaneous RHI texture and graphics-memory sample with availability flags.",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.world_partition.change.plan",
+      "domain": "scene",
+      "kind": "validation",
+      "description": "Plan a reversible World Partition streaming or runtime Data Layer state change.",
+      "inputSchema": { "type": "object", "properties": { "action": { "type": "string", "enum": ["setStreamingEnabled", "setDataLayerRuntimeState"] }, "enabled": { "type": "boolean" }, "dataLayer": { "type": "string" }, "state": { "type": "string", "enum": ["unloaded", "loaded", "activated"] } }, "required": ["action"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.world_partition.change.execute",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Execute an approved World Partition change after re-planning and exact digest validation.",
+      "inputSchema": { "type": "object", "properties": { "action": { "type": "string", "enum": ["setStreamingEnabled", "setDataLayerRuntimeState"] }, "enabled": { "type": "boolean" }, "dataLayer": { "type": "string" }, "state": { "type": "string", "enum": ["unloaded", "loaded", "activated"] }, "approvePlanDigest": { "type": "string" }, "confirmWrite": { "type": "boolean" }, "requestId": { "type": "string" } }, "required": ["action", "approvePlanDigest", "confirmWrite"], "additionalProperties": false },
+      "traits": { "readOnly": false, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.world_partition.change.rollback",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Rollback a recorded World Partition change in the same Editor instance.",
+      "inputSchema": { "type": "object", "properties": { "runId": { "type": "string" }, "confirmWrite": { "type": "boolean" } }, "required": ["runId", "confirmWrite"], "additionalProperties": false },
+      "traits": { "readOnly": false, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.render.settings.plan",
+      "domain": "scene",
+      "kind": "validation",
+      "description": "Plan an allowlisted, session-scoped render setting change.",
+      "inputSchema": { "type": "object", "properties": { "scope": { "type": "string", "enum": ["session"] }, "settings": { "type": "object", "additionalProperties": { "type": "boolean" } } }, "required": ["settings"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.render.settings.execute",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Execute an approved allowlisted session render setting change.",
+      "inputSchema": { "type": "object", "properties": { "scope": { "type": "string", "enum": ["session"] }, "settings": { "type": "object", "additionalProperties": { "type": "boolean" } }, "approvePlanDigest": { "type": "string" }, "confirmWrite": { "type": "boolean" }, "requestId": { "type": "string" } }, "required": ["settings", "approvePlanDigest", "confirmWrite"], "additionalProperties": false },
+      "traits": { "readOnly": false, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.render.settings.rollback",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Rollback a recorded session render setting change in the same Editor instance.",
+      "inputSchema": { "type": "object", "properties": { "runId": { "type": "string" }, "confirmWrite": { "type": "boolean" } }, "required": ["runId", "confirmWrite"], "additionalProperties": false },
+      "traits": { "readOnly": false, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.hlod.build",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Start an approved WorldPartitionHLODsBuilder commandlet job for the current saved map.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["setup", "build", "delete", "stats"]
+          },
+          "timeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 21600
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["mode", "confirmWrite"],
+        "additionalProperties": false
+      },
+      "traits": { "readOnly": false, "destructive": true, "expensive": true },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "confirmWrite" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.pcg.generate",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Schedule GenerateLocal on bounded PCG components in the current Editor world; never executes inside Workflow.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "maxComponents": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["confirmWrite"],
+        "additionalProperties": false
+      },
+      "requires": {
+        "plugins": ["PCG"],
+        "modules": ["PCG"]
+      },
+      "traits": { "readOnly": false, "destructive": false, "expensive": true },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "confirmWrite" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.pcg.cleanup",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Schedule CleanupLocal on bounded PCG components in the current Editor world; never executes inside Workflow.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "maxComponents": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "removeComponents": {
+            "type": "boolean"
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["confirmWrite"],
+        "additionalProperties": false
+      },
+      "requires": {
+        "plugins": ["PCG"],
+        "modules": ["PCG"]
+      },
+      "traits": { "readOnly": false, "destructive": true, "expensive": true },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "confirmWrite" },
+      "output": { "kind": "json" }
     }
   ]
 }

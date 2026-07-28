@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { type CapabilityCatalog, type CapabilityDomain, type CapabilityKind, type CapabilityOutputKind } from "./capability-catalog.js";
+import { type CapabilityCatalog, type CapabilityDomain, type CapabilityDslRisk, type CapabilityKind, type CapabilityOutputKind } from "./capability-catalog.js";
 import { type MCPResponse } from "./helpers.js";
 import { type UECapabilitiesData, type UECapabilityQuery, type UEHealthData, type UEWorkflowData, type UEWorkflowRequest } from "./ue-bridge.js";
 import { type CliLocationResult } from "./cli-locator.js";
@@ -31,6 +31,8 @@ export declare function handleCapabilities(catalog: CapabilityCatalog, client: U
     destructive?: boolean;
     expensive?: boolean;
     outputKind?: CapabilityOutputKind;
+    risk?: CapabilityDslRisk;
+    availableOnly?: boolean;
     offset?: number;
     limit?: number;
     detail?: CapabilityDetail;
@@ -45,6 +47,7 @@ export declare function handleContext(catalog: CapabilityCatalog, args: {
     destructive?: boolean;
     expensive?: boolean;
     outputKind?: CapabilityOutputKind;
+    risk?: CapabilityDslRisk;
     offset?: number;
     limit?: number;
 }): MCPResponse;

@@ -18,16 +18,15 @@ struct FManifestSpec
 {
 	const TCHAR* FileName;
 	const TCHAR* Domain;
-	int32 ExpectedCount;
 };
 
 const FManifestSpec ManifestSpecs[] = {
-	{TEXT("blueprint.json"), TEXT("blueprint"), 58},
-	{TEXT("scene.json"), TEXT("scene"), 54},
-	{TEXT("content.json"), TEXT("content"), 59},
-	{TEXT("animation.json"), TEXT("animation"), 10},
-	{TEXT("ai.json"), TEXT("ai"), 9},
-	{TEXT("production.json"), TEXT("production"), 22},
+	{TEXT("blueprint.json"), TEXT("blueprint")},
+	{TEXT("scene.json"), TEXT("scene")},
+	{TEXT("content.json"), TEXT("content")},
+	{TEXT("animation.json"), TEXT("animation")},
+	{TEXT("ai.json"), TEXT("ai")},
+	{TEXT("production.json"), TEXT("production")},
 };
 
 void AddError(TArray<FString>& Errors, const FString& Error)
@@ -78,6 +77,42 @@ bool HasRequiredBool(
 		return false;
 	}
 	return true;
+}
+
+bool ValidateOptionalStringArray(
+	const TSharedPtr<FJsonObject>& Object,
+	const TCHAR* Field,
+	const FString& Context,
+	TArray<FString>& Errors)
+{
+	if (!Object.IsValid() || !Object->HasField(Field))
+	{
+		return true;
+	}
+	if (!Object->HasTypedField<EJson::Array>(Field))
+	{
+		AddError(
+			Errors,
+			FString::Printf(TEXT("%s.%s must be an array."), *Context, Field));
+		return false;
+	}
+
+	bool bValid = true;
+	for (const TSharedPtr<FJsonValue>& Value : Object->GetArrayField(Field))
+	{
+		if (!Value.IsValid() || Value->Type != EJson::String || Value->AsString().IsEmpty())
+		{
+			AddError(
+				Errors,
+				FString::Printf(
+					TEXT("%s.%s must contain only non-empty strings."),
+					*Context,
+					Field));
+			bValid = false;
+			break;
+		}
+	}
+	return bValid;
 }
 
 bool JsonValuesEqual(const TSharedPtr<FJsonValue>& Left, const TSharedPtr<FJsonValue>& Right)
@@ -489,6 +524,86 @@ bool ValidateDescriptor(
 		}
 	}
 
+	if (Descriptor->HasField(TEXT("requires")))
+	{
+		if (!Descriptor->HasTypedField<EJson::Object>(TEXT("requires")))
+		{
+			AddError(Errors, FString::Printf(TEXT("%s.requires must be an object."), *Context));
+			bValid = false;
+		}
+		else
+		{
+			const TSharedPtr<FJsonObject> Requirements =
+				Descriptor->GetObjectField(TEXT("requires"));
+			static const TSet<FString> AllowedRequirementFields = {
+				TEXT("plugins"),
+				TEXT("modules"),
+				TEXT("platforms"),
+				TEXT("engine"),
+			};
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Requirements->Values)
+			{
+				if (!AllowedRequirementFields.Contains(Field.Key))
+				{
+					AddError(
+						Errors,
+						FString::Printf(
+							TEXT("%s.requires.%s is not supported."),
+							*Context,
+							*Field.Key));
+					bValid = false;
+				}
+			}
+			bValid &= ValidateOptionalStringArray(
+				Requirements, TEXT("plugins"), Context + TEXT(".requires"), Errors);
+			bValid &= ValidateOptionalStringArray(
+				Requirements, TEXT("modules"), Context + TEXT(".requires"), Errors);
+			bValid &= ValidateOptionalStringArray(
+				Requirements, TEXT("platforms"), Context + TEXT(".requires"), Errors);
+
+			if (Requirements->HasField(TEXT("engine")))
+			{
+				if (!Requirements->HasTypedField<EJson::Object>(TEXT("engine")))
+				{
+					AddError(
+						Errors,
+						FString::Printf(TEXT("%s.requires.engine must be an object."), *Context));
+					bValid = false;
+				}
+				else
+				{
+					const TSharedPtr<FJsonObject> Engine =
+						Requirements->GetObjectField(TEXT("engine"));
+					for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Engine->Values)
+					{
+						if (Field.Key != TEXT("min") && Field.Key != TEXT("maxExclusive"))
+						{
+							AddError(
+								Errors,
+								FString::Printf(
+									TEXT("%s.requires.engine.%s is not supported."),
+									*Context,
+									*Field.Key));
+							bValid = false;
+						}
+						else if (!Field.Value.IsValid()
+							|| Field.Value->Type != EJson::String
+							|| Field.Value->AsString().IsEmpty())
+						{
+							AddError(
+								Errors,
+								FString::Printf(
+									TEXT("%s.requires.engine.%s must be a non-empty string."),
+									*Context,
+									*Field.Key));
+							bValid = false;
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return bValid;
 }
 }
@@ -580,16 +695,6 @@ bool LoadCapabilityCatalog(
 		int32 DomainCount = 0;
 		const TArray<TSharedPtr<FJsonValue>>& Capabilities =
 			Root->GetArrayField(TEXT("capabilities"));
-		if (Capabilities.Num() != Spec.ExpectedCount)
-		{
-			AddError(
-				OutErrors,
-				FString::Printf(
-					TEXT("%s must contain exactly %d capabilities; found %d."),
-					Spec.FileName,
-					Spec.ExpectedCount,
-					Capabilities.Num()));
-		}
 		for (int32 Index = 0; Index < Capabilities.Num(); ++Index)
 		{
 			const TSharedPtr<FJsonValue>& Value = Capabilities[Index];
