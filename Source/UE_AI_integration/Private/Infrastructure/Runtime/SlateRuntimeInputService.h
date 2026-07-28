@@ -13,9 +13,11 @@ struct FRuntimeServiceResult;
 /**
  * Centralized runtime input adapter.
  *
- * Targeted widget actions use AutomationDriver with a locator created from
- * UWidget::GetCachedWidget(). Absolute-coordinate operations and unsupported
- * driver actions fall back to the same centralized Slate event path.
+ * Off-thread targeted widget actions use AutomationDriver with a locator
+ * created from UWidget::GetCachedWidget(). Game-thread calls, absolute
+ * coordinates, and unsupported driver actions use the centralized Slate event
+ * path so a synchronous driver action can never wait on the thread advancing
+ * that action.
  */
 class FSlateRuntimeInputService
 {

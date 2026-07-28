@@ -177,10 +177,12 @@ FRuntimeServiceResult FSlateRuntimeInputService::Pointer(
 	bool bHandled = false;
 	FString Backend = TEXT("slate");
 
-	// A cached UWidget maps directly to an AutomationDriver locator. Keep
-	// coordinate-only input in the Slate fallback because AutomationDriver
-	// intentionally exposes element-relative rather than absolute positioning.
-	if (TargetWidget && !Position.IsSet())
+	// The synchronous AutomationDriver facade waits for an asynchronous action
+	// that is advanced by the game thread. MCP requests are also executed from
+	// the game thread, so using that facade here would deadlock. Keep the driver
+	// path for off-thread callers and use the direct Slate path on the game
+	// thread.
+	if (!IsInGameThread() && TargetWidget && !Position.IsSet())
 	{
 		const TSharedPtr<SWidget> CachedWidget = TargetWidget->GetCachedWidget();
 		if (CachedWidget.IsValid())
@@ -347,7 +349,11 @@ FRuntimeServiceResult FSlateRuntimeInputService::Key(
 	bool bHandled = false;
 	const FModifierKeysState NoModifiers;
 
-	if (TargetWidget && TargetWidget->GetCachedWidget().IsValid())
+	// See Pointer(): synchronous AutomationDriver calls cannot be made while
+	// already executing on the game thread.
+	if (!IsInGameThread()
+		&& TargetWidget
+		&& TargetWidget->GetCachedWidget().IsValid())
 	{
 		if (IAutomationDriverModule* DriverModule =
 				LoadAutomationDriverModule())
