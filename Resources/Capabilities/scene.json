@@ -2319,7 +2319,7 @@
       "id": "scene.runtime.viewport.capture",
       "domain": "scene",
       "kind": "query",
-      "description": "Capture only the SViewport bound to the specified live PIE session and return capture provenance plus a raw-pixel SHA-256.",
+      "description": "Capture the exact viewport bound to the specified live PIE session, preferring its Slate SViewport and falling back only to its FSceneViewport render target; return whether Slate is included plus raw-pixel provenance.",
       "inputSchema": {
         "type": "object",
         "properties": {

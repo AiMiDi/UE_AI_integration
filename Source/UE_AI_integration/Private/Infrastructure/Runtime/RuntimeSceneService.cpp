@@ -3084,18 +3084,50 @@ FRuntimeServiceResult FRuntimeSceneService::CapturePIEViewport(
 
 	TArray<FColor> Pixels;
 	FIntVector ScreenshotSize = FIntVector::ZeroValue;
-	if (!FSlateApplication::Get().TakeScreenshot(
+	FString CaptureSource;
+	bool bIncludesSlate = false;
+	bool bForceSceneViewportReadbackForTesting = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	Params->TryGetBoolField(
+		TEXT("forceSceneViewportReadbackForTesting"),
+		bForceSceneViewportReadbackForTesting);
+#endif
+	const bool bSlateCaptureSucceeded =
+		!bForceSceneViewportReadbackForTesting
+		&& FSlateApplication::Get().TakeScreenshot(
 			ViewportWidget.ToSharedRef(),
 			Pixels,
 			ScreenshotSize)
-		|| ScreenshotSize.X <= 0
-		|| ScreenshotSize.Y <= 0
-		|| Pixels.Num() != ScreenshotSize.X * ScreenshotSize.Y)
+		&& ScreenshotSize.X > 0
+		&& ScreenshotSize.Y > 0
+		&& Pixels.Num() == ScreenshotSize.X * ScreenshotSize.Y;
+	if (bSlateCaptureSucceeded)
 	{
-		return FRuntimeServiceResult::Error(
-			TEXT("viewport_capture_failed"),
-			TEXT("Capturing the bound PIE SViewport failed; no fallback source was used."),
-			422);
+		CaptureSource = TEXT("pieSlateViewport");
+		bIncludesSlate = true;
+	}
+	else
+	{
+		Pixels.Reset();
+		ScreenshotSize = FIntVector::ZeroValue;
+		const FIntPoint SceneViewportSize = SceneViewport->GetSizeXY();
+		if (SceneViewportSize.X <= 0
+			|| SceneViewportSize.Y <= 0
+			|| !SceneViewport->GetRenderTargetTexture().IsValid()
+			|| !SceneViewport->ReadPixels(Pixels)
+			|| Pixels.Num() != SceneViewportSize.X * SceneViewportSize.Y)
+		{
+			return FRuntimeServiceResult::Error(
+				TEXT("viewport_capture_failed"),
+				TEXT(
+					"Capturing the bound PIE SViewport failed and its "
+					"exact FSceneViewport render target could not be read; "
+					"no desktop or other-window fallback was used."),
+				422);
+		}
+		ScreenshotSize =
+			FIntVector(SceneViewportSize.X, SceneViewportSize.Y, 0);
+		CaptureSource = TEXT("pieSceneViewportReadPixels");
 	}
 
 	FString PixelSha256;
@@ -3190,7 +3222,8 @@ FRuntimeServiceResult FRuntimeSceneService::CapturePIEViewport(
 	Data->SetNumberField(
 		TEXT("generation"),
 		static_cast<double>(Impl->Generation));
-	Data->SetStringField(TEXT("captureSource"), TEXT("pieSlateViewport"));
+	Data->SetStringField(TEXT("captureSource"), CaptureSource);
+	Data->SetBoolField(TEXT("includesSlate"), bIncludesSlate);
 	Data->SetStringField(TEXT("slateWidget"), ViewportWidget->GetTypeAsString());
 	Data->SetStringField(TEXT("windowTitle"), Window->GetTitle().ToString());
 	Data->SetStringField(

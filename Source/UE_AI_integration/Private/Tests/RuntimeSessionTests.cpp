@@ -830,6 +830,12 @@ bool FWaitForRuntimePIECapture::Update()
 		Params->SetNumberField(TEXT("width"), 160.0);
 		Params->SetNumberField(TEXT("height"), 90.0);
 		Params->SetNumberField(TEXT("quality"), 90.0);
+		if (State->bExpectCaptureSuccess)
+		{
+			Params->SetBoolField(
+				TEXT("forceSceneViewportReadbackForTesting"),
+				true);
+		}
 		const FRuntimeServiceResult Capture =
 			Service.CapturePIEViewport(Params);
 		State->bCaptureAttempted = true;
@@ -862,9 +868,12 @@ bool FWaitForRuntimePIECapture::Update()
 		{
 			const TSharedPtr<FJsonObject>& Data = Capture.Data;
 			Test->TestEqual(
-				TEXT("Capture provenance is the bound PIE Slate viewport"),
+				TEXT("Forced fallback reads the exact bound PIE FSceneViewport"),
 				Data->GetStringField(TEXT("captureSource")),
-				FString(TEXT("pieSlateViewport")));
+				FString(TEXT("pieSceneViewportReadPixels")));
+			Test->TestFalse(
+				TEXT("FSceneViewport readback does not claim Slate overlays"),
+				Data->GetBoolField(TEXT("includesSlate")));
 			Test->TestEqual(
 				TEXT("Capture belongs to the requested session"),
 				Data->GetStringField(TEXT("sessionId")),
