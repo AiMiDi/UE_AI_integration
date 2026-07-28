@@ -14,7 +14,7 @@ public class UE_AI_integration : ModuleRules
 		PrivateIncludePaths.Add(
 			Path.Combine(ModuleDirectory, "..", "..", "Workflow", "ThirdParty"));
 
-		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"0.3.0\"");
+		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"0.3.1\"");
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{

@@ -117,13 +117,18 @@ ue-workflow validate --file <workflow.json|->
 ue-workflow plan --file <workflow.json|->
 ue-workflow execute --file <workflow.json|-> --approve-plan <digest>
                     --receipt <path> [--save-on-success] [--confirm-write]
+                    [--detail-level summary|standard|full]
+                    [--section <name>]...
 ue-workflow resume|status|rollback --receipt <path>
+                    [--detail-level summary|standard|full]
+                    [--section <name>]...
 ue-workflow operation run <type> ...
 ue-workflow shell
 ```
 
 机器可读结果写 stdout；连接进度和日志写 stderr。`validate`、`plan` 和 help
 可离线使用。`execute`、run 状态与 rollback 需要正在运行的 Unreal Editor。
+`--section` 可重复使用；`--details` 暂作为 `--detail-level full` 的兼容别名。
 
 ### 构建与安装
 
@@ -145,13 +150,37 @@ cmake --install build-workflow --config Release --prefix C:\Tools\ue-workflow
   "workflow": {},
   "approvePlanDigest": "sha256:<64-hex-digest>",
   "saveOnSuccess": false,
-  "confirmWrite": false
+  "confirmWrite": false,
+  "detailLevel": "summary",
+  "sections": ["readBack", "assetDiff"]
 }
 ```
 
 `ue_workflow` 支持 `validate`、`plan`、`execute`、`resume`、`status` 和
 `rollback`。MCP 只接收内联 JSON object，不接收本地文件路径。`rollback`
 还需要原 run 的 `runId` 和已审批 digest。
+
+### 分级响应
+
+`validate/plan` 默认使用 `standard`；`execute/resume/status/rollback` 默认使用
+`summary`：
+
+- `summary`：状态、Mutation、operation/finalizer 状态计数、Dirty Package 与
+  diagnostics 数量、Diff 统计、rollback 摘要和 `resultRef`。
+- `standard`：在 summary 上增加不含原始 output 的 operation/finalizer 清单。
+- `full`：返回全部 section，但 ReadBack、Diff 和结构快照各只出现一次。
+
+`sections` 可从 `operations`、`finalizers`、`readBack`、`assetDiff`、
+`structures`、`rollback`、`diagnostics` 中按需附加。显式 section 不会改变
+`detailLevel` 的默认投影。旧 `details:false/true` 继续映射到
+`summary/full`；同时传 `details` 与 `detailLevel` 会返回
+`422 invalid_workflow_request`。
+
+Widget Blueprint 的 `widgetTree/bindings/layout` 共用一次
+`content.widget.hierarchy.get`，再分别投影。finalizer 清单只保留执行元数据和
+状态，原始读回只位于 `readBack` section；完整字段 Diff 只位于
+`assetDiff` section。外部 receipt 是精简的运行凭据，完整恢复数据只保存在
+`Saved/UEWorkflow` journal 中。
 
 v1 的 Editor 执行是同步的，因此 `resume` 不会重新执行 editStep，也不接受
 workflow 或参数修改。它只接受当前 Editor Runtime 内存中已经记录的 `runId`：
@@ -160,7 +189,7 @@ workflow 或参数修改。它只接受当前 Editor Runtime 内存中已经记�
 `resumedExecution=false`。来自其他 Editor 实例或未知的 run 会被拒绝；若遇到
 不可安全续跑的非终态记录，则返回 `workflow_resume_not_safe`，不会伪装成已续跑。
 
-HTTP action 返回 `ue.workflow-result.v1`；其中嵌套的
+HTTP action 返回 `ue.workflow-result.v1`；其中嵌套的精简
 `ue.workflow-run.v1` receipt 才是 CLI 写入 `--receipt` 的持久化对象。
 CLI 在落盘前校验 result、receipt、plan digest 和 contract digest。
 

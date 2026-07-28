@@ -99,9 +99,19 @@ def main() -> int:
             assert written["schema"] == "ue.workflow-run.v1"
             assert written["status"] == "pending"
 
-            run("status", "--receipt", str(receipt_path))
+            run(
+                "status",
+                "--receipt",
+                str(receipt_path),
+                "--detail-level",
+                "standard",
+                "--section",
+                "diagnostics",
+                "--section",
+                "assetDiff",
+            )
             assert json.loads(receipt_path.read_text(encoding="utf-8"))["status"] == "running"
-            run("resume", "--receipt", str(receipt_path))
+            run("resume", "--receipt", str(receipt_path), "--details")
             assert json.loads(receipt_path.read_text(encoding="utf-8"))["status"] == "completed"
             run("rollback", "--receipt", str(receipt_path))
             final_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -119,6 +129,10 @@ def main() -> int:
     ]
     assert "approvePlanDigest" not in requests[1]
     assert "approvePlanDigest" not in requests[2]
+    assert requests[1]["detailLevel"] == "standard"
+    assert requests[1]["sections"] == ["diagnostics", "assetDiff"]
+    assert requests[2]["detailLevel"] == "full"
+    assert "details" not in requests[2]
     assert requests[3]["approvePlanDigest"] == plan_digest
     return 0
 

@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 3,
-	"VersionName": "0.3.0",
+	"Version": 4,
+	"VersionName": "0.3.1",
 	"FriendlyName": "UE_AI_integration",
 	"Description": "A domain-layered AI integration for Unreal Engine 5.3-5.7, exposing 212 editor and PIE runtime capabilities plus the UE Workflow DSL.",
 	"Category": "Editor",

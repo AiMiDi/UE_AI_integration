@@ -6,7 +6,7 @@
 Editor Module 和 TypeScript stdio bridge，让 Codex CLI、Claude Code 等
 MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与生产流程。
 
-当前插件版本为 `0.3.0`，以 Unreal Engine 5.3 为实际构建基线；UE
+当前插件版本为 `0.3.1`，以 Unreal Engine 5.3 为实际构建基线；UE
 5.4–5.7 的差异集中在兼容层，但尚未全部完成本地编译验证。
 
 ## 核心特性
@@ -22,6 +22,8 @@ MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与
 - 默认监听 `127.0.0.1:9847`，客户端可通过 `UE_PORT` 覆盖端口。
 - [UE Workflow DSL/CLI](docs/UE_WORKFLOW_DSL.md) 将单资产连续编辑合并为一次
   可规划、可审批、可回滚的执行；调试和长任务不进入 Workflow。
+- Workflow 默认返回压缩摘要；完整 ReadBack、Diff 与结构快照按 section 获取。
+- capability 目录支持搜索、trait 过滤与分页，默认最多返回 25 项摘要。
 
 ## 架构
 
@@ -144,8 +146,9 @@ bridge 始终注册以下十个工具，即使 Unreal Editor 暂时离线：
 }
 ```
 
-先用 `ue_capabilities` 或 `ue_context` 查询 operation 的 schema、traits 和
-输出类型。领域工具会拒绝调用其他领域的 operation。
+先用 `ue_capabilities` 搜索分页摘要，或用 `ue_context` 按域读取完整 schema。
+精确指定 `operation` 会返回单项完整描述符。领域工具会拒绝调用其他领域的
+operation。
 
 ### PIE 生命周期
 
@@ -173,7 +176,7 @@ Editor 插件保留三条原有路由，并新增两条 Workflow 路由：
 
 ```text
 GET  /api/health
-GET  /api/capabilities?domain=<domain>
+GET  /api/capabilities?query=<text>&domain=<domain>&offset=0&limit=25
 POST /api/execute
 GET  /api/v1/workflow/handshake
 POST /api/v1/workflow
@@ -227,6 +230,11 @@ POST /api/v1/workflow
 Registry 启动时会验证 manifest 与 C++ Handler 是否一一对应。缺失、重复或
 跨域绑定会让服务进入 `degraded` 状态：健康检查和能力查询仍然可用，但执行
 被禁用。
+
+`/api/capabilities` 默认返回不含 `inputSchema` 的摘要页，并包含
+`total/offset/limit/hasMore`。可按 `kind`、`readOnly`、`destructive`、
+`expensive`、`outputKind` 过滤；使用 `detail=full` 获取完整描述符，或用
+`operation=<dotted-id>` 精确获取单项完整 schema。`limit` 最大为 100。
 
 ## 开发与验证
 

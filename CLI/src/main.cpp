@@ -56,7 +56,8 @@ struct CliOptions
     bool connect = false;
     bool save_on_success = false;
     bool confirm_write = false;
-    bool details = false;
+    bool details_alias = false;
+    bool detail_level_explicit = false;
     std::filesystem::path contract_root;
     std::vector<std::filesystem::path> capability_roots;
     std::filesystem::path file;
@@ -64,6 +65,8 @@ struct CliOptions
     std::string endpoint = "http://127.0.0.1:9847";
     std::string approve_plan;
     std::string params = "{}";
+    std::string detail_level;
+    std::vector<std::string> sections;
     std::vector<std::string> positional;
 };
 
@@ -160,6 +163,77 @@ void print_json_text(std::string_view text, bool compact)
     std::cout << (parsed.is_discarded() ? std::string(text) : parsed.dump(2)) << "\n";
 }
 
+void apply_response_options(json& request, const CliOptions& options)
+{
+    if (!options.detail_level.empty())
+    {
+        request["detailLevel"] = options.detail_level;
+    }
+    if (!options.sections.empty())
+    {
+        request["sections"] = options.sections;
+    }
+}
+
+std::string project_planning_response(std::string_view response_text, const CliOptions& options)
+{
+    auto response = json::parse(response_text, nullptr, false, true);
+    if (!response.is_object())
+    {
+        return std::string(response_text);
+    }
+
+    const std::string detail_level =
+        options.detail_level.empty() ? "standard" : options.detail_level;
+    if (detail_level != "summary")
+    {
+        response["detailLevel"] = detail_level;
+        if (options.details_alias)
+        {
+            response["deprecations"] = json::array({
+                "'--details' is deprecated; use '--detail-level full' instead.",
+            });
+        }
+        return response.dump();
+    }
+
+    static const std::array<std::string_view, 10> summary_fields = {
+        "ok",          "schema",          "plannerVersion", "contractSetDigest", "planDigest",
+        "contractSet", "validationScope", "risk",           "approval",          "valid",
+    };
+    json projected = json::object();
+    for (const auto field : summary_fields)
+    {
+        if (response.contains(field))
+        {
+            projected[std::string(field)] = response[std::string(field)];
+        }
+    }
+    projected["detailLevel"] = "summary";
+    projected["summary"] = json::object();
+    for (const auto* field : {"initializers", "operations", "finalizers", "diagnostics"})
+    {
+        if (response.contains(field) && response[field].is_array())
+        {
+            projected["summary"][std::string(field) + "Count"] = response[field].size();
+        }
+    }
+    json requested_sections = json::object();
+    for (const auto& section : options.sections)
+    {
+        if ((section == "operations" || section == "finalizers" || section == "diagnostics") &&
+            response.contains(section))
+        {
+            requested_sections[section] = response[section];
+        }
+    }
+    if (!requested_sections.empty())
+    {
+        projected["sections"] = std::move(requested_sections);
+    }
+    return projected.dump();
+}
+
 int print_error(
     int exit_code,
     std::string code,
@@ -186,29 +260,36 @@ int print_error(
 json binary_help()
 {
     return {
-        { "ok", true },
-        { "schema", "ue.workflow-cli-help.v1" },
-        { "product", "UE Workflow DSL" },
-        { "executable", "ue-workflow" },
-        { "version", UE_WORKFLOW_VERSION },
-        { "dsl", "ue.workflow" },
-        { "commands", json::array({
-            "doctor [--connect]",
-            "help composable [blueprint|widget|material]",
-            "help operation <type>",
-            "validate --file <workflow.json|->",
-            "plan --file <workflow.json|->",
-            "execute --file <workflow.json|-> --approve-plan <digest> --receipt <path> [--save-on-success] [--confirm-write]",
-            "status|resume|rollback --receipt <path>",
-            "operation run <type> [--params <json>]",
-            "shell",
-        }) },
-        { "globalOptions", json::array({
-            "--json",
-            "--contract-root <path>",
-            "--capability-root <path>",
-            "--endpoint http://127.0.0.1:<port>",
-        }) },
+        {"ok", true},
+        {"schema", "ue.workflow-cli-help.v1"},
+        {"product", "UE Workflow DSL"},
+        {"executable", "ue-workflow"},
+        {"version", UE_WORKFLOW_VERSION},
+        {"dsl", "ue.workflow"},
+        {"commands", json::array({
+                         "doctor [--connect]",
+                         "help composable [blueprint|widget|material]",
+                         "help operation <type>",
+                         "validate --file <workflow.json|->",
+                         "plan --file <workflow.json|->",
+                         "execute --file <workflow.json|-> --approve-plan <digest> --receipt "
+                         "<path> [--save-on-success] [--confirm-write]",
+                         "status|resume|rollback --receipt <path> [--detail-level <level>] "
+                         "[--section <name>]",
+                         "operation run <type> [--params <json>]",
+                         "shell",
+                     })},
+        {"globalOptions", json::array({
+                              "--json",
+                              "--contract-root <path>",
+                              "--capability-root <path>",
+                              "--endpoint http://127.0.0.1:<port>",
+                              "--detail-level summary|standard|full",
+                              "--section "
+                              "operations|finalizers|readBack|assetDiff|structures|rollback|"
+                              "diagnostics",
+                              "--details (deprecated alias for --detail-level full)",
+                          })},
     };
 }
 
@@ -244,7 +325,46 @@ bool parse_arguments(const std::vector<std::string>& arguments, CliOptions& opti
         }
         else if (argument == "--details")
         {
-            options.details = true;
+            if (options.detail_level_explicit)
+            {
+                return false;
+            }
+            options.details_alias = true;
+            options.detail_level = "full";
+        }
+        else if (argument == "--detail-level")
+        {
+            std::string value;
+            if (options.details_alias || options.detail_level_explicit ||
+                !take_value(index, value) ||
+                (value != "summary" && value != "standard" && value != "full"))
+            {
+                return false;
+            }
+            options.detail_level_explicit = true;
+            options.detail_level = std::move(value);
+        }
+        else if (argument == "--section")
+        {
+            std::string value;
+            if (!take_value(index, value))
+            {
+                return false;
+            }
+            static const std::array<std::string_view, 7> supported_sections = {
+                "operations", "finalizers", "readBack",    "assetDiff",
+                "structures", "rollback",   "diagnostics",
+            };
+            if (std::find(supported_sections.begin(), supported_sections.end(), value) ==
+                supported_sections.end())
+            {
+                return false;
+            }
+            if (std::find(options.sections.begin(), options.sections.end(), value) ==
+                options.sections.end())
+            {
+                options.sections.push_back(std::move(value));
+            }
         }
         else if (argument == "--contract-root")
         {
@@ -922,14 +1042,14 @@ int run_command(
         if (command == "validate")
         {
             const auto result = engine->ValidateJson(*input);
-            print_json_text(result.json, options.json_output);
+            print_json_text(project_planning_response(result.json, options), options.json_output);
             return result.exit_code;
         }
 
         const auto plan = engine->PlanJson(*input);
         if (command == "plan" || !plan.ok)
         {
-            print_json_text(plan.json, options.json_output);
+            print_json_text(project_planning_response(plan.json, options), options.json_output);
             return plan.exit_code;
         }
 
@@ -960,14 +1080,14 @@ int run_command(
                 "Workflow execution requires --receipt <path>.");
         }
         const auto workflow = json::parse(*input, nullptr, false, true);
-        const json request = {
-            { "action", "execute" },
-            { "workflow", workflow },
-            { "approvePlanDigest", options.approve_plan },
-            { "saveOnSuccess", options.save_on_success },
-            { "confirmWrite", options.confirm_write },
-            { "details", options.details },
+        json request = {
+            {"action", "execute"},
+            {"workflow", workflow},
+            {"approvePlanDigest", options.approve_plan},
+            {"saveOnSuccess", options.save_on_success},
+            {"confirmWrite", options.confirm_write},
         };
+        apply_response_options(request, options);
         const auto response = http_request(
             options.endpoint,
             "POST",
@@ -1013,10 +1133,10 @@ int run_command(
         }
         const auto receipt = json::parse(*receipt_text, nullptr, false, true);
         json request = {
-            { "action", command },
-            { "runId", receipt["runId"] },
-            { "details", options.details },
+            {"action", command},
+            {"runId", receipt["runId"]},
         };
+        apply_response_options(request, options);
         if (command == "rollback")
         {
             if (!receipt.contains("planDigest") || !receipt["planDigest"].is_string())

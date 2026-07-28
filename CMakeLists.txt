@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 project(
     UEWorkflow
-    VERSION 0.1.0
+    VERSION 0.3.1
     DESCRIPTION "Portable UE Workflow DSL core and CLI"
     LANGUAGES CXX
 )

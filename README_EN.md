@@ -7,7 +7,7 @@ a single Editor Module with a TypeScript stdio bridge so MCP clients such as
 Codex CLI and Claude Code can inspect or modify Blueprints, scenes, content
 assets, animation, AI, and production workflows.
 
-The current plugin version is `0.3.0`. Unreal Engine 5.3 is the verified build
+The current plugin version is `0.3.1`. Unreal Engine 5.3 is the verified build
 baseline. Differences for UE 5.4–5.7 are isolated in the compatibility layer,
 but those versions have not all been compiled locally.
 
@@ -29,6 +29,10 @@ but those versions have not all been compiled locally.
 - [UE Workflow DSL/CLI](docs/UE_WORKFLOW_DSL.md) combines deterministic
   single-asset edits into one planned, approved, and reversible execution;
   debugging sessions and long-running jobs stay outside Workflow.
+- Workflow returns compact summaries by default; readback, diff, and structure
+  snapshots are retrieved as explicit sections.
+- Capability discovery supports search, trait filters, and pagination, with at
+  most 25 summaries returned by default.
 
 ## Architecture
 
@@ -155,9 +159,9 @@ All six domain tools accept the same input shape:
 }
 ```
 
-Use `ue_capabilities` or `ue_context` to inspect an operation's schema, traits,
-and output type first. A domain tool rejects operations owned by another
-domain.
+Use `ue_capabilities` for paged summaries and `ue_context` for full schemas.
+An exact `operation` returns one full descriptor. A domain tool rejects
+operations owned by another domain.
 
 ### PIE Lifecycle
 
@@ -187,7 +191,7 @@ routes:
 
 ```text
 GET  /api/health
-GET  /api/capabilities?domain=<domain>
+GET  /api/capabilities?query=<text>&domain=<domain>&offset=0&limit=25
 POST /api/execute
 GET  /api/v1/workflow/handshake
 POST /api/v1/workflow
@@ -242,6 +246,12 @@ At startup, the Registry verifies a one-to-one mapping between every manifest
 entry and C++ handler. A missing, duplicate, or cross-domain binding places the
 service in `degraded` state. Health checks and capability discovery remain
 available, but execution is disabled.
+
+`/api/capabilities` returns summary pages without `inputSchema` by default and
+includes `total/offset/limit/hasMore`. Filters include `kind`, `readOnly`,
+`destructive`, `expensive`, and `outputKind`. Use `detail=full` for full
+descriptors or `operation=<dotted-id>` for one exact schema. The maximum
+`limit` is 100.
 
 ## Development and Validation
 
