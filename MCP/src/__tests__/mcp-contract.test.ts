@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 
 import { loadCapabilityCatalog } from "../capability-catalog.js";
+import { locateWorkflowCli } from "../cli-locator.js";
 import { runDomainOperation } from "../domain-router.js";
 import { createLocalShutdownHandler } from "../index.js";
 import {
@@ -45,7 +48,7 @@ test("keeps oversized MCP JSON text valid when truncating", () => {
   assert.ok(output.length <= 512);
 });
 
-test("registers exactly ten MCP tools without contacting Unreal Editor", () => {
+test("registers exactly eleven MCP tools without contacting Unreal Editor", () => {
   let networkCalls = 0;
   const offlineClient: UEConnectionClient = {
     getHealth: async () => {
@@ -88,6 +91,7 @@ test("registers exactly ten MCP tools without contacting Unreal Editor", () => {
     "ue_status",
     "ue_capabilities",
     "ue_context",
+    "ue_cli",
     "ue_blueprint",
     "ue_scene",
     "ue_content",
@@ -98,7 +102,11 @@ test("registers exactly ten MCP tools without contacting Unreal Editor", () => {
   ]);
   assert.deepEqual(runtime.registeredToolNames, MCP_TOOL_NAMES);
   assert.deepEqual(registeredTools, MCP_TOOL_NAMES);
-  assert.equal(runtime.registeredToolNames.length, 10);
+  assert.equal(runtime.registeredToolNames.length, 11);
+  assert.deepEqual(
+    Object.keys(registeredToolMap.ue_cli?.inputSchema?.shape ?? {}),
+    [],
+  );
   for (const toolName of [
     "ue_blueprint",
     "ue_scene",
@@ -127,6 +135,56 @@ test("registers exactly ten MCP tools without contacting Unreal Editor", () => {
     ],
   );
   assert.equal(networkCalls, 0);
+});
+
+test("locates ue-workflow offline with deterministic precedence", () => {
+  const fixturePluginRoot = resolve("fixture-plugin");
+  const moduleUrl = pathToFileURL(
+    join(fixturePluginRoot, "MCP", "dist", "cli-locator.js"),
+  ).href;
+  const executableName =
+    process.platform === "win32" ? "ue-workflow.exe" : "ue-workflow";
+  const configured = resolve("custom-tools", executableName);
+  const packaged = join(fixturePluginRoot, "CLI", "bin", executableName);
+
+  const configuredResult = locateWorkflowCli({
+    moduleUrl,
+    env: { PATH: "", UE_WORKFLOW_CLI: configured },
+    isFile: (path) => path === configured || path === packaged,
+  });
+  assert.equal(configuredResult.found, true);
+  assert.equal(configuredResult.executablePath, configured);
+  assert.equal(configuredResult.source, "environment");
+  assert.match(configuredResult.guidance, /doctor --connect$/);
+
+  const packagedResult = locateWorkflowCli({
+    moduleUrl,
+    env: { PATH: "" },
+    isFile: (path) => path === packaged,
+  });
+  assert.equal(packagedResult.found, true);
+  assert.equal(packagedResult.executablePath, packaged);
+  assert.equal(packagedResult.source, "packaged");
+  assert.ok(packagedResult.candidates.length <= 6);
+  assert.ok(Buffer.byteLength(JSON.stringify(packagedResult)) <= 4096);
+  assert.ok(
+    packagedResult.candidates.some(
+      (candidate) =>
+        candidate.source === "packaged" &&
+        candidate.path === packaged &&
+        candidate.exists,
+    ),
+  );
+
+  const missingResult = locateWorkflowCli({
+    moduleUrl,
+    env: { PATH: "" },
+    isFile: () => false,
+  });
+  assert.equal(missingResult.found, false);
+  assert.equal(missingResult.executablePath, null);
+  assert.equal(missingResult.source, "not_found");
+  assert.match(missingResult.guidance, /UE_WORKFLOW_CLI/);
 });
 
 test("pages and filters capability summaries without emitting schemas by default", async () => {

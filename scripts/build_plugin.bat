@@ -40,6 +40,7 @@ if "%ENGINE_PATH%"=="" (
 
 set UAT=%ENGINE_PATH%\Engine\Build\BatchFiles\RunUAT.bat
 set PLUGIN_PATH=%~dp0..\UE_AI_integration.uplugin
+set PLUGIN_ROOT=%~dp0..
 
 if not exist "%UAT%" (
     echo ERROR: RunUAT.bat not found at %UAT%
@@ -65,6 +66,37 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
+echo Restoring packaged MCP production dependencies...
+call npm ci --omit=dev --prefix "%OUTPUT_PATH%\MCP"
+if %ERRORLEVEL% neq 0 (
+    echo MCP DEPENDENCY INSTALL FAILED.
+    exit /b 1
+)
+
+set CLI_BUILD_DIR=%TEMP%\UE_AI_integration-cli-%RANDOM%-%RANDOM%
+echo.
+echo Building and packaging ue-workflow CLI...
+cmake -S "%PLUGIN_ROOT%" -B "%CLI_BUILD_DIR%" -DUE_WORKFLOW_BUILD_TESTS=OFF -DUE_WORKFLOW_BUILD_CLI=ON
+if %ERRORLEVEL% neq 0 (
+    if exist "%CLI_BUILD_DIR%" rmdir /s /q "%CLI_BUILD_DIR%"
+    echo CLI CONFIGURE FAILED.
+    exit /b 1
+)
+cmake --build "%CLI_BUILD_DIR%" --config Release --target ue-workflow
+if %ERRORLEVEL% neq 0 (
+    if exist "%CLI_BUILD_DIR%" rmdir /s /q "%CLI_BUILD_DIR%"
+    echo CLI BUILD FAILED.
+    exit /b 1
+)
+cmake --install "%CLI_BUILD_DIR%" --config Release --prefix "%OUTPUT_PATH%\CLI"
+if %ERRORLEVEL% neq 0 (
+    if exist "%CLI_BUILD_DIR%" rmdir /s /q "%CLI_BUILD_DIR%"
+    echo CLI INSTALL FAILED.
+    exit /b 1
+)
+if exist "%CLI_BUILD_DIR%" rmdir /s /q "%CLI_BUILD_DIR%"
+
+echo.
 echo ========================================
 echo  BUILD SUCCESSFUL
 echo ========================================
@@ -76,4 +108,5 @@ echo   1. Copy %OUTPUT_PATH% into YourProject\Plugins\UE_AI_integration\
 echo   2. Open UE5 -- plugin loads automatically
 echo   3. Run: claude mcp add ue_ai_integration -- node Plugins/UE_AI_integration/MCP/dist/index.js
 echo   4. Start claude in your project folder
+echo   5. Query ue_cli to locate the packaged CLI at CLI\bin\ue-workflow.exe
 echo.

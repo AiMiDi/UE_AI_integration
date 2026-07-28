@@ -5,10 +5,12 @@ import { DOMAIN_DESCRIPTIONS, DOMAIN_TOOL_NAMES, runDomainOperation, validateDom
 import { formatErrorResponse, formatJsonResponse, } from "./helpers.js";
 import { UEApiError, ueClient, } from "./ue-bridge.js";
 import { handleWorkflowInput, UE_WORKFLOW_TOOL_SCHEMA, } from "./workflow-router.js";
+import { locateWorkflowCli, } from "./cli-locator.js";
 export const MCP_TOOL_NAMES = [
     "ue_status",
     "ue_capabilities",
     "ue_context",
+    "ue_cli",
     "ue_blueprint",
     "ue_scene",
     "ue_content",
@@ -133,6 +135,7 @@ export function handleContext(catalog, args) {
 export function createMcpServer(options = {}) {
     const catalog = options.catalog ?? loadCapabilityCatalog();
     const client = options.client ?? ueClient;
+    const cliLocator = options.cliLocator ?? locateWorkflowCli;
     const server = new McpServer({
         name: "ue-ai-integration",
         version: "0.3.1",
@@ -215,6 +218,14 @@ export function createMcpServer(options = {}) {
         offset: args.offset,
         limit: args.limit,
     }));
+    server.tool("ue_cli", "Locate the ue-workflow CLI without requiring Unreal Editor. Returns the resolved executable, discovery source, checked candidates, and a doctor command.", {}, async () => {
+        try {
+            return formatJsonResponse(cliLocator());
+        }
+        catch (error) {
+            return formatErrorResponse(error);
+        }
+    });
     for (const domain of CAPABILITY_DOMAINS) {
         const toolName = DOMAIN_TOOL_NAMES[domain];
         const operationCount = catalog.forDomain(domain).length;

@@ -14,7 +14,7 @@ but those versions have not all been compiled locally.
 ## Highlights
 
 - 212 manifest-driven Editor and PIE runtime capabilities.
-- Ten stable MCP tools instead of exposing all 212 capabilities as tools.
+- Eleven stable MCP tools instead of exposing all 212 capabilities as tools.
 - Six domain routers: Blueprint, Scene, Content, Animation, AI, and Production.
 - Dedicated PIE lifecycle, runtime object/widget/delegate, real input, and
   scenario operations.
@@ -131,12 +131,13 @@ claude mcp add ue_ai_integration -- node Plugins\UE_AI_integration\MCP\dist\inde
 
 ## MCP Tools
 
-The bridge always registers these ten tools, even while Unreal Editor is
+The bridge always registers these eleven tools, even while Unreal Editor is
 offline:
 
 - `ue_status`
 - `ue_capabilities`
 - `ue_context`
+- `ue_cli`
 - `ue_blueprint`
 - `ue_scene`
 - `ue_content`
@@ -144,6 +145,13 @@ offline:
 - `ue_ai`
 - `ue_production`
 - `ue_workflow`
+
+`ue_cli` does not contact the Editor. It locates the CLI in this order:
+`UE_WORKFLOW_CLI`, the packaged `CLI/bin/ue-workflow.exe`, `PATH`, and local
+development build directories. Its response includes the resolved path,
+discovery source, checked candidates, and a ready-to-run `doctor --connect`
+command. `scripts/build_plugin.bat` packages the CLI with its
+Contracts/Capabilities and restores MCP production dependencies.
 
 All six domain tools accept the same input shape:
 

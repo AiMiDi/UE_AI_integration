@@ -12,7 +12,7 @@ MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与
 ## 核心特性
 
 - 212 项 manifest 驱动的 Editor 与 PIE Runtime 能力。
-- 十个稳定的 MCP 工具，不把 212 项能力直接展开成工具列表。
+- 十一个稳定的 MCP 工具，不把 212 项能力直接展开成工具列表。
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
 - 专用 PIE 生命周期、Runtime 对象/Widget/Delegate/真实输入与 Scenario 能力。
 - Blueprint/UMG 写入返回编译、保存、重载和读回验证证据。
@@ -119,11 +119,12 @@ claude mcp add ue_ai_integration -- node Plugins\UE_AI_integration\MCP\dist\inde
 
 ## MCP 工具
 
-bridge 始终注册以下十个工具，即使 Unreal Editor 暂时离线：
+bridge 始终注册以下十一个工具，即使 Unreal Editor 暂时离线：
 
 - `ue_status`
 - `ue_capabilities`
 - `ue_context`
+- `ue_cli`
 - `ue_blueprint`
 - `ue_scene`
 - `ue_content`
@@ -131,6 +132,12 @@ bridge 始终注册以下十个工具，即使 Unreal Editor 暂时离线：
 - `ue_ai`
 - `ue_production`
 - `ue_workflow`
+
+`ue_cli` 不连接 Editor。它按 `UE_WORKFLOW_CLI`、插件包内
+`CLI/bin/ue-workflow.exe`、`PATH` 和开发构建目录的顺序定位 CLI，并返回
+实际路径、发现来源、候选列表和可直接执行的 `doctor --connect` 命令。
+`scripts/build_plugin.bat` 会将 CLI 及其 Contracts/Capabilities 安装到插件包
+的 `CLI/` 目录，同时恢复 MCP 的生产依赖。
 
 六个领域工具统一接收：
 
