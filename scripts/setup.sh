@@ -1,6 +1,6 @@
 #!/bin/bash
 # Quick setup script — run from your UE5 project root
-# Usage: bash path/to/UE5UltimateMCP/scripts/setup.sh
+# Usage: bash path/to/UE_AI_integration/scripts/setup.sh
 
 set -e
 
@@ -9,22 +9,37 @@ PLUGIN_DIR="$SCRIPT_DIR/.."
 
 echo ""
 echo "========================================"
-echo " UE5 Ultimate MCP — Setup"
+echo " UE_AI_integration — Setup"
 echo "========================================"
 echo ""
 
 # 1. Check Node.js
 if ! command -v node &> /dev/null; then
-    echo "ERROR: Node.js not found. Install Node.js 18+ first."
+    echo "ERROR: Node.js not found. Install Node.js 20+ first."
+    exit 1
+fi
+NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
+if [ "$NODE_MAJOR" -lt 20 ]; then
+    echo "ERROR: Node.js 20+ is required; found $(node --version)."
     exit 1
 fi
 echo "[OK] Node.js $(node --version)"
 
-# 2. Build TypeScript bridge if needed
+# 2. Verify the capability catalog and build the TypeScript bridge if needed
+if [ ! -d "$PLUGIN_DIR/Resources/Capabilities" ]; then
+    echo "ERROR: Capability manifests are missing from Resources/Capabilities."
+    exit 1
+fi
+
+node "$PLUGIN_DIR/scripts/validate_capabilities.mjs"
+
+echo "[..] Installing locked MCP dependencies..."
+cd "$PLUGIN_DIR/MCP"
+npm ci --silent
+echo "[OK] MCP dependencies installed"
+
 if [ ! -f "$PLUGIN_DIR/MCP/dist/index.js" ]; then
     echo "[..] Building TypeScript bridge..."
-    cd "$PLUGIN_DIR/MCP"
-    npm install --silent
     npm run build
     echo "[OK] Bridge built"
 else
@@ -43,7 +58,7 @@ fi
 # 4. Register MCP server with Claude Code
 BRIDGE_PATH="$PLUGIN_DIR/MCP/dist/index.js"
 echo "[..] Registering MCP server with Claude Code..."
-claude mcp add ue5 -- node "$BRIDGE_PATH" 2>/dev/null && echo "[OK] MCP server registered" || echo "[!!] Could not register (is Claude Code installed?)"
+claude mcp add ue_ai_integration -- node "$BRIDGE_PATH" 2>/dev/null && echo "[OK] MCP server registered" || echo "[!!] Could not register (is Claude Code installed?)"
 
 echo ""
 echo "========================================"
@@ -53,5 +68,5 @@ echo ""
 echo " Next steps:"
 echo "   1. Open your project in UE5"
 echo "   2. Run 'claude' in this folder"
-echo "   3. Ask Claude to do something!"
+echo "   3. Call ue_status, then inspect ue_capabilities"
 echo ""

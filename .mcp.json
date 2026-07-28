@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "ue5": {
+    "ue_ai_integration": {
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/MCP/dist/index.js"]
     }

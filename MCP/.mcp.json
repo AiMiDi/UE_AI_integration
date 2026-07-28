@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "ue5-ultimate": {
+    "ue_ai_integration": {
       "command": "node",
-      "args": ["path/to/UE5UltimateMCP/MCP/dist/index.js"],
+      "args": ["path/to/UE_AI_integration/MCP/dist/index.js"],
       "env": { "UE_PORT": "9847" }
     }
   }

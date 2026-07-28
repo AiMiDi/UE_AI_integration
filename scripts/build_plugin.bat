@@ -1,34 +1,45 @@
 @echo off
-REM Build UE5UltimateMCP as a standalone plugin binary
+REM Build UE_AI_integration as a standalone plugin binary
 REM This creates a pre-compiled version that works in Blueprint-only projects
 REM
 REM Usage: build_plugin.bat [engine_path] [output_path]
 REM   engine_path  - Path to UE5 install (default: auto-detect from Epic launcher)
-REM   output_path  - Where to put the built plugin (default: .\BuiltPlugin)
+REM   output_path  - Where to put the built plugin (default: sibling of the source checkout)
 
 setlocal
 
 set ENGINE_PATH=%~1
 set OUTPUT_PATH=%~2
 
-if "%OUTPUT_PATH%"=="" set OUTPUT_PATH=%~dp0..\BuiltPlugin
+REM Keep packaged output outside the plugin source tree. UE 5.3 BuildPlugin
+REM creates a host copy before filtering staged files, so an in-tree package
+REM can be copied recursively on the next build.
+if "%OUTPUT_PATH%"=="" set OUTPUT_PATH=%~dp0..\..\UE_AI_integration-BuiltPlugin
 
-REM Auto-detect engine if not provided
+REM Auto-detect a supported engine if not provided (newest first).
 if "%ENGINE_PATH%"=="" (
-    REM Try common locations
     if exist "E:\EpicGames\Games\UE_5.7\Engine" (
         set ENGINE_PATH=E:\EpicGames\Games\UE_5.7
     ) else if exist "C:\Program Files\Epic Games\UE_5.7\Engine" (
         set ENGINE_PATH=C:\Program Files\Epic Games\UE_5.7
+    ) else if exist "C:\Program Files\Epic Games\UE_5.6\Engine" (
+        set ENGINE_PATH=C:\Program Files\Epic Games\UE_5.6
+    ) else if exist "C:\Program Files\Epic Games\UE_5.5\Engine" (
+        set ENGINE_PATH=C:\Program Files\Epic Games\UE_5.5
+    ) else if exist "C:\Program Files\Epic Games\UE_5.4\Engine" (
+        set ENGINE_PATH=C:\Program Files\Epic Games\UE_5.4
+    ) else if exist "C:\Program Files\Epic Games\UE_5.3\Engine" (
+        set ENGINE_PATH=C:\Program Files\Epic Games\UE_5.3
     ) else (
-        echo ERROR: Could not find UE5.7. Pass the engine path as first argument.
-        echo Example: build_plugin.bat "E:\EpicGames\Games\UE_5.7"
+        echo ERROR: Could not find a supported UE 5.3-5.7 installation.
+        echo Pass the engine root as the first argument.
+        echo Example: build_plugin.bat "D:\code\D5\d5render-ue5_3"
         exit /b 1
     )
 )
 
 set UAT=%ENGINE_PATH%\Engine\Build\BatchFiles\RunUAT.bat
-set PLUGIN_PATH=%~dp0..\UE5UltimateMCP.uplugin
+set PLUGIN_PATH=%~dp0..\UE_AI_integration.uplugin
 
 if not exist "%UAT%" (
     echo ERROR: RunUAT.bat not found at %UAT%
@@ -37,7 +48,7 @@ if not exist "%UAT%" (
 
 echo.
 echo ========================================
-echo  Building UE5 Ultimate MCP Plugin
+echo  Building UE_AI_integration Plugin
 echo ========================================
 echo  Engine: %ENGINE_PATH%
 echo  Plugin: %PLUGIN_PATH%
@@ -61,8 +72,8 @@ echo.
 echo Plugin built to: %OUTPUT_PATH%
 echo.
 echo To use it:
-echo   1. Copy %OUTPUT_PATH% into YourProject\Plugins\UE5UltimateMCP\
+echo   1. Copy %OUTPUT_PATH% into YourProject\Plugins\UE_AI_integration\
 echo   2. Open UE5 -- plugin loads automatically
-echo   3. Run: claude mcp add ue5 -- node Plugins/UE5UltimateMCP/MCP/dist/index.js
+echo   3. Run: claude mcp add ue_ai_integration -- node Plugins/UE_AI_integration/MCP/dist/index.js
 echo   4. Start claude in your project folder
 echo.

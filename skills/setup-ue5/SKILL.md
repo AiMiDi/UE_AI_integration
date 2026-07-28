@@ -1,11 +1,11 @@
 ---
 name: setup-ue5
-description: Set up the UE5 Ultimate MCP plugin in the current Unreal Engine project. Use when the user says "setup ue5", "install ue5 plugin", "connect to unreal", or wants to start using Claude Code with their UE5 project.
+description: Set up the UE_AI_integration plugin in the current Unreal Engine project. Use when the user says "setup ue5", "install ue5 plugin", "connect to unreal", or wants to start using Claude Code with their UE5 project.
 ---
 
-# Setup UE5 Ultimate MCP Plugin
+# Setup UE_AI_integration Plugin
 
-Install the UE5 Ultimate MCP plugin into the user's current Unreal Engine 5 project so Claude Code can control the editor.
+Install the UE_AI_integration plugin into the user's current Unreal Engine 5 project so Claude Code can control the editor.
 
 ## Steps
 
@@ -23,19 +23,21 @@ Read the `.uproject` file. Check if it has `"Modules"` — if yes, it's a C++ pr
 
 ### 3. Create Plugins directory
 
-Ensure `<ProjectRoot>/Plugins/UE5UltimateMCP/` exists.
+Ensure `<ProjectRoot>/Plugins/UE_AI_integration/` exists.
 
 ### 4. Copy or download the plugin
 
 The plugin files are at `${CLAUDE_PLUGIN_ROOT}` (the directory where this skill lives, two levels up from this SKILL.md).
 
-Copy these directories/files from the plugin root to `<ProjectRoot>/Plugins/UE5UltimateMCP/`:
+Copy these directories/files from the plugin root to `<ProjectRoot>/Plugins/UE_AI_integration/`:
 - `Source/` (C++ source)
-- `UE5UltimateMCP.uplugin`
+- `Resources/` (the six capability manifests)
+- `MCP/` (the TypeScript stdio bridge)
+- `UE_AI_integration.uplugin`
 
 For **Blueprint-only projects**, also check if `BuiltPlugin/` exists at the plugin root OR download the latest release binary:
-- If `BuiltPlugin/Binaries/` exists locally, copy `BuiltPlugin/Binaries/` to `<ProjectRoot>/Plugins/UE5UltimateMCP/Binaries/`
-- Otherwise, tell the user to download the pre-built binary from https://github.com/NodeNestor/UE5UltimateMCP/releases and extract `Binaries/` into the plugin folder
+- If `BuiltPlugin/Binaries/` exists locally, copy `BuiltPlugin/Binaries/` to `<ProjectRoot>/Plugins/UE_AI_integration/Binaries/`
+- Otherwise, tell the user to download the pre-built binary from https://github.com/AiMiDi/UE_AI_integration/releases and extract `Binaries/` into the plugin folder
 
 For **C++ projects**, just the Source/ and .uplugin is enough — the engine compiles it.
 
@@ -50,23 +52,25 @@ curl -s http://localhost:9847/api/health
 If it responds, the plugin is already running. If not, tell the user to:
 1. Open (or restart) their project in UE5
 2. Wait for the editor to fully load
-3. Check the Output Log for `[UltimateMCP] Server started on port 9847`
+3. Check the Output Log for `[UE_AI_integration] Server started on port 9847`
 
-### 6. Confirm tool count
+### 6. Confirm capability count
 
-Once the server responds, check available tools:
+Once the server responds, check the capability catalog:
 
 ```bash
-curl -s http://localhost:9847/api/tools | python -c "import sys,json; d=json.load(sys.stdin); print(f'{len(d[\"tools\"])} tools available')"
+curl -s http://localhost:9847/api/capabilities | python -c "import sys,json; d=json.load(sys.stdin); print(f'{len(d[\"data\"][\"capabilities\"])} capabilities available')"
 ```
 
-Expected: 158 tools.
+Expected: 212 capabilities across six domains. The stdio bridge exposes ten
+stable MCP tools and routes domain operations through this catalog.
 
 ### 7. Report success
 
 Tell the user:
-- The plugin is installed at `Plugins/UE5UltimateMCP/`
-- The MCP server connects automatically (no extra config needed since this plugin provides the MCP server)
+- The plugin is installed at `Plugins/UE_AI_integration/`
+- The UE HTTP service starts with the Editor; the MCP stdio bridge connects to
+  it but never launches or shuts down the Editor
 - They can now ask Claude to do things like:
   - "List all blueprints in my project"
   - "Create a new Actor blueprint called BP_Enemy"

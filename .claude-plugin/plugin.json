@@ -1,9 +1,9 @@
 {
-  "name": "ue5-ultimate-mcp",
-  "description": "Control Unreal Engine 5 from Claude Code — 158 tools for Blueprints, Materials, Sequencer, AI, Niagara, World Gen, and more. Use /setup-ue5 to install the plugin into your current UE5 project.",
-  "version": "0.1.1",
+  "name": "ue-ai-integration",
+  "description": "Control Unreal Engine 5.3-5.7 through ten MCP tools backed by 212 manifest-driven editor and PIE runtime capabilities. Use /setup-ue5 to install the plugin into your current UE5 project.",
+  "version": "0.3.0",
   "author": {
     "name": "NodeNestor"
   },
-  "homepage": "https://github.com/NodeNestor/UE5UltimateMCP"
+  "homepage": "https://github.com/AiMiDi/UE_AI_integration"
 }
