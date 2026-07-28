@@ -21,8 +21,8 @@
       "Unreal Engine 5"
     ],
     "description": "这是一个由 manifest 驱动的 MCP bridge，通过九个稳定的领域工具控制正在运行的 Unreal Editor。项目采用单一 Unreal Editor Module 与 TypeScript stdio bridge，为 MCP 客户端提供 Blueprint、场景、内容资产、动画、AI 和生产流程的查询与修改能力。",
-    "analyzedAt": "2026-07-28T09:35:58.793Z",
-    "gitCommitHash": "6e38c2b30ee7acffc20586278781651f2fd503ad"
+    "analyzedAt": "2026-07-28T09:42:12.996Z",
+    "gitCommitHash": "60f21c14088d80dfa07c464b52d6b54e1066d8ac"
   },
   "nodes": [
     {
