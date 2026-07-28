@@ -727,6 +727,7 @@ void resolve_contract_paths(
                 executable.parent_path() / "Resources" / "Workflow",
                 executable.parent_path() / "Contracts",
                 executable.parent_path() / ".." / "share" / "ue-workflow" / "Contracts",
+                executable.parent_path() / ".." / ".." / "Workflow" / "Contracts",
                 std::filesystem::path(UE_WORKFLOW_SOURCE_ROOT) / "Workflow" / "Contracts",
             };
             for (const auto& candidate : candidates)
@@ -753,6 +754,7 @@ void resolve_contract_paths(
                 executable.parent_path() / "Resources" / "Capabilities",
                 executable.parent_path() / "Capabilities",
                 executable.parent_path() / ".." / "share" / "ue-workflow" / "Capabilities",
+                executable.parent_path() / ".." / ".." / "Resources" / "Capabilities",
                 std::filesystem::path(UE_WORKFLOW_SOURCE_ROOT) / "Resources" / "Capabilities",
             };
             for (const auto& candidate : candidates)

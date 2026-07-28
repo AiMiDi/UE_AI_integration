@@ -14,6 +14,7 @@ execute_process(
         --json
         --contract-root "${UE_WORKFLOW_CONTRACT_ROOT}"
         --capability-root "${UE_WORKFLOW_CAPABILITY_ROOT}"
+        --endpoint "http://127.0.0.1:1"
         execute
         --file "${UE_WORKFLOW_FIXTURE}"
         --receipt "${UE_WORKFLOW_RECEIPT}"
@@ -32,6 +33,7 @@ execute_process(
         --json
         --contract-root "${UE_WORKFLOW_CONTRACT_ROOT}"
         --capability-root "${UE_WORKFLOW_CAPABILITY_ROOT}"
+        --endpoint "http://127.0.0.1:1"
         execute
         --file "${UE_WORKFLOW_FIXTURE}"
         --approve-plan "sha256:0000000000000000000000000000000000000000000000000000000000000000"

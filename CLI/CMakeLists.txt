@@ -106,4 +106,13 @@ if(UE_WORKFLOW_BUILD_TESTS AND BUILD_TESTING)
         ue_workflow_cli_installed_doctor
         PROPERTIES DEPENDS ue_workflow_cli_install
     )
+    add_test(
+        NAME ue_workflow_cli_packaged_layout
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DUE_WORKFLOW_EXECUTABLE=$<TARGET_FILE:ue-workflow>"
+            "-DUE_WORKFLOW_SOURCE_ROOT=${CMAKE_SOURCE_DIR}"
+            "-DUE_WORKFLOW_PACKAGE_ROOT=${CMAKE_BINARY_DIR}/packaged-layout-smoke"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/PackagedLayoutSmoke.cmake"
+    )
 endif()
