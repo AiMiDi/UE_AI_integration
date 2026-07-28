@@ -1,316 +1,279 @@
 /**
- * UE5 HTTP Bridge
+ * Thin HTTP client for the UE_AI_integration API.
  *
- * Handles all communication between the MCP wrapper and the C++ HTTP server
- * running inside Unreal Engine on port 9847 (configurable via UE_PORT).
- *
- * Adapted from BlueprintMCP's ue-bridge.ts — simplified for UltimateMCP
- * since the C++ server handles all engine logic. This bridge is a thin
- * HTTP relay with health checks and auto-detection.
+ * The MCP process never launches, owns, or shuts down Unreal Editor. It only
+ * connects to an editor that is already running the plugin.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { CapabilityDescriptor } from "./capability-catalog.js";
 
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
+function parsePositiveInteger(
+  value: string | undefined,
+  fallback: number,
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
-export const UE_PORT = parseInt(process.env.UE_PORT || "9847", 10);
-export const UE_BASE_URL = `http://localhost:${UE_PORT}`;
-export const UE_PROJECT_DIR = process.env.UE_PROJECT_DIR || process.cwd();
-export const REQUEST_TIMEOUT_MS = parseInt(process.env.UE_TIMEOUT_MS || "300000", 10);
-
-// ---------------------------------------------------------------------------
-// Mutable state
-// ---------------------------------------------------------------------------
-
-export const state = {
-  ueProcess: null as ChildProcess | null,
-  editorMode: false,
-  startupPromise: null as Promise<string | null> | null,
-};
-
-// ---------------------------------------------------------------------------
-// Logging (stderr only — stdout is reserved for MCP protocol)
-// ---------------------------------------------------------------------------
+export const UE_PORT = parsePositiveInteger(process.env.UE_PORT, 9847);
+export const UE_BASE_URL = `http://127.0.0.1:${UE_PORT}`;
+export const REQUEST_TIMEOUT_MS = parsePositiveInteger(
+  process.env.UE_TIMEOUT_MS,
+  300_000,
+);
 
 export const log = {
-  info: (msg: string, data?: Record<string, unknown>) =>
-    console.error(`[UE5MCP] ${msg}`, data ? JSON.stringify(data) : ""),
-  error: (msg: string, data?: Record<string, unknown>) =>
-    console.error(`[UE5MCP:ERROR] ${msg}`, data ? JSON.stringify(data) : ""),
-  debug: (msg: string, data?: Record<string, unknown>) => {
+  info: (message: string, data?: Record<string, unknown>) =>
+    console.error(
+      `[UE_AI_integration] ${message}`,
+      data ? JSON.stringify(data) : "",
+    ),
+  error: (message: string, data?: Record<string, unknown>) =>
+    console.error(
+      `[UE_AI_integration:ERROR] ${message}`,
+      data ? JSON.stringify(data) : "",
+    ),
+  debug: (message: string, data?: Record<string, unknown>) => {
     if (process.env.DEBUG) {
-      console.error(`[UE5MCP:DEBUG] ${msg}`, data ? JSON.stringify(data) : "");
+      console.error(
+        `[UE_AI_integration:DEBUG] ${message}`,
+        data ? JSON.stringify(data) : "",
+      );
     }
   },
 };
 
-// ---------------------------------------------------------------------------
-// Health & Connection
-// ---------------------------------------------------------------------------
+export interface UEApiErrorPayload {
+  code: string;
+  message: string;
+  details?: unknown;
+}
 
-export interface HealthPayload {
-  status: string;
-  mode: string;
-  toolCount?: number;
-  pluginVersion?: string;
-  engineVersion?: string;
-  projectName?: string;
+export type UEApiEnvelope<T> =
+  | {
+      ok: true;
+      data: T;
+    }
+  | {
+      ok: false;
+      error: UEApiErrorPayload;
+    };
+
+export interface UEHealthData {
+  status: "ready" | "degraded";
+  pluginVersion: string;
+  engineVersion: string;
+  projectName: string;
+  mode: "editor";
+  capabilityCount: number;
+  domainCounts: Record<string, number>;
+  validationErrors: unknown[];
   [key: string]: unknown;
 }
 
-/** Returns the health payload if the UE5 server is reachable, or null. */
-export async function getUEHealth(): Promise<HealthPayload | null> {
-  try {
-    const resp = await fetch(`${UE_BASE_URL}/api/health`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!resp.ok) return null;
-    return (await resp.json()) as HealthPayload;
-  } catch {
-    return null;
+export interface UECapabilitiesData {
+  capabilities: CapabilityDescriptor[];
+  [key: string]: unknown;
+}
+
+export type UEExecuteData = Record<string, unknown>;
+
+export interface UEExecuteRequest {
+  capability: string;
+  params: Record<string, unknown>;
+  requestId?: string;
+}
+
+export const UE_WORKFLOW_ACTIONS = [
+  "validate",
+  "plan",
+  "execute",
+  "resume",
+  "status",
+  "rollback",
+] as const;
+
+export type UEWorkflowAction = (typeof UE_WORKFLOW_ACTIONS)[number];
+
+export interface UEWorkflowRequest {
+  action: UEWorkflowAction;
+  workflow?: Record<string, unknown>;
+  approvePlanDigest?: string;
+  runId?: string;
+  saveOnSuccess?: boolean;
+  confirmWrite?: boolean;
+  details?: boolean;
+}
+
+export interface UEWorkflowHandshakeData {
+  [key: string]: unknown;
+}
+
+export type UEWorkflowData = Record<string, unknown>;
+
+export class UEApiError extends Error {
+  readonly code: string;
+  readonly details?: unknown;
+  readonly status?: number;
+
+  constructor(payload: UEApiErrorPayload, status?: number) {
+    super(payload.message);
+    this.name = "UEApiError";
+    this.code = payload.code;
+    this.details = payload.details;
+    this.status = status;
   }
 }
 
-export async function isUEHealthy(): Promise<boolean> {
-  return (await getUEHealth()) !== null;
+export interface UEClientOptions {
+  baseUrl?: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
 }
 
-/** Block until the server responds or timeout expires. */
-export async function waitForHealthy(timeoutSeconds = 180): Promise<boolean> {
-  const deadline = Date.now() + timeoutSeconds * 1000;
-  while (Date.now() < deadline) {
-    if (await isUEHealthy()) return true;
-    if (!state.ueProcess) return false;
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-  return false;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// ---------------------------------------------------------------------------
-// UE5 Process Management
-// ---------------------------------------------------------------------------
-
-/** Find the .uproject file in UE_PROJECT_DIR. */
-export function findUProject(): string | null {
-  try {
-    const entries = fs.readdirSync(UE_PROJECT_DIR);
-    const uprojectFile = entries.find((e) => e.endsWith(".uproject"));
-    if (uprojectFile) return path.join(UE_PROJECT_DIR, uprojectFile);
-  } catch {
-    /* ignore */
+function parseErrorPayload(
+  value: unknown,
+  fallbackMessage: string,
+): UEApiErrorPayload {
+  if (isRecord(value)) {
+    const nested = isRecord(value.error) ? value.error : value;
+    return {
+      code:
+        typeof nested.code === "string" ? nested.code : "transport_error",
+      message:
+        typeof nested.message === "string"
+          ? nested.message
+          : fallbackMessage,
+      details: nested.details,
+    };
   }
-  return null;
+  return {
+    code: "transport_error",
+    message: fallbackMessage,
+  };
 }
 
-/** Read EngineAssociation from the .uproject file. */
-export function readEngineVersion(): string | null {
-  const uproject = findUProject();
-  if (!uproject) return null;
-  try {
-    const data = JSON.parse(fs.readFileSync(uproject, "utf-8"));
-    if (typeof data.EngineAssociation === "string" && data.EngineAssociation) {
-      return data.EngineAssociation;
-    }
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
+export class UEClient {
+  readonly baseUrl: string;
+  readonly timeoutMs: number;
+  private readonly fetchImpl: typeof fetch;
 
-/** Locate UnrealEditor-Cmd.exe on disk. */
-export function findEditorCmd(): string | null {
-  if (process.env.UE_EDITOR_CMD && fs.existsSync(process.env.UE_EDITOR_CMD)) {
-    return process.env.UE_EDITOR_CMD;
+  constructor(options: UEClientOptions = {}) {
+    this.baseUrl = (options.baseUrl ?? UE_BASE_URL).replace(/\/+$/, "");
+    this.timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+    this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  const engineVersion = readEngineVersion();
-  if (engineVersion) {
-    const candidates = [
-      `C:\\Program Files\\Epic Games\\UE_${engineVersion}\\Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe`,
-      `C:\\Program Files (x86)\\Epic Games\\UE_${engineVersion}\\Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe`,
-    ];
-    for (const p of candidates) {
-      if (fs.existsSync(p)) {
-        log.info(`Auto-detected engine ${engineVersion} from .uproject`);
-        return p;
-      }
-    }
+  async getHealth(): Promise<UEHealthData> {
+    return this.request<UEHealthData>("GET", "/api/health");
   }
 
-  // Fallback: scan Epic Games directory
-  const epicDir = "C:\\Program Files\\Epic Games";
-  try {
-    const entries = fs.readdirSync(epicDir);
-    for (const entry of entries.sort().reverse()) {
-      if (entry.startsWith("UE_")) {
-        const candidate = path.join(epicDir, entry, "Engine", "Binaries", "Win64", "UnrealEditor-Cmd.exe");
-        if (fs.existsSync(candidate)) {
-          log.info(`Found engine ${entry.replace("UE_", "")}`);
-          return candidate;
-        }
-      }
-    }
-  } catch {
-    /* directory may not exist */
+  async getCapabilities(): Promise<UECapabilitiesData> {
+    return this.request<UECapabilitiesData>("GET", "/api/capabilities");
   }
 
-  return null;
-}
-
-/** Spawn UE5 commandlet and wait for it to become healthy. */
-export async function spawnAndWait(): Promise<string | null> {
-  const editorCmd = findEditorCmd();
-  if (!editorCmd) {
-    return "Could not find UnrealEditor-Cmd.exe. Set UE_EDITOR_CMD environment variable.";
+  async execute(
+    id: string,
+    params: Record<string, unknown> = {},
+    requestId?: string,
+  ): Promise<UEExecuteData> {
+    const request: UEExecuteRequest = {
+      capability: id,
+      params,
+      ...(requestId === undefined ? {} : { requestId }),
+    };
+    return this.request<UEExecuteData>("POST", "/api/execute", request);
   }
 
-  const uproject = findUProject();
-  if (!uproject) {
-    return `No .uproject file found in ${UE_PROJECT_DIR}`;
+  async getWorkflowHandshake(): Promise<UEWorkflowHandshakeData> {
+    return this.request<UEWorkflowHandshakeData>(
+      "GET",
+      "/api/v1/workflow/handshake",
+    );
   }
 
-  const logPath = path.join(UE_PROJECT_DIR, "Saved", "Logs", "UE5UltimateMCP_server.log");
-
-  log.info("Spawning UE5 commandlet...");
-
-  state.ueProcess = spawn(
-    editorCmd,
-    [uproject, "-run=UltimateMCP", `-port=${UE_PORT}`, "-unattended", "-nopause", "-nullrhi", `-LOG=${logPath}`],
-    { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
-  );
-
-  state.ueProcess.on("exit", (code) => {
-    log.info(`UE5 server exited with code ${code}`);
-    state.ueProcess = null;
-  });
-
-  state.ueProcess.stdout?.on("data", (data: Buffer) => {
-    log.debug(`[UE5:out] ${data.toString().trim()}`);
-  });
-  state.ueProcess.stderr?.on("data", (data: Buffer) => {
-    log.debug(`[UE5:err] ${data.toString().trim()}`);
-  });
-
-  log.info("Waiting for health check (up to 3 min)...");
-  const ok = await waitForHealthy(180);
-
-  if (ok) {
-    log.info("UE5 server is ready.");
-    return null;
+  async workflow(request: UEWorkflowRequest): Promise<UEWorkflowData> {
+    return this.request<UEWorkflowData>(
+      "POST",
+      "/api/v1/workflow",
+      request,
+    );
   }
 
-  if (state.ueProcess) {
-    state.ueProcess.kill();
-    state.ueProcess = null;
-  }
-  return "UE5 server failed to start within 3 minutes. Check Saved/Logs/UE5UltimateMCP_server.log.";
-}
-
-/**
- * Ensure the UE5 server is running.
- *
- * If the editor is already running with the plugin, we connect to it.
- * Otherwise, spawn a commandlet in the background.
- */
-export async function ensureUE(): Promise<string | null> {
-  const health = await getUEHealth();
-  if (health) {
-    state.editorMode = health.mode === "editor";
-    log.info("Connected to existing UE5 server", {
-      mode: health.mode,
-      toolCount: health.toolCount,
-    });
-    return null;
-  }
-
-  state.editorMode = false;
-
-  // Deduplicate concurrent startup calls
-  if (state.startupPromise) {
-    return state.startupPromise;
-  }
-
-  if (state.ueProcess) {
-    log.info("UE5 process exists but unhealthy — killing and respawning...");
-    state.ueProcess.kill();
-    state.ueProcess = null;
-  }
-
-  state.startupPromise = spawnAndWait().finally(() => {
-    state.startupPromise = null;
-  });
-  return state.startupPromise;
-}
-
-// ---------------------------------------------------------------------------
-// HTTP helpers
-// ---------------------------------------------------------------------------
-
-/** GET request to the UE5 server. */
-export async function ueGet(
-  endpoint: string,
-  params: Record<string, string> = {},
-): Promise<unknown> {
-  const url = new URL(endpoint, UE_BASE_URL);
-  for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null) url.searchParams.set(k, v);
-  }
-  const resp = await fetch(url.toString(), {
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!resp.ok) {
-    throw new Error(`UE5 GET ${endpoint} failed: HTTP ${resp.status} ${resp.statusText}`);
-  }
-  return resp.json();
-}
-
-/** POST request to the UE5 server. */
-export async function uePost(
-  endpoint: string,
-  body: Record<string, unknown> = {},
-): Promise<unknown> {
-  const resp = await fetch(`${UE_BASE_URL}${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!resp.ok) {
-    throw new Error(`UE5 POST ${endpoint} failed: HTTP ${resp.status} ${resp.statusText}`);
-  }
-  return resp.json();
-}
-
-/** Ask the UE5 server to shut down gracefully. */
-export async function gracefulShutdown(): Promise<void> {
-  try {
-    await fetch(`${UE_BASE_URL}/api/shutdown`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-      signal: AbortSignal.timeout(3000),
-    });
-  } catch {
-    /* server may already be gone */
-  }
-
-  if (state.ueProcess) {
-    const proc = state.ueProcess;
-    const exited = await new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => resolve(false), 15000);
-      proc.on("exit", () => {
-        clearTimeout(timer);
-        resolve(true);
+  private async request<T>(
+    method: "GET" | "POST",
+    endpoint: string,
+    body?: object,
+  ): Promise<T> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${endpoint}`, {
+        method,
+        headers:
+          method === "POST" ? { "Content-Type": "application/json" } : undefined,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
-    });
-    if (!exited && state.ueProcess) {
-      log.info("Graceful shutdown timed out, force-killing.");
-      state.ueProcess.kill();
+    } catch (error) {
+      throw new UEApiError({
+        code: "editor_unreachable",
+        message: `Cannot connect to the running Unreal Editor at ${this.baseUrl}: ${(error as Error).message}`,
+      });
     }
-    state.ueProcess = null;
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      throw new UEApiError(
+        {
+          code: "invalid_response",
+          message: `UE5 ${method} ${endpoint} returned invalid JSON: ${(error as Error).message}`,
+        },
+        response.status,
+      );
+    }
+
+    if (!isRecord(payload) || typeof payload.ok !== "boolean") {
+      throw new UEApiError(
+        {
+          code: "invalid_response",
+          message: `UE5 ${method} ${endpoint} returned an invalid API envelope`,
+          details: payload,
+        },
+        response.status,
+      );
+    }
+
+    if (!response.ok || payload.ok === false) {
+      throw new UEApiError(
+        parseErrorPayload(
+          payload,
+          `UE5 ${method} ${endpoint} failed with HTTP ${response.status}`,
+        ),
+        response.status,
+      );
+    }
+
+    if (!("data" in payload)) {
+      throw new UEApiError(
+        {
+          code: "invalid_response",
+          message: `UE5 ${method} ${endpoint} returned no data`,
+        },
+        response.status,
+      );
+    }
+
+    return payload.data as T;
   }
 }
+
+export const ueClient = new UEClient();

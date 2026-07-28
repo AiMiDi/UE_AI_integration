@@ -1,60 +1,87 @@
 /**
- * UE5 HTTP Bridge
+ * Thin HTTP client for the UE_AI_integration API.
  *
- * Handles all communication between the MCP wrapper and the C++ HTTP server
- * running inside Unreal Engine on port 9847 (configurable via UE_PORT).
- *
- * Adapted from BlueprintMCP's ue-bridge.ts — simplified for UltimateMCP
- * since the C++ server handles all engine logic. This bridge is a thin
- * HTTP relay with health checks and auto-detection.
+ * The MCP process never launches, owns, or shuts down Unreal Editor. It only
+ * connects to an editor that is already running the plugin.
  */
-import { type ChildProcess } from "node:child_process";
+import type { CapabilityDescriptor } from "./capability-catalog.js";
 export declare const UE_PORT: number;
 export declare const UE_BASE_URL: string;
-export declare const UE_PROJECT_DIR: string;
 export declare const REQUEST_TIMEOUT_MS: number;
-export declare const state: {
-    ueProcess: ChildProcess | null;
-    editorMode: boolean;
-    startupPromise: Promise<string | null> | null;
-};
 export declare const log: {
-    info: (msg: string, data?: Record<string, unknown>) => void;
-    error: (msg: string, data?: Record<string, unknown>) => void;
-    debug: (msg: string, data?: Record<string, unknown>) => void;
+    info: (message: string, data?: Record<string, unknown>) => void;
+    error: (message: string, data?: Record<string, unknown>) => void;
+    debug: (message: string, data?: Record<string, unknown>) => void;
 };
-export interface HealthPayload {
-    status: string;
-    mode: string;
-    toolCount?: number;
-    pluginVersion?: string;
-    engineVersion?: string;
-    projectName?: string;
+export interface UEApiErrorPayload {
+    code: string;
+    message: string;
+    details?: unknown;
+}
+export type UEApiEnvelope<T> = {
+    ok: true;
+    data: T;
+} | {
+    ok: false;
+    error: UEApiErrorPayload;
+};
+export interface UEHealthData {
+    status: "ready" | "degraded";
+    pluginVersion: string;
+    engineVersion: string;
+    projectName: string;
+    mode: "editor";
+    capabilityCount: number;
+    domainCounts: Record<string, number>;
+    validationErrors: unknown[];
     [key: string]: unknown;
 }
-/** Returns the health payload if the UE5 server is reachable, or null. */
-export declare function getUEHealth(): Promise<HealthPayload | null>;
-export declare function isUEHealthy(): Promise<boolean>;
-/** Block until the server responds or timeout expires. */
-export declare function waitForHealthy(timeoutSeconds?: number): Promise<boolean>;
-/** Find the .uproject file in UE_PROJECT_DIR. */
-export declare function findUProject(): string | null;
-/** Read EngineAssociation from the .uproject file. */
-export declare function readEngineVersion(): string | null;
-/** Locate UnrealEditor-Cmd.exe on disk. */
-export declare function findEditorCmd(): string | null;
-/** Spawn UE5 commandlet and wait for it to become healthy. */
-export declare function spawnAndWait(): Promise<string | null>;
-/**
- * Ensure the UE5 server is running.
- *
- * If the editor is already running with the plugin, we connect to it.
- * Otherwise, spawn a commandlet in the background.
- */
-export declare function ensureUE(): Promise<string | null>;
-/** GET request to the UE5 server. */
-export declare function ueGet(endpoint: string, params?: Record<string, string>): Promise<unknown>;
-/** POST request to the UE5 server. */
-export declare function uePost(endpoint: string, body?: Record<string, unknown>): Promise<unknown>;
-/** Ask the UE5 server to shut down gracefully. */
-export declare function gracefulShutdown(): Promise<void>;
+export interface UECapabilitiesData {
+    capabilities: CapabilityDescriptor[];
+    [key: string]: unknown;
+}
+export type UEExecuteData = Record<string, unknown>;
+export interface UEExecuteRequest {
+    capability: string;
+    params: Record<string, unknown>;
+    requestId?: string;
+}
+export declare const UE_WORKFLOW_ACTIONS: readonly ["validate", "plan", "execute", "resume", "status", "rollback"];
+export type UEWorkflowAction = (typeof UE_WORKFLOW_ACTIONS)[number];
+export interface UEWorkflowRequest {
+    action: UEWorkflowAction;
+    workflow?: Record<string, unknown>;
+    approvePlanDigest?: string;
+    runId?: string;
+    saveOnSuccess?: boolean;
+    confirmWrite?: boolean;
+    details?: boolean;
+}
+export interface UEWorkflowHandshakeData {
+    [key: string]: unknown;
+}
+export type UEWorkflowData = Record<string, unknown>;
+export declare class UEApiError extends Error {
+    readonly code: string;
+    readonly details?: unknown;
+    readonly status?: number;
+    constructor(payload: UEApiErrorPayload, status?: number);
+}
+export interface UEClientOptions {
+    baseUrl?: string;
+    timeoutMs?: number;
+    fetchImpl?: typeof fetch;
+}
+export declare class UEClient {
+    readonly baseUrl: string;
+    readonly timeoutMs: number;
+    private readonly fetchImpl;
+    constructor(options?: UEClientOptions);
+    getHealth(): Promise<UEHealthData>;
+    getCapabilities(): Promise<UECapabilitiesData>;
+    execute(id: string, params?: Record<string, unknown>, requestId?: string): Promise<UEExecuteData>;
+    getWorkflowHandshake(): Promise<UEWorkflowHandshakeData>;
+    workflow(request: UEWorkflowRequest): Promise<UEWorkflowData>;
+    private request;
+}
+export declare const ueClient: UEClient;

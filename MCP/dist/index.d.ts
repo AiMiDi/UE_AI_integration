@@ -1,18 +1,13 @@
 #!/usr/bin/env node
 /**
- * UE5 Ultimate MCP Server
+ * UE_AI_integration stdio entry point.
  *
- * Main entry point. Bridges Claude Code (MCP over stdio) to the C++ HTTP
- * server running inside Unreal Engine.
- *
- * Key design: the tool list is fetched dynamically from /api/tools at startup.
- * Adding new C++ tools automatically makes them available — no TS changes needed.
- *
- * Environment Variables:
- *   UE_PORT            - UE5 server port (default: 9847)
- *   UE_PROJECT_DIR     - Path to .uproject directory
- *   UE_TIMEOUT_MS      - HTTP request timeout (default: 300000)
- *   INJECT_CONTEXT     - Auto-inject context docs on tool calls (default: false)
- *   DEBUG              - Enable debug logging
+ * Tool registration is entirely local and manifest-driven, so all ten MCP
+ * tools are available even when Unreal Editor is offline. Calls that require
+ * UE connect to an already-running editor on UE_PORT; this process never
+ * launches or shuts down the editor.
  */
-export {};
+export type LocalClose = () => Promise<void>;
+export type LocalExit = (code: number) => void;
+export declare function createLocalShutdownHandler(close: LocalClose, exit: LocalExit): () => Promise<void>;
+export declare function main(): Promise<void>;

@@ -1,19 +1,27 @@
 {
-  "name": "ue5-ultimate-mcp",
-  "version": "0.1.0",
-  "description": "Ultimate MCP bridge for UE5 — 150+ tools for Blueprints, Materials, World Building, Sequencer, AI, and more",
+  "name": "ue-ai-integration",
+  "version": "0.3.0",
+  "description": "Manifest-driven MCP bridge for controlling a running Unreal Editor through ten stable tools",
   "type": "module",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "pretest": "npm run build",
+    "test": "node --test dist/__tests__/*.test.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "typescript": "^5.8.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0"
+  },
+  "overrides": {
+    "@hono/node-server": "2.0.12"
   }
 }

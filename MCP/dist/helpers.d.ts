@@ -1,14 +1,4 @@
-/**
- * Formatting helpers for tool outputs
- *
- * Converts raw UE5 server responses into well-structured MCP content blocks.
- */
-export interface UEToolResult {
-    success: boolean;
-    message?: string;
-    data?: unknown;
-    error?: string;
-}
+import type { CapabilityDescriptor } from "./capability-catalog.js";
 export interface TextContent {
     type: "text";
     text: string;
@@ -20,21 +10,11 @@ export interface ImageContent {
 }
 export type MCPContent = TextContent | ImageContent;
 export interface MCPResponse {
+    [key: string]: unknown;
     content: MCPContent[];
     isError?: boolean;
 }
-/**
- * Format a UE5 tool result into MCP response content blocks.
- *
- * - Detects image_base64 in capture_viewport responses and returns native ImageContent
- * - Attaches optional context docs for relevant tools
- */
-export declare function formatToolResponse(toolName: string, result: UEToolResult, contextProvider?: (toolName: string) => string | null): MCPResponse;
-/** Format a list of items as a numbered list. */
-export declare function formatList(items: string[], header?: string): string;
-/** Format a key-value record as a Markdown table. */
-export declare function formatTable(data: Record<string, unknown>, header?: string): string;
-/** Truncate a string to maxLen, appending "..." if truncated. */
-export declare function truncate(str: string, maxLen: number): string;
-/** Pretty-print JSON with a size guard. */
-export declare function safeStringify(data: unknown, maxLen?: number): string;
+export declare function safeStringify(data: unknown, maxLength?: number): string;
+export declare function formatJsonResponse(data: unknown): MCPResponse;
+export declare function formatErrorResponse(error: unknown): MCPResponse;
+export declare function formatCapabilityResponse(capability: CapabilityDescriptor, data: Record<string, unknown>): MCPResponse;
