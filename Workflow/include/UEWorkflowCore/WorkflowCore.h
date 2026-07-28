@@ -43,6 +43,29 @@ struct Result
     std::vector<Diagnostic> diagnostics;
 };
 
+enum class CapabilityDetail
+{
+    Summary,
+    Full,
+};
+
+struct CapabilityQuery
+{
+    std::string query;
+    std::string operation;
+    std::string domain;
+    std::string kind;
+    std::string output_kind;
+    std::string risk;
+    std::optional<bool> read_only;
+    std::optional<bool> destructive;
+    std::optional<bool> expensive;
+    bool available_only = false;
+    std::size_t offset = 0;
+    std::size_t limit = 25;
+    CapabilityDetail detail = CapabilityDetail::Summary;
+};
+
 class Engine
 {
 public:
@@ -62,6 +85,7 @@ public:
     Result ValidateReceiptJson(std::string_view receipt_json) const;
     Result HelpJson(std::string_view scope_kind = {}) const;
     Result ExplainOperation(std::string_view operation_type) const;
+    Result CapabilitiesJson(const CapabilityQuery& query = {}) const;
 
     [[nodiscard]] bool IsLoaded() const noexcept;
     [[nodiscard]] std::size_t CapabilityCount() const noexcept;
@@ -78,5 +102,9 @@ private:
 [[nodiscard]] const char* SeverityName(Severity severity) noexcept;
 [[nodiscard]] std::optional<std::string> Sha256File(
     const std::filesystem::path& path);
+[[nodiscard]] std::optional<std::string> CanonicalizeJsonText(
+    std::string_view json_text);
+[[nodiscard]] std::optional<std::string> CanonicalJsonSha256(
+    std::string_view json_text);
 
 } // namespace ue::workflow

@@ -19,6 +19,9 @@
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformTime.h"
+#include "Infrastructure/EngineeringContractUtils.h"
+#include "Infrastructure/Compatibility/UEVersionCompat.h"
 #include "Infrastructure/Sha256.h"
 #include "Interfaces/IPluginManager.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -34,6 +37,7 @@
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"
 #include "ObjectTools.h"
+#include "PackageTools.h"
 #include "ScopedTransaction.h"
 #include "Serialization/ObjectReader.h"
 #include "Serialization/ObjectWriter.h"
@@ -42,16 +46,28 @@
 #include "Serialization/JsonWriter.h"
 #include "Tools/MCPToolRegistry.h"
 #include "UObject/Package.h"
+#include "UObject/SavePackage.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UObjectHash.h"
 #include "WidgetBlueprint.h"
+
+#ifndef UE_AI_INTEGRATION_VERSION
+#define UE_AI_INTEGRATION_VERSION "unknown"
+#endif
 
 namespace UEAIIntegration::Workflow
 {
 namespace
 {
 constexpr TCHAR WorkflowContextName[] = TEXT("UEWorkflow");
+constexpr int32 MaxPreparedPlanCacheEntries = 64;
+constexpr double PreparedPlanCacheTtlSeconds = 10.0 * 60.0;
+
+FString CurrentPluginVersion()
+{
+	return UTF8_TO_TCHAR(UE_AI_INTEGRATION_VERSION);
+}
 
 FString FromUtf8(const std::string& Value)
 {
@@ -479,9 +495,9 @@ TSharedPtr<FJsonValue> ProjectReadBackValue(const FString& Key,
 		TSharedPtr<FJsonObject> Tree = MakeShared<FJsonObject>();
 		FString WidgetBlueprint;
 		double Count = 0.0;
-		if (Output->TryGetStringField(TEXT("widget_bp"), WidgetBlueprint))
+		if (Output->TryGetStringField(TEXT("widgetBp"), WidgetBlueprint))
 		{
-			Tree->SetStringField(TEXT("widget_bp"), WidgetBlueprint);
+			Tree->SetStringField(TEXT("widgetBp"), WidgetBlueprint);
 		}
 		if (Output->TryGetNumberField(TEXT("count"), Count))
 		{
@@ -938,6 +954,59 @@ TArray<FWorkflowObjectMemorySnapshot> CaptureMemorySnapshots(UObject* Asset)
 	return Snapshots;
 }
 
+FString ComputeAssetMemorySha256(UObject* Asset)
+{
+	if (!Asset)
+	{
+		return FString();
+	}
+
+	const TArray<FWorkflowObjectMemorySnapshot> Snapshots =
+		CaptureMemorySnapshots(Asset);
+	if (Snapshots.IsEmpty())
+	{
+		return FString();
+	}
+
+	TArray<uint8> DigestInput;
+	for (const FWorkflowObjectMemorySnapshot& Snapshot : Snapshots)
+	{
+		const UObject* Object = Snapshot.Object.Get();
+		if (!Object)
+		{
+			return FString();
+		}
+		const FTCHARToUTF8 PathUtf8(*Object->GetPathName());
+		const uint64 PathBytes =
+			static_cast<uint64>(PathUtf8.Length());
+		const uint64 PayloadBytes =
+			static_cast<uint64>(Snapshot.Bytes.Num());
+		for (int32 ByteIndex = 0; ByteIndex < 8; ++ByteIndex)
+		{
+			DigestInput.Add(
+				static_cast<uint8>(
+					(PathBytes >> (ByteIndex * 8)) & 0xff));
+		}
+		DigestInput.Append(
+			reinterpret_cast<const uint8*>(PathUtf8.Get()),
+			PathUtf8.Length());
+		for (int32 ByteIndex = 0; ByteIndex < 8; ++ByteIndex)
+		{
+			DigestInput.Add(
+				static_cast<uint8>(
+					(PayloadBytes >> (ByteIndex * 8)) & 0xff));
+		}
+		DigestInput.Append(Snapshot.Bytes);
+	}
+
+	FString Hex;
+	return UEAIIntegration::Infrastructure::TrySha256Hex(
+			DigestInput,
+			Hex)
+		? TEXT("sha256:") + Hex
+		: FString();
+}
+
 void RebuildDomainAfterRollback(UObject* Asset)
 {
 	if (!Asset)
@@ -1045,6 +1114,299 @@ bool RestoreMemorySnapshots(
 	RebuildDomainAfterRollback(Asset);
 	return bRestored;
 }
+
+FString PackageFilenameForAsset(const FString& AssetPath)
+{
+	const FString PackageName =
+		FPackageName::ObjectPathToPackageName(AssetPath);
+	return PackageName.IsEmpty()
+		? FString()
+		: FPackageName::LongPackageNameToFilename(
+			PackageName,
+			FPackageName::GetAssetPackageExtension());
+}
+
+FString WorkflowAssetSnapshotKey(
+	const FString& RunId,
+	const FString& ScopeId)
+{
+	return RunId + TEXT("|") + ScopeId;
+}
+
+bool TryHashFile(const FString& Filename, FString& OutDigest)
+{
+	OutDigest.Reset();
+	TArray<uint8> Bytes;
+	if (Filename.IsEmpty()
+		|| !FFileHelper::LoadFileToArray(Bytes, *Filename))
+	{
+		return false;
+	}
+	FString Hex;
+	if (!UEAIIntegration::Infrastructure::TrySha256Hex(Bytes, Hex))
+	{
+		return false;
+	}
+	OutDigest = TEXT("sha256:") + Hex;
+	return true;
+}
+
+TSharedPtr<FJsonObject> CaptureAssetPrecondition(
+	const FString& ScopeId,
+	const FString& Kind,
+	const FString& AssetPath)
+{
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("scopeId"), ScopeId);
+	Result->SetStringField(TEXT("asset"), AssetPath);
+	Result->SetStringField(TEXT("kind"), Kind);
+	const bool bExists = AssetExistsWithoutLogging(AssetPath);
+	Result->SetBoolField(TEXT("exists"), bExists);
+	UObject* Asset = bExists
+		? LoadAssetWithoutLogging(AssetPath)
+		: nullptr;
+	Result->SetBoolField(
+		TEXT("dirty"),
+		Asset && Asset->GetOutermost()->IsDirty());
+
+	if (Asset)
+	{
+		Result->SetStringField(
+			TEXT("structureHash"),
+			FWorkflowRuntime::ComputeAssetStructureHash(Asset));
+		const FString MemoryDigest = ComputeAssetMemorySha256(Asset);
+		if (!MemoryDigest.IsEmpty())
+		{
+			Result->SetStringField(
+				TEXT("memorySha256"),
+				MemoryDigest);
+		}
+		else
+		{
+			Result->SetField(
+				TEXT("memorySha256"),
+				MakeShared<FJsonValueNull>());
+		}
+		FGuid PackageGuid;
+		if (UEAIIntegration::Compatibility::TryGetPackagePersistentGuid(
+				Asset->GetOutermost(),
+				PackageGuid))
+		{
+			Result->SetStringField(
+				TEXT("packageGuid"),
+				PackageGuid.ToString(
+					EGuidFormats::DigitsWithHyphensLower));
+		}
+		else
+		{
+			Result->SetField(
+				TEXT("packageGuid"),
+				MakeShared<FJsonValueNull>());
+		}
+	}
+	else
+	{
+		Result->SetField(
+			TEXT("structureHash"),
+			MakeShared<FJsonValueNull>());
+		Result->SetField(
+			TEXT("memorySha256"),
+			MakeShared<FJsonValueNull>());
+		Result->SetField(
+			TEXT("packageGuid"),
+			MakeShared<FJsonValueNull>());
+	}
+
+	const FString PackageFilename =
+		PackageFilenameForAsset(AssetPath);
+	FString PackageDigest;
+	if (!PackageFilename.IsEmpty() &&
+		IFileManager::Get().FileExists(*PackageFilename) &&
+		TryHashFile(PackageFilename, PackageDigest))
+	{
+		Result->SetStringField(
+			TEXT("packageSha256"),
+			PackageDigest);
+	}
+	else
+	{
+		Result->SetField(
+			TEXT("packageSha256"),
+			MakeShared<FJsonValueNull>());
+	}
+
+	const UBlueprint* Blueprint = Cast<UBlueprint>(Asset);
+	if (Blueprint && Blueprint->GeneratedClass)
+	{
+		TSharedPtr<FJsonObject> GeneratedClass =
+			MakeShared<FJsonObject>();
+		GeneratedClass->SetStringField(
+			TEXT("path"),
+			Blueprint->GeneratedClass->GetPathName());
+		GeneratedClass->SetNumberField(
+			TEXT("objectGenerationToken"),
+			Blueprint->GeneratedClass->GetUniqueID());
+		GeneratedClass->SetNumberField(
+			TEXT("blueprintSystemVersion"),
+			Blueprint->BlueprintSystemVersion);
+		Result->SetObjectField(
+			TEXT("generatedClass"),
+			GeneratedClass);
+	}
+	else
+	{
+		Result->SetField(
+			TEXT("generatedClass"),
+			MakeShared<FJsonValueNull>());
+	}
+	return Result;
+}
+
+TSharedPtr<FJsonObject> FindAssetRecord(
+	TArray<TSharedPtr<FJsonValue>>& Assets,
+	const FString& ScopeId)
+{
+	for (const TSharedPtr<FJsonValue>& Value : Assets)
+	{
+		if (!Value.IsValid() || Value->Type != EJson::Object)
+		{
+			continue;
+		}
+		const TSharedPtr<FJsonObject> Asset = Value->AsObject();
+		FString Candidate;
+		if (Asset->TryGetStringField(TEXT("scopeId"), Candidate)
+			&& Candidate == ScopeId)
+		{
+			return Asset;
+		}
+	}
+	return nullptr;
+}
+
+TSharedPtr<FJsonObject> FindAssetRecord(
+	const TArray<TSharedPtr<FJsonValue>>& Assets,
+	const FString& ScopeId)
+{
+	for (const TSharedPtr<FJsonValue>& Value : Assets)
+	{
+		if (!Value.IsValid() || Value->Type != EJson::Object)
+		{
+			continue;
+		}
+		const TSharedPtr<FJsonObject> Asset = Value->AsObject();
+		FString Candidate;
+		if (Asset->TryGetStringField(TEXT("scopeId"), Candidate)
+			&& Candidate == ScopeId)
+		{
+			return Asset;
+		}
+	}
+	return nullptr;
+}
+
+bool DeleteWorkflowAsset(const FString& AssetPath)
+{
+	UObject* Asset = LoadAssetWithoutLogging(AssetPath);
+	UPackage* Package = Asset ? Asset->GetOutermost() : nullptr;
+	if (Asset)
+	{
+		const TArray<UObject*> Objects = {Asset};
+		ObjectTools::DeleteObjectsUnchecked(Objects);
+	}
+	const FString Filename = PackageFilenameForAsset(AssetPath);
+	const bool bFileRemoved =
+		Filename.IsEmpty()
+		|| !IFileManager::Get().FileExists(*Filename)
+		|| IFileManager::Get().Delete(*Filename, false, true, true);
+	if (Package)
+	{
+		IAssetRegistry::GetChecked().PackageDeleted(Package);
+	}
+	return bFileRemoved && !AssetExistsWithoutLogging(AssetPath);
+}
+
+bool RestoreWorkflowAssetFile(
+	const TSharedPtr<FJsonObject>& AssetRecord,
+	FString& OutError)
+{
+	const FString AssetPath =
+		AssetRecord.IsValid()
+		? AssetRecord->GetStringField(TEXT("asset"))
+		: FString();
+	bool bExistedBefore = false;
+	if (AssetRecord.IsValid())
+	{
+		AssetRecord->TryGetBoolField(
+			TEXT("existedBefore"),
+			bExistedBefore);
+	}
+	if (!bExistedBefore)
+	{
+		if (DeleteWorkflowAsset(AssetPath))
+		{
+			return true;
+		}
+		OutError = FString::Printf(
+			TEXT("Could not remove newly-created workflow asset '%s'."),
+			*AssetPath);
+		return false;
+	}
+
+	const FString SnapshotFilename =
+		AssetRecord->GetStringField(TEXT("snapshotFilename"));
+	const FString PackageFilename =
+		AssetRecord->GetStringField(TEXT("packageFilename"));
+	if (SnapshotFilename.IsEmpty()
+		|| PackageFilename.IsEmpty()
+		|| !IFileManager::Get().FileExists(*SnapshotFilename))
+	{
+		OutError = FString::Printf(
+			TEXT("Durable snapshot is unavailable for '%s'."),
+			*AssetPath);
+		return false;
+	}
+	FString SnapshotDigest;
+	const FString ExpectedSnapshotDigest =
+		AssetRecord->GetStringField(TEXT("snapshotSha256"));
+	if (ExpectedSnapshotDigest.IsEmpty()
+		|| !TryHashFile(SnapshotFilename, SnapshotDigest)
+		|| SnapshotDigest != ExpectedSnapshotDigest)
+	{
+		OutError = FString::Printf(
+			TEXT("Durable snapshot integrity check failed for '%s'."),
+			*AssetPath);
+		return false;
+	}
+	if (IFileManager::Get().Copy(
+			*PackageFilename,
+			*SnapshotFilename,
+			true,
+			true) != COPY_OK)
+	{
+		OutError = FString::Printf(
+			TEXT("Could not restore staged package snapshot for '%s'."),
+			*AssetPath);
+		return false;
+	}
+
+	if (UObject* LoadedAsset = LoadAssetWithoutLogging(AssetPath))
+	{
+		TArray<UPackage*> Packages = {LoadedAsset->GetOutermost()};
+		FText ReloadError;
+		if (!UPackageTools::ReloadPackages(
+				Packages,
+				ReloadError,
+				EReloadPackagesInteractionMode::AssumePositive))
+		{
+			OutError = FString::Printf(
+				TEXT("Restored package '%s' could not be reloaded: %s"),
+				*AssetPath,
+				*ReloadError.ToString());
+			return false;
+		}
+	}
+	return true;
+}
 }
 
 FWorkflowRuntime::FWorkflowRuntime(FMCPToolRegistry& InRegistry)
@@ -1082,6 +1444,11 @@ FWorkflowRuntime::FWorkflowRuntime(FMCPToolRegistry& InRegistry)
 	}
 }
 
+FWorkflowRuntime::~FWorkflowRuntime()
+{
+	PreparedPlanCache.Empty();
+}
+
 FMCPResult FWorkflowRuntime::MakeHandshake() const
 {
 	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
@@ -1089,6 +1456,12 @@ FMCPResult FWorkflowRuntime::MakeHandshake() const
 	Data->SetStringField(TEXT("dsl"), TEXT("ue.workflow"));
 	Data->SetStringField(TEXT("dslVersion"), FromUtf8(
 		std::string(ue::workflow::DslVersion())));
+	Data->SetArrayField(
+		TEXT("dslVersions"),
+		{
+			MakeShared<FJsonValueString>(TEXT("1.0")),
+			MakeShared<FJsonValueString>(TEXT("2.0")),
+		});
 	Data->SetStringField(TEXT("plannerVersion"), FromUtf8(
 		std::string(ue::workflow::PlannerVersion())));
 	Data->SetStringField(TEXT("serverInstanceId"), ServerInstanceId);
@@ -1118,13 +1491,21 @@ FMCPResult FWorkflowRuntime::MakeHandshake() const
 
 	TSharedPtr<FJsonObject> Features = MakeShared<FJsonObject>();
 	Features->SetBoolField(TEXT("singleAssetScope"), true);
+	Features->SetBoolField(TEXT("multiAssetScopes"), true);
+	Features->SetNumberField(TEXT("maxScopes"), 16);
+	Features->SetNumberField(TEXT("maxOperations"), 256);
 	Features->SetBoolField(TEXT("transaction"), true);
-	Features->SetStringField(TEXT("rollback"), TEXT("topTransactionOnly"));
+	Features->SetStringField(
+		TEXT("rollback"),
+		TEXT("durableAssetSetSnapshot"));
 	Features->SetBoolField(TEXT("dirtyOnly"), true);
 	Features->SetBoolField(TEXT("saveOnSuccess"), true);
 	Features->SetStringField(
 		TEXT("resume"),
-		TEXT("sameInstanceTerminalReattach"));
+		TEXT("durableSegmentBoundary"));
+	Features->SetStringField(
+		TEXT("resumeV2"),
+		TEXT("durableSegmentBoundary"));
 	Data->SetObjectField(TEXT("features"), Features);
 
 	if (!CoreLoadResult.ok)
@@ -1265,6 +1646,7 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::ProjectPlanningResponse(
 	static const TSet<FString> SummaryFields = {
 	    TEXT("schema"),     TEXT("plannerVersion"), TEXT("contractSetDigest"),
 	    TEXT("planDigest"), TEXT("contractSet"),    TEXT("validationScope"),
+	    TEXT("corePlanDigest"), TEXT("executionReady"), TEXT("preconditions"),
 	    TEXT("risk"),       TEXT("approval"),       TEXT("valid"),
 	};
 	for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Response->Values)
@@ -1278,7 +1660,8 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::ProjectPlanningResponse(
 
 	TSharedPtr<FJsonObject> Summary = MakeShared<FJsonObject>();
 	for (const FString& ArrayField :
-	     {TEXT("initializers"), TEXT("operations"), TEXT("finalizers"), TEXT("diagnostics")})
+	     {TEXT("assetSet"), TEXT("initializers"), TEXT("operations"), TEXT("finalizers"),
+	      TEXT("diagnostics")})
 	{
 		const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
 		if (Response->TryGetArrayField(ArrayField, Values) && Values)
@@ -1287,6 +1670,12 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::ProjectPlanningResponse(
 		}
 	}
 	Projected->SetObjectField(TEXT("summary"), Summary);
+	const TArray<TSharedPtr<FJsonValue>>* PlannedAssets = nullptr;
+	if (Response->TryGetArrayField(TEXT("assetSet"), PlannedAssets)
+		&& PlannedAssets)
+	{
+		Projected->SetArrayField(TEXT("assetSet"), *PlannedAssets);
+	}
 
 	TSharedPtr<FJsonObject> Sections = MakeShared<FJsonObject>();
 	for (const FString& SectionName : {TEXT("operations"), TEXT("finalizers"), TEXT("diagnostics")})
@@ -1524,8 +1913,9 @@ FMCPResult FWorkflowRuntime::ValidateWorkflow(const TSharedPtr<FJsonObject>& Wor
 	return FMCPResult::Ok(ProjectPlanningResponse(Data, Options));
 }
 
-FMCPResult FWorkflowRuntime::PlanWorkflow(const TSharedPtr<FJsonObject>& Workflow,
-                                          const FResponseOptions& Options) const
+FMCPResult FWorkflowRuntime::PlanWorkflow(
+	const TSharedPtr<FJsonObject>& Workflow,
+	const FResponseOptions& Options)
 {
 	TSharedPtr<FJsonObject> Plan;
 	FMCPResult Failure;
@@ -1533,7 +1923,17 @@ FMCPResult FWorkflowRuntime::PlanWorkflow(const TSharedPtr<FJsonObject>& Workflo
 	{
 		return Failure;
 	}
-	return FMCPResult::Ok(ProjectPlanningResponse(Plan, Options));
+	TSharedPtr<FJsonObject> PreparedPlan;
+	if (!PreparePlanWithAssetPreconditions(
+			Plan,
+			PreparedPlan,
+			Failure))
+	{
+		return Failure;
+	}
+	CachePreparedPlan(PreparedPlan);
+	return FMCPResult::Ok(
+		ProjectPlanningResponse(PreparedPlan, Options));
 }
 
 bool FWorkflowRuntime::TryPlan(
@@ -1563,6 +1963,534 @@ bool FWorkflowRuntime::TryPlan(
 	return true;
 }
 
+bool FWorkflowRuntime::PreparePlanWithAssetPreconditions(
+	const TSharedPtr<FJsonObject>& CorePlan,
+	TSharedPtr<FJsonObject>& OutPlan,
+	FMCPResult& OutFailure) const
+{
+	const FString CorePlanDigest =
+		GetStringField(CorePlan, TEXT("planDigest"));
+	const FString ContractDigest =
+		GetStringField(CorePlan, TEXT("contractSetDigest"));
+	const TSharedPtr<FJsonObject>* NormalizedWorkflow = nullptr;
+	if (!CorePlan.IsValid() || CorePlanDigest.IsEmpty() ||
+		ContractDigest.IsEmpty() ||
+		!CorePlan->TryGetObjectField(
+			TEXT("normalizedWorkflow"),
+			NormalizedWorkflow)
+		|| !NormalizedWorkflow || !NormalizedWorkflow->IsValid())
+	{
+		OutFailure = FMCPResult::Fail(
+			TEXT("workflow_core_invalid_response"),
+			TEXT(
+				"Core plan cannot be bound to Editor asset "
+				"preconditions."),
+			500);
+		return false;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> Assets;
+	const FString PlanSchema =
+		GetStringField(CorePlan, TEXT("schema"));
+	if (PlanSchema == TEXT("ue.workflow-plan.v2"))
+	{
+		const TArray<TSharedPtr<FJsonValue>>* PlannedAssets = nullptr;
+		if (!CorePlan->TryGetArrayField(
+				TEXT("assetSet"),
+				PlannedAssets)
+			|| !PlannedAssets)
+		{
+			OutFailure = FMCPResult::Fail(
+				TEXT("workflow_core_invalid_response"),
+				TEXT("Workflow v2 plan has no assetSet."),
+				500);
+			return false;
+		}
+		for (const TSharedPtr<FJsonValue>& AssetValue :
+			 *PlannedAssets)
+		{
+			const TSharedPtr<FJsonObject> Asset =
+				AssetValue.IsValid() &&
+					AssetValue->Type == EJson::Object
+				? AssetValue->AsObject()
+				: nullptr;
+			if (!Asset.IsValid())
+			{
+				continue;
+			}
+			Assets.Add(MakeShared<FJsonValueObject>(
+				CaptureAssetPrecondition(
+					GetStringField(Asset, TEXT("scopeId")),
+					GetStringField(Asset, TEXT("kind")),
+					GetStringField(Asset, TEXT("asset")))));
+		}
+	}
+	else
+	{
+		const TSharedPtr<FJsonObject>* Scope = nullptr;
+		if (!(*NormalizedWorkflow)->TryGetObjectField(
+				TEXT("scope"),
+				Scope)
+			|| !Scope || !Scope->IsValid())
+		{
+			OutFailure = FMCPResult::Fail(
+				TEXT("workflow_core_invalid_response"),
+				TEXT("Workflow v1 plan has no scope."),
+				500);
+			return false;
+		}
+		Assets.Add(MakeShared<FJsonValueObject>(
+			CaptureAssetPrecondition(
+				TEXT("primary"),
+				GetStringField(*Scope, TEXT("kind")),
+				GetStringField(*Scope, TEXT("asset")))));
+	}
+	Assets.Sort(
+		[](const TSharedPtr<FJsonValue>& Left,
+			const TSharedPtr<FJsonValue>& Right)
+		{
+			const TSharedPtr<FJsonObject> LeftObject =
+				Left->AsObject();
+			const TSharedPtr<FJsonObject> RightObject =
+				Right->AsObject();
+			const FString LeftAsset =
+				GetStringField(LeftObject, TEXT("asset"));
+			const FString RightAsset =
+				GetStringField(RightObject, TEXT("asset"));
+			if (LeftAsset != RightAsset)
+			{
+				return LeftAsset < RightAsset;
+			}
+			return GetStringField(LeftObject, TEXT("scopeId")) <
+				GetStringField(RightObject, TEXT("scopeId"));
+		});
+
+	for (const TSharedPtr<FJsonValue>& AssetValue : Assets)
+	{
+		const TSharedPtr<FJsonObject> Asset =
+			AssetValue.IsValid() && AssetValue->Type == EJson::Object
+			? AssetValue->AsObject()
+			: nullptr;
+		bool bDirty = false;
+		if (Asset.IsValid()
+			&& Asset->TryGetBoolField(TEXT("dirty"), bDirty)
+			&& bDirty)
+		{
+			TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+			Details->SetStringField(
+				TEXT("scopeId"),
+				GetStringField(Asset, TEXT("scopeId")));
+			Details->SetStringField(
+				TEXT("asset"),
+				GetStringField(Asset, TEXT("asset")));
+			Details->SetStringField(
+				TEXT("guidance"),
+				TEXT(
+					"Save or revert the asset before preparing an "
+					"executable workflow plan."));
+			OutFailure = FMCPResult::Fail(
+				TEXT("asset_dirty"),
+				TEXT(
+					"Editor-prepared plans require a clean existing "
+					"asset baseline."),
+				409,
+				Details);
+			return false;
+		}
+	}
+
+	TSharedPtr<FJsonObject> AssetsDigestInput =
+		MakeShared<FJsonObject>();
+	AssetsDigestInput->SetArrayField(TEXT("assets"), Assets);
+	const FString AssetsDigest =
+		UEAIIntegration::Infrastructure::DigestJson(
+			AssetsDigestInput);
+	if (AssetsDigest.IsEmpty())
+	{
+		OutFailure = FMCPResult::Fail(
+			TEXT("asset_precondition_unavailable"),
+			TEXT("Editor could not digest asset preconditions."),
+			500);
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> Preconditions =
+		MakeShared<FJsonObject>();
+	Preconditions->SetStringField(
+		TEXT("schema"),
+		TEXT("ue.workflow-asset-preconditions.v1"));
+	Preconditions->SetBoolField(TEXT("prepared"), true);
+	Preconditions->SetArrayField(TEXT("assets"), Assets);
+	Preconditions->SetStringField(
+		TEXT("digest"),
+		TEXT("sha256:") + AssetsDigest);
+
+	TSharedPtr<FJsonObject> BoundDigestInput =
+		MakeShared<FJsonObject>();
+	BoundDigestInput->SetStringField(
+		TEXT("corePlanDigest"),
+		CorePlanDigest);
+	BoundDigestInput->SetStringField(
+		TEXT("contractSetDigest"),
+		ContractDigest);
+	BoundDigestInput->SetStringField(
+		TEXT("preconditionsDigest"),
+		TEXT("sha256:") + AssetsDigest);
+	const FString BoundDigest =
+		UEAIIntegration::Infrastructure::DigestJson(
+			BoundDigestInput);
+	if (BoundDigest.IsEmpty())
+	{
+		OutFailure = FMCPResult::Fail(
+			TEXT("asset_precondition_unavailable"),
+			TEXT("Editor could not bind the workflow plan digest."),
+			500);
+		return false;
+	}
+
+	OutPlan = CloneObject(CorePlan);
+	OutPlan->SetStringField(
+		TEXT("corePlanDigest"),
+		CorePlanDigest);
+	OutPlan->SetBoolField(TEXT("executionReady"), true);
+	OutPlan->SetObjectField(
+		TEXT("preconditions"),
+		Preconditions);
+	OutPlan->SetStringField(
+		TEXT("planDigest"),
+		TEXT("sha256:") + BoundDigest);
+	const TSharedPtr<FJsonObject>* CoreApproval = nullptr;
+	TSharedPtr<FJsonObject> Approval =
+		OutPlan->TryGetObjectField(
+				TEXT("approval"),
+				CoreApproval)
+			&& CoreApproval && CoreApproval->IsValid()
+		? CloneObject(*CoreApproval)
+		: MakeShared<FJsonObject>();
+	Approval->SetStringField(
+		TEXT("planDigest"),
+		TEXT("sha256:") + BoundDigest);
+	OutPlan->SetObjectField(TEXT("approval"), Approval);
+	return true;
+}
+
+bool FWorkflowRuntime::VerifyPlanAssetPreconditions(
+	const TSharedPtr<FJsonObject>& PreparedPlan,
+	FMCPResult& OutFailure) const
+{
+	const TSharedPtr<FJsonObject>* Preconditions = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* ExpectedAssets = nullptr;
+	bool bPrepared = false;
+	if (!PreparedPlan.IsValid() ||
+		!PreparedPlan->TryGetObjectField(
+			TEXT("preconditions"),
+			Preconditions)
+		|| !Preconditions || !Preconditions->IsValid() ||
+		GetStringField(*Preconditions, TEXT("schema")) !=
+			TEXT("ue.workflow-asset-preconditions.v1") ||
+		!(*Preconditions)->TryGetBoolField(
+			TEXT("prepared"),
+			bPrepared)
+		|| !bPrepared ||
+		!(*Preconditions)->TryGetArrayField(
+			TEXT("assets"),
+			ExpectedAssets)
+		|| !ExpectedAssets)
+	{
+		OutFailure = FMCPResult::Fail(
+			TEXT("asset_precondition_required"),
+			TEXT(
+				"Execute requires an Editor-prepared plan; run "
+				"'ue-workflow plan --connect' first."),
+			409);
+		return false;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> CurrentAssets;
+	for (const TSharedPtr<FJsonValue>& AssetValue : *ExpectedAssets)
+	{
+		const TSharedPtr<FJsonObject> Expected =
+			AssetValue.IsValid() &&
+				AssetValue->Type == EJson::Object
+			? AssetValue->AsObject()
+			: nullptr;
+		if (!Expected.IsValid())
+		{
+			continue;
+		}
+		CurrentAssets.Add(MakeShared<FJsonValueObject>(
+			CaptureAssetPrecondition(
+				GetStringField(Expected, TEXT("scopeId")),
+				GetStringField(Expected, TEXT("kind")),
+				GetStringField(Expected, TEXT("asset")))));
+	}
+	TSharedPtr<FJsonObject> DigestInput = MakeShared<FJsonObject>();
+	DigestInput->SetArrayField(TEXT("assets"), CurrentAssets);
+	const FString CurrentDigest =
+		UEAIIntegration::Infrastructure::DigestJson(DigestInput);
+	const FString ExpectedDigest =
+		GetStringField(*Preconditions, TEXT("digest"));
+	if (!CurrentDigest.IsEmpty() &&
+		ExpectedDigest == TEXT("sha256:") + CurrentDigest)
+	{
+		return true;
+	}
+
+	TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+	Details->SetStringField(
+		TEXT("expectedDigest"),
+		ExpectedDigest);
+	Details->SetStringField(
+		TEXT("actualDigest"),
+		CurrentDigest.IsEmpty()
+			? FString()
+			: TEXT("sha256:") + CurrentDigest);
+	for (int32 Index = 0;
+		 Index < ExpectedAssets->Num() &&
+		 Index < CurrentAssets.Num();
+		 ++Index)
+	{
+		const TSharedPtr<FJsonObject> Expected =
+			(*ExpectedAssets)[Index]->AsObject();
+		const TSharedPtr<FJsonObject> Actual =
+			CurrentAssets[Index]->AsObject();
+		if (UEAIIntegration::Infrastructure::CanonicalizeJsonValue(
+				MakeShared<FJsonValueObject>(Expected)) !=
+			UEAIIntegration::Infrastructure::CanonicalizeJsonValue(
+				MakeShared<FJsonValueObject>(Actual)))
+		{
+			Details->SetStringField(
+				TEXT("scopeId"),
+				GetStringField(Expected, TEXT("scopeId")));
+			Details->SetStringField(
+				TEXT("asset"),
+				GetStringField(Expected, TEXT("asset")));
+			Details->SetObjectField(TEXT("expected"), Expected);
+			Details->SetObjectField(TEXT("actual"), Actual);
+			break;
+		}
+	}
+	OutFailure = FMCPResult::Fail(
+		TEXT("asset_precondition_failed"),
+		TEXT(
+			"Workflow asset state changed after the approved Editor "
+			"plan was prepared."),
+		409,
+		Details);
+	return false;
+}
+
+void FWorkflowRuntime::PrunePreparedPlanCache()
+{
+	const double Now = FPlatformTime::Seconds();
+	for (auto It = PreparedPlanCache.CreateIterator(); It; ++It)
+	{
+		if (!It.Value().Plan.IsValid() ||
+			Now - It.Value().PreparedAtSeconds >
+				PreparedPlanCacheTtlSeconds)
+		{
+			It.RemoveCurrent();
+		}
+	}
+	while (PreparedPlanCache.Num() >=
+		MaxPreparedPlanCacheEntries)
+	{
+		FString OldestDigest;
+		double OldestTime = TNumericLimits<double>::Max();
+		for (const TPair<FString, FPreparedPlanCacheEntry>& Pair :
+			 PreparedPlanCache)
+		{
+			if (Pair.Value.PreparedAtSeconds < OldestTime)
+			{
+				OldestDigest = Pair.Key;
+				OldestTime = Pair.Value.PreparedAtSeconds;
+			}
+		}
+		if (OldestDigest.IsEmpty())
+		{
+			break;
+		}
+		PreparedPlanCache.Remove(OldestDigest);
+	}
+}
+
+void FWorkflowRuntime::CachePreparedPlan(
+	const TSharedPtr<FJsonObject>& PreparedPlan)
+{
+	if (!PreparedPlan.IsValid())
+	{
+		return;
+	}
+	const FString Digest =
+		GetStringField(PreparedPlan, TEXT("planDigest"));
+	if (Digest.IsEmpty())
+	{
+		return;
+	}
+	PrunePreparedPlanCache();
+	FPreparedPlanCacheEntry Entry;
+	Entry.Plan = CloneObject(PreparedPlan);
+	Entry.PreparedAtSeconds = FPlatformTime::Seconds();
+	PreparedPlanCache.Add(Digest, MoveTemp(Entry));
+}
+
+bool FWorkflowRuntime::FindPreparedPlan(
+	const FString& BoundPlanDigest,
+	TSharedPtr<FJsonObject>& OutPlan)
+{
+	OutPlan.Reset();
+	PrunePreparedPlanCache();
+	const FPreparedPlanCacheEntry* Entry =
+		PreparedPlanCache.Find(BoundPlanDigest);
+	if (!Entry || !Entry->Plan.IsValid())
+	{
+		return false;
+	}
+	OutPlan = CloneObject(Entry->Plan);
+	return OutPlan.IsValid();
+}
+
+bool FWorkflowRuntime::AdaptV1PlanToV2(
+	const TSharedPtr<FJsonObject>& Plan,
+	TSharedPtr<FJsonObject>& OutPlan,
+	FString& OutError) const
+{
+	const TSharedPtr<FJsonObject>* NormalizedWorkflow = nullptr;
+	const TSharedPtr<FJsonObject>* Scope = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* PlannedOperations = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* Initializers = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* Finalizers = nullptr;
+	if (!Plan.IsValid()
+		|| GetStringField(Plan, TEXT("schema")) !=
+			TEXT("ue.workflow-plan.v1")
+		|| !Plan->TryGetObjectField(
+			TEXT("normalizedWorkflow"),
+			NormalizedWorkflow)
+		|| !NormalizedWorkflow || !NormalizedWorkflow->IsValid()
+		|| !(*NormalizedWorkflow)->TryGetObjectField(
+			TEXT("scope"),
+			Scope)
+		|| !Scope || !Scope->IsValid()
+		|| !Plan->TryGetArrayField(
+			TEXT("operations"),
+			PlannedOperations)
+		|| !PlannedOperations
+		|| !Plan->TryGetArrayField(
+			TEXT("initializers"),
+			Initializers)
+		|| !Initializers
+		|| !Plan->TryGetArrayField(
+			TEXT("finalizers"),
+			Finalizers)
+		|| !Finalizers)
+	{
+		OutError =
+			TEXT("Workflow v1 plan is incomplete and cannot be adapted.");
+		return false;
+	}
+
+	const FString ScopeId = TEXT("primary");
+	TSharedPtr<FJsonObject> AdaptedScope = CloneObject(*Scope);
+	const TSharedPtr<FJsonObject>* Verify = nullptr;
+	if ((*NormalizedWorkflow)->TryGetObjectField(
+			TEXT("verify"),
+			Verify)
+		&& Verify && Verify->IsValid())
+	{
+		AdaptedScope->SetObjectField(
+			TEXT("verify"),
+			CloneObject(*Verify));
+	}
+	TSharedPtr<FJsonObject> Scopes = MakeShared<FJsonObject>();
+	Scopes->SetObjectField(ScopeId, AdaptedScope);
+
+	auto AddScopeToRecords =
+		[&](const TArray<TSharedPtr<FJsonValue>>& Source,
+			TArray<TSharedPtr<FJsonValue>>& Destination) -> bool
+	{
+		Destination.Reserve(Source.Num());
+		for (const TSharedPtr<FJsonValue>& Value : Source)
+		{
+			if (!Value.IsValid() || Value->Type != EJson::Object)
+			{
+				OutError =
+					TEXT("Workflow v1 plan contains a non-object record.");
+				return false;
+			}
+			TSharedPtr<FJsonObject> Record =
+				CloneObject(Value->AsObject());
+			Record->SetStringField(TEXT("scope"), ScopeId);
+			Destination.Add(MakeShared<FJsonValueObject>(Record));
+		}
+		return true;
+	};
+
+	TArray<TSharedPtr<FJsonValue>> AdaptedOperations;
+	TArray<TSharedPtr<FJsonValue>> AdaptedInitializers;
+	TArray<TSharedPtr<FJsonValue>> AdaptedFinalizers;
+	if (!AddScopeToRecords(*PlannedOperations, AdaptedOperations)
+		|| !AddScopeToRecords(*Initializers, AdaptedInitializers)
+		|| !AddScopeToRecords(*Finalizers, AdaptedFinalizers))
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> InternalWorkflow =
+		CloneObject(*NormalizedWorkflow);
+	InternalWorkflow->SetStringField(TEXT("dslVersion"), TEXT("2.0"));
+	InternalWorkflow->Values.Remove(TEXT("scope"));
+	InternalWorkflow->Values.Remove(TEXT("verify"));
+	InternalWorkflow->SetObjectField(TEXT("scopes"), Scopes);
+	const TArray<TSharedPtr<FJsonValue>>* AuthoredOperations = nullptr;
+	TArray<TSharedPtr<FJsonValue>> AdaptedAuthoredOperations;
+	if ((*NormalizedWorkflow)->TryGetArrayField(
+			TEXT("operations"),
+			AuthoredOperations)
+		&& AuthoredOperations
+		&& !AddScopeToRecords(
+			*AuthoredOperations,
+			AdaptedAuthoredOperations))
+	{
+		return false;
+	}
+	InternalWorkflow->SetArrayField(
+		TEXT("operations"),
+		AdaptedAuthoredOperations);
+
+	bool bCreateIfMissing = false;
+	AdaptedScope->TryGetBoolField(
+		TEXT("createIfMissing"),
+		bCreateIfMissing);
+	TSharedPtr<FJsonObject> AssetRecord = MakeShared<FJsonObject>();
+	AssetRecord->SetStringField(TEXT("scopeId"), ScopeId);
+	AssetRecord->SetStringField(
+		TEXT("kind"),
+		GetStringField(AdaptedScope, TEXT("kind")));
+	AssetRecord->SetStringField(
+		TEXT("asset"),
+		GetStringField(AdaptedScope, TEXT("asset")));
+	AssetRecord->SetBoolField(
+		TEXT("createIfMissing"),
+		bCreateIfMissing);
+
+	OutPlan = CloneObject(Plan);
+	OutPlan->SetStringField(TEXT("schema"), TEXT("ue.workflow-plan.v2"));
+	OutPlan->SetStringField(TEXT("sourceDslVersion"), TEXT("1.0"));
+	OutPlan->SetObjectField(
+		TEXT("originalNormalizedWorkflow"),
+		CloneObject(*NormalizedWorkflow));
+	OutPlan->SetObjectField(
+		TEXT("normalizedWorkflow"),
+		InternalWorkflow);
+	OutPlan->SetArrayField(
+		TEXT("assetSet"),
+		{MakeShared<FJsonValueObject>(AssetRecord)});
+	OutPlan->SetArrayField(TEXT("initializers"), AdaptedInitializers);
+	OutPlan->SetArrayField(TEXT("operations"), AdaptedOperations);
+	OutPlan->SetArrayField(TEXT("finalizers"), AdaptedFinalizers);
+	return true;
+}
+
 FMCPResult FWorkflowRuntime::ExecuteWorkflow(const TSharedPtr<FJsonObject>& Request,
                                              const FResponseOptions& Options)
 {
@@ -1577,34 +2505,110 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(const TSharedPtr<FJsonObject>& Requ
 			422);
 	}
 
-	TSharedPtr<FJsonObject> Plan;
+	TSharedPtr<FJsonObject> CorePlan;
 	FMCPResult PlanFailure;
-	if (!TryPlan(*Workflow, Plan, PlanFailure))
+	if (!TryPlan(*Workflow, CorePlan, PlanFailure))
 	{
 		return PlanFailure;
 	}
-
-	const FString PlanDigest = GetStringField(Plan, TEXT("planDigest"));
+	const FString CorePlanDigest =
+		GetStringField(CorePlan, TEXT("planDigest"));
 	FString ApprovedDigest;
 	if (!Request->TryGetStringField(TEXT("approvePlanDigest"), ApprovedDigest)
 		|| ApprovedDigest.IsEmpty())
 	{
 		TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
-		Details->SetStringField(TEXT("planDigest"), PlanDigest);
+		Details->SetStringField(
+			TEXT("corePlanDigest"),
+			CorePlanDigest);
+		Details->SetBoolField(TEXT("executionReady"), false);
+		Details->SetStringField(
+			TEXT("guidance"),
+			TEXT("Run 'ue-workflow plan --connect' and approve its planDigest."));
 		return FMCPResult::Fail(
 			TEXT("plan_approval_required"),
-			TEXT("Execute requires exact 'approvePlanDigest' from plan."),
+			TEXT(
+				"Execute requires exact 'approvePlanDigest' from an "
+				"Editor-prepared plan."),
 			409,
 			Details);
 	}
-	if (ApprovedDigest != PlanDigest)
+	if (ApprovedDigest == CorePlanDigest)
 	{
 		TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
 		Details->SetStringField(TEXT("approvedPlanDigest"), ApprovedDigest);
-		Details->SetStringField(TEXT("currentPlanDigest"), PlanDigest);
+		Details->SetStringField(
+			TEXT("corePlanDigest"),
+			CorePlanDigest);
+		Details->SetStringField(
+			TEXT("guidance"),
+			TEXT("Run 'ue-workflow plan --connect' before executing."));
+		Details->SetBoolField(TEXT("executionReady"), false);
+		return FMCPResult::Fail(
+			TEXT("asset_precondition_required"),
+			TEXT(
+				"The approved digest came from an offline Core plan "
+				"and is not bound to current Editor assets."),
+			409,
+			Details);
+	}
+
+	TSharedPtr<FJsonObject> Plan;
+	if (!FindPreparedPlan(ApprovedDigest, Plan))
+	{
+		TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+		Details->SetStringField(
+			TEXT("approvedPlanDigest"),
+			ApprovedDigest);
+		Details->SetStringField(
+			TEXT("corePlanDigest"),
+			CorePlanDigest);
+		Details->SetBoolField(TEXT("executionReady"), false);
+		Details->SetStringField(
+			TEXT("guidance"),
+			TEXT(
+				"The prepared plan expired or belongs to another Editor "
+				"session; run 'ue-workflow plan --connect' again."));
+		return FMCPResult::Fail(
+			TEXT("asset_precondition_required"),
+			TEXT(
+				"Execute requires a cached Editor-prepared plan for the "
+				"approved digest."),
+			409,
+			Details);
+	}
+
+	const FString PreparedCoreDigest =
+		GetStringField(Plan, TEXT("corePlanDigest"));
+	const FString PreparedContractDigest =
+		GetStringField(Plan, TEXT("contractSetDigest"));
+	if (PreparedCoreDigest != CorePlanDigest ||
+		PreparedContractDigest !=
+			GetStringField(CorePlan, TEXT("contractSetDigest")))
+	{
+		TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+		Details->SetStringField(
+			TEXT("approvedPlanDigest"),
+			ApprovedDigest);
+		Details->SetStringField(
+			TEXT("expectedCorePlanDigest"),
+			PreparedCoreDigest);
+		Details->SetStringField(
+			TEXT("currentCorePlanDigest"),
+			CorePlanDigest);
+		Details->SetStringField(
+			TEXT("expectedContractSetDigest"),
+			PreparedContractDigest);
+		Details->SetStringField(
+			TEXT("currentContractSetDigest"),
+			GetStringField(
+				CorePlan,
+				TEXT("contractSetDigest")));
 		return FMCPResult::Fail(
 			TEXT("plan_digest_mismatch"),
-			TEXT("Approved plan digest does not match the current plan."),
+			TEXT(
+				"The approved prepared plan belongs to a different "
+				"workflow or contract set."),
 			409,
 			Details);
 	}
@@ -1634,6 +2638,29 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(const TSharedPtr<FJsonObject>& Requ
 			TEXT("Cannot start a workflow while another Editor transaction is active."),
 			409);
 	}
+	if (!VerifyPlanAssetPreconditions(Plan, PlanFailure))
+	{
+		return PlanFailure;
+	}
+	if (GetStringField(Plan, TEXT("schema")) ==
+		TEXT("ue.workflow-plan.v2"))
+	{
+		return ExecuteWorkflowV2(Request, Plan, Options);
+	}
+	if (GetStringField(Plan, TEXT("schema")) ==
+		TEXT("ue.workflow-plan.v1"))
+	{
+		TSharedPtr<FJsonObject> AdaptedPlan;
+		FString AdaptError;
+		if (!AdaptV1PlanToV2(Plan, AdaptedPlan, AdaptError))
+		{
+			return FMCPResult::Fail(
+				TEXT("workflow_core_invalid_response"),
+				AdaptError,
+				500);
+		}
+		return ExecuteWorkflowV2(Request, AdaptedPlan, Options);
+	}
 
 	const TSharedPtr<FJsonObject>* NormalizedWorkflow = nullptr;
 	const TSharedPtr<FJsonObject>* Scope = nullptr;
@@ -1660,7 +2687,10 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(const TSharedPtr<FJsonObject>& Requ
 	Record.WorkflowId =
 		GetStringField(*NormalizedWorkflow, TEXT("workflowId"));
 	Record.ScopeAsset = GetStringField(*Scope, TEXT("asset"));
-	Record.PlanDigest = PlanDigest;
+	Record.PlanDigest =
+		GetStringField(Plan, TEXT("planDigest"));
+	Record.CorePlanDigest =
+		GetStringField(Plan, TEXT("corePlanDigest"));
 	Record.ContractSetDigest =
 		GetStringField(Plan, TEXT("contractSetDigest"));
 	Record.Status = TEXT("running");
@@ -2221,12 +3251,6 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(const TSharedPtr<FJsonObject>& Requ
 		// long as their post-state still matches the completed workflow.
 		Record.bRollbackAvailable = true;
 	}
-	else if (!Record.bScopeExistedBefore)
-	{
-		// A dirty-only newly-created scope needs no byte snapshot: rollback
-		// verifies the unchanged post-state hash and removes the unsaved asset.
-		Record.bRollbackAvailable = true;
-	}
 
 	if (PrimaryAsset && PrimaryAsset->GetOutermost()->IsDirty())
 	{
@@ -2243,6 +3267,989 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(const TSharedPtr<FJsonObject>& Requ
 		return FMCPResult::Fail(
 			TEXT("journal_write_failed"),
 			TEXT("Workflow completed, but its terminal journal could not be written."),
+			500,
+			Details);
+	}
+	Runs.Add(Record.RunId, Record);
+	return FMCPResult::Ok(Record.ToResultJson(Options));
+}
+
+FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
+	const TSharedPtr<FJsonObject>& Request,
+	const TSharedPtr<FJsonObject>& Plan,
+	const FResponseOptions& Options)
+{
+	const TSharedPtr<FJsonObject>* NormalizedWorkflow = nullptr;
+	const TSharedPtr<FJsonObject>* Scopes = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* AssetSet = nullptr;
+	if (!Plan->TryGetObjectField(
+			TEXT("normalizedWorkflow"),
+			NormalizedWorkflow)
+		|| !NormalizedWorkflow
+		|| !(*NormalizedWorkflow)->TryGetObjectField(
+			TEXT("scopes"),
+			Scopes)
+		|| !Scopes
+		|| !Plan->TryGetArrayField(TEXT("assetSet"), AssetSet)
+		|| !AssetSet
+		|| AssetSet->IsEmpty())
+	{
+		return FMCPResult::Fail(
+			TEXT("workflow_core_invalid_response"),
+			TEXT("Workflow v2 plan is missing named scopes or assetSet."),
+			500);
+	}
+
+	bool bSaveOnSuccess = false;
+	Request->TryGetBoolField(TEXT("saveOnSuccess"), bSaveOnSuccess);
+
+	FRunRecord Record;
+	Record.RunId =
+		FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	Record.ServerInstanceId = ServerInstanceId;
+	Record.WorkflowId =
+		GetStringField(*NormalizedWorkflow, TEXT("workflowId"));
+	Record.DslVersion =
+		GetStringField(Plan, TEXT("sourceDslVersion"));
+	if (Record.DslVersion.IsEmpty())
+	{
+		Record.DslVersion = TEXT("2.0");
+	}
+	Record.PluginVersion = CurrentPluginVersion();
+	Record.PlanDigest = GetStringField(Plan, TEXT("planDigest"));
+	Record.CorePlanDigest =
+		GetStringField(Plan, TEXT("corePlanDigest"));
+	Record.ContractSetDigest =
+		GetStringField(Plan, TEXT("contractSetDigest"));
+	Record.Status = TEXT("running");
+	Record.RollbackStatus = TEXT("notRequested");
+	Record.CurrentPhase = TEXT("staging");
+	Record.bSaveOnSuccess = bSaveOnSuccess;
+	Record.bDurableResume = true;
+	const TSharedPtr<FJsonObject>* OriginalNormalizedWorkflow = nullptr;
+	Record.NormalizedWorkflow =
+		Plan->TryGetObjectField(
+				TEXT("originalNormalizedWorkflow"),
+				OriginalNormalizedWorkflow)
+			&& OriginalNormalizedWorkflow
+			&& OriginalNormalizedWorkflow->IsValid()
+		? CloneObject(*OriginalNormalizedWorkflow)
+		: CloneObject(*NormalizedWorkflow);
+	Record.StoredPlan = CloneObject(Plan);
+	Record.OperationOutputs = MakeShared<FJsonObject>();
+	Record.StructureBefore = MakeShared<FJsonObject>();
+	Record.StructureAfter = MakeShared<FJsonObject>();
+	Record.StructureAfterRollback = MakeShared<FJsonObject>();
+	Record.ReadBack = MakeShared<FJsonObject>();
+	Record.AssetDiff = MakeShared<FJsonObject>();
+
+	const FString SnapshotDirectory =
+		FPaths::Combine(GetRunDirectory(Record.RunId), TEXT("Snapshots"));
+	if (!IFileManager::Get().MakeDirectory(*SnapshotDirectory, true))
+	{
+		return FMCPResult::Fail(
+			TEXT("journal_write_failed"),
+			TEXT("Could not create the Workflow v2 snapshot directory."),
+			500);
+	}
+
+	for (const TSharedPtr<FJsonValue>& AssetValue : *AssetSet)
+	{
+		if (!AssetValue.IsValid() ||
+			AssetValue->Type != EJson::Object)
+		{
+			return FMCPResult::Fail(
+				TEXT("workflow_core_invalid_response"),
+				TEXT("Workflow v2 assetSet contains a non-object entry."),
+				500);
+		}
+		const TSharedPtr<FJsonObject> PlannedAsset =
+			AssetValue->AsObject();
+		const FString ScopeId =
+			GetStringField(PlannedAsset, TEXT("scopeId"));
+		const FString AssetPath =
+			GetStringField(PlannedAsset, TEXT("asset"));
+		const TSharedPtr<FJsonObject>* Scope = nullptr;
+		if (ScopeId.IsEmpty() || AssetPath.IsEmpty()
+			|| !(*Scopes)->TryGetObjectField(ScopeId, Scope)
+			|| !Scope || !Scope->IsValid())
+		{
+			return FMCPResult::Fail(
+				TEXT("workflow_core_invalid_response"),
+				TEXT("Workflow v2 assetSet does not match normalized scopes."),
+				500);
+		}
+
+		const bool bExistedBefore =
+			AssetExistsWithoutLogging(AssetPath);
+		UObject* Asset = bExistedBefore
+			? LoadAssetWithoutLogging(AssetPath)
+			: nullptr;
+		const bool bDirtyBefore =
+			Asset && Asset->GetOutermost()->IsDirty();
+		if (bSaveOnSuccess && bDirtyBefore)
+		{
+			TSharedPtr<FJsonObject> Details =
+				MakeShared<FJsonObject>();
+			Details->SetStringField(TEXT("scopeId"), ScopeId);
+			Details->SetStringField(TEXT("asset"), AssetPath);
+			return FMCPResult::Fail(
+				TEXT("asset_dirty"),
+				TEXT(
+					"Workflow v2 saveOnSuccess refuses to overwrite a "
+					"scope that was already dirty."),
+				409,
+				Details);
+		}
+
+		TSharedPtr<FJsonObject> AssetRecord =
+			CloneObject(PlannedAsset);
+		AssetRecord->SetBoolField(
+			TEXT("existedBefore"),
+			bExistedBefore);
+		AssetRecord->SetBoolField(
+			TEXT("packageDirtyBefore"),
+			bDirtyBefore);
+		const FString HashBefore =
+			ComputeAssetStructureHash(Asset);
+		AssetRecord->SetStringField(
+			TEXT("structureHashBefore"),
+			HashBefore);
+		AssetRecord->SetStringField(
+			TEXT("currentHash"),
+			HashBefore);
+		const FString MemoryHashBefore =
+			ComputeAssetMemorySha256(Asset);
+		if (!MemoryHashBefore.IsEmpty())
+		{
+			AssetRecord->SetStringField(
+				TEXT("memorySha256Before"),
+				MemoryHashBefore);
+			AssetRecord->SetStringField(
+				TEXT("currentMemorySha256"),
+				MemoryHashBefore);
+		}
+		const FString PackageFilename =
+			PackageFilenameForAsset(AssetPath);
+		AssetRecord->SetStringField(
+			TEXT("packageFilename"),
+			PackageFilename);
+
+		if (bExistedBefore)
+		{
+			if (!Asset || PackageFilename.IsEmpty()
+				|| !IFileManager::Get().FileExists(*PackageFilename))
+			{
+				TSharedPtr<FJsonObject> Details =
+					MakeShared<FJsonObject>();
+				Details->SetStringField(TEXT("scopeId"), ScopeId);
+				Details->SetStringField(TEXT("asset"), AssetPath);
+				return FMCPResult::Fail(
+					TEXT("snapshot_unavailable"),
+					TEXT(
+						"Existing Workflow v2 scopes require a package "
+						"file for durable recovery."),
+					409,
+					Details);
+			}
+			const FString SnapshotFilename = FPaths::Combine(
+				SnapshotDirectory,
+				ScopeId + FPackageName::GetAssetPackageExtension());
+			if (IFileManager::Get().Copy(
+					*SnapshotFilename,
+					*PackageFilename,
+					true,
+					true) != COPY_OK)
+			{
+				return FMCPResult::Fail(
+					TEXT("snapshot_write_failed"),
+					FString::Printf(
+						TEXT("Could not stage package snapshot for '%s'."),
+						*AssetPath),
+					500);
+			}
+			FString SnapshotDigest;
+			if (!TryHashFile(SnapshotFilename, SnapshotDigest))
+			{
+				return FMCPResult::Fail(
+					TEXT("snapshot_write_failed"),
+					FString::Printf(
+						TEXT("Could not hash package snapshot for '%s'."),
+						*AssetPath),
+					500);
+			}
+			AssetRecord->SetStringField(
+				TEXT("snapshotFilename"),
+				SnapshotFilename);
+			AssetRecord->SetStringField(
+				TEXT("snapshotSha256"),
+				SnapshotDigest);
+			FString PackageDigest;
+			if (!TryHashFile(PackageFilename, PackageDigest))
+			{
+				return FMCPResult::Fail(
+					TEXT("snapshot_unavailable"),
+					FString::Printf(
+						TEXT("Could not hash package for '%s'."),
+						*AssetPath),
+					500);
+			}
+			AssetRecord->SetStringField(
+				TEXT("packageSha256Before"),
+				PackageDigest);
+			AssetRecord->SetStringField(
+				TEXT("currentPackageSha256"),
+				PackageDigest);
+			TArray<FWorkflowObjectMemorySnapshot> MemorySnapshots =
+				CaptureMemorySnapshots(Asset);
+			if (!MemorySnapshots.IsEmpty())
+			{
+				Record.bMemorySnapshotCaptured = true;
+				MultiAssetRollbackMemorySnapshots.Add(
+					WorkflowAssetSnapshotKey(
+						Record.RunId,
+						ScopeId),
+					MoveTemp(MemorySnapshots));
+			}
+		}
+		Record.Assets.Add(
+			MakeShared<FJsonValueObject>(AssetRecord));
+		Record.StructureBefore->SetObjectField(
+			ScopeId,
+			CaptureAssetStructure(Asset));
+	}
+	if (Record.DslVersion == TEXT("1.0") &&
+		Record.Assets.Num() == 1 &&
+		Record.Assets[0].IsValid() &&
+		Record.Assets[0]->Type == EJson::Object)
+	{
+		const TSharedPtr<FJsonObject> Asset =
+			Record.Assets[0]->AsObject();
+		Record.ScopeAsset =
+			GetStringField(Asset, TEXT("asset"));
+		Record.StructureHashBefore =
+			GetStringField(Asset, TEXT("structureHashBefore"));
+		Asset->TryGetBoolField(
+			TEXT("existedBefore"),
+			Record.bScopeExistedBefore);
+		Asset->TryGetBoolField(
+			TEXT("packageDirtyBefore"),
+			Record.bPackageDirtyBefore);
+	}
+
+	FMCPResult PreconditionFailure;
+	if (!VerifyPlanAssetPreconditions(Plan, PreconditionFailure))
+	{
+		for (const TSharedPtr<FJsonValue>& AssetValue :
+			 Record.Assets)
+		{
+			if (AssetValue.IsValid() &&
+				AssetValue->Type == EJson::Object)
+			{
+				MultiAssetRollbackMemorySnapshots.Remove(
+					WorkflowAssetSnapshotKey(
+						Record.RunId,
+						GetStringField(
+							AssetValue->AsObject(),
+							TEXT("scopeId"))));
+			}
+		}
+		const FString RunDirectory = GetRunDirectory(Record.RunId);
+		IFileManager::Get().DeleteDirectory(
+			*RunDirectory,
+			false,
+			true);
+		return PreconditionFailure;
+	}
+
+	FString JournalError;
+	if (!SaveRun(Record, JournalError))
+	{
+		return FMCPResult::Fail(
+			TEXT("journal_write_failed"),
+			TEXT("Could not create Workflow v2 run journal."),
+			500,
+			MakeDiagnostics({JournalError}));
+	}
+	Runs.Add(Record.RunId, Record);
+	return ContinueWorkflowV2(
+		Record,
+		Plan,
+		Options,
+		false);
+}
+
+FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
+	FRunRecord& Record,
+	const TSharedPtr<FJsonObject>& Plan,
+	const FResponseOptions& Options,
+	const bool bRestartFromBaseline)
+{
+	const TSharedPtr<FJsonObject>* NormalizedWorkflow = nullptr;
+	const TSharedPtr<FJsonObject>* Scopes = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* Initializers = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* Operations = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* Finalizers = nullptr;
+	if (!Plan.IsValid()
+		|| !Plan->TryGetObjectField(
+			TEXT("normalizedWorkflow"),
+			NormalizedWorkflow)
+		|| !NormalizedWorkflow
+		|| !(*NormalizedWorkflow)->TryGetObjectField(
+			TEXT("scopes"),
+			Scopes)
+		|| !Scopes
+		|| !Plan->TryGetArrayField(
+			TEXT("initializers"),
+			Initializers)
+		|| !Initializers
+		|| !Plan->TryGetArrayField(TEXT("operations"), Operations)
+		|| !Operations
+		|| !Plan->TryGetArrayField(TEXT("finalizers"), Finalizers)
+		|| !Finalizers)
+	{
+		return FMCPResult::Fail(
+			TEXT("workflow_core_invalid_response"),
+			TEXT("Workflow v2 plan is incomplete."),
+			500);
+	}
+
+	if (bRestartFromBaseline)
+	{
+		Record.NextInitializerIndex = 0;
+		Record.NextOperationIndex = 0;
+		Record.NextFinalizerIndex = 0;
+		Record.CurrentPhase = TEXT("initializers");
+		Record.Operations.Reset();
+		Record.Finalizers.Reset();
+		Record.Diagnostics.Reset();
+		Record.DirtyPackages.Reset();
+		Record.OperationOutputs = MakeShared<FJsonObject>();
+		Record.ReadBack = MakeShared<FJsonObject>();
+		Record.AssetDiff = MakeShared<FJsonObject>();
+	}
+	if (!Record.OperationOutputs.IsValid())
+	{
+		Record.OperationOutputs = MakeShared<FJsonObject>();
+	}
+
+	TMap<FString, TSharedPtr<FJsonObject>> PriorOutputs;
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair :
+		Record.OperationOutputs->Values)
+	{
+		if (Pair.Value.IsValid() &&
+			Pair.Value->Type == EJson::Object)
+		{
+			PriorOutputs.Add(Pair.Key, Pair.Value->AsObject());
+		}
+	}
+
+	const FText TransactionTitle = FText::FromString(
+		FString::Printf(TEXT("UE Workflow v2 %s"), *Record.RunId));
+	FMCPResult ExecutionFailure;
+	bool bExecutionOk = true;
+	auto UpdateCheckpointHash = [&](const FString& ScopeId)
+	{
+		const TSharedPtr<FJsonObject> AssetRecord =
+			FindAssetRecord(Record.Assets, ScopeId);
+		if (!AssetRecord.IsValid())
+		{
+			return;
+		}
+		const FString AssetPath =
+			GetStringField(AssetRecord, TEXT("asset"));
+		UObject* Asset = LoadAssetWithoutLogging(AssetPath);
+		AssetRecord->SetStringField(
+			TEXT("currentHash"),
+			ComputeAssetStructureHash(Asset));
+		const FString MemoryDigest =
+			ComputeAssetMemorySha256(Asset);
+		if (!MemoryDigest.IsEmpty())
+		{
+			AssetRecord->SetStringField(
+				TEXT("currentMemorySha256"),
+				MemoryDigest);
+		}
+		else
+		{
+			AssetRecord->Values.Remove(
+				TEXT("currentMemorySha256"));
+		}
+		const FString PackageFilename =
+			GetStringField(
+				AssetRecord,
+				TEXT("packageFilename"));
+		FString PackageDigest;
+		if (!PackageFilename.IsEmpty() &&
+			IFileManager::Get().FileExists(*PackageFilename) &&
+			TryHashFile(PackageFilename, PackageDigest))
+		{
+			AssetRecord->SetStringField(
+				TEXT("currentPackageSha256"),
+				PackageDigest);
+		}
+	};
+	auto SaveCheckpoint = [&]() -> bool
+	{
+		FString Error;
+		if (SaveRun(Record, Error))
+		{
+			Runs.Add(Record.RunId, Record);
+			return true;
+		}
+		ExecutionFailure = FMCPResult::Fail(
+			TEXT("journal_write_failed"),
+			TEXT("Workflow v2 checkpoint could not be persisted."),
+			500,
+			MakeDiagnostics({Error}));
+		return false;
+	};
+
+	{
+		const FScopedTransaction Transaction(
+			WorkflowContextName,
+			TransactionTitle,
+			nullptr);
+		for (const TSharedPtr<FJsonValue>& AssetValue : Record.Assets)
+		{
+			if (!AssetValue.IsValid() ||
+				AssetValue->Type != EJson::Object)
+			{
+				continue;
+			}
+			UObject* Asset = LoadAssetWithoutLogging(
+				GetStringField(
+					AssetValue->AsObject(),
+					TEXT("asset")));
+			for (UObject* Object : GatherDomainOwnedObjects(Asset))
+			{
+				if (Object)
+				{
+					Object->SetFlags(RF_Transactional);
+					Object->Modify();
+				}
+			}
+		}
+
+		Record.CurrentPhase = TEXT("initializers");
+		for (int32 Index = Record.NextInitializerIndex;
+			 bExecutionOk && Index < Initializers->Num();
+			 ++Index)
+		{
+			const TSharedPtr<FJsonObject> Planned =
+				(*Initializers)[Index].IsValid() &&
+					(*Initializers)[Index]->Type == EJson::Object
+				? (*Initializers)[Index]->AsObject()
+				: nullptr;
+			const FString ScopeId =
+				GetStringField(Planned, TEXT("scope"));
+			const TSharedPtr<FJsonObject>* Scope = nullptr;
+			if (!Planned.IsValid()
+				|| !(*Scopes)->TryGetObjectField(ScopeId, Scope)
+				|| !Scope || !Scope->IsValid())
+			{
+				ExecutionFailure = FMCPResult::Fail(
+					TEXT("workflow_core_invalid_response"),
+					TEXT("Workflow v2 initializer has an invalid scope."),
+					500);
+				bExecutionOk = false;
+				break;
+			}
+
+			const FString InitializerId =
+				GetStringField(Planned, TEXT("id"));
+			const FString CapabilityId =
+				GetStringField(Planned, TEXT("operationType"));
+			const FString AssetPath =
+				GetStringField(*Scope, TEXT("asset"));
+			if (AssetExistsWithoutLogging(AssetPath))
+			{
+				Record.Operations.Add(
+					MakeShared<FJsonValueObject>(
+						MakeOperationRecord(
+							InitializerId,
+							CapabilityId,
+							TEXT("skipped"),
+							MakeShared<FJsonObject>())));
+			}
+			else
+			{
+				TSharedPtr<FJsonObject> Synthetic =
+					MakeShared<FJsonObject>();
+				Synthetic->SetStringField(
+					TEXT("id"),
+					InitializerId);
+				Synthetic->SetStringField(
+					TEXT("type"),
+					CapabilityId);
+				const TSharedPtr<FJsonObject>* Params = nullptr;
+				Synthetic->SetObjectField(
+					TEXT("params"),
+					Planned->TryGetObjectField(TEXT("params"), Params)
+						&& Params && Params->IsValid()
+						? CloneObject(*Params)
+						: MakeShared<FJsonObject>());
+				TSharedPtr<FJsonObject> Output;
+				if (!ExecuteOperation(
+						Synthetic,
+						*Scope,
+						PriorOutputs,
+						Record.bSaveOnSuccess,
+						true,
+						Output,
+						ExecutionFailure))
+				{
+					Record.Operations.Add(
+						MakeShared<FJsonValueObject>(
+							MakeOperationRecord(
+								InitializerId,
+								CapabilityId,
+								TEXT("failed"),
+								ExecutionFailure.Error.Details)));
+					bExecutionOk = false;
+					break;
+				}
+				PriorOutputs.Add(InitializerId, Output);
+				Record.OperationOutputs->SetObjectField(
+					InitializerId,
+					Output);
+				Record.Operations.Add(
+					MakeShared<FJsonValueObject>(
+						MakeOperationRecord(
+							InitializerId,
+							CapabilityId,
+							TEXT("succeeded"),
+							Output)));
+			}
+			Record.NextInitializerIndex = Index + 1;
+			UpdateCheckpointHash(ScopeId);
+			bExecutionOk = SaveCheckpoint();
+		}
+
+		Record.CurrentPhase = TEXT("operations");
+		for (int32 Index = Record.NextOperationIndex;
+			 bExecutionOk && Index < Operations->Num();
+			 ++Index)
+		{
+			const TSharedPtr<FJsonObject> Operation =
+				(*Operations)[Index].IsValid() &&
+					(*Operations)[Index]->Type == EJson::Object
+				? (*Operations)[Index]->AsObject()
+				: nullptr;
+			const FString ScopeId =
+				GetStringField(Operation, TEXT("scope"));
+			const TSharedPtr<FJsonObject>* Scope = nullptr;
+			if (!Operation.IsValid()
+				|| !(*Scopes)->TryGetObjectField(ScopeId, Scope)
+				|| !Scope || !Scope->IsValid())
+			{
+				ExecutionFailure = FMCPResult::Fail(
+					TEXT("workflow_core_invalid_response"),
+					TEXT("Workflow v2 operation has an invalid scope."),
+					500);
+				bExecutionOk = false;
+				break;
+			}
+			const FString OperationId =
+				GetStringField(Operation, TEXT("id"));
+			const FString CapabilityId =
+				GetStringField(Operation, TEXT("type"));
+			TSharedPtr<FJsonObject> Output;
+			if (!ExecuteOperation(
+					Operation,
+					*Scope,
+					PriorOutputs,
+					Record.bSaveOnSuccess,
+					true,
+					Output,
+					ExecutionFailure))
+			{
+				Record.Operations.Add(
+					MakeShared<FJsonValueObject>(
+						MakeOperationRecord(
+							OperationId,
+							CapabilityId,
+							TEXT("failed"),
+							ExecutionFailure.Error.Details)));
+				bExecutionOk = false;
+				break;
+			}
+			PriorOutputs.Add(OperationId, Output);
+			Record.OperationOutputs->SetObjectField(
+				OperationId,
+				Output);
+			Record.Operations.Add(
+				MakeShared<FJsonValueObject>(
+					MakeOperationRecord(
+						OperationId,
+						CapabilityId,
+						TEXT("succeeded"),
+						Output)));
+			Record.NextOperationIndex = Index + 1;
+			UpdateCheckpointHash(ScopeId);
+			bExecutionOk = SaveCheckpoint();
+		}
+
+		Record.CurrentPhase = TEXT("finalizers");
+		for (int32 Index = Record.NextFinalizerIndex;
+			 bExecutionOk && Index < Finalizers->Num();
+			 ++Index)
+		{
+			const TSharedPtr<FJsonObject> Finalizer =
+				(*Finalizers)[Index].IsValid() &&
+					(*Finalizers)[Index]->Type == EJson::Object
+				? (*Finalizers)[Index]->AsObject()
+				: nullptr;
+			const FString ScopeId =
+				GetStringField(Finalizer, TEXT("scope"));
+			const TSharedPtr<FJsonObject>* Scope = nullptr;
+			if (!Finalizer.IsValid()
+				|| !(*Scopes)->TryGetObjectField(ScopeId, Scope)
+				|| !Scope || !Scope->IsValid())
+			{
+				ExecutionFailure = FMCPResult::Fail(
+					TEXT("workflow_core_invalid_response"),
+					TEXT("Workflow v2 finalizer has an invalid scope."),
+					500);
+				bExecutionOk = false;
+				break;
+			}
+			const FString FinalizerId =
+				GetStringField(Finalizer, TEXT("id"));
+			const FString CapabilityId =
+				GetStringField(Finalizer, TEXT("operationType"));
+			TSharedPtr<FJsonObject> Output;
+			if (!ExecuteFinalizer(
+					Finalizer,
+					*Scope,
+					*Operations,
+					PriorOutputs,
+					Output,
+					ExecutionFailure))
+			{
+				Record.Finalizers.Add(
+					MakeShared<FJsonValueObject>(
+						MakeOperationRecord(
+							FinalizerId,
+							CapabilityId,
+							TEXT("failed"),
+							ExecutionFailure.Error.Details)));
+				bExecutionOk = false;
+				break;
+			}
+			Record.Finalizers.Add(
+				MakeShared<FJsonValueObject>(
+					MakeOperationRecord(
+						FinalizerId,
+						CapabilityId,
+						TEXT("succeeded"),
+						Output)));
+			const FString Kind =
+				GetStringField(Finalizer, TEXT("kind"));
+			if (Kind == TEXT("readBack"))
+			{
+				TSharedPtr<FJsonObject> ScopeReadBack;
+				const TSharedPtr<FJsonObject>* Existing = nullptr;
+				if (Record.ReadBack->TryGetObjectField(
+						ScopeId,
+						Existing)
+					&& Existing && Existing->IsValid())
+				{
+					ScopeReadBack = *Existing;
+				}
+				else
+				{
+					ScopeReadBack = MakeShared<FJsonObject>();
+					Record.ReadBack->SetObjectField(
+						ScopeId,
+						ScopeReadBack);
+				}
+				TArray<FString> Keys;
+				const TArray<TSharedPtr<FJsonValue>>* Grouped = nullptr;
+				if (Finalizer->TryGetArrayField(
+						TEXT("readBackKeys"),
+						Grouped)
+					&& Grouped)
+				{
+					for (const TSharedPtr<FJsonValue>& Value : *Grouped)
+					{
+						if (Value.IsValid() &&
+							Value->Type == EJson::String)
+						{
+							Keys.Add(Value->AsString());
+						}
+					}
+				}
+				if (Keys.IsEmpty())
+				{
+					Keys.Add(
+						GetStringField(
+							Finalizer,
+							TEXT("readBackKey")));
+				}
+				for (const FString& Key : Keys)
+				{
+					if (!Key.IsEmpty())
+					{
+						if (Key == TEXT("graphs"))
+						{
+							TSharedPtr<FJsonObject> GraphResults;
+							const TSharedPtr<FJsonObject>* ExistingGraphs =
+								nullptr;
+							if (ScopeReadBack->TryGetObjectField(
+									Key,
+									ExistingGraphs)
+								&& ExistingGraphs
+								&& ExistingGraphs->IsValid())
+							{
+								GraphResults = *ExistingGraphs;
+							}
+							else
+							{
+								GraphResults =
+									MakeShared<FJsonObject>();
+								ScopeReadBack->SetObjectField(
+									Key,
+									GraphResults);
+							}
+							FString GraphName;
+							const TSharedPtr<FJsonObject>* FinalizerParams =
+								nullptr;
+							if (Finalizer->TryGetObjectField(
+									TEXT("params"),
+									FinalizerParams)
+								&& FinalizerParams
+								&& FinalizerParams->IsValid())
+							{
+								(*FinalizerParams)->TryGetStringField(
+									TEXT("graph"),
+									GraphName);
+							}
+							if (GraphName.IsEmpty())
+							{
+								GraphName = FinalizerId;
+							}
+							GraphResults->SetObjectField(
+								GraphName,
+								Output);
+						}
+						else
+						{
+							ScopeReadBack->SetField(
+								Key,
+								ProjectReadBackValue(Key, Output));
+						}
+					}
+				}
+			}
+			Record.NextFinalizerIndex = Index + 1;
+			UpdateCheckpointHash(ScopeId);
+			bExecutionOk = SaveCheckpoint();
+		}
+	}
+
+	const FTransactionContext UndoContext =
+		GEditor && GEditor->Trans
+		? GEditor->Trans->GetUndoContext(false)
+		: FTransactionContext();
+	if (UndoContext.IsValid()
+		&& UndoContext.Context == WorkflowContextName
+		&& UndoContext.Title.EqualTo(TransactionTitle))
+	{
+		Record.TransactionId = UndoContext.TransactionId.ToString(
+			EGuidFormats::DigitsWithHyphensLower);
+	}
+
+	for (const TSharedPtr<FJsonValue>& AssetValue : Record.Assets)
+	{
+		if (!AssetValue.IsValid() ||
+			AssetValue->Type != EJson::Object)
+		{
+			continue;
+		}
+		const TSharedPtr<FJsonObject> AssetRecord =
+			AssetValue->AsObject();
+		const FString ScopeId =
+			GetStringField(AssetRecord, TEXT("scopeId"));
+		UObject* Asset = LoadAssetWithoutLogging(
+			GetStringField(AssetRecord, TEXT("asset")));
+		const TSharedPtr<FJsonObject> StructureAfter =
+			CaptureAssetStructure(Asset);
+		const FString HashAfter =
+			ComputeAssetStructureHash(Asset);
+		Record.StructureAfter->SetObjectField(
+			ScopeId,
+			StructureAfter);
+		AssetRecord->SetStringField(
+			TEXT("structureHashAfter"),
+			HashAfter);
+		AssetRecord->SetStringField(
+			TEXT("currentHash"),
+			HashAfter);
+		const FString MemoryHashAfter =
+			ComputeAssetMemorySha256(Asset);
+		if (!MemoryHashAfter.IsEmpty())
+		{
+			AssetRecord->SetStringField(
+				TEXT("currentMemorySha256"),
+				MemoryHashAfter);
+		}
+		const TSharedPtr<FJsonObject>* StructureBefore = nullptr;
+		TSharedPtr<FJsonObject> Diff =
+			MakeStructuralDiff(
+				Record.StructureBefore->TryGetObjectField(
+						ScopeId,
+						StructureBefore)
+					&& StructureBefore && StructureBefore->IsValid()
+					? *StructureBefore
+					: MakeShared<FJsonObject>(),
+				StructureAfter);
+		Diff->SetStringField(TEXT("scopeId"), ScopeId);
+		Diff->SetStringField(
+			TEXT("asset"),
+			GetStringField(AssetRecord, TEXT("asset")));
+		Diff->SetStringField(
+			TEXT("structureHashBefore"),
+			GetStringField(
+				AssetRecord,
+				TEXT("structureHashBefore")));
+		Diff->SetStringField(
+			TEXT("structureHashAfter"),
+			HashAfter);
+		Record.AssetDiff->SetObjectField(ScopeId, Diff);
+	}
+
+	if (!bExecutionOk)
+	{
+		Record.Status = TEXT("failed");
+		Record.Diagnostics.Add(
+			MakeShared<FJsonValueObject>(
+				ExecutionFailure.Error.Details.IsValid()
+				? ExecutionFailure.Error.Details
+				: MakeShared<FJsonObject>()));
+		const FMCPResult RollbackResult =
+			RollbackV2(Record, Options, true);
+		TSharedPtr<FJsonObject> Details =
+			Record.ToResultJson(Options);
+		Details->SetStringField(
+			TEXT("causeCode"),
+			ExecutionFailure.Error.Code);
+		Details->SetStringField(
+			TEXT("causeMessage"),
+			ExecutionFailure.Error.Message);
+		if (!RollbackResult.bOk)
+		{
+			Details->SetObjectField(
+				TEXT("rollbackFailure"),
+				RollbackResult.Error.Details.IsValid()
+				? RollbackResult.Error.Details
+				: MakeShared<FJsonObject>());
+		}
+		return FMCPResult::Fail(
+			TEXT("workflow_execution_failed"),
+			TEXT("Workflow v2 execution failed."),
+			ExecutionFailure.Error.HttpStatus >= 400
+				? ExecutionFailure.Error.HttpStatus
+				: 500,
+			Details);
+	}
+
+	if (Record.bSaveOnSuccess)
+	{
+		Record.CurrentPhase = TEXT("save");
+		for (const TSharedPtr<FJsonValue>& AssetValue :
+			 Record.Assets)
+		{
+			const TSharedPtr<FJsonObject> AssetRecord =
+				AssetValue.IsValid() &&
+					AssetValue->Type == EJson::Object
+				? AssetValue->AsObject()
+				: nullptr;
+			UObject* Asset = LoadAssetWithoutLogging(
+				GetStringField(AssetRecord, TEXT("asset")));
+			if (!Asset ||
+				!UEditorAssetLibrary::SaveLoadedAsset(Asset, true))
+			{
+				ExecutionFailure = FMCPResult::Fail(
+					TEXT("workflow_save_failed"),
+					FString::Printf(
+						TEXT("Could not save Workflow v2 scope '%s'."),
+						*GetStringField(
+							AssetRecord,
+							TEXT("scopeId"))),
+					500);
+				Record.Status = TEXT("failed");
+				RollbackV2(Record, Options, true);
+				return FMCPResult::Fail(
+					TEXT("workflow_save_failed"),
+					TEXT(
+						"Workflow v2 verified, but its staged asset "
+						"set could not be saved."),
+					500,
+					Record.ToResultJson(Options));
+			}
+			UpdateCheckpointHash(
+				GetStringField(AssetRecord, TEXT("scopeId")));
+		}
+	}
+
+	for (const TSharedPtr<FJsonValue>& AssetValue : Record.Assets)
+	{
+		const TSharedPtr<FJsonObject> AssetRecord =
+			AssetValue.IsValid() &&
+				AssetValue->Type == EJson::Object
+			? AssetValue->AsObject()
+			: nullptr;
+		UObject* Asset = LoadAssetWithoutLogging(
+			GetStringField(AssetRecord, TEXT("asset")));
+		if (Asset && Asset->GetOutermost()->IsDirty())
+		{
+			Record.DirtyPackages.Add(
+				MakeShared<FJsonValueString>(
+					Asset->GetOutermost()->GetName()));
+		}
+		const FString Hash =
+			ComputeAssetStructureHash(Asset);
+		AssetRecord->SetStringField(
+			TEXT("structureHashAfter"),
+			Hash);
+		AssetRecord->SetStringField(TEXT("currentHash"), Hash);
+		const FString MemoryHash =
+			ComputeAssetMemorySha256(Asset);
+		if (!MemoryHash.IsEmpty())
+		{
+			AssetRecord->SetStringField(
+				TEXT("currentMemorySha256"),
+				MemoryHash);
+		}
+	}
+	if (Record.DslVersion == TEXT("1.0") &&
+		Record.Assets.Num() == 1 &&
+		Record.Assets[0].IsValid() &&
+		Record.Assets[0]->Type == EJson::Object)
+	{
+		Record.StructureHashAfter =
+			GetStringField(
+				Record.Assets[0]->AsObject(),
+				TEXT("structureHashAfter"));
+	}
+	Record.Status = TEXT("completed");
+	Record.CurrentPhase = TEXT("completed");
+	Record.bRollbackAvailable = true;
+	FString JournalError;
+	if (!SaveRun(Record, JournalError))
+	{
+		Runs.Add(Record.RunId, Record);
+		TSharedPtr<FJsonObject> Details =
+			Record.ToResultJson(Options);
+		Details->SetStringField(
+			TEXT("journalError"),
+			JournalError);
+		return FMCPResult::Fail(
+			TEXT("journal_write_failed"),
+			TEXT(
+				"Workflow v2 completed, but its terminal journal "
+				"could not be written."),
 			500,
 			Details);
 	}
@@ -2605,7 +4612,7 @@ bool FWorkflowRuntime::InjectScopeParams(
 		return SetScopedString(Params, TEXT("name"), AssetName, OutError)
 			&& SetScopedString(
 				Params,
-				TEXT("package_path"),
+				TEXT("packagePath"),
 				PackagePath,
 				OutError);
 	}
@@ -2626,7 +4633,7 @@ bool FWorkflowRuntime::InjectScopeParams(
 	}
 	if (CapabilityId.StartsWith(TEXT("content.widget.")))
 	{
-		return SetScopedString(Params, TEXT("widget_bp"), Asset, OutError);
+		return SetScopedString(Params, TEXT("widgetBp"), Asset, OutError);
 	}
 	if (CapabilityId.StartsWith(TEXT("content.material.")))
 	{
@@ -2718,6 +4725,10 @@ FMCPResult FWorkflowRuntime::GetStatus(const FString& RunId, const FResponseOpti
 			FString::Printf(TEXT("Workflow run '%s' was not found."), *RunId),
 			404);
 	}
+	if (Record.bDurableResume && !Record.Assets.IsEmpty())
+	{
+		return FMCPResult::Ok(Record.ToResultJson(Options));
+	}
 	bool bRecordChanged = false;
 	if (Record.ServerInstanceId != ServerInstanceId
 		&& (Record.Status == TEXT("pending")
@@ -2781,6 +4792,20 @@ FMCPResult FWorkflowRuntime::GetStatus(const FString& RunId, const FResponseOpti
 FMCPResult FWorkflowRuntime::ResumeRun(const FString& RunId, const FResponseOptions& Options)
 {
 	const FRunRecord* Existing = Runs.Find(RunId);
+	FRunRecord DurableRecord;
+	if (Existing)
+	{
+		DurableRecord = *Existing;
+	}
+	else
+	{
+		LoadRun(RunId, DurableRecord);
+	}
+	if (DurableRecord.bDurableResume &&
+		!DurableRecord.Assets.IsEmpty())
+	{
+		return ResumeRunV2(DurableRecord, Options);
+	}
 	if (!Existing)
 	{
 		FRunRecord JournalRecord;
@@ -2862,6 +4887,288 @@ FMCPResult FWorkflowRuntime::ResumeRun(const FString& RunId, const FResponseOpti
 	return FMCPResult::Ok(Result);
 }
 
+FMCPResult FWorkflowRuntime::ResumeRunV2(
+	FRunRecord& Record,
+	const FResponseOptions& Options)
+{
+	if (Record.RunId.IsEmpty() ||
+		!Record.NormalizedWorkflow.IsValid())
+	{
+		return FMCPResult::Fail(
+			TEXT("workflow_run_not_found"),
+			TEXT("Workflow v2 journal is missing durable run data."),
+			404);
+	}
+	if (Record.PluginVersion.IsEmpty() ||
+		Record.PluginVersion != CurrentPluginVersion())
+	{
+		TSharedPtr<FJsonObject> Details =
+			Record.ToResultJson(Options);
+		Details->SetStringField(
+			TEXT("journalPluginVersion"),
+			Record.PluginVersion);
+		Details->SetStringField(
+			TEXT("currentPluginVersion"),
+			CurrentPluginVersion());
+		return FMCPResult::Fail(
+			TEXT("resume_conflict"),
+			TEXT(
+				"Workflow journal plugin version differs from the "
+				"currently loaded plugin."),
+			409,
+			Details);
+	}
+
+	static const TSet<FString> TerminalStatuses = {
+		TEXT("completed"),
+		TEXT("failed"),
+		TEXT("blocked"),
+		TEXT("rolledBack"),
+	};
+	const bool bTerminal =
+		TerminalStatuses.Contains(Record.Status);
+	if (!bTerminal && Record.Status != TEXT("running") &&
+		Record.Status != TEXT("pending"))
+	{
+		return FMCPResult::Fail(
+			TEXT("workflow_resume_not_safe"),
+			TEXT("Workflow v2 journal is not at a resumable boundary."),
+			409,
+			Record.ToResultJson(Options));
+	}
+
+	TSharedPtr<FJsonObject> CurrentPlan;
+	FMCPResult PlanFailure;
+	if (!TryPlan(
+			Record.NormalizedWorkflow,
+			CurrentPlan,
+			PlanFailure)
+		|| GetStringField(CurrentPlan, TEXT("planDigest")) !=
+			Record.CorePlanDigest
+		|| GetStringField(
+			CurrentPlan,
+			TEXT("contractSetDigest")) !=
+			Record.ContractSetDigest)
+	{
+		TSharedPtr<FJsonObject> Details =
+			Record.ToResultJson(Options);
+		Details->SetStringField(
+			TEXT("expectedPlanDigest"),
+			Record.CorePlanDigest);
+		if (CurrentPlan.IsValid())
+		{
+			Details->SetStringField(
+				TEXT("currentPlanDigest"),
+				GetStringField(
+					CurrentPlan,
+					TEXT("planDigest")));
+		}
+		return FMCPResult::Fail(
+			TEXT("resume_conflict"),
+			TEXT(
+				"Workflow v2 contract or plan changed since the run "
+				"journal was written."),
+			409,
+			Details);
+	}
+
+	TSharedPtr<FJsonObject> ExecutionPlan = CurrentPlan;
+	if (Record.DslVersion == TEXT("1.0"))
+	{
+		FString AdaptError;
+		if (!AdaptV1PlanToV2(
+				CurrentPlan,
+				ExecutionPlan,
+				AdaptError))
+		{
+			TSharedPtr<FJsonObject> Details =
+				Record.ToResultJson(Options);
+			Details->SetStringField(TEXT("message"), AdaptError);
+			return FMCPResult::Fail(
+				TEXT("resume_conflict"),
+				TEXT(
+					"Workflow v1 plan can no longer be adapted to the "
+					"durable execution model."),
+				409,
+				Details);
+		}
+	}
+
+	const bool bDifferentInstance =
+		Record.ServerInstanceId != ServerInstanceId;
+	const bool bRestartFromBaseline =
+		bDifferentInstance && !bTerminal;
+	for (const TSharedPtr<FJsonValue>& AssetValue : Record.Assets)
+	{
+		const TSharedPtr<FJsonObject> AssetRecord =
+			AssetValue.IsValid() &&
+				AssetValue->Type == EJson::Object
+			? AssetValue->AsObject()
+			: nullptr;
+		const FString ScopeId =
+			GetStringField(AssetRecord, TEXT("scopeId"));
+		const FString AssetPath =
+			GetStringField(AssetRecord, TEXT("asset"));
+		const FString ExpectedHash = GetStringField(
+			AssetRecord,
+			bRestartFromBaseline
+				? TEXT("structureHashBefore")
+				: TEXT("currentHash"));
+		UObject* CurrentAsset =
+			LoadAssetWithoutLogging(AssetPath);
+		if (!bTerminal
+			&& bDifferentInstance
+			&& CurrentAsset
+			&& CurrentAsset->GetOutermost()->IsDirty())
+		{
+			TSharedPtr<FJsonObject> Details =
+				Record.ToResultJson(Options);
+			Details->SetStringField(TEXT("scopeId"), ScopeId);
+			Details->SetStringField(TEXT("asset"), AssetPath);
+			Details->SetStringField(
+				TEXT("guidance"),
+				TEXT(
+					"Save or revert the external edit before resuming "
+					"from the staged baseline."));
+			return FMCPResult::Fail(
+				TEXT("resume_conflict"),
+				TEXT(
+					"Workflow resume refused a dirty asset loaded by "
+					"the new Editor instance."),
+				409,
+				Details);
+		}
+		if (!bTerminal && !bDifferentInstance)
+		{
+			const FString ExpectedMemoryHash =
+				GetStringField(
+					AssetRecord,
+					TEXT("currentMemorySha256"));
+			const FString CurrentMemoryHash =
+				ComputeAssetMemorySha256(CurrentAsset);
+			if (ExpectedMemoryHash.IsEmpty()
+				|| CurrentMemoryHash != ExpectedMemoryHash)
+			{
+				TSharedPtr<FJsonObject> Details =
+					Record.ToResultJson(Options);
+				Details->SetStringField(TEXT("scopeId"), ScopeId);
+				Details->SetStringField(TEXT("asset"), AssetPath);
+				Details->SetStringField(
+					TEXT("expectedMemorySha256"),
+					ExpectedMemoryHash);
+				Details->SetStringField(
+					TEXT("currentMemorySha256"),
+					CurrentMemoryHash);
+				return FMCPResult::Fail(
+					TEXT("resume_conflict"),
+					TEXT(
+						"Workflow resume detected an in-memory asset "
+						"edit outside the recorded segment boundary."),
+					409,
+					Details);
+			}
+		}
+		const FString CurrentHash =
+			ComputeAssetStructureHash(CurrentAsset);
+		if (ExpectedHash.IsEmpty() ||
+			CurrentHash != ExpectedHash)
+		{
+			TSharedPtr<FJsonObject> Details =
+				Record.ToResultJson(Options);
+			Details->SetStringField(TEXT("scopeId"), ScopeId);
+			Details->SetStringField(TEXT("asset"), AssetPath);
+			Details->SetStringField(
+				TEXT("expectedHash"),
+				ExpectedHash);
+			Details->SetStringField(
+				TEXT("currentHash"),
+				CurrentHash);
+			return FMCPResult::Fail(
+				TEXT("resume_conflict"),
+				TEXT(
+					"A Workflow v2 scope changed outside the recorded "
+					"execution boundary."),
+				409,
+				Details);
+		}
+
+		const FString PackageFilename =
+			GetStringField(AssetRecord, TEXT("packageFilename"));
+		const FString ExpectedPackageHash = GetStringField(
+			AssetRecord,
+			bRestartFromBaseline
+				? TEXT("packageSha256Before")
+				: TEXT("currentPackageSha256"));
+		FString CurrentPackageHash;
+		const bool bPackageExists =
+			!PackageFilename.IsEmpty() &&
+			IFileManager::Get().FileExists(*PackageFilename);
+		if (bPackageExists &&
+			!TryHashFile(PackageFilename, CurrentPackageHash))
+		{
+			CurrentPackageHash = TEXT("<unreadable>");
+		}
+		if ((ExpectedPackageHash.IsEmpty() && bPackageExists)
+			|| (!ExpectedPackageHash.IsEmpty() &&
+				CurrentPackageHash != ExpectedPackageHash))
+		{
+			TSharedPtr<FJsonObject> Details =
+				Record.ToResultJson(Options);
+			Details->SetStringField(TEXT("scopeId"), ScopeId);
+			Details->SetStringField(TEXT("asset"), AssetPath);
+			Details->SetStringField(
+				TEXT("expectedPackageSha256"),
+				ExpectedPackageHash);
+			Details->SetStringField(
+				TEXT("currentPackageSha256"),
+				CurrentPackageHash);
+			return FMCPResult::Fail(
+				TEXT("resume_conflict"),
+				TEXT(
+					"A Workflow scope package changed outside the "
+					"recorded execution boundary."),
+				409,
+				Details);
+		}
+	}
+
+	if (bTerminal)
+	{
+		TSharedPtr<FJsonObject> Result =
+			Record.ToResultJson(Options);
+		Result->SetStringField(
+			TEXT("resumeMode"),
+			TEXT("terminalReattach"));
+		Result->SetBoolField(TEXT("reattached"), true);
+		Result->SetBoolField(
+			TEXT("resumedExecution"),
+			false);
+		return FMCPResult::Ok(Result);
+	}
+
+	Record.ServerInstanceId = ServerInstanceId;
+	Record.Status = TEXT("running");
+	Runs.Add(Record.RunId, Record);
+	FMCPResult Result = ContinueWorkflowV2(
+		Record,
+		ExecutionPlan,
+		Options,
+		bRestartFromBaseline);
+	if (Result.bOk && Result.Data.IsValid())
+	{
+		Result.Data->SetStringField(
+			TEXT("resumeMode"),
+			bRestartFromBaseline
+				? TEXT("restartFromStagedBaseline")
+				: TEXT("continueFromCheckpoint"));
+		Result.Data->SetBoolField(TEXT("reattached"), true);
+		Result.Data->SetBoolField(
+			TEXT("resumedExecution"),
+			true);
+	}
+	return Result;
+}
+
 FMCPResult FWorkflowRuntime::Rollback(const TSharedPtr<FJsonObject>& Request,
                                       const FResponseOptions& Options)
 {
@@ -2873,6 +5180,29 @@ FMCPResult FWorkflowRuntime::Rollback(const TSharedPtr<FJsonObject>& Request,
 			TEXT("workflow_run_not_found"),
 			FString::Printf(TEXT("Workflow run '%s' was not found."), *RunId),
 			404);
+	}
+	if (Record.bDurableResume && !Record.Assets.IsEmpty())
+	{
+		FString ApprovedDigest;
+		if (!Request->TryGetStringField(
+				TEXT("approvePlanDigest"),
+				ApprovedDigest)
+			|| ApprovedDigest != Record.PlanDigest)
+		{
+			TSharedPtr<FJsonObject> Details =
+				Record.ToResultJson(Options);
+			Details->SetStringField(
+				TEXT("requiredPlanDigest"),
+				Record.PlanDigest);
+			return FMCPResult::Fail(
+				TEXT("plan_digest_mismatch"),
+				TEXT(
+					"Rollback requires the exact approved plan digest "
+					"for the run."),
+				409,
+				Details);
+		}
+		return RollbackV2(Record, Options, false);
 	}
 	if (Record.ServerInstanceId != ServerInstanceId)
 	{
@@ -3018,6 +5348,374 @@ FMCPResult FWorkflowRuntime::Rollback(const TSharedPtr<FJsonObject>& Request,
 	return FMCPResult::Ok(Record.ToResultJson(Options));
 }
 
+FMCPResult FWorkflowRuntime::RollbackV2(
+	FRunRecord& Record,
+	const FResponseOptions& Options,
+	const bool bAutomatic)
+{
+	if (Record.Status == TEXT("rolledBack"))
+	{
+		return FMCPResult::Ok(Record.ToResultJson(Options));
+	}
+	if (!bAutomatic && !Record.bRollbackAvailable)
+	{
+		return FMCPResult::Fail(
+			TEXT("workflow_rollback_not_available"),
+			TEXT("Workflow v2 rollback is not available for this run."),
+			409,
+			Record.ToResultJson(Options));
+	}
+	if (!bAutomatic &&
+		(Record.PluginVersion.IsEmpty() ||
+			Record.PluginVersion != CurrentPluginVersion()))
+	{
+		TSharedPtr<FJsonObject> Details =
+			Record.ToResultJson(Options);
+		Details->SetStringField(
+			TEXT("journalPluginVersion"),
+			Record.PluginVersion);
+		Details->SetStringField(
+			TEXT("currentPluginVersion"),
+			CurrentPluginVersion());
+		return FMCPResult::Fail(
+			TEXT("resume_conflict"),
+			TEXT(
+				"Workflow rollback refused a journal created by a "
+				"different plugin version."),
+			409,
+			Details);
+	}
+	if (!Record.StructureAfterRollback.IsValid())
+	{
+		Record.StructureAfterRollback = MakeShared<FJsonObject>();
+	}
+
+	const bool bSameInstance =
+		Record.ServerInstanceId == ServerInstanceId;
+	if (!bAutomatic)
+	{
+		for (const TSharedPtr<FJsonValue>& AssetValue : Record.Assets)
+		{
+			const TSharedPtr<FJsonObject> AssetRecord =
+				AssetValue.IsValid() && AssetValue->Type == EJson::Object
+				? AssetValue->AsObject()
+				: nullptr;
+			const FString AssetPath = GetStringField(AssetRecord, TEXT("asset"));
+			UObject* CurrentAsset =
+				LoadAssetWithoutLogging(AssetPath);
+			if (!bSameInstance
+				&& CurrentAsset
+				&& CurrentAsset->GetOutermost()->IsDirty())
+			{
+				TSharedPtr<FJsonObject> Details =
+					Record.ToResultJson(Options);
+				Details->SetStringField(
+					TEXT("scopeId"),
+					GetStringField(
+						AssetRecord,
+						TEXT("scopeId")));
+				Details->SetStringField(
+					TEXT("asset"),
+					AssetPath);
+				Details->SetStringField(
+					TEXT("guidance"),
+					TEXT(
+						"Save or revert the external edit before "
+						"rolling back from the staged baseline."));
+				return FMCPResult::Fail(
+					TEXT("resume_conflict"),
+					TEXT(
+						"Workflow v2 rollback refused a dirty asset "
+						"loaded by a different Editor instance."),
+					409,
+					Details);
+			}
+			const FString CurrentHash =
+				ComputeAssetStructureHash(CurrentAsset);
+			const FString BeforeHash = GetStringField(
+				AssetRecord,
+				TEXT("structureHashBefore"));
+			const FString ExpectedHash = GetStringField(
+				AssetRecord,
+				TEXT("currentHash"));
+			if (bSameInstance)
+			{
+				const FString ExpectedMemoryHash =
+					GetStringField(
+						AssetRecord,
+						TEXT("currentMemorySha256"));
+				const FString BeforeMemoryHash =
+					GetStringField(
+						AssetRecord,
+						TEXT("memorySha256Before"));
+				const FString CurrentMemoryHash =
+					ComputeAssetMemorySha256(CurrentAsset);
+				bool bExistedBefore = false;
+				AssetRecord->TryGetBoolField(
+					TEXT("existedBefore"),
+					bExistedBefore);
+				const bool bMatchesRecordedCurrent =
+					!ExpectedMemoryHash.IsEmpty()
+					&& CurrentMemoryHash == ExpectedMemoryHash;
+				const bool bMatchesRecordedBaseline =
+					(!bExistedBefore && !CurrentAsset)
+					|| (!BeforeMemoryHash.IsEmpty()
+						&& CurrentMemoryHash == BeforeMemoryHash);
+				if (!bMatchesRecordedCurrent
+					&& !bMatchesRecordedBaseline)
+				{
+					TSharedPtr<FJsonObject> Details =
+						Record.ToResultJson(Options);
+					Details->SetStringField(
+						TEXT("scopeId"),
+						GetStringField(
+							AssetRecord,
+							TEXT("scopeId")));
+					Details->SetStringField(
+						TEXT("asset"),
+						AssetPath);
+					Details->SetStringField(
+						TEXT("expectedMemorySha256"),
+						ExpectedMemoryHash);
+					Details->SetStringField(
+						TEXT("currentMemorySha256"),
+						CurrentMemoryHash);
+					return FMCPResult::Fail(
+						TEXT("resume_conflict"),
+						TEXT(
+							"Workflow v2 rollback detected an "
+							"in-memory edit outside the recorded "
+							"execution boundary."),
+						409,
+						Details);
+				}
+			}
+			if (CurrentHash != BeforeHash
+				&& (ExpectedHash.IsEmpty() || CurrentHash != ExpectedHash))
+			{
+				TSharedPtr<FJsonObject> Details = Record.ToResultJson(Options);
+				Details->SetStringField(
+					TEXT("scopeId"),
+					GetStringField(AssetRecord, TEXT("scopeId")));
+				Details->SetStringField(TEXT("asset"), AssetPath);
+				Details->SetStringField(TEXT("expectedHash"), ExpectedHash);
+				Details->SetStringField(TEXT("currentHash"), CurrentHash);
+				return FMCPResult::Fail(
+					TEXT("resume_conflict"),
+					TEXT(
+						"Workflow v2 rollback refused to overwrite an "
+						"externally modified scope."),
+					409,
+					Details);
+			}
+
+			const FString PackageFilename =
+				GetStringField(
+					AssetRecord,
+					TEXT("packageFilename"));
+			const FString ExpectedPackageHash =
+				GetStringField(
+					AssetRecord,
+					TEXT("currentPackageSha256"));
+			FString CurrentPackageHash;
+			const bool bPackageExists =
+				!PackageFilename.IsEmpty() &&
+				IFileManager::Get().FileExists(*PackageFilename);
+			if (bPackageExists &&
+				!TryHashFile(PackageFilename, CurrentPackageHash))
+			{
+				CurrentPackageHash = TEXT("<unreadable>");
+			}
+			if ((ExpectedPackageHash.IsEmpty() && bPackageExists)
+				|| (!ExpectedPackageHash.IsEmpty() &&
+					CurrentPackageHash != ExpectedPackageHash))
+			{
+				TSharedPtr<FJsonObject> Details =
+					Record.ToResultJson(Options);
+				Details->SetStringField(
+					TEXT("scopeId"),
+					GetStringField(AssetRecord, TEXT("scopeId")));
+				Details->SetStringField(TEXT("asset"), AssetPath);
+				Details->SetStringField(
+					TEXT("expectedPackageSha256"),
+					ExpectedPackageHash);
+				Details->SetStringField(
+					TEXT("currentPackageSha256"),
+					CurrentPackageHash);
+				return FMCPResult::Fail(
+					TEXT("resume_conflict"),
+					TEXT(
+						"Workflow rollback refused to overwrite an "
+						"externally modified package."),
+					409,
+					Details);
+			}
+		}
+	}
+
+	const bool bUndoApplied =
+		bSameInstance
+		&& IsTopTransaction(Record.TransactionId)
+		&& GEditor->UndoTransaction(false);
+	bool bAllRestored = true;
+	for (int32 Index = Record.Assets.Num() - 1; Index >= 0; --Index)
+	{
+		const TSharedPtr<FJsonObject> AssetRecord =
+			Record.Assets[Index].IsValid()
+				&& Record.Assets[Index]->Type == EJson::Object
+			? Record.Assets[Index]->AsObject()
+			: nullptr;
+		if (!AssetRecord.IsValid())
+		{
+			bAllRestored = false;
+			continue;
+		}
+		const FString ScopeId = GetStringField(AssetRecord, TEXT("scopeId"));
+		const FString AssetPath = GetStringField(AssetRecord, TEXT("asset"));
+		const FString BeforeHash = GetStringField(
+			AssetRecord,
+			TEXT("structureHashBefore"));
+		UObject* Asset = LoadAssetWithoutLogging(AssetPath);
+		FString CurrentHash = ComputeAssetStructureHash(Asset);
+		bool bRestored = CurrentHash == BeforeHash;
+
+		if (!bRestored && bUndoApplied)
+		{
+			RebuildDomainAfterRollback(Asset);
+			CurrentHash = ComputeAssetStructureHash(
+				LoadAssetWithoutLogging(AssetPath));
+			bRestored = CurrentHash == BeforeHash;
+		}
+
+		const FString SnapshotKey =
+			WorkflowAssetSnapshotKey(Record.RunId, ScopeId);
+		if (!bRestored && bSameInstance)
+		{
+			if (TArray<FWorkflowObjectMemorySnapshot>* Snapshots =
+					MultiAssetRollbackMemorySnapshots.Find(SnapshotKey))
+			{
+				Record.bMemorySnapshotRestoreAttempted = true;
+				Asset = LoadAssetWithoutLogging(AssetPath);
+				const bool bDeserialized =
+					RestoreMemorySnapshots(Asset, *Snapshots);
+				CurrentHash = ComputeAssetStructureHash(
+					LoadAssetWithoutLogging(AssetPath));
+				bRestored = bDeserialized && CurrentHash == BeforeHash;
+				Record.bMemorySnapshotRestored =
+					Record.bMemorySnapshotRestored || bRestored;
+			}
+		}
+
+		if (!bRestored)
+		{
+			FString RestoreError;
+			bRestored = RestoreWorkflowAssetFile(AssetRecord, RestoreError);
+			if (!bRestored)
+			{
+				TSharedPtr<FJsonObject> Diagnostic = MakeShared<FJsonObject>();
+				Diagnostic->SetStringField(TEXT("scopeId"), ScopeId);
+				Diagnostic->SetStringField(TEXT("asset"), AssetPath);
+				Diagnostic->SetStringField(TEXT("message"), RestoreError);
+				Record.Diagnostics.Add(
+					MakeShared<FJsonValueObject>(Diagnostic));
+			}
+		}
+
+		Asset = LoadAssetWithoutLogging(AssetPath);
+		CurrentHash = ComputeAssetStructureHash(Asset);
+		bRestored = bRestored && CurrentHash == BeforeHash;
+		bool bDirtyBefore = false;
+		AssetRecord->TryGetBoolField(
+			TEXT("packageDirtyBefore"),
+			bDirtyBefore);
+		if (bRestored && Asset)
+		{
+			Asset->GetOutermost()->SetDirtyFlag(bDirtyBefore);
+		}
+		AssetRecord->SetStringField(
+			TEXT("structureHashAfterRollback"),
+			CurrentHash);
+		AssetRecord->SetStringField(TEXT("currentHash"), CurrentHash);
+		const FString RestoredMemoryHash =
+			ComputeAssetMemorySha256(Asset);
+		if (!RestoredMemoryHash.IsEmpty())
+		{
+			AssetRecord->SetStringField(
+				TEXT("currentMemorySha256"),
+				RestoredMemoryHash);
+		}
+		else
+		{
+			AssetRecord->Values.Remove(
+				TEXT("currentMemorySha256"));
+		}
+		const FString PackageFilename =
+			GetStringField(AssetRecord, TEXT("packageFilename"));
+		FString RestoredPackageHash;
+		if (!PackageFilename.IsEmpty() &&
+			IFileManager::Get().FileExists(*PackageFilename) &&
+			TryHashFile(PackageFilename, RestoredPackageHash))
+		{
+			AssetRecord->SetStringField(
+				TEXT("currentPackageSha256"),
+				RestoredPackageHash);
+		}
+		else
+		{
+			AssetRecord->Values.Remove(
+				TEXT("currentPackageSha256"));
+		}
+		Record.StructureAfterRollback->SetObjectField(
+			ScopeId,
+			CaptureAssetStructure(Asset));
+		bAllRestored = bAllRestored && bRestored;
+		MultiAssetRollbackMemorySnapshots.Remove(SnapshotKey);
+	}
+	if (Record.DslVersion == TEXT("1.0") &&
+		Record.Assets.Num() == 1 &&
+		Record.Assets[0].IsValid() &&
+		Record.Assets[0]->Type == EJson::Object)
+	{
+		Record.StructureHashAfterRollback =
+			GetStringField(
+				Record.Assets[0]->AsObject(),
+				TEXT("structureHashAfterRollback"));
+	}
+
+	Record.bRollbackVerified = bAllRestored;
+	Record.bRollbackAvailable = false;
+	Record.RollbackStatus =
+		bAllRestored ? TEXT("rolledBack") : TEXT("manualReview");
+	Record.Status = bAllRestored
+		? (bAutomatic ? TEXT("failed") : TEXT("rolledBack"))
+		: TEXT("blocked");
+	Record.CurrentPhase =
+		bAllRestored ? TEXT("rolledBack") : TEXT("blocked");
+	FString JournalError;
+	if (!SaveRun(Record, JournalError))
+	{
+		Runs.Add(Record.RunId, Record);
+		TSharedPtr<FJsonObject> Details = Record.ToResultJson(Options);
+		Details->SetStringField(TEXT("journalError"), JournalError);
+		return FMCPResult::Fail(
+			TEXT("journal_write_failed"),
+			TEXT("Workflow v2 rollback journal could not be written."),
+			500,
+			Details);
+	}
+	Runs.Add(Record.RunId, Record);
+	if (bAllRestored)
+	{
+		return FMCPResult::Ok(Record.ToResultJson(Options));
+	}
+	return FMCPResult::Fail(
+		TEXT("workflow_rollback_verification_failed"),
+		TEXT(
+			"Workflow v2 could not restore and verify its entire asset set."),
+		500,
+		Record.ToResultJson(Options));
+}
+
 TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToJournalJson() const
 {
 	TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
@@ -3025,8 +5723,11 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToJournalJson() const
 	Json->SetStringField(TEXT("runId"), RunId);
 	Json->SetStringField(TEXT("serverInstanceId"), ServerInstanceId);
 	Json->SetStringField(TEXT("workflowId"), WorkflowId);
+	Json->SetStringField(TEXT("dslVersion"), DslVersion);
+	Json->SetStringField(TEXT("pluginVersion"), PluginVersion);
 	Json->SetStringField(TEXT("scopeAsset"), ScopeAsset);
 	Json->SetStringField(TEXT("planDigest"), PlanDigest);
+	Json->SetStringField(TEXT("corePlanDigest"), CorePlanDigest);
 	Json->SetStringField(TEXT("contractSetDigest"), ContractSetDigest);
 	Json->SetStringField(TEXT("transactionId"), TransactionId);
 	Json->SetStringField(TEXT("status"), Status);
@@ -3036,7 +5737,18 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToJournalJson() const
 	Json->SetStringField(
 		TEXT("structureHashAfterRollback"),
 		StructureHashAfterRollback);
+	Json->SetStringField(TEXT("currentPhase"), CurrentPhase);
+	Json->SetNumberField(
+		TEXT("nextInitializerIndex"),
+		NextInitializerIndex);
+	Json->SetNumberField(
+		TEXT("nextOperationIndex"),
+		NextOperationIndex);
+	Json->SetNumberField(
+		TEXT("nextFinalizerIndex"),
+		NextFinalizerIndex);
 	Json->SetBoolField(TEXT("saveOnSuccess"), bSaveOnSuccess);
+	Json->SetBoolField(TEXT("durableResume"), bDurableResume);
 	Json->SetBoolField(TEXT("scopeExistedBefore"), bScopeExistedBefore);
 	Json->SetBoolField(TEXT("packageDirtyBefore"), bPackageDirtyBefore);
 	Json->SetBoolField(
@@ -3092,6 +5804,22 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToJournalJson() const
 		StructureHashAfterRollback);
 	Json->SetObjectField(TEXT("rollback"), Rollback);
 	Json->SetArrayField(TEXT("diagnostics"), Diagnostics);
+	Json->SetArrayField(TEXT("assets"), Assets);
+	Json->SetObjectField(
+		TEXT("normalizedWorkflow"),
+		NormalizedWorkflow.IsValid()
+			? NormalizedWorkflow
+			: MakeShared<FJsonObject>());
+	Json->SetObjectField(
+		TEXT("plan"),
+		StoredPlan.IsValid()
+			? StoredPlan
+			: MakeShared<FJsonObject>());
+	Json->SetObjectField(
+		TEXT("operationOutputs"),
+		OperationOutputs.IsValid()
+			? OperationOutputs
+			: MakeShared<FJsonObject>());
 	return Json;
 }
 
@@ -3102,8 +5830,11 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToReceiptJson() const
 	Json->SetStringField(TEXT("runId"), RunId);
 	Json->SetStringField(TEXT("serverInstanceId"), ServerInstanceId);
 	Json->SetStringField(TEXT("workflowId"), WorkflowId);
+	Json->SetStringField(TEXT("dslVersion"), DslVersion);
+	Json->SetStringField(TEXT("pluginVersion"), PluginVersion);
 	Json->SetStringField(TEXT("scopeAsset"), ScopeAsset);
 	Json->SetStringField(TEXT("planDigest"), PlanDigest);
+	Json->SetStringField(TEXT("corePlanDigest"), CorePlanDigest);
 	Json->SetStringField(TEXT("contractSetDigest"), ContractSetDigest);
 	Json->SetStringField(TEXT("status"), Status);
 	Json->SetStringField(TEXT("rollbackStatus"), RollbackStatus);
@@ -3112,6 +5843,48 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToReceiptJson() const
 	Json->SetStringField(TEXT("structureHashBefore"), StructureHashBefore);
 	Json->SetStringField(TEXT("structureHashAfter"), StructureHashAfter);
 	Json->SetStringField(TEXT("structureHashAfterRollback"), StructureHashAfterRollback);
+	Json->SetStringField(TEXT("currentPhase"), CurrentPhase);
+	Json->SetNumberField(TEXT("assetCount"), Assets.Num());
+	Json->SetNumberField(
+		TEXT("nextInitializerIndex"),
+		NextInitializerIndex);
+	Json->SetNumberField(
+		TEXT("nextOperationIndex"),
+		NextOperationIndex);
+	Json->SetNumberField(
+		TEXT("nextFinalizerIndex"),
+		NextFinalizerIndex);
+	Json->SetBoolField(TEXT("durableResume"), bDurableResume);
+	if (DslVersion == TEXT("2.0"))
+	{
+		TArray<TSharedPtr<FJsonValue>> AssetSet;
+		for (const TSharedPtr<FJsonValue>& Value : Assets)
+		{
+			if (!Value.IsValid() || Value->Type != EJson::Object)
+			{
+				continue;
+			}
+			TSharedPtr<FJsonObject> Summary = MakeShared<FJsonObject>();
+			for (const TCHAR* Field : {
+				TEXT("scopeId"),
+				TEXT("kind"),
+				TEXT("asset"),
+				TEXT("structureHashBefore"),
+				TEXT("structureHashAfter"),
+				TEXT("structureHashAfterRollback"),
+				TEXT("packageSha256Before"),
+				TEXT("currentPackageSha256")})
+			{
+				FString Text;
+				if (Value->AsObject()->TryGetStringField(Field, Text))
+				{
+					Summary->SetStringField(Field, Text);
+				}
+			}
+			AssetSet.Add(MakeShared<FJsonValueObject>(Summary));
+		}
+		Json->SetArrayField(TEXT("assetSet"), AssetSet);
+	}
 	return Json;
 }
 
@@ -3122,23 +5895,48 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson(
 	Json->SetStringField(TEXT("schema"), TEXT("ue.workflow-result.v1"));
 	Json->SetStringField(TEXT("runId"), RunId);
 	Json->SetStringField(TEXT("workflowId"), WorkflowId);
+	Json->SetStringField(TEXT("dslVersion"), DslVersion);
 	Json->SetStringField(TEXT("scopeAsset"), ScopeAsset);
 	Json->SetStringField(TEXT("status"), Status);
 	Json->SetStringField(TEXT("planDigest"), PlanDigest);
+	Json->SetStringField(TEXT("corePlanDigest"), CorePlanDigest);
 	Json->SetStringField(TEXT("contractSetDigest"), ContractSetDigest);
 	Json->SetStringField(TEXT("rollbackStatus"), RollbackStatus);
 	Json->SetBoolField(TEXT("rollbackAvailable"), bRollbackAvailable);
 	Json->SetBoolField(TEXT("rollbackVerified"), bRollbackVerified);
+	Json->SetStringField(TEXT("currentPhase"), CurrentPhase);
+	Json->SetNumberField(TEXT("assetCount"), Assets.Num());
 	Json->SetStringField(TEXT("detailLevel"),
 	                     Options.DetailLevel == EDetailLevel::Full       ? TEXT("full")
 	                     : Options.DetailLevel == EDetailLevel::Standard ? TEXT("standard")
 	                                                                     : TEXT("summary"));
+	const bool bAssetSetExecution =
+		bDurableResume && !Assets.IsEmpty();
 	bool bChanged = false;
 	if (AssetDiff.IsValid())
 	{
 		AssetDiff->TryGetBoolField(TEXT("changed"), bChanged);
+		if (bAssetSetExecution)
+		{
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair :
+				AssetDiff->Values)
+			{
+				bool bAssetChanged = false;
+				if (Pair.Value.IsValid()
+					&& Pair.Value->Type == EJson::Object
+					&& Pair.Value->AsObject()->TryGetBoolField(
+						TEXT("changed"),
+						bAssetChanged)
+					&& bAssetChanged)
+				{
+					bChanged = true;
+					break;
+				}
+			}
+		}
 	}
-	bool bCompiled = false;
+	bool bCompiled = bAssetSetExecution;
+	int32 SuccessfulCompileCount = 0;
 	for (const TSharedPtr<FJsonValue>& FinalizerValue : Finalizers)
 	{
 		if (!FinalizerValue.IsValid()
@@ -3151,12 +5949,22 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson(
 		FString FinalizerStatus;
 		Finalizer->TryGetStringField(TEXT("id"), Id);
 		Finalizer->TryGetStringField(TEXT("status"), FinalizerStatus);
-		if (Id == TEXT("$finalizer.compile")
+		if ((Id == TEXT("$finalizer.compile")
+				|| Id.EndsWith(TEXT(".compile")))
 			&& FinalizerStatus == TEXT("succeeded"))
 		{
-			bCompiled = true;
-			break;
+			++SuccessfulCompileCount;
+			if (!bAssetSetExecution)
+			{
+				bCompiled = true;
+				break;
+			}
 		}
+	}
+	if (bAssetSetExecution)
+	{
+		bCompiled =
+			SuccessfulCompileCount == Assets.Num();
 	}
 	const bool bCompleted = Status == TEXT("completed");
 	auto ProjectMutationDiagnostics = [this](const bool bWarnings)
@@ -3269,6 +6077,41 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson(
 				DiffSummary->SetField(Field.Key, Field.Value);
 			}
 		}
+		if (bAssetSetExecution)
+		{
+			int32 Added = 0;
+			int32 Removed = 0;
+			int32 Changed = 0;
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair :
+				AssetDiff->Values)
+			{
+				if (!Pair.Value.IsValid()
+					|| Pair.Value->Type != EJson::Object)
+				{
+					continue;
+				}
+				const TSharedPtr<FJsonObject>* AssetSummary = nullptr;
+				if (!Pair.Value->AsObject()->TryGetObjectField(
+						TEXT("summary"),
+						AssetSummary)
+					|| !AssetSummary || !AssetSummary->IsValid())
+				{
+					continue;
+				}
+				Added += static_cast<int32>(
+					(*AssetSummary)->GetNumberField(TEXT("added")));
+				Removed += static_cast<int32>(
+					(*AssetSummary)->GetNumberField(TEXT("removed")));
+				Changed += static_cast<int32>(
+					(*AssetSummary)->GetNumberField(TEXT("changed")));
+			}
+			DiffSummary->SetNumberField(TEXT("added"), Added);
+			DiffSummary->SetNumberField(TEXT("removed"), Removed);
+			DiffSummary->SetNumberField(TEXT("changed"), Changed);
+			DiffSummary->SetNumberField(
+				TEXT("assetCount"),
+				Assets.Num());
+		}
 	}
 	DiffSummary->SetStringField(TEXT("beforeHash"), StructureHashBefore);
 	DiffSummary->SetStringField(TEXT("afterHash"), StructureHashAfter);
@@ -3335,6 +6178,25 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson(
 		       (SectionName == TEXT("operations") || SectionName == TEXT("finalizers") ||
 		        SectionName == TEXT("diagnostics"));
 	};
+	auto ProjectSingleScopeSection =
+		[this, bAssetSetExecution](
+			const TSharedPtr<FJsonObject>& Section)
+			-> TSharedPtr<FJsonObject>
+	{
+		if (DslVersion != TEXT("1.0") ||
+			!bAssetSetExecution ||
+			!Section.IsValid())
+		{
+			return Section.IsValid()
+				? Section
+				: MakeShared<FJsonObject>();
+		}
+		const TSharedPtr<FJsonObject>* Primary = nullptr;
+		return Section->TryGetObjectField(TEXT("primary"), Primary)
+				&& Primary && Primary->IsValid()
+			? *Primary
+			: Section;
+	};
 
 	TSharedPtr<FJsonObject> Sections = MakeShared<FJsonObject>();
 	if (ShouldInclude(TEXT("operations")))
@@ -3353,24 +6215,25 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson(
 	if (ShouldInclude(TEXT("readBack")))
 	{
 		Sections->SetObjectField(TEXT("readBack"),
-		                         ReadBack.IsValid() ? ReadBack : MakeShared<FJsonObject>());
+		                         ProjectSingleScopeSection(ReadBack));
 	}
 	if (ShouldInclude(TEXT("assetDiff")))
 	{
 		Sections->SetObjectField(TEXT("assetDiff"),
-		                         AssetDiff.IsValid() ? AssetDiff : MakeShared<FJsonObject>());
+		                         ProjectSingleScopeSection(AssetDiff));
 	}
 	if (ShouldInclude(TEXT("structures")))
 	{
 		TSharedPtr<FJsonObject> Structures = MakeShared<FJsonObject>();
-		Structures->SetObjectField(TEXT("before"), StructureBefore.IsValid()
-		                                               ? StructureBefore
-		                                               : MakeShared<FJsonObject>());
 		Structures->SetObjectField(
-		    TEXT("after"), StructureAfter.IsValid() ? StructureAfter : MakeShared<FJsonObject>());
-		Structures->SetObjectField(TEXT("afterRollback"), StructureAfterRollback.IsValid()
-		                                                      ? StructureAfterRollback
-		                                                      : MakeShared<FJsonObject>());
+			TEXT("before"),
+			ProjectSingleScopeSection(StructureBefore));
+		Structures->SetObjectField(
+			TEXT("after"),
+			ProjectSingleScopeSection(StructureAfter));
+		Structures->SetObjectField(
+			TEXT("afterRollback"),
+			ProjectSingleScopeSection(StructureAfterRollback));
 		Sections->SetObjectField(TEXT("structures"), Structures);
 	}
 	if (ShouldInclude(TEXT("rollback")))
@@ -3421,8 +6284,15 @@ bool FWorkflowRuntime::FRunRecord::FromJson(
 	}
 	Json->TryGetStringField(TEXT("serverInstanceId"), OutRecord.ServerInstanceId);
 	Json->TryGetStringField(TEXT("workflowId"), OutRecord.WorkflowId);
+	Json->TryGetStringField(TEXT("dslVersion"), OutRecord.DslVersion);
+	Json->TryGetStringField(
+		TEXT("pluginVersion"),
+		OutRecord.PluginVersion);
 	Json->TryGetStringField(TEXT("scopeAsset"), OutRecord.ScopeAsset);
 	Json->TryGetStringField(TEXT("planDigest"), OutRecord.PlanDigest);
+	Json->TryGetStringField(
+		TEXT("corePlanDigest"),
+		OutRecord.CorePlanDigest);
 	Json->TryGetStringField(
 		TEXT("contractSetDigest"),
 		OutRecord.ContractSetDigest);
@@ -3438,7 +6308,31 @@ bool FWorkflowRuntime::FRunRecord::FromJson(
 	Json->TryGetStringField(
 		TEXT("structureHashAfterRollback"),
 		OutRecord.StructureHashAfterRollback);
+	Json->TryGetStringField(TEXT("currentPhase"), OutRecord.CurrentPhase);
+	double NumericIndex = 0.0;
+	if (Json->TryGetNumberField(
+			TEXT("nextInitializerIndex"),
+			NumericIndex))
+	{
+		OutRecord.NextInitializerIndex =
+			static_cast<int32>(NumericIndex);
+	}
+	if (Json->TryGetNumberField(
+			TEXT("nextOperationIndex"),
+			NumericIndex))
+	{
+		OutRecord.NextOperationIndex =
+			static_cast<int32>(NumericIndex);
+	}
+	if (Json->TryGetNumberField(
+			TEXT("nextFinalizerIndex"),
+			NumericIndex))
+	{
+		OutRecord.NextFinalizerIndex =
+			static_cast<int32>(NumericIndex);
+	}
 	Json->TryGetBoolField(TEXT("saveOnSuccess"), OutRecord.bSaveOnSuccess);
+	Json->TryGetBoolField(TEXT("durableResume"), OutRecord.bDurableResume);
 	Json->TryGetBoolField(
 		TEXT("scopeExistedBefore"),
 		OutRecord.bScopeExistedBefore);
@@ -3476,6 +6370,10 @@ bool FWorkflowRuntime::FRunRecord::FromJson(
 	{
 		OutRecord.Diagnostics = *Values;
 	}
+	if (Json->TryGetArrayField(TEXT("assets"), Values) && Values)
+	{
+		OutRecord.Assets = *Values;
+	}
 	const TSharedPtr<FJsonObject>* Object = nullptr;
 	if (Json->TryGetObjectField(TEXT("readBack"), Object)
 		&& Object
@@ -3506,6 +6404,21 @@ bool FWorkflowRuntime::FRunRecord::FromJson(
 		&& Object->IsValid())
 	{
 		OutRecord.StructureAfterRollback = *Object;
+	}
+	if (Json->TryGetObjectField(TEXT("normalizedWorkflow"), Object)
+		&& Object && Object->IsValid())
+	{
+		OutRecord.NormalizedWorkflow = *Object;
+	}
+	if (Json->TryGetObjectField(TEXT("plan"), Object)
+		&& Object && Object->IsValid())
+	{
+		OutRecord.StoredPlan = *Object;
+	}
+	if (Json->TryGetObjectField(TEXT("operationOutputs"), Object)
+		&& Object && Object->IsValid())
+	{
+		OutRecord.OperationOutputs = *Object;
 	}
 	return true;
 }
@@ -3584,6 +6497,20 @@ FString FWorkflowRuntime::GetRunPath(const FString& RunId) const
 	return FPaths::Combine(
 		JournalDirectory,
 		Parsed.ToString(EGuidFormats::DigitsWithHyphensLower) + TEXT(".json"));
+}
+
+FString FWorkflowRuntime::GetRunDirectory(const FString& RunId) const
+{
+	FGuid Parsed;
+	if (!FGuid::Parse(RunId, Parsed))
+	{
+		return FPaths::Combine(
+			JournalDirectory,
+			TEXT("invalid-run-id"));
+	}
+	return FPaths::Combine(
+		JournalDirectory,
+		Parsed.ToString(EGuidFormats::DigitsWithHyphensLower));
 }
 
 FString FWorkflowRuntime::JsonStringify(

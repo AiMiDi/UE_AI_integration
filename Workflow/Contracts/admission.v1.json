@@ -474,7 +474,7 @@
       ],
       "scopeParameters": [
         "name",
-        "package_path"
+        "packagePath"
       ],
       "transactionDomain": "asset",
       "deferCompile": true,
@@ -488,7 +488,7 @@
           "name": {
             "type": "string"
           },
-          "parent_class": {
+          "parentClass": {
             "type": "string"
           }
         }
@@ -500,12 +500,12 @@
         "widgetBlueprint"
       ],
       "scopeParameters": [
-        "widget_bp"
+        "widgetBp"
       ],
       "parameterAliases": {
-        "class": "child_class",
-        "name": "child_name",
-        "parent": "parent_name"
+        "class": "childClass",
+        "name": "childName",
+        "parent": "parentName"
       },
       "transactionDomain": "asset",
       "deferCompile": true,
@@ -533,10 +533,10 @@
             ],
             "additionalProperties": false
           },
-          "child_name": {
+          "childName": {
             "type": "string"
           },
-          "child_class": {
+          "childClass": {
             "type": "string"
           },
           "parent": {
@@ -551,7 +551,7 @@
         "widgetBlueprint"
       ],
       "scopeParameters": [
-        "widget_bp"
+        "widgetBp"
       ],
       "transactionDomain": "asset",
       "deferCompile": true,
@@ -583,7 +583,7 @@
         "widgetBlueprint"
       ],
       "scopeParameters": [
-        "widget_bp"
+        "widgetBp"
       ],
       "transactionDomain": "asset",
       "deferCompile": true,
@@ -621,7 +621,7 @@
         "widgetBlueprint"
       ],
       "scopeParameters": [
-        "widget_bp"
+        "widgetBp"
       ],
       "transactionDomain": "asset",
       "deferCompile": true,
@@ -661,7 +661,7 @@
         "widgetBlueprint"
       ],
       "scopeParameters": [
-        "widget_bp"
+        "widgetBp"
       ],
       "transactionDomain": "asset",
       "deferCompile": true,
@@ -669,7 +669,7 @@
       "outputSchema": {
         "type": "object",
         "properties": {
-          "child_name": {
+          "childName": {
             "type": "string"
           },
           "parent": {
@@ -690,7 +690,7 @@
         "widgetBlueprint"
       ],
       "scopeParameters": [
-        "widget_bp"
+        "widgetBp"
       ],
       "transactionDomain": "asset",
       "deferCompile": true,
@@ -724,7 +724,7 @@
           "old_index": {
             "type": "integer"
           },
-          "new_index": {
+          "newIndex": {
             "type": "integer"
           }
         }
@@ -736,7 +736,7 @@
         "widgetBlueprint"
       ],
       "scopeParameters": [
-        "widget_bp"
+        "widgetBp"
       ],
       "transactionDomain": "asset",
       "deferCompile": false,

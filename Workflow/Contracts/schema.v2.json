@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ue-ai-cli.local/schemas/ue.workflow.v2.json",
+  "title": "UE Workflow DSL v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dsl",
+    "dslVersion",
+    "workflowKind",
+    "workflowId",
+    "scopes",
+    "operations"
+  ],
+  "properties": {
+    "dsl": {
+      "const": "ue.workflow"
+    },
+    "dslVersion": {
+      "const": "2.0"
+    },
+    "workflowKind": {
+      "const": "assetEdit"
+    },
+    "workflowId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scopes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/scope"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+      }
+    },
+    "persistence": {
+      "const": "dirtyOnly"
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/operation"
+      }
+    }
+  },
+  "$defs": {
+    "verify": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "compile": {
+          "type": "boolean",
+          "description": "Compatibility input normalized to true."
+        },
+        "readBack": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "asset"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "blueprint",
+            "widgetBlueprint",
+            "material"
+          ]
+        },
+        "asset": {
+          "type": "string",
+          "pattern": "^/Game/"
+        },
+        "createIfMissing": {
+          "type": "boolean"
+        },
+        "verify": {
+          "$ref": "#/$defs/verify"
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "path"
+      ],
+      "properties": {
+        "from": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "scope",
+        "params"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+        },
+        "params": {
+          "type": "object"
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "bindings": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^/"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/binding"
+          }
+        }
+      }
+    }
+  }
+}

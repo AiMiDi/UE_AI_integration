@@ -40,9 +40,9 @@ execute_process(
     OUTPUT_VARIABLE wrong_output
     ERROR_VARIABLE wrong_error
 )
-string(FIND "${wrong_output}" "\"code\":\"plan_changed\"" wrong_code)
+string(FIND "${wrong_output}" "\"code\":\"editor_unreachable\"" wrong_code)
 if(wrong_result EQUAL 0 OR wrong_code EQUAL -1)
-    message(FATAL_ERROR "Wrong digest was not rejected locally: ${wrong_output}${wrong_error}")
+    message(FATAL_ERROR "Execute did not require Editor plan binding: ${wrong_output}${wrong_error}")
 endif()
 if(EXISTS "${UE_WORKFLOW_RECEIPT}")
     message(FATAL_ERROR "Local approval rejection unexpectedly wrote a receipt")

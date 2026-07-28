@@ -1,0 +1,70 @@
+{
+  "schema": "ue.canonical-json-vectors.v1",
+  "vectors": [
+    {
+      "name": "sorted-object-and-array",
+      "value": {
+        "z": 1,
+        "a": [
+          true,
+          null,
+          "x"
+        ]
+      },
+      "canonical": "{\"a\":[true,null,\"x\"],\"z\":1}",
+      "sha256": "cc31fc728ab32ccfd6543dd8cce686b9633b3c47fbec82c88a466688f3a8cb81"
+    },
+    {
+      "name": "recursive-object-order",
+      "value": {
+        "nested": {
+          "b": 2,
+          "a": 1
+        },
+        "empty": {}
+      },
+      "canonical": "{\"empty\":{},\"nested\":{\"a\":1,\"b\":2}}",
+      "sha256": "cabeb64dce202c59fc3b7d7e6a5c644488860ccc4e5fdd6fdd2ac55e2b4ebf99"
+    },
+    {
+      "name": "root-array",
+      "value": [
+        3,
+        {
+          "y": "value",
+          "x": false
+        }
+      ],
+      "canonical": "[3,{\"x\":false,\"y\":\"value\"}]",
+      "sha256": "409bbde15abc4cfb64945441a15e333e8d73bd1b2a9b2e0739d7ac523f469a45"
+    },
+    {
+      "name": "fractional-numbers-and-escapes",
+      "value": {
+        "text": "line\nquote\"slash\\tab\t",
+        "numbers": [
+          1.5,
+          -2.25,
+          0.125
+        ]
+      },
+      "canonical": "{\"numbers\":[1.50000000000000000e+0,-2.25000000000000000e+0,1.25000000000000000e-1],\"text\":\"line\\nquote\\\"slash\\\\tab\\t\"}",
+      "sha256": "36005eaf989903f8fc2900a33b56bb00944bd03a550a0f7a0509c1014b5d3568"
+    },
+    {
+      "name": "numeric-and-unicode-scalar-boundaries",
+      "value": {
+        "numbers": [
+          0.1,
+          1.0,
+          -0.0,
+          1e-7
+        ],
+        "": "bmp-private-use",
+        "𐀀": "astral-plane"
+      },
+      "canonical": "{\"numbers\":[1.00000000000000006e-1,1,0,9.99999999999999955e-8],\"\":\"bmp-private-use\",\"𐀀\":\"astral-plane\"}",
+      "sha256": "64a2db56acc73f2417add1e3f87f6a9e6026980e228f0db06e77280b7a71bf9c"
+    }
+  ]
+}

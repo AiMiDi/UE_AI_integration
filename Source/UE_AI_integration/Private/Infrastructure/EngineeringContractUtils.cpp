@@ -1,19 +1,124 @@
 #include "Infrastructure/EngineeringContractUtils.h"
 
 #include "Infrastructure/Sha256.h"
-#include "Serialization/JsonSerializer.h"
-#include "Serialization/JsonWriter.h"
 
 namespace UEAIIntegration::Infrastructure
 {
 namespace
 {
+TArray<uint32> UnicodeScalars(const FString& Value)
+{
+	TArray<uint32> Scalars;
+	for (int32 Index = 0; Index < Value.Len(); ++Index)
+	{
+		const uint32 First = static_cast<uint32>(Value[Index]);
+		if (First >= 0xd800u && First <= 0xdbffu &&
+			Index + 1 < Value.Len())
+		{
+			const uint32 Second =
+				static_cast<uint32>(Value[Index + 1]);
+			if (Second >= 0xdc00u && Second <= 0xdfffu)
+			{
+				Scalars.Add(
+					0x10000u +
+					((First - 0xd800u) << 10u) +
+					(Second - 0xdc00u));
+				++Index;
+				continue;
+			}
+		}
+		Scalars.Add(First);
+	}
+	return Scalars;
+}
+
+bool UnicodeScalarLess(const FString& Left, const FString& Right)
+{
+	const TArray<uint32> LeftScalars = UnicodeScalars(Left);
+	const TArray<uint32> RightScalars = UnicodeScalars(Right);
+	const int32 CommonLength =
+		FMath::Min(LeftScalars.Num(), RightScalars.Num());
+	for (int32 Index = 0; Index < CommonLength; ++Index)
+	{
+		if (LeftScalars[Index] != RightScalars[Index])
+		{
+			return LeftScalars[Index] < RightScalars[Index];
+		}
+	}
+	return LeftScalars.Num() < RightScalars.Num();
+}
+
+FString CanonicalizeNumber(const double Value)
+{
+	if (Value == 0.0)
+	{
+		return TEXT("0");
+	}
+	constexpr double MaxExactInteger = 9007199254740991.0;
+	if (FMath::TruncToDouble(Value) == Value &&
+		FMath::Abs(Value) <= MaxExactInteger)
+	{
+		return FString::Printf(TEXT("%.0f"), Value);
+	}
+
+	const FString Scientific =
+		FString::Printf(TEXT("%.17e"), Value);
+	int32 ExponentPosition = INDEX_NONE;
+	if (!Scientific.FindChar(TCHAR('e'), ExponentPosition))
+	{
+		return Scientific;
+	}
+	const int32 Exponent =
+		FCString::Atoi(*Scientific.Mid(ExponentPosition + 1));
+	return Scientific.Left(ExponentPosition) +
+		TEXT("e") +
+		(Exponent >= 0 ? TEXT("+") : TEXT("")) +
+		FString::FromInt(Exponent);
+}
+
 FString QuoteJsonString(const FString& Value)
 {
-	FString Serialized;
-	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Serialized);
-	FJsonSerializer::Serialize(MakeShared<FJsonValueString>(Value), TEXT(""), Writer);
-	Writer->Close();
+	FString Serialized = TEXT("\"");
+	for (const TCHAR Character : Value)
+	{
+		switch (Character)
+		{
+		case TCHAR('"'):
+			Serialized += TEXT("\\\"");
+			break;
+		case TCHAR('\\'):
+			Serialized += TEXT("\\\\");
+			break;
+		case TCHAR('\b'):
+			Serialized += TEXT("\\b");
+			break;
+		case TCHAR('\f'):
+			Serialized += TEXT("\\f");
+			break;
+		case TCHAR('\n'):
+			Serialized += TEXT("\\n");
+			break;
+		case TCHAR('\r'):
+			Serialized += TEXT("\\r");
+			break;
+		case TCHAR('\t'):
+			Serialized += TEXT("\\t");
+			break;
+		default:
+			if (Character < TCHAR(0x20))
+			{
+				Serialized += FString::Printf(
+					TEXT("\\u%04x"),
+					static_cast<uint32>(Character));
+			}
+			else
+			{
+				Serialized.AppendChar(Character);
+			}
+			break;
+		}
+	}
+	Serialized += TEXT("\"");
 	return Serialized;
 }
 
@@ -26,7 +131,11 @@ FString CanonicalizeObject(const TSharedPtr<FJsonObject>& Object)
 
 	TArray<FString> Keys;
 	Object->Values.GetKeys(Keys);
-	Keys.Sort();
+	Keys.Sort(
+		[](const FString& Left, const FString& Right)
+		{
+			return UnicodeScalarLess(Left, Right);
+		});
 
 	FString Result = TEXT("{");
 	for (int32 Index = 0; Index < Keys.Num(); ++Index)
@@ -58,7 +167,7 @@ FString CanonicalizeJsonValue(const TSharedPtr<FJsonValue>& Value)
 	case EJson::String:
 		return QuoteJsonString(Value->AsString());
 	case EJson::Number:
-		return FString::Printf(TEXT("%.17g"), Value->AsNumber());
+		return CanonicalizeNumber(Value->AsNumber());
 	case EJson::Boolean:
 		return Value->AsBool() ? TEXT("true") : TEXT("false");
 	case EJson::Array:

@@ -71,6 +71,19 @@ struct CliOptions
     std::string params = "{}";
     std::string request_id;
     std::string detail_level;
+    std::string capability_query;
+    std::string capability_operation;
+    std::string capability_domain;
+    std::string capability_kind;
+    std::string capability_output_kind;
+    std::string capability_risk;
+    std::string capability_detail = "summary";
+    std::optional<bool> capability_read_only;
+    std::optional<bool> capability_destructive;
+    std::optional<bool> capability_expensive;
+    bool capability_available_only = false;
+    std::size_t capability_offset = 0;
+    std::size_t capability_limit = 25;
     std::vector<std::string> sections;
     std::vector<std::string> positional;
 };
@@ -274,9 +287,12 @@ std::string project_planning_response(std::string_view response_text, const CliO
         return response.dump();
     }
 
-    static const std::array<std::string_view, 10> summary_fields = {
-        "ok",          "schema",          "plannerVersion", "contractSetDigest", "planDigest",
-        "contractSet", "validationScope", "risk",           "approval",          "valid",
+    static const std::array<std::string_view, 13> summary_fields = {
+        "ok",             "schema",          "plannerVersion",
+        "contractSetDigest", "planDigest",    "corePlanDigest",
+        "executionReady", "preconditions",   "contractSet",
+        "validationScope", "risk",            "approval",
+        "valid",
     };
     json projected = json::object();
     for (const auto field : summary_fields)
@@ -309,6 +325,26 @@ std::string project_planning_response(std::string_view response_text, const CliO
         projected["sections"] = std::move(requested_sections);
     }
     return projected.dump();
+}
+
+std::string mark_offline_plan_unprepared(std::string_view plan_text)
+{
+    auto plan = json::parse(plan_text, nullptr, false, true);
+    if (!plan.is_object() || !plan.value("ok", false))
+    {
+        return std::string(plan_text);
+    }
+    const std::string core_digest =
+        plan.value("planDigest", std::string{});
+    plan["corePlanDigest"] = core_digest;
+    plan["executionReady"] = false;
+    plan["preconditions"] = {
+        { "schema", "ue.workflow-asset-preconditions.v1" },
+        { "prepared", false },
+        { "assets", json::array() },
+        { "digest", nullptr },
+    };
+    return plan.dump();
 }
 
 int print_error(
@@ -345,10 +381,17 @@ json binary_help()
         {"dsl", "ue.workflow"},
         {"commands", json::array({
                          "doctor [--connect]",
+                         "capabilities [--connect] [--query <text>] [--operation <id>] "
+                         "[--domain <domain>] [--kind <kind>] [--read-only <bool>] "
+                         "[--destructive <bool>] [--expensive <bool>] "
+                         "[--output-kind json|image] "
+                         "[--risk readOnly|safeWrite|confirmWrite|notOpen] "
+                         "[--available-only] [--offset <n>] [--limit <1..100>] "
+                         "[--detail summary|full]",
                          "help composable [blueprint|widget|material]",
                          "help operation <type>",
                          "validate --file <workflow.json|->",
-                         "plan --file <workflow.json|->",
+                         "plan --file <workflow.json|-> [--connect]",
                          "execute --file <workflow.json|-> --approve-plan <digest> --receipt "
                          "<path> [--save-on-success] [--confirm-write]",
                          "status|resume|rollback --receipt <path> [--detail-level <level>] "
@@ -379,6 +422,40 @@ bool parse_arguments(const std::vector<std::string>& arguments, CliOptions& opti
             return false;
         }
         destination = arguments[++index];
+        return true;
+    };
+    auto take_bool = [&](std::size_t& index, std::optional<bool>& destination) {
+        std::string value;
+        if (!take_value(index, value))
+        {
+            return false;
+        }
+        if (value == "true" || value == "1")
+        {
+            destination = true;
+            return true;
+        }
+        if (value == "false" || value == "0")
+        {
+            destination = false;
+            return true;
+        }
+        return false;
+    };
+    auto take_size = [&](std::size_t& index, std::size_t& destination) {
+        std::string value;
+        if (!take_value(index, value) || value.empty())
+        {
+            return false;
+        }
+        std::size_t parsed = 0;
+        const auto result =
+            std::from_chars(value.data(), value.data() + value.size(), parsed);
+        if (result.ec != std::errc{} || result.ptr != value.data() + value.size())
+        {
+            return false;
+        }
+        destination = parsed;
         return true;
     };
 
@@ -520,6 +597,104 @@ bool parse_arguments(const std::vector<std::string>& arguments, CliOptions& opti
                 return false;
             }
         }
+        else if (argument == "--query")
+        {
+            if (!take_value(index, options.capability_query))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--operation")
+        {
+            if (!take_value(index, options.capability_operation))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--domain")
+        {
+            if (!take_value(index, options.capability_domain))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--kind")
+        {
+            if (!take_value(index, options.capability_kind))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--output-kind")
+        {
+            if (!take_value(index, options.capability_output_kind)
+                || (options.capability_output_kind != "json"
+                    && options.capability_output_kind != "image"))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--risk")
+        {
+            if (!take_value(index, options.capability_risk)
+                || (options.capability_risk != "readOnly"
+                    && options.capability_risk != "safeWrite"
+                    && options.capability_risk != "confirmWrite"
+                    && options.capability_risk != "notOpen"))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--available-only")
+        {
+            options.capability_available_only = true;
+        }
+        else if (argument == "--read-only")
+        {
+            if (!take_bool(index, options.capability_read_only))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--destructive")
+        {
+            if (!take_bool(index, options.capability_destructive))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--expensive")
+        {
+            if (!take_bool(index, options.capability_expensive))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--offset")
+        {
+            if (!take_size(index, options.capability_offset))
+            {
+                return false;
+            }
+        }
+        else if (argument == "--limit")
+        {
+            if (!take_size(index, options.capability_limit)
+                || options.capability_limit == 0
+                || options.capability_limit > 100)
+            {
+                return false;
+            }
+        }
+        else if (argument == "--detail")
+        {
+            if (!take_value(index, options.capability_detail)
+                || (options.capability_detail != "summary"
+                    && options.capability_detail != "full"))
+            {
+                return false;
+            }
+        }
         else if (argument == "--help" || argument == "--version")
         {
             options.positional.push_back(argument);
@@ -626,6 +801,75 @@ std::optional<ParsedEndpoint> parse_endpoint(std::string_view endpoint)
         return std::nullopt;
     }
     return ParsedEndpoint{ host, port };
+}
+
+std::string url_encode(std::string_view value)
+{
+    constexpr char hex[] = "0123456789ABCDEF";
+    std::string encoded;
+    encoded.reserve(value.size());
+    for (const unsigned char character : value)
+    {
+        if ((character >= 'a' && character <= 'z')
+            || (character >= 'A' && character <= 'Z')
+            || (character >= '0' && character <= '9')
+            || character == '-' || character == '_' || character == '.')
+        {
+            encoded.push_back(static_cast<char>(character));
+            continue;
+        }
+        encoded.push_back('%');
+        encoded.push_back(hex[(character >> 4U) & 0x0fU]);
+        encoded.push_back(hex[character & 0x0fU]);
+    }
+    return encoded;
+}
+
+std::string capability_query_path(const CliOptions& options)
+{
+    std::vector<std::pair<std::string, std::string>> parameters;
+    auto add = [&parameters](std::string name, const std::string& value) {
+        if (!value.empty())
+        {
+            parameters.emplace_back(std::move(name), value);
+        }
+    };
+    add("query", options.capability_query);
+    add("operation", options.capability_operation);
+    add("domain", options.capability_domain);
+    add("kind", options.capability_kind);
+    add("outputKind", options.capability_output_kind);
+    add("risk", options.capability_risk);
+    add("detail", options.capability_detail);
+    auto add_bool = [&parameters](
+        std::string name,
+        const std::optional<bool>& value) {
+        if (value.has_value())
+        {
+            parameters.emplace_back(
+                std::move(name),
+                *value ? "true" : "false");
+        }
+    };
+    add_bool("readOnly", options.capability_read_only);
+    add_bool("destructive", options.capability_destructive);
+    add_bool("expensive", options.capability_expensive);
+    if (options.capability_available_only)
+    {
+        parameters.emplace_back("availableOnly", "true");
+    }
+    parameters.emplace_back("offset", std::to_string(options.capability_offset));
+    parameters.emplace_back("limit", std::to_string(options.capability_limit));
+
+    std::string result = "/api/capabilities";
+    for (std::size_t index = 0; index < parameters.size(); ++index)
+    {
+        result.push_back(index == 0 ? '?' : '&');
+        result += url_encode(parameters[index].first);
+        result.push_back('=');
+        result += url_encode(parameters[index].second);
+    }
+    return result;
 }
 
 #if defined(_WIN32)
@@ -797,6 +1041,84 @@ int print_http_result(const HttpResult& response, bool compact)
     }
     print_json_text(payload.dump(), compact);
     return response.ok ? 0 : kExitExecution;
+}
+
+int print_capabilities_http_result(
+    const HttpResult& response,
+    bool compact)
+{
+    if (!response.error.empty())
+    {
+        return print_error(
+            kExitUnavailable,
+            "editor_unreachable",
+            response.error);
+    }
+    const auto envelope =
+        json::parse(response.body, nullptr, false, true);
+    if (!envelope.is_object())
+    {
+        return print_error(
+            kExitExecution,
+            "invalid_editor_response",
+            "Unreal Editor returned a non-object capability response.");
+    }
+
+    json result = {
+        { "schema", "ue.workflow-capabilities.v1" },
+        { "ok", false },
+        { "diagnostics", json::array() },
+    };
+    if (response.ok && envelope.value("ok", false))
+    {
+        const auto data = envelope.find("data");
+        if (data == envelope.end() || !data->is_object())
+        {
+            return print_error(
+                kExitExecution,
+                "invalid_editor_response",
+                "Unreal Editor capability response did not contain an object data field.");
+        }
+        result.update(*data);
+        result["schema"] = "ue.workflow-capabilities.v1";
+        result["ok"] = true;
+        result["diagnostics"] = json::array();
+        print_json_text(result.dump(), compact);
+        return 0;
+    }
+
+    const auto error = envelope.value("error", json::object());
+    result["diagnostics"].push_back({
+        { "severity", "error" },
+        { "phase", "capabilities" },
+        { "code", error.value("code", "capability_request_failed") },
+        { "path", "" },
+        { "message",
+            error.value(
+                "message",
+                "Unreal Editor capability request failed.") },
+    });
+    print_json_text(result.dump(), compact);
+    return kExitExecution;
+}
+
+std::optional<json> http_data_object(const HttpResult& response)
+{
+    if (!response.ok || !response.error.empty())
+    {
+        return std::nullopt;
+    }
+    auto envelope = json::parse(response.body, nullptr, false, true);
+    if (!envelope.is_object())
+    {
+        return std::nullopt;
+    }
+    if (const auto data = envelope.find("data");
+        data != envelope.end() && data->is_object())
+    {
+        return *data;
+    }
+    return envelope;
 }
 
 struct Base64Payload
@@ -1473,6 +1795,42 @@ int run_command(
         return payload.value("ok", false) ? 0 : kExitUnavailable;
     }
 
+    if (command == "capabilities")
+    {
+        if (options.connect)
+        {
+            const auto response = http_request(
+                options.endpoint,
+                "GET",
+                capability_query_path(options));
+            return print_capabilities_http_result(
+                response,
+                options.json_output);
+        }
+
+        ue::workflow::CapabilityQuery query;
+        query.query = options.capability_query;
+        query.operation = options.capability_operation;
+        query.domain = options.capability_domain;
+        query.kind = options.capability_kind;
+        query.output_kind = options.capability_output_kind;
+        query.risk = options.capability_risk;
+        query.read_only = options.capability_read_only;
+        query.destructive = options.capability_destructive;
+        query.expensive = options.capability_expensive;
+        query.available_only =
+            options.capability_available_only;
+        query.offset = options.capability_offset;
+        query.limit = options.capability_limit;
+        query.detail =
+            options.capability_detail == "full"
+            ? ue::workflow::CapabilityDetail::Full
+            : ue::workflow::CapabilityDetail::Summary;
+        const auto result = engine->CapabilitiesJson(query);
+        print_json_text(result.json, options.json_output);
+        return result.exit_code;
+    }
+
     if (command == "help")
     {
         if (options.positional.size() >= 3 && options.positional[1] == "operation")
@@ -1519,23 +1877,118 @@ int run_command(
         }
 
         const auto plan = engine->PlanJson(*input);
-        if (command == "plan" || !plan.ok)
+        if (!plan.ok)
         {
             print_json_text(project_planning_response(plan.json, options), options.json_output);
             return plan.exit_code;
         }
 
-        const auto plan_json = json::parse(plan.json, nullptr, false, true);
-        const auto expected_digest = plan_json.value("planDigest", std::string{});
-        if (options.approve_plan.empty() || options.approve_plan != expected_digest)
+        const auto workflow = json::parse(*input, nullptr, false, true);
+        if (!workflow.is_object())
+        {
+            return print_error(
+                kExitValidation,
+                "workflow_json_invalid",
+                "The workflow file must contain one JSON object.");
+        }
+
+        if (command == "plan")
+        {
+            if (options.connect)
+            {
+                json request = {
+                    { "action", "plan" },
+                    { "workflow", workflow },
+                };
+                apply_response_options(request, options);
+                const auto response = http_request(
+                    options.endpoint,
+                    "POST",
+                    "/api/v1/workflow",
+                    request.dump());
+                return print_http_result(response, options.json_output);
+            }
+            const std::string offline_plan =
+                mark_offline_plan_unprepared(plan.json);
+            print_json_text(
+                project_planning_response(offline_plan, options),
+                options.json_output);
+            return plan.exit_code;
+        }
+
+        const auto core_plan = json::parse(plan.json, nullptr, false, true);
+        const auto core_digest =
+            core_plan.value("planDigest", std::string{});
+        if (options.approve_plan.empty())
         {
             return print_error(
                 kExitApproval,
-                options.approve_plan.empty() ? "approval_required" : "plan_changed",
-                "Execute requires the exact planDigest from a reviewed ue-workflow plan.",
+                "approval_required",
+                "Execute requires the exact planDigest from a reviewed "
+                "ue-workflow plan --connect.",
                 "/approvePlanDigest");
         }
-        if (plan_json["approval"].value("confirmWriteRequired", false) &&
+        json prepare_request = {
+            { "action", "plan" },
+            { "workflow", workflow },
+            { "detailLevel", "summary" },
+        };
+        const auto prepare_response = http_request(
+            options.endpoint,
+            "POST",
+            "/api/v1/workflow",
+            prepare_request.dump());
+        if (!prepare_response.ok)
+        {
+            return print_http_result(
+                prepare_response,
+                options.json_output);
+        }
+        const auto prepared_plan = http_data_object(prepare_response);
+        if (!prepared_plan)
+        {
+            return print_error(
+                kExitExecution,
+                "invalid_editor_response",
+                "Editor workflow plan response did not contain a JSON object.");
+        }
+        const auto prepared_core_digest =
+            prepared_plan->value("corePlanDigest", std::string{});
+        const auto prepared_contract_digest =
+            prepared_plan->value("contractSetDigest", std::string{});
+        if (prepared_core_digest != core_digest ||
+            prepared_contract_digest !=
+                core_plan.value("contractSetDigest", std::string{}))
+        {
+            return print_error(
+                kExitApproval,
+                "workflow_contract_mismatch",
+                "Editor and CLI produced different Core workflow plans; "
+                "refresh the installed CLI/plugin pair.");
+        }
+        const auto expected_digest =
+            prepared_plan->value("planDigest", std::string{});
+        if (!prepared_plan->value("executionReady", false) ||
+            expected_digest.empty())
+        {
+            return print_error(
+                kExitApproval,
+                "asset_precondition_required",
+                "Editor did not return an execution-ready asset-bound plan; "
+                "run ue-workflow plan --connect again.");
+        }
+        if (options.approve_plan != expected_digest)
+        {
+            return print_error(
+                kExitApproval,
+                "plan_changed",
+                "Execute requires the exact planDigest from a reviewed "
+                "ue-workflow plan --connect.",
+                "/approvePlanDigest");
+        }
+        const json approval =
+            prepared_plan->value("approval", json::object());
+        if (approval.value("confirmWriteRequired", false) &&
             !options.confirm_write)
         {
             return print_error(
@@ -1551,7 +2004,6 @@ int run_command(
                 "receipt_required",
                 "Workflow execution requires --receipt <path>.");
         }
-        const auto workflow = json::parse(*input, nullptr, false, true);
         json request = {
             {"action", "execute"},
             {"workflow", workflow},

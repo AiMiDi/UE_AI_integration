@@ -33,6 +33,7 @@ class FWorkflowRuntime
 {
 public:
 	explicit FWorkflowRuntime(FMCPToolRegistry& InRegistry);
+	~FWorkflowRuntime();
 
 	FMCPResult MakeHandshake() const;
 	FMCPResult HandleRequest(const TSharedPtr<FJsonObject>& Request);
@@ -56,13 +57,22 @@ private:
 		bool bUsedDeprecatedDetails = false;
 	};
 
+	struct FPreparedPlanCacheEntry
+	{
+		TSharedPtr<FJsonObject> Plan;
+		double PreparedAtSeconds = 0.0;
+	};
+
 	struct FRunRecord
 	{
 		FString RunId;
 		FString ServerInstanceId;
 		FString WorkflowId;
+		FString DslVersion = TEXT("1.0");
+		FString PluginVersion;
 		FString ScopeAsset;
 		FString PlanDigest;
+		FString CorePlanDigest;
 		FString ContractSetDigest;
 		FString TransactionId;
 		FString Status;
@@ -70,7 +80,12 @@ private:
 		FString StructureHashBefore;
 		FString StructureHashAfter;
 		FString StructureHashAfterRollback;
+		FString CurrentPhase;
+		int32 NextInitializerIndex = 0;
+		int32 NextOperationIndex = 0;
+		int32 NextFinalizerIndex = 0;
 		bool bSaveOnSuccess = false;
+		bool bDurableResume = false;
 		bool bScopeExistedBefore = false;
 		bool bPackageDirtyBefore = false;
 		bool bMemorySnapshotCaptured = false;
@@ -82,6 +97,10 @@ private:
 		TArray<TSharedPtr<FJsonValue>> Finalizers;
 		TArray<TSharedPtr<FJsonValue>> DirtyPackages;
 		TArray<TSharedPtr<FJsonValue>> Diagnostics;
+		TArray<TSharedPtr<FJsonValue>> Assets;
+		TSharedPtr<FJsonObject> NormalizedWorkflow;
+		TSharedPtr<FJsonObject> StoredPlan;
+		TSharedPtr<FJsonObject> OperationOutputs;
 		TSharedPtr<FJsonObject> ReadBack;
 		TSharedPtr<FJsonObject> AssetDiff;
 		TSharedPtr<FJsonObject> StructureBefore;
@@ -97,17 +116,47 @@ private:
 	FMCPResult ValidateWorkflow(const TSharedPtr<FJsonObject>& Workflow,
 	                            const FResponseOptions& Options) const;
 	FMCPResult PlanWorkflow(const TSharedPtr<FJsonObject>& Workflow,
-	                        const FResponseOptions& Options) const;
+	                        const FResponseOptions& Options);
 	FMCPResult ExecuteWorkflow(const TSharedPtr<FJsonObject>& Request,
 	                           const FResponseOptions& Options);
+	FMCPResult ExecuteWorkflowV2(
+		const TSharedPtr<FJsonObject>& Request,
+		const TSharedPtr<FJsonObject>& Plan,
+		const FResponseOptions& Options);
+	FMCPResult ContinueWorkflowV2(
+		FRunRecord& Record,
+		const TSharedPtr<FJsonObject>& Plan,
+		const FResponseOptions& Options,
+		bool bRestartFromBaseline);
 	FMCPResult GetStatus(const FString& RunId, const FResponseOptions& Options);
 	FMCPResult ResumeRun(const FString& RunId, const FResponseOptions& Options);
+	FMCPResult ResumeRunV2(FRunRecord& Record, const FResponseOptions& Options);
 	FMCPResult Rollback(const TSharedPtr<FJsonObject>& Request, const FResponseOptions& Options);
+	FMCPResult RollbackV2(
+		FRunRecord& Record,
+		const FResponseOptions& Options,
+		bool bAutomatic);
 
 	bool TryPlan(
 		const TSharedPtr<FJsonObject>& Workflow,
 		TSharedPtr<FJsonObject>& OutPlan,
 		FMCPResult& OutFailure) const;
+	bool AdaptV1PlanToV2(
+		const TSharedPtr<FJsonObject>& Plan,
+		TSharedPtr<FJsonObject>& OutPlan,
+		FString& OutError) const;
+	bool PreparePlanWithAssetPreconditions(
+		const TSharedPtr<FJsonObject>& CorePlan,
+		TSharedPtr<FJsonObject>& OutPlan,
+		FMCPResult& OutFailure) const;
+	bool VerifyPlanAssetPreconditions(
+		const TSharedPtr<FJsonObject>& PreparedPlan,
+		FMCPResult& OutFailure) const;
+	void CachePreparedPlan(const TSharedPtr<FJsonObject>& PreparedPlan);
+	bool FindPreparedPlan(
+		const FString& BoundPlanDigest,
+		TSharedPtr<FJsonObject>& OutPlan);
+	void PrunePreparedPlanCache();
 	bool ExecuteOperation(
 		const TSharedPtr<FJsonObject>& Operation,
 		const TSharedPtr<FJsonObject>& Scope,
@@ -138,6 +187,7 @@ private:
 	bool LoadRun(const FString& RunId, FRunRecord& OutRecord) const;
 	bool SaveRun(const FRunRecord& Record, FString& OutError) const;
 	FString GetRunPath(const FString& RunId) const;
+	FString GetRunDirectory(const FString& RunId) const;
 
 	static FString JsonStringify(const TSharedPtr<FJsonObject>& Json);
 	static bool ParseJsonObject(const FString& Json, TSharedPtr<FJsonObject>& OutObject);
@@ -167,5 +217,8 @@ private:
 	TMap<FString, FRunRecord> Runs;
 	TMap<FString, TArray<FWorkflowObjectMemorySnapshot>>
 		RollbackMemorySnapshots;
+	TMap<FString, TArray<FWorkflowObjectMemorySnapshot>>
+		MultiAssetRollbackMemorySnapshots;
+	TMap<FString, FPreparedPlanCacheEntry> PreparedPlanCache;
 };
 }

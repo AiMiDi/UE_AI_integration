@@ -4,15 +4,19 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
 #include <sstream>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace ue::workflow
 {
@@ -24,6 +28,10 @@ using json = nlohmann::json;
 
 constexpr std::string_view kDslVersion = "1.0";
 constexpr std::string_view kPlannerVersion = "1.0";
+constexpr std::string_view kDslVersionV2 = "2.0";
+constexpr std::string_view kPlannerVersionV2 = "2.0";
+constexpr std::size_t kMaxV2Scopes = 16;
+constexpr std::size_t kMaxV2Operations = 256;
 
 class Sha256
 {
@@ -1323,6 +1331,33 @@ public:
             return make_load_result(std::move(diagnostics));
         }
 
+        workflow_schema_v2_ =
+            load_contract_file("schema.v2.json", diagnostics);
+        plan_schema_v2_ =
+            load_contract_file("plan.schema.v2.json", diagnostics);
+        if (!workflow_schema_v2_.is_object() || workflow_schema_v2_.empty())
+        {
+            add_diagnostic(
+                diagnostics,
+                "contracts",
+                "workflow_v2_schema_missing",
+                "/schema.v2.json",
+                "UE Workflow DSL v2 requires schema.v2.json.");
+        }
+        if (!plan_schema_v2_.is_object() || plan_schema_v2_.empty())
+        {
+            add_diagnostic(
+                diagnostics,
+                "contracts",
+                "workflow_v2_plan_schema_missing",
+                "/plan.schema.v2.json",
+                "UE Workflow DSL v2 requires plan.schema.v2.json.");
+        }
+        if (has_errors(diagnostics))
+        {
+            return make_load_result(std::move(diagnostics));
+        }
+
         std::vector<std::filesystem::path> requested_roots = options.capability_roots;
         if (const auto roots = contract_set_.find("capabilityRoots");
             roots != contract_set_.end() && roots->is_array())
@@ -1527,6 +1562,12 @@ public:
             { "capabilities", std::move(digest_capabilities) },
         };
         contract_set_digest_ = sha256(digest_input.dump());
+        v2_contract_set_digest_ = sha256(json({
+            { "schema", "ue.workflow-contract-set.v2" },
+            { "baseContractSetDigest", contract_set_digest_ },
+            { "workflowSchema", workflow_schema_v2_ },
+            { "planSchema", plan_schema_v2_ },
+        }).dump());
         loaded_ = !has_errors(diagnostics);
         return make_load_result(std::move(diagnostics));
     }
@@ -1537,13 +1578,18 @@ public:
         {
             return not_loaded_result();
         }
-        auto validation = validate_internal(workflow_json);
+        const auto input = json::parse(workflow_json, nullptr, false, true);
+        const bool is_v2 =
+            input.is_object() && input.value("dslVersion", std::string{}) == kDslVersionV2;
+        auto validation = is_v2
+            ? validate_v2_internal(workflow_json)
+            : validate_internal(workflow_json);
         json payload = {
             { "schema", "ue.workflow-validation.v1" },
-            { "contractSet", contract_summary() },
+            { "contractSet", is_v2 ? contract_summary_v2() : contract_summary() },
             { "validationScope", {
                 { "dsl", "ue.workflow" },
-                { "dslVersion", kDslVersion },
+                { "dslVersion", is_v2 ? kDslVersionV2 : kDslVersion },
                 { "workflowKind", "assetEdit" },
                 { "capabilityCount", capabilities_.size() },
                 { "composableOperationCount", composable_count() },
@@ -1603,6 +1649,12 @@ public:
         if (!loaded_)
         {
             return not_loaded_result();
+        }
+        const auto input = json::parse(workflow_json, nullptr, false, true);
+        if (input.is_object() &&
+            input.value("dslVersion", std::string{}) == kDslVersionV2)
+        {
+            return plan_v2(workflow_json);
         }
         auto validation = validate_internal(workflow_json);
         if (has_errors(validation.diagnostics))
@@ -1961,6 +2013,249 @@ public:
         return make_result(std::move(plan_payload), std::move(validation.diagnostics), 2);
     }
 
+    Result capabilities(const CapabilityQuery& query) const
+    {
+        if (!loaded_)
+        {
+            return not_loaded_result();
+        }
+
+        std::vector<Diagnostic> diagnostics;
+        if (query.limit == 0 || query.limit > 100)
+        {
+            add_diagnostic(
+                diagnostics,
+                "capabilities",
+                "capability_limit_invalid",
+                "/limit",
+                "Capability query limit must be between 1 and 100.");
+            return make_result({
+                { "schema", "ue.workflow-capabilities.v1" },
+            }, std::move(diagnostics), 2);
+        }
+        if (query.available_only)
+        {
+            add_diagnostic(
+                diagnostics,
+                "capabilities",
+                "capability_availability_requires_connection",
+                "/availableOnly",
+                "Capability availability requires a connection to the Unreal Editor.");
+            return make_result({
+                { "schema", "ue.workflow-capabilities.v1" },
+            }, std::move(diagnostics), 2);
+        }
+        const std::set<std::string> valid_domains = {
+            "ai",
+            "animation",
+            "blueprint",
+            "content",
+            "production",
+            "scene",
+        };
+        const std::set<std::string> valid_kinds = {
+            "command",
+            "query",
+            "validation",
+        };
+        const std::set<std::string> valid_output_kinds = {
+            "image",
+            "json",
+        };
+        const std::set<std::string> valid_risks = {
+            "confirmWrite",
+            "notOpen",
+            "readOnly",
+            "safeWrite",
+        };
+        auto validate_filter = [&diagnostics](
+            const std::string& value,
+            const std::set<std::string>& allowed,
+            std::string_view field,
+            std::string_view code) {
+            if (!value.empty() && !allowed.contains(value))
+            {
+                add_diagnostic(
+                    diagnostics,
+                    "capabilities",
+                    std::string(code),
+                    "/" + std::string(field),
+                    "Capability query contains an unsupported " +
+                        std::string(field) + " value.");
+            }
+        };
+        validate_filter(
+            query.domain,
+            valid_domains,
+            "domain",
+            "capability_domain_invalid");
+        validate_filter(
+            query.kind,
+            valid_kinds,
+            "kind",
+            "capability_kind_invalid");
+        validate_filter(
+            query.output_kind,
+            valid_output_kinds,
+            "outputKind",
+            "capability_output_kind_invalid");
+        validate_filter(
+            query.risk,
+            valid_risks,
+            "risk",
+            "capability_risk_invalid");
+        if (has_errors(diagnostics))
+        {
+            return make_result({
+                { "schema", "ue.workflow-capabilities.v1" },
+            }, std::move(diagnostics), 2);
+        }
+
+        auto lowercase = [](std::string value) {
+            std::transform(
+                value.begin(),
+                value.end(),
+                value.begin(),
+                [](const unsigned char character) {
+                    return static_cast<char>(std::tolower(character));
+                });
+            return value;
+        };
+        const auto search = lowercase(query.query);
+        std::vector<const Capability*> matches;
+        for (const auto& [id, capability] : capabilities_)
+        {
+            if (!query.operation.empty() && id != query.operation)
+            {
+                continue;
+            }
+            if (!query.domain.empty() && capability.domain != query.domain)
+            {
+                continue;
+            }
+            if (!query.kind.empty() &&
+                capability.raw.value("kind", std::string{}) != query.kind)
+            {
+                continue;
+            }
+            const auto output_kind =
+                capability.raw.value("output", json::object())
+                    .value("kind", std::string{});
+            if (!query.output_kind.empty() && output_kind != query.output_kind)
+            {
+                continue;
+            }
+            const auto descriptor_dsl =
+                capability.raw.value("dsl", json::object());
+            const auto descriptor_risk =
+                descriptor_dsl.value("risk", std::string{});
+            if (!query.risk.empty() && descriptor_risk != query.risk)
+            {
+                continue;
+            }
+            const auto traits =
+                capability.raw.value("traits", json::object());
+            auto trait_matches = [&traits](
+                std::string_view name,
+                const std::optional<bool>& expected) {
+                return !expected.has_value() ||
+                    traits.value(std::string(name), false) == *expected;
+            };
+            if (!trait_matches("readOnly", query.read_only) ||
+                !trait_matches("destructive", query.destructive) ||
+                !trait_matches("expensive", query.expensive))
+            {
+                continue;
+            }
+            if (!search.empty())
+            {
+                const auto haystack =
+                    lowercase(id + "\n" + capability.description);
+                if (haystack.find(search) == std::string::npos)
+                {
+                    continue;
+                }
+            }
+            matches.push_back(&capability);
+        }
+
+        if (!query.operation.empty() && matches.empty())
+        {
+            add_diagnostic(
+                diagnostics,
+                "capabilities",
+                "operation_unknown",
+                "/operation",
+                "Capability is not present in the loaded manifests.");
+        }
+
+        const std::size_t total = matches.size();
+        const std::size_t effective_offset =
+            query.operation.empty() ? query.offset : 0;
+        const std::size_t effective_limit =
+            query.operation.empty() ? query.limit : 1;
+        const std::size_t page_end =
+            effective_offset >= total
+            ? total
+            : std::min(effective_offset + effective_limit, total);
+        const bool full =
+            !query.operation.empty() || query.detail == CapabilityDetail::Full;
+        json page = json::array();
+        for (std::size_t index = effective_offset;
+             index < page_end;
+             ++index)
+        {
+            const Capability& capability = *matches[index];
+            if (full)
+            {
+                json descriptor = capability.raw;
+                descriptor["dsl"] = capability.dsl;
+                descriptor["available"] = nullptr;
+                descriptor["availabilityReasons"] =
+                    json::array({ "editor_connection_required" });
+                page.push_back(std::move(descriptor));
+                continue;
+            }
+            json summary = {
+                { "id", capability.id },
+                { "domain", capability.domain },
+                { "kind", capability.raw.value("kind", std::string{}) },
+                { "description", capability.description },
+                { "traits", capability.raw.value("traits", json::object()) },
+                { "output", capability.raw.value("output", json::object()) },
+                { "available", nullptr },
+                { "availabilityReasons",
+                    json::array({ "editor_connection_required" }) },
+            };
+            if (const auto requirements_it =
+                    capability.raw.find("requires");
+                requirements_it != capability.raw.end())
+            {
+                summary["requires"] = *requirements_it;
+            }
+            const auto descriptor_dsl =
+                capability.raw.value("dsl", json::object());
+            const auto descriptor_risk =
+                descriptor_dsl.value("risk", std::string{});
+            if (!descriptor_risk.empty())
+            {
+                summary["risk"] = descriptor_risk;
+            }
+            page.push_back(std::move(summary));
+        }
+
+        return make_result({
+            { "schema", "ue.workflow-capabilities.v1" },
+            { "capabilities", std::move(page) },
+            { "total", total },
+            { "offset", effective_offset },
+            { "limit", effective_limit },
+            { "hasMore",
+                effective_offset < total && page_end < total },
+            { "detail", full ? "full" : "summary" },
+        }, std::move(diagnostics), 2);
+    }
+
     Result help(std::string_view scope_kind) const
     {
         if (!loaded_)
@@ -2111,6 +2406,18 @@ private:
             { "schema", "ue.workflow-contract-set.v1" },
             { "contractApiVersion", contract_set_.value("contractApiVersion", "1") },
             { "digest", contract_set_digest_ },
+            { "capabilityCount", capabilities_.size() },
+            { "composableOperationCount", composable_count() },
+        };
+    }
+
+    json contract_summary_v2() const
+    {
+        return {
+            { "schema", "ue.workflow-contract-set.v2" },
+            { "contractApiVersion", "2" },
+            { "baseContractSetDigest", contract_set_digest_ },
+            { "digest", v2_contract_set_digest_ },
             { "capabilityCount", capabilities_.size() },
             { "composableOperationCount", composable_count() },
         };
@@ -2617,18 +2924,1104 @@ private:
         return result;
     }
 
+    ValidationData validate_v2_internal(std::string_view workflow_json) const
+    {
+        ValidationData result;
+        auto workflow = json::parse(workflow_json, nullptr, false, true);
+        if (workflow.is_discarded())
+        {
+            add_diagnostic(
+                result.diagnostics,
+                "json",
+                "invalid_json",
+                "",
+                "Workflow input must be valid UTF-8 JSON.");
+            return result;
+        }
+
+        validate_schema(
+            workflow,
+            workflow_schema_v2_,
+            workflow_schema_v2_,
+            "",
+            result.diagnostics);
+        find_forbidden_interpolation(workflow, "", result.diagnostics);
+        if (!workflow.is_object())
+        {
+            return result;
+        }
+
+        json normalized = workflow;
+        if (!normalized.contains("persistence"))
+        {
+            normalized["persistence"] = "dirtyOnly";
+        }
+        if (!normalized.contains("scopes") || !normalized["scopes"].is_object())
+        {
+            result.normalized_workflow = std::move(normalized);
+            return result;
+        }
+        if (normalized["scopes"].empty())
+        {
+            add_diagnostic(
+                result.diagnostics,
+                "scope",
+                "scope_set_empty",
+                "/scopes",
+                "UE Workflow v2 requires at least one named scope.");
+        }
+        if (normalized["scopes"].size() > kMaxV2Scopes)
+        {
+            add_diagnostic(
+                result.diagnostics,
+                "scope",
+                "scope_limit_exceeded",
+                "/scopes",
+                "UE Workflow v2 supports at most 16 named scopes.");
+        }
+
+        std::set<std::string> seen_assets;
+        for (auto& [scope_id, scope] : normalized["scopes"].items())
+        {
+            const auto scope_path = "/scopes/" + pointer_escape(scope_id);
+            if (!scope.is_object())
+            {
+                continue;
+            }
+            if (!scope.contains("createIfMissing"))
+            {
+                scope["createIfMissing"] = false;
+            }
+            const auto asset = scope.value("asset", std::string{});
+            if (!asset.empty() && !seen_assets.insert(asset).second)
+            {
+                add_diagnostic(
+                    result.diagnostics,
+                    "scope",
+                    "duplicate_scope_asset",
+                    scope_path + "/asset",
+                    "Each named scope must target a distinct asset.");
+            }
+
+            const auto scope_kind = scope.value("kind", std::string{});
+            const json* scope_config = nullptr;
+            if (admission_.contains("scopeKinds") &&
+                admission_["scopeKinds"].is_object())
+            {
+                const auto found =
+                    admission_["scopeKinds"].find(scope_kind);
+                if (found != admission_["scopeKinds"].end() &&
+                    found->is_object())
+                {
+                    scope_config = &*found;
+                }
+            }
+            if (!scope_config)
+            {
+                add_diagnostic(
+                    result.diagnostics,
+                    "scope",
+                    "scope_kind_unknown",
+                    scope_path + "/kind",
+                    "Named scope kind is not registered for UE Workflow.");
+                continue;
+            }
+
+            if (!scope.contains("verify") || !scope["verify"].is_object())
+            {
+                scope["verify"] = json::object();
+            }
+            scope["verify"]["compile"] = true;
+            if (!scope["verify"].contains("readBack") ||
+                !scope["verify"]["readBack"].is_array() ||
+                scope["verify"]["readBack"].empty())
+            {
+                scope["verify"]["readBack"] =
+                    scope_config->value("defaultReadBack", json::array());
+            }
+        }
+
+        if (!normalized.contains("operations") ||
+            !normalized["operations"].is_array())
+        {
+            result.normalized_workflow = std::move(normalized);
+            return result;
+        }
+        if (normalized["operations"].size() > kMaxV2Operations)
+        {
+            add_diagnostic(
+                result.diagnostics,
+                "workflow",
+                "operation_limit_exceeded",
+                "/operations",
+                "UE Workflow v2 supports at most 256 operations.");
+        }
+
+        const std::size_t operation_count = normalized["operations"].size();
+        std::map<std::string, std::size_t, std::less<>> authored_indices;
+        std::vector<const Capability*> operation_capabilities(
+            operation_count,
+            nullptr);
+        for (std::size_t index = 0; index < operation_count; ++index)
+        {
+            const auto& operation = normalized["operations"][index];
+            if (!operation.is_object())
+            {
+                continue;
+            }
+            const auto id = operation.value("id", std::string{});
+            if (!id.empty() && !authored_indices.emplace(id, index).second)
+            {
+                add_diagnostic(
+                    result.diagnostics,
+                    "workflow",
+                    "duplicate_operation_id",
+                    "/operations/" + std::to_string(index) + "/id",
+                    "Operation ids must be unique.",
+                    id);
+            }
+            const auto capability =
+                capabilities_.find(operation.value("type", std::string{}));
+            if (capability != capabilities_.end())
+            {
+                operation_capabilities[index] = &capability->second;
+            }
+        }
+
+        std::vector<NormalizedOperation> candidates;
+        candidates.reserve(operation_count);
+        std::set<std::string> transaction_domains;
+        std::set<std::string> all_forbidden_scope_parameters;
+        if (admission_.contains("scopeKinds") &&
+            admission_["scopeKinds"].is_object())
+        {
+            for (const auto& [ignored, config] :
+                 admission_["scopeKinds"].items())
+            {
+                (void)ignored;
+                if (!config.is_object() ||
+                    !config.contains("forbiddenParameters"))
+                {
+                    continue;
+                }
+                for (const auto& parameter :
+                     string_array(&config["forbiddenParameters"]))
+                {
+                    all_forbidden_scope_parameters.insert(parameter);
+                }
+            }
+        }
+
+        for (std::size_t index = 0; index < operation_count; ++index)
+        {
+            const auto& authored = normalized["operations"][index];
+            const auto base_path = "/operations/" + std::to_string(index);
+            if (!authored.is_object())
+            {
+                continue;
+            }
+            const auto id = authored.value("id", std::string{});
+            const auto type = authored.value("type", std::string{});
+            const auto scope_id = authored.value("scope", std::string{});
+            const Capability* capability = operation_capabilities[index];
+            if (!capability)
+            {
+                add_diagnostic(
+                    result.diagnostics,
+                    "workflow",
+                    "unknown_operation",
+                    base_path + "/type",
+                    "Operation is not present in the loaded capability manifests.",
+                    id);
+                continue;
+            }
+            if (capability->dsl.value("admission", "none") != "editStep")
+            {
+                add_diagnostic(
+                    result.diagnostics,
+                    "workflow",
+                    "operation_not_composable",
+                    base_path + "/type",
+                    "Only operations with dsl.admission=editStep may appear in UE Workflow v2.",
+                    id);
+            }
+
+            const auto scope = normalized["scopes"].find(scope_id);
+            const auto scope_kind =
+                scope != normalized["scopes"].end() && scope->is_object()
+                ? scope->value("kind", std::string{})
+                : std::string{};
+            if (scope == normalized["scopes"].end())
+            {
+                add_diagnostic(
+                    result.diagnostics,
+                    "scope",
+                    "operation_scope_unknown",
+                    base_path + "/scope",
+                    "Operation references an unknown named scope.",
+                    id);
+            }
+            const auto supported_scopes = string_array(
+                capability->dsl.contains("scopeKinds")
+                ? &capability->dsl["scopeKinds"]
+                : nullptr);
+            if (!scope_kind.empty() &&
+                std::find(
+                    supported_scopes.begin(),
+                    supported_scopes.end(),
+                    scope_kind) == supported_scopes.end())
+            {
+                add_diagnostic(
+                    result.diagnostics,
+                    "scope",
+                    "operation_scope_mismatch",
+                    base_path + "/scope",
+                    "Operation does not support the referenced scope kind.",
+                    id);
+            }
+
+            transaction_domains.insert(
+                capability->dsl.value("transactionDomain", std::string{}));
+            json normalized_operation = authored;
+            normalized_operation["params"] = normalize_params(
+                authored.value("params", json::object()),
+                *capability,
+                base_path + "/params",
+                id,
+                result.diagnostics);
+
+            std::set<std::string> scope_parameters;
+            for (const auto& parameter : string_array(
+                     capability->dsl.contains("scopeParameters")
+                     ? &capability->dsl["scopeParameters"]
+                     : nullptr))
+            {
+                scope_parameters.insert(parameter);
+                if (normalized_operation["params"].contains(parameter))
+                {
+                    add_diagnostic(
+                        result.diagnostics,
+                        "scope",
+                        "scope_parameter_authored",
+                        base_path + "/params/" + pointer_escape(parameter),
+                        "Scope-bound capability parameters are injected from the referenced named scope.",
+                        id);
+                }
+            }
+            for (const auto& parameter : all_forbidden_scope_parameters)
+            {
+                if (normalized_operation["params"].contains(parameter))
+                {
+                    add_diagnostic(
+                        result.diagnostics,
+                        "scope",
+                        "scope_parameter_forbidden",
+                        base_path + "/params/" + pointer_escape(parameter),
+                        "This parameter would escape the operation's named asset scope.",
+                        id);
+                }
+            }
+
+            std::vector<std::string> dependencies;
+            std::set<std::string> dependency_set;
+            if (const auto depends_on = authored.find("dependsOn");
+                depends_on != authored.end() && depends_on->is_array())
+            {
+                for (const auto& dependency : *depends_on)
+                {
+                    if (!dependency.is_string())
+                    {
+                        continue;
+                    }
+                    const auto dependency_id = dependency.get<std::string>();
+                    if (!authored_indices.contains(dependency_id))
+                    {
+                        add_diagnostic(
+                            result.diagnostics,
+                            "dependency",
+                            "dependency_unknown",
+                            base_path + "/dependsOn",
+                            "Dependency references an unknown operation.",
+                            id);
+                    }
+                    else if (dependency_id == id)
+                    {
+                        add_diagnostic(
+                            result.diagnostics,
+                            "dependency",
+                            "dependency_self_reference",
+                            base_path + "/dependsOn",
+                            "Operation may not depend on itself.",
+                            id);
+                    }
+                    else if (dependency_set.insert(dependency_id).second)
+                    {
+                        dependencies.push_back(dependency_id);
+                    }
+                }
+            }
+
+            std::set<std::string> satisfied_parameters = scope_parameters;
+            json normalized_bindings = json::object();
+            if (const auto bindings = authored.find("bindings");
+                bindings != authored.end() && bindings->is_object())
+            {
+                for (const auto& [destination_text, binding] :
+                     bindings->items())
+                {
+                    if (!binding.is_object() ||
+                        !binding.contains("from") ||
+                        !binding["from"].is_string() ||
+                        !binding.contains("path") ||
+                        !binding["path"].is_string())
+                    {
+                        continue;
+                    }
+                    auto destination_tokens =
+                        parse_json_pointer(destination_text);
+                    if (!destination_tokens || destination_tokens->empty())
+                    {
+                        add_diagnostic(
+                            result.diagnostics,
+                            "binding",
+                            "binding_destination_invalid",
+                            base_path + "/bindings/" +
+                                pointer_escape(destination_text),
+                            "Binding destination must be a non-empty RFC 6901 JSON Pointer.",
+                            id);
+                        continue;
+                    }
+                    if (destination_tokens->front() == "params")
+                    {
+                        destination_tokens->erase(destination_tokens->begin());
+                    }
+                    if (destination_tokens->size() != 1)
+                    {
+                        add_diagnostic(
+                            result.diagnostics,
+                            "binding",
+                            "binding_destination_depth_unsupported",
+                            base_path + "/bindings/" +
+                                pointer_escape(destination_text),
+                            "Workflow binding destinations must target one top-level capability parameter.",
+                            id);
+                        continue;
+                    }
+                    destination_tokens->front() =
+                        capability_alias(*capability, destination_tokens->front());
+                    const auto destination_parameter =
+                        destination_tokens->front();
+                    if (scope_parameters.contains(destination_parameter) ||
+                        all_forbidden_scope_parameters.contains(
+                            destination_parameter))
+                    {
+                        add_diagnostic(
+                            result.diagnostics,
+                            "scope",
+                            "scope_binding_forbidden",
+                            base_path + "/bindings/" +
+                                pointer_escape(destination_text),
+                            "Bindings may not override scope-injected or scope-forbidden parameters.",
+                            id);
+                        continue;
+                    }
+                    const auto* destination_schema = schema_at_tokens(
+                        capability->input_schema,
+                        *destination_tokens);
+                    if (!destination_schema)
+                    {
+                        add_diagnostic(
+                            result.diagnostics,
+                            "binding",
+                            "binding_destination_unknown",
+                            base_path + "/bindings/" +
+                                pointer_escape(destination_text),
+                            "Binding destination is not declared by the capability input schema.",
+                            id);
+                        continue;
+                    }
+
+                    const auto source_id =
+                        binding["from"].get<std::string>();
+                    const auto source_index =
+                        authored_indices.find(source_id);
+                    if (source_index == authored_indices.end() ||
+                        source_id == id)
+                    {
+                        add_diagnostic(
+                            result.diagnostics,
+                            "binding",
+                            "binding_source_unknown",
+                            base_path + "/bindings/" +
+                                pointer_escape(destination_text),
+                            "Binding source must reference another workflow operation.",
+                            id);
+                        continue;
+                    }
+                    const Capability* source_capability =
+                        operation_capabilities[source_index->second];
+                    const auto source_tokens =
+                        parse_json_pointer(binding["path"].get<std::string>());
+                    const auto* source_schema =
+                        source_capability && source_tokens &&
+                            !source_tokens->empty()
+                        ? schema_at_tokens(
+                            source_capability->output_schema,
+                            *source_tokens)
+                        : nullptr;
+                    if (!source_schema)
+                    {
+                        add_diagnostic(
+                            result.diagnostics,
+                            "binding",
+                            "binding_source_untyped",
+                            base_path + "/bindings/" +
+                                pointer_escape(destination_text) + "/path",
+                            "Binding source path is not declared by the source operation output schema.",
+                            id);
+                        continue;
+                    }
+                    if (!types_compatible(source_schema, destination_schema))
+                    {
+                        add_diagnostic(
+                            result.diagnostics,
+                            "binding",
+                            "binding_type_mismatch",
+                            base_path + "/bindings/" +
+                                pointer_escape(destination_text),
+                            "Binding source and destination JSON Schema types are incompatible.",
+                            id);
+                        continue;
+                    }
+                    if (normalized_operation["params"].contains(
+                            destination_parameter))
+                    {
+                        add_diagnostic(
+                            result.diagnostics,
+                            "binding",
+                            "binding_destination_conflict",
+                            base_path + "/bindings/" +
+                                pointer_escape(destination_text),
+                            "Binding destination conflicts with an explicitly supplied parameter.",
+                            id);
+                    }
+                    std::vector<std::string> normalized_tokens = {
+                        "params",
+                        destination_parameter,
+                    };
+                    const auto normalized_destination =
+                        make_json_pointer(normalized_tokens);
+                    if (normalized_bindings.contains(normalized_destination))
+                    {
+                        add_diagnostic(
+                            result.diagnostics,
+                            "binding",
+                            "binding_destination_duplicate",
+                            base_path + "/bindings/" +
+                                pointer_escape(destination_text),
+                            "Multiple bindings normalize to the same destination.",
+                            id);
+                    }
+                    else
+                    {
+                        normalized_bindings[normalized_destination] = {
+                            { "from", source_id },
+                            { "path", make_json_pointer(*source_tokens) },
+                        };
+                    }
+                    satisfied_parameters.insert(destination_parameter);
+                    if (dependency_set.insert(source_id).second)
+                    {
+                        dependencies.push_back(source_id);
+                    }
+                }
+            }
+            if (normalized_bindings.empty())
+            {
+                normalized_operation.erase("bindings");
+            }
+            else
+            {
+                normalized_operation["bindings"] =
+                    std::move(normalized_bindings);
+            }
+            normalized_operation["dependsOn"] = dependencies;
+            validate_schema(
+                normalized_operation["params"],
+                capability->input_schema,
+                capability->input_schema,
+                base_path + "/params",
+                result.diagnostics,
+                &satisfied_parameters);
+            candidates.push_back({
+                std::move(normalized_operation),
+                capability,
+                std::move(dependencies),
+            });
+        }
+
+        if (transaction_domains.size() > 1 ||
+            (!transaction_domains.empty() &&
+             *transaction_domains.begin() != "asset"))
+        {
+            add_diagnostic(
+                result.diagnostics,
+                "workflow",
+                "transaction_domain_mismatch",
+                "/operations",
+                "All UE Workflow v2 operations must use the asset transaction domain.");
+        }
+
+        std::map<std::string, std::size_t, std::less<>> candidate_indices;
+        for (std::size_t index = 0; index < candidates.size(); ++index)
+        {
+            candidate_indices.emplace(
+                candidates[index].operation.value("id", std::string{}),
+                index);
+        }
+        std::vector<int> indegree(candidates.size(), 0);
+        std::vector<std::vector<std::size_t>> outgoing(candidates.size());
+        for (std::size_t index = 0; index < candidates.size(); ++index)
+        {
+            for (const auto& dependency : candidates[index].dependencies)
+            {
+                const auto found = candidate_indices.find(dependency);
+                if (found == candidate_indices.end())
+                {
+                    continue;
+                }
+                ++indegree[index];
+                outgoing[found->second].push_back(index);
+            }
+        }
+        std::vector<bool> emitted(candidates.size(), false);
+        std::vector<NormalizedOperation> ordered;
+        ordered.reserve(candidates.size());
+        while (ordered.size() < candidates.size())
+        {
+            std::optional<std::size_t> next;
+            for (std::size_t index = 0; index < candidates.size(); ++index)
+            {
+                if (!emitted[index] && indegree[index] == 0)
+                {
+                    next = index;
+                    break;
+                }
+            }
+            if (!next)
+            {
+                add_diagnostic(
+                    result.diagnostics,
+                    "dependency",
+                    "dependency_cycle",
+                    "/operations",
+                    "Operation dependency and binding edges contain a cycle.");
+                break;
+            }
+            emitted[*next] = true;
+            ordered.push_back(candidates[*next]);
+            for (const auto target : outgoing[*next])
+            {
+                --indegree[target];
+            }
+        }
+        if (ordered.size() == candidates.size())
+        {
+            result.operations = std::move(ordered);
+        }
+        else
+        {
+            result.operations = std::move(candidates);
+        }
+        json normalized_operations = json::array();
+        for (const auto& operation : result.operations)
+        {
+            normalized_operations.push_back(operation.operation);
+        }
+        normalized["operations"] = std::move(normalized_operations);
+        result.normalized_workflow = std::move(normalized);
+        return result;
+    }
+
+    Result plan_v2(std::string_view workflow_json) const
+    {
+        auto validation = validate_v2_internal(workflow_json);
+        if (has_errors(validation.diagnostics))
+        {
+            return make_result({
+                { "schema", "ue.workflow-plan.v2" },
+                { "plannerVersion", kPlannerVersionV2 },
+                { "contractSetDigest", v2_contract_set_digest_ },
+            }, std::move(validation.diagnostics), 2);
+        }
+
+        const auto& workflow = validation.normalized_workflow;
+        struct ScopePlanData
+        {
+            std::string id;
+            std::string kind;
+            std::string asset;
+            json scope = json::object();
+            json config = json::object();
+        };
+        std::vector<ScopePlanData> scopes;
+        for (const auto& [scope_id, scope] : workflow["scopes"].items())
+        {
+            const auto kind = scope.value("kind", std::string{});
+            const auto config = admission_["scopeKinds"].find(kind);
+            scopes.push_back({
+                scope_id,
+                kind,
+                scope.value("asset", std::string{}),
+                scope,
+                config != admission_["scopeKinds"].end() &&
+                        config->is_object()
+                    ? *config
+                    : json::object(),
+            });
+        }
+        std::sort(
+            scopes.begin(),
+            scopes.end(),
+            [](const ScopePlanData& left, const ScopePlanData& right) {
+                return std::tie(left.asset, left.id) <
+                    std::tie(right.asset, right.id);
+            });
+
+        json asset_set = json::array();
+        json initializers = json::array();
+        std::map<std::string, std::string, std::less<>> initializer_ids;
+        std::string overall_risk = "readOnly";
+        for (const auto& scope : scopes)
+        {
+            asset_set.push_back({
+                { "scopeId", scope.id },
+                { "kind", scope.kind },
+                { "asset", scope.asset },
+                { "createIfMissing", scope.scope.value("createIfMissing", false) },
+            });
+
+            const auto initializer_config =
+                scope.config.find("initializer");
+            const auto initializer_type =
+                initializer_config != scope.config.end() &&
+                    initializer_config->is_object()
+                ? initializer_config->value(
+                    "operationType",
+                    std::string{})
+                : std::string{};
+            std::size_t explicit_count = 0;
+            std::size_t first_scope_operation = validation.operations.size();
+            std::size_t explicit_index = validation.operations.size();
+            for (std::size_t index = 0;
+                 index < validation.operations.size();
+                 ++index)
+            {
+                const auto& operation =
+                    validation.operations[index].operation;
+                if (operation.value("scope", std::string{}) != scope.id)
+                {
+                    continue;
+                }
+                first_scope_operation =
+                    std::min(first_scope_operation, index);
+                if (operation.value("type", std::string{}) ==
+                    initializer_type)
+                {
+                    ++explicit_count;
+                    explicit_index = index;
+                }
+            }
+            if (explicit_count > 1)
+            {
+                add_diagnostic(
+                    validation.diagnostics,
+                    "plan",
+                    "scope_initializer_duplicate",
+                    "/scopes/" + pointer_escape(scope.id),
+                    "A named scope initializer may appear at most once.");
+            }
+            if (explicit_count == 1 &&
+                explicit_index != first_scope_operation)
+            {
+                add_diagnostic(
+                    validation.diagnostics,
+                    "plan",
+                    "scope_initializer_must_be_first",
+                    "/operations/" + std::to_string(explicit_index),
+                    "An explicit initializer must be the first operation for its named scope.");
+            }
+
+            if (scope.scope.value("createIfMissing", false) &&
+                explicit_count == 0)
+            {
+                if (initializer_type.empty())
+                {
+                    add_diagnostic(
+                        validation.diagnostics,
+                        "plan",
+                        "scope_initializer_missing",
+                        "/scopes/" + pointer_escape(scope.id) +
+                            "/createIfMissing",
+                        "No deterministic initializer is registered for this scope kind.");
+                    continue;
+                }
+                const auto capability =
+                    capabilities_.find(initializer_type);
+                if (capability == capabilities_.end())
+                {
+                    add_diagnostic(
+                        validation.diagnostics,
+                        "plan",
+                        "scope_initializer_unavailable",
+                        "/scopes/" + pointer_escape(scope.id) +
+                            "/createIfMissing",
+                        "The registered initializer capability is unavailable.");
+                    continue;
+                }
+                const auto initializer_id =
+                    "$initializer." + scope.id + ".create";
+                initializer_ids[scope.id] = initializer_id;
+                const auto risk =
+                    capability->second.dsl.value("risk", "safeWrite");
+                initializers.push_back({
+                    { "id", initializer_id },
+                    { "scope", scope.id },
+                    { "kind", "createIfMissing" },
+                    { "automatic", true },
+                    { "operationType", initializer_type },
+                    { "params", initializer_config->value("params", json::object()) },
+                    { "scopeParameters", capability->second.dsl.value("scopeParameters", json::array()) },
+                    { "risk", risk },
+                    { "dependsOn", json::array() },
+                });
+                if (risk_rank(risk) > risk_rank(overall_risk))
+                {
+                    overall_risk = risk;
+                }
+            }
+        }
+
+        json planned_operations = json::array();
+        std::map<std::string, std::vector<std::string>, std::less<>>
+            scope_operation_ids;
+        for (const auto& normalized : validation.operations)
+        {
+            json operation = normalized.operation;
+            const auto scope_id =
+                operation.value("scope", std::string{});
+            auto dependencies = normalized.dependencies;
+            if (const auto initializer = initializer_ids.find(scope_id);
+                initializer != initializer_ids.end() &&
+                std::find(
+                    dependencies.begin(),
+                    dependencies.end(),
+                    initializer->second) == dependencies.end())
+            {
+                dependencies.insert(
+                    dependencies.begin(),
+                    initializer->second);
+            }
+            operation["dependsOn"] = dependencies;
+            operation["automatic"] = false;
+            operation["scopeParameters"] =
+                normalized.capability->dsl.value(
+                    "scopeParameters",
+                    json::array());
+            operation["transactionDomain"] =
+                normalized.capability->dsl.value(
+                    "transactionDomain",
+                    "asset");
+            operation["deferCompile"] =
+                normalized.capability->dsl.value("deferCompile", true);
+            const auto risk =
+                normalized.capability->dsl.value("risk", "safeWrite");
+            operation["risk"] = risk;
+
+            const auto& scope_data = *std::find_if(
+                scopes.begin(),
+                scopes.end(),
+                [&scope_id](const ScopePlanData& candidate) {
+                    return candidate.id == scope_id;
+                });
+            const auto initializer_config =
+                scope_data.config.find("initializer");
+            if (initializer_config != scope_data.config.end() &&
+                initializer_config->is_object() &&
+                operation.value("type", std::string{}) ==
+                    initializer_config->value(
+                        "operationType",
+                        std::string{}))
+            {
+                operation["kind"] = "scopeInitializer";
+            }
+            scope_operation_ids[scope_id].push_back(
+                operation.value("id", std::string{}));
+            if (risk_rank(risk) > risk_rank(overall_risk))
+            {
+                overall_risk = risk;
+            }
+            planned_operations.push_back(std::move(operation));
+        }
+
+        json finalizers = json::array();
+        for (const auto& scope : scopes)
+        {
+            std::vector<std::string> authored_ids =
+                scope_operation_ids[scope.id];
+            if (const auto initializer = initializer_ids.find(scope.id);
+                authored_ids.empty() && initializer != initializer_ids.end())
+            {
+                authored_ids.push_back(initializer->second);
+            }
+            const auto compile_config = scope.config.find("compile");
+            std::vector<std::string> post_compile_dependencies =
+                authored_ids;
+            if (compile_config != scope.config.end() &&
+                compile_config->is_object())
+            {
+                const auto compile_id =
+                    "$finalizer." + scope.id + ".compile";
+                finalizers.push_back({
+                    { "id", compile_id },
+                    { "scope", scope.id },
+                    { "kind", "compile" },
+                    { "automatic", true },
+                    { "operationType", compile_config->value("operationType", std::string{}) },
+                    { "dependsOn", authored_ids },
+                });
+                post_compile_dependencies = { compile_id };
+            }
+            else
+            {
+                add_diagnostic(
+                    validation.diagnostics,
+                    "plan",
+                    "compile_finalizer_unavailable",
+                    "/scopes/" + pointer_escape(scope.id) + "/kind",
+                    "Named scope has no registered compile finalizer.");
+            }
+
+            std::vector<std::string> read_back_ids;
+            std::map<std::string, std::size_t> grouped_indices;
+            const auto read_back_config =
+                scope.config.find("readBack");
+            const auto verify =
+                scope.scope.value("verify", json::object());
+            for (const auto& read_back :
+                 verify.value("readBack", json::array()))
+            {
+                if (!read_back.is_string())
+                {
+                    continue;
+                }
+                const auto key = read_back.get<std::string>();
+                const json* entry = nullptr;
+                if (read_back_config != scope.config.end() &&
+                    read_back_config->is_object())
+                {
+                    const auto found = read_back_config->find(key);
+                    if (found != read_back_config->end() &&
+                        found->is_object())
+                    {
+                        entry = &*found;
+                    }
+                }
+                if (!entry)
+                {
+                    add_diagnostic(
+                        validation.diagnostics,
+                        "plan",
+                        "read_back_unknown",
+                        "/scopes/" + pointer_escape(scope.id) +
+                            "/verify/readBack",
+                        "Read-back key is not supported by this scope: " +
+                            key);
+                    continue;
+                }
+
+                if (key == "graphs")
+                {
+                    std::set<std::string> graph_names;
+                    for (const auto& operation : validation.operations)
+                    {
+                        if (operation.operation.value(
+                                "scope",
+                                std::string{}) != scope.id)
+                        {
+                            continue;
+                        }
+                        if (const auto target =
+                                graph_read_back_target(
+                                    operation.operation))
+                        {
+                            graph_names.insert(*target);
+                        }
+                    }
+                    std::size_t graph_index = 0;
+                    for (const auto& graph_name : graph_names)
+                    {
+                        const auto finalizer_id =
+                            "$finalizer." + scope.id +
+                            ".readBack.graphs." +
+                            std::to_string(graph_index++);
+                        finalizers.push_back({
+                            { "id", finalizer_id },
+                            { "scope", scope.id },
+                            { "kind", "readBack" },
+                            { "readBackKey", key },
+                            { "automatic", true },
+                            { "operationType", entry->value("operationType", std::string{}) },
+                            { "params", { { "graph", graph_name } } },
+                            { "dependsOn", post_compile_dependencies },
+                        });
+                        read_back_ids.push_back(finalizer_id);
+                    }
+                    if (graph_names.empty())
+                    {
+                        add_diagnostic(
+                            validation.diagnostics,
+                            "plan",
+                            "graph_read_back_target_missing",
+                            "/scopes/" + pointer_escape(scope.id) +
+                                "/verify/readBack",
+                            "Graph read-back requires a deterministic graph target in the same scope.");
+                    }
+                    continue;
+                }
+
+                const auto operation_type =
+                    entry->value("operationType", std::string{});
+                const auto params =
+                    entry->value("params", json::object());
+                const auto group_key =
+                    operation_type + "\n" + params.dump();
+                if (const auto grouped =
+                        grouped_indices.find(group_key);
+                    grouped != grouped_indices.end())
+                {
+                    auto& existing = finalizers.at(grouped->second);
+                    if (!existing.contains("readBackKeys"))
+                    {
+                        existing["readBackKeys"] = json::array({
+                            existing.value(
+                                "readBackKey",
+                                std::string{}),
+                        });
+                        existing.erase("readBackKey");
+                    }
+                    existing["readBackKeys"].push_back(key);
+                    continue;
+                }
+                const auto finalizer_id =
+                    "$finalizer." + scope.id + ".readBack." + key;
+                json finalizer = {
+                    { "id", finalizer_id },
+                    { "scope", scope.id },
+                    { "kind", "readBack" },
+                    { "readBackKey", key },
+                    { "automatic", true },
+                    { "operationType", operation_type },
+                    { "dependsOn", post_compile_dependencies },
+                };
+                if (!params.empty())
+                {
+                    finalizer["params"] = params;
+                }
+                grouped_indices.emplace(
+                    group_key,
+                    finalizers.size());
+                finalizers.push_back(std::move(finalizer));
+                read_back_ids.push_back(finalizer_id);
+            }
+            if (read_back_ids.empty())
+            {
+                add_diagnostic(
+                    validation.diagnostics,
+                    "plan",
+                    "read_back_finalizer_required",
+                    "/scopes/" + pointer_escape(scope.id) +
+                        "/verify/readBack",
+                    "Each named scope requires at least one deterministic structural read-back.");
+            }
+            finalizers.push_back({
+                { "id", "$finalizer." + scope.id + ".diff" },
+                { "scope", scope.id },
+                { "kind", "diff" },
+                { "automatic", true },
+                { "dependsOn", read_back_ids.empty() ? post_compile_dependencies : read_back_ids },
+            });
+        }
+
+        if (has_errors(validation.diagnostics))
+        {
+            return make_result({
+                { "schema", "ue.workflow-plan.v2" },
+                { "plannerVersion", kPlannerVersionV2 },
+                { "contractSetDigest", v2_contract_set_digest_ },
+            }, std::move(validation.diagnostics), 2);
+        }
+
+        json digest_input = {
+            { "schema", "ue.workflow-plan-digest.v2" },
+            { "plannerVersion", kPlannerVersionV2 },
+            { "contractSetDigest", v2_contract_set_digest_ },
+            { "normalizedWorkflow", workflow },
+            { "assetSet", asset_set },
+            { "initializers", initializers },
+            { "operations", planned_operations },
+            { "finalizers", finalizers },
+        };
+        const auto plan_digest = sha256(digest_input.dump());
+        const bool approval_required =
+            risk_rank(overall_risk) >= risk_rank("safeWrite");
+        const bool confirm_write =
+            risk_rank(overall_risk) >= risk_rank("confirmWrite");
+        json payload = {
+            { "schema", "ue.workflow-plan.v2" },
+            { "plannerVersion", kPlannerVersionV2 },
+            { "contractSetDigest", v2_contract_set_digest_ },
+            { "normalizedWorkflow", workflow },
+            { "assetSet", std::move(asset_set) },
+            { "initializers", std::move(initializers) },
+            { "operations", std::move(planned_operations) },
+            { "finalizers", std::move(finalizers) },
+            { "risk", { { "overall", overall_risk } } },
+            { "approval", {
+                { "required", approval_required },
+                { "confirmWriteRequired", confirm_write },
+                { "planDigest", plan_digest },
+            } },
+            { "expectedDiff", { { "kind", "assetSetDiff" } } },
+            { "planDigest", plan_digest },
+        };
+        validate_schema(
+            payload,
+            plan_schema_v2_,
+            plan_schema_v2_,
+            "",
+            validation.diagnostics);
+        return make_result(
+            std::move(payload),
+            std::move(validation.diagnostics),
+            2);
+    }
+
     bool loaded_ = false;
     std::filesystem::path contract_root_;
     std::vector<std::filesystem::path> capability_roots_;
     json contract_set_ = json::object();
     json contract_files_ = json::object();
     json workflow_schema_ = json::object();
+    json workflow_schema_v2_ = json::object();
     json plan_schema_ = json::object();
+    json plan_schema_v2_ = json::object();
     json result_schema_ = json::object();
     json receipt_schema_ = json::object();
     json admission_ = json::object();
     std::map<std::string, Capability, std::less<>> capabilities_;
     std::string contract_set_digest_;
+    std::string v2_contract_set_digest_;
 };
 
 Engine::Engine()
@@ -2673,6 +4066,11 @@ Result Engine::HelpJson(std::string_view scope_kind) const
 Result Engine::ExplainOperation(std::string_view operation_type) const
 {
     return impl_->explain(operation_type);
+}
+
+Result Engine::CapabilitiesJson(const CapabilityQuery& query) const
+{
+    return impl_->capabilities(query);
 }
 
 bool Engine::IsLoaded() const noexcept
@@ -2758,6 +4156,163 @@ std::optional<std::string> Sha256File(
         result.push_back(hex[byte & 0x0f]);
     }
     return result;
+}
+
+std::optional<std::string> CanonicalizeJsonText(
+    std::string_view json_text)
+{
+    const auto value = json::parse(json_text, nullptr, false, true);
+    if (value.is_discarded())
+    {
+        return std::nullopt;
+    }
+
+    const auto unicode_scalars = [](std::string_view text)
+    {
+        std::vector<std::uint32_t> scalars;
+        for (std::size_t index = 0; index < text.size();)
+        {
+            const auto first =
+                static_cast<std::uint8_t>(text[index++]);
+            std::uint32_t scalar = first;
+            std::size_t continuation_count = 0;
+            if ((first & 0xe0u) == 0xc0u)
+            {
+                scalar = first & 0x1fu;
+                continuation_count = 1;
+            }
+            else if ((first & 0xf0u) == 0xe0u)
+            {
+                scalar = first & 0x0fu;
+                continuation_count = 2;
+            }
+            else if ((first & 0xf8u) == 0xf0u)
+            {
+                scalar = first & 0x07u;
+                continuation_count = 3;
+            }
+            for (std::size_t offset = 0;
+                 offset < continuation_count && index < text.size();
+                 ++offset)
+            {
+                scalar =
+                    (scalar << 6u) |
+                    (static_cast<std::uint8_t>(text[index++]) & 0x3fu);
+            }
+            scalars.push_back(scalar);
+        }
+        return scalars;
+    };
+    const auto scalar_less =
+        [&unicode_scalars](
+            const std::string& left,
+            const std::string& right)
+    {
+        const auto left_scalars = unicode_scalars(left);
+        const auto right_scalars = unicode_scalars(right);
+        return std::lexicographical_compare(
+            left_scalars.begin(),
+            left_scalars.end(),
+            right_scalars.begin(),
+            right_scalars.end());
+    };
+    const auto canonical_number = [](double number)
+    {
+        if (number == 0.0)
+        {
+            return std::string("0");
+        }
+        constexpr double max_exact_integer = 9007199254740991.0;
+        if (std::trunc(number) == number &&
+            std::abs(number) <= max_exact_integer)
+        {
+            std::array<char, 64> integer_buffer{};
+            std::snprintf(
+                integer_buffer.data(),
+                integer_buffer.size(),
+                "%.0f",
+                number);
+            return std::string(integer_buffer.data());
+        }
+
+        std::array<char, 64> scientific_buffer{};
+        std::snprintf(
+            scientific_buffer.data(),
+            scientific_buffer.size(),
+            "%.17e",
+            number);
+        std::string scientific(scientific_buffer.data());
+        const auto exponent_pos = scientific.find('e');
+        const int exponent = std::stoi(
+            scientific.substr(exponent_pos + 1));
+        return scientific.substr(0, exponent_pos) +
+            "e" + (exponent >= 0 ? "+" : "") +
+            std::to_string(exponent);
+    };
+    std::function<std::string(const json&)> canonicalize;
+    canonicalize = [&](const json& current) -> std::string
+    {
+        if (current.is_null())
+        {
+            return "null";
+        }
+        if (current.is_boolean())
+        {
+            return current.get<bool>() ? "true" : "false";
+        }
+        if (current.is_number())
+        {
+            return canonical_number(current.get<double>());
+        }
+        if (current.is_string())
+        {
+            return json(current.get<std::string>()).dump();
+        }
+        if (current.is_array())
+        {
+            std::string result = "[";
+            for (std::size_t index = 0; index < current.size(); ++index)
+            {
+                if (index > 0)
+                {
+                    result += ",";
+                }
+                result += canonicalize(current[index]);
+            }
+            return result + "]";
+        }
+
+        std::vector<std::string> keys;
+        keys.reserve(current.size());
+        for (const auto& [key, ignored] : current.items())
+        {
+            (void)ignored;
+            keys.push_back(key);
+        }
+        std::sort(keys.begin(), keys.end(), scalar_less);
+        std::string result = "{";
+        for (std::size_t index = 0; index < keys.size(); ++index)
+        {
+            if (index > 0)
+            {
+                result += ",";
+            }
+            result += json(keys[index]).dump();
+            result += ":";
+            result += canonicalize(current.at(keys[index]));
+        }
+        return result + "}";
+    };
+    return canonicalize(value);
+}
+
+std::optional<std::string> CanonicalJsonSha256(
+    std::string_view json_text)
+{
+    const auto canonical = CanonicalizeJsonText(json_text);
+    return canonical
+        ? std::optional<std::string>(sha256(*canonical))
+        : std::nullopt;
 }
 
 } // namespace ue::workflow

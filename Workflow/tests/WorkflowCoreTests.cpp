@@ -115,7 +115,7 @@ int main()
     const auto widget_plan = engine.PlanJson(widget_text);
     require(widget_plan.ok, "documented widget workflow plans");
     const auto widget = parse_result(widget_plan);
-    require(widget["normalizedWorkflow"]["operations"][0]["params"].contains("child_class"),
+    require(widget["normalizedWorkflow"]["operations"][0]["params"].contains("childClass"),
             "child class alias normalized");
     require(!widget["normalizedWorkflow"]["operations"][0]["params"].contains("class"),
             "child class alias removed");
@@ -164,6 +164,151 @@ int main()
     const auto widget_plan_again = parse_result(engine.PlanJson(widget_text));
     require(widget["planDigest"] == widget_plan_again["planDigest"],
             "identical workflow has deterministic digest");
+    require(widget["schema"] == "ue.workflow-plan.v1" &&
+                widget["plannerVersion"] == "1.0",
+            "v1 workflows retain the v1 planner and plan contract");
+
+    const auto multi_asset_text = read_file(
+        root / "Workflow" / "tests" / "fixtures" /
+            "multi-asset.workflow.v2.json");
+    const auto multi_asset_plan_result =
+        engine.PlanJson(multi_asset_text);
+    require(multi_asset_plan_result.ok, "multi-asset v2 workflow plans");
+    const auto multi_asset = parse_result(multi_asset_plan_result);
+    require(
+        multi_asset["schema"] == "ue.workflow-plan.v2" &&
+            multi_asset["plannerVersion"] == "2.0",
+        "v2 workflow uses the v2 plan contract");
+    require(
+        multi_asset["assetSet"].size() == 2 &&
+            multi_asset["assetSet"][0]["asset"] <
+                multi_asset["assetSet"][1]["asset"],
+        "v2 asset set is in canonical asset-path order");
+    require(
+        multi_asset["operations"][0]["id"] ==
+            "createProducerGraph" &&
+            multi_asset["operations"][1]["id"] ==
+                "createConsumerGraph",
+        "v2 operations use a stable topological order");
+    require(
+        multi_asset["operations"][1]["dependsOn"].back() ==
+            "createProducerGraph",
+        "cross-scope typed binding contributes a DAG edge");
+    require(
+        multi_asset["initializers"].size() == 2 &&
+            multi_asset["finalizers"].size() == 6,
+        "v2 plans one initializer and compile/readback/diff chain per asset");
+    const auto multi_asset_plan_again =
+        parse_result(engine.PlanJson(multi_asset_text));
+    require(
+        multi_asset["planDigest"] ==
+            multi_asset_plan_again["planDigest"],
+        "v2 plan digest is deterministic");
+
+    auto cyclic_v2 = json::parse(multi_asset_text);
+    cyclic_v2["operations"][1]["dependsOn"] =
+        json::array({ "createConsumerGraph" });
+    const auto cyclic_v2_result =
+        parse_result(engine.PlanJson(cyclic_v2.dump()));
+    require(
+        cyclic_v2_result["ok"] == false &&
+            has_diagnostic(cyclic_v2_result, "dependency_cycle"),
+        "v2 cross-scope dependency cycles are rejected");
+
+    auto duplicate_asset_v2 = json::parse(multi_asset_text);
+    duplicate_asset_v2["scopes"]["consumer"]["asset"] =
+        duplicate_asset_v2["scopes"]["producer"]["asset"];
+    const auto duplicate_asset_result =
+        parse_result(engine.PlanJson(duplicate_asset_v2.dump()));
+    require(
+        duplicate_asset_result["ok"] == false &&
+            has_diagnostic(
+                duplicate_asset_result,
+                "duplicate_scope_asset"),
+        "v2 rejects two scope names for the same asset");
+
+    auto too_many_scopes_v2 = json::parse(multi_asset_text);
+    for (int index = 0; index < 15; ++index)
+    {
+        too_many_scopes_v2["scopes"][
+            "extra" + std::to_string(index)] = {
+            { "kind", "blueprint" },
+            { "asset", "/Game/Automation/BP_Extra" +
+                std::to_string(index) },
+        };
+    }
+    const auto too_many_scopes_result =
+        parse_result(engine.PlanJson(too_many_scopes_v2.dump()));
+    require(
+        too_many_scopes_result["ok"] == false &&
+            has_diagnostic(
+                too_many_scopes_result,
+                "scope_limit_exceeded"),
+        "v2 enforces the sixteen-scope limit");
+
+    ue::workflow::CapabilityQuery capability_query;
+    capability_query.domain = "blueprint";
+    capability_query.kind = "query";
+    capability_query.limit = 3;
+    const auto capability_page =
+        parse_result(engine.CapabilitiesJson(capability_query));
+    require(
+        capability_page["ok"] == true &&
+            capability_page["capabilities"].size() <= 3 &&
+            capability_page["detail"] == "summary",
+        "portable capability catalog filters and pages summaries");
+    if (capability_page["capabilities"].size() > 1)
+    {
+        require(
+            capability_page["capabilities"][0]["id"] <
+                capability_page["capabilities"][1]["id"],
+            "portable capability catalog sorts by id");
+    }
+    ue::workflow::CapabilityQuery exact_query;
+    exact_query.operation = "blueprint.asset.get";
+    const auto exact_capability =
+        parse_result(engine.CapabilitiesJson(exact_query));
+    require(
+        exact_capability["ok"] == true &&
+            exact_capability["detail"] == "full" &&
+            exact_capability["total"] == 1 &&
+            exact_capability["capabilities"][0].contains(
+                "inputSchema"),
+        "exact operation lookup returns one full descriptor");
+    ue::workflow::CapabilityQuery invalid_query;
+    invalid_query.domain = "invalid-domain";
+    const auto invalid_capability_query =
+        parse_result(engine.CapabilitiesJson(invalid_query));
+    require(
+        invalid_capability_query["ok"] == false &&
+            has_diagnostic(
+                invalid_capability_query,
+                "capability_domain_invalid"),
+        "invalid capability filters return structured diagnostics");
+
+    const auto canonical_vectors = json::parse(read_file(
+        root / "Resources" / "Contracts" /
+            "canonical-json-vectors.v1.json"));
+    for (const auto& vector : canonical_vectors["vectors"])
+    {
+        const auto canonical =
+            ue::workflow::CanonicalizeJsonText(
+                vector["value"].dump());
+        const auto digest =
+            ue::workflow::CanonicalJsonSha256(
+                vector["value"].dump());
+        require(
+            canonical &&
+                *canonical ==
+                    vector["canonical"].get<std::string>(),
+            "canonical JSON matches the shared golden vector");
+        require(
+            digest &&
+                *digest ==
+                    "sha256:" +
+                    vector["sha256"].get<std::string>(),
+            "canonical JSON digest matches the shared golden vector");
+    }
 
     const json valid_receipt = {
         { "schema", "ue.workflow-run.v1" },
@@ -288,7 +433,7 @@ int main()
                 { "value", "Updated" },
             } },
             { "bindings", {
-                { "/params/widget_bp", {
+                { "/params/widgetBp", {
                     { "from", "sourceValue" },
                     { "path", "/value" },
                 } },
@@ -379,13 +524,13 @@ int main()
     widget_scope_escape["operations"].insert(
         widget_scope_escape["operations"].begin(),
         explicit_create_operation);
-    widget_scope_escape["operations"][0]["params"]["package_path"] = "/Game/Other";
+    widget_scope_escape["operations"][0]["params"]["packagePath"] = "/Game/Other";
     const auto widget_scope_escape_result =
         parse_result(engine.PlanJson(widget_scope_escape.dump()));
     require(widget_scope_escape_result["ok"] == false,
-            "authored widget package_path scope parameter rejected");
+            "authored widget packagePath scope parameter rejected");
     require(has_diagnostic(widget_scope_escape_result, "scope_parameter_authored"),
-            "widget package_path escape has diagnostic");
+            "widget packagePath escape has diagnostic");
 
     auto graph_binding = minimal_workflow("blueprint", "/Game/Blueprints/BP_Test");
     graph_binding["operations"] = json::array({
@@ -514,7 +659,7 @@ int main()
     }
 
     auto second_scope = json::parse(widget_text);
-    second_scope["operations"][0]["params"]["widget_bp"] =
+    second_scope["operations"][0]["params"]["widgetBp"] =
         "/Game/UI/WBP_Other";
     const auto second_scope_result =
         parse_result(engine.PlanJson(second_scope.dump()));
@@ -562,7 +707,7 @@ int main()
     confirm["operations"].push_back({
         { "id", "removeTitle" },
         { "type", "content.widget.child.remove" },
-        { "params", { { "child_name", "Title" } } },
+        { "params", { { "childName", "Title" } } },
     });
     const auto confirm_plan = parse_result(engine.PlanJson(confirm.dump()));
     require(confirm_plan["ok"] == true, "confirmWrite workflow plans");

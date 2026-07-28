@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ue-ai-cli.local/schemas/ue.workflow-plan.v2.json",
+  "title": "UE Workflow Plan v2",
+  "type": "object",
+  "required": [
+    "schema",
+    "plannerVersion",
+    "contractSetDigest",
+    "normalizedWorkflow",
+    "assetSet",
+    "initializers",
+    "operations",
+    "finalizers",
+    "risk",
+    "approval",
+    "planDigest"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ue.workflow-plan.v2"
+    },
+    "plannerVersion": {
+      "type": "string"
+    },
+    "contractSetDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "normalizedWorkflow": {
+      "type": "object"
+    },
+    "assetSet": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16
+    },
+    "initializers": {
+      "type": "array"
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256
+    },
+    "finalizers": {
+      "type": "array"
+    },
+    "risk": {
+      "type": "object"
+    },
+    "approval": {
+      "type": "object"
+    },
+    "planDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

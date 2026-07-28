@@ -1,0 +1,44 @@
+{
+  "dsl": "ue.workflow",
+  "dslVersion": "2.0",
+  "workflowKind": "assetEdit",
+  "workflowId": "build-shared-function-across-blueprints",
+  "scopes": {
+    "consumer": {
+      "kind": "blueprint",
+      "asset": "/Game/Automation/BP_WorkflowV2Consumer",
+      "createIfMissing": true
+    },
+    "producer": {
+      "kind": "blueprint",
+      "asset": "/Game/Automation/BP_WorkflowV2Producer",
+      "createIfMissing": true
+    }
+  },
+  "persistence": "dirtyOnly",
+  "operations": [
+    {
+      "id": "createConsumerGraph",
+      "type": "blueprint.graph.create",
+      "scope": "consumer",
+      "params": {
+        "graphType": "function"
+      },
+      "bindings": {
+        "/graphName": {
+          "from": "createProducerGraph",
+          "path": "/graphName"
+        }
+      }
+    },
+    {
+      "id": "createProducerGraph",
+      "type": "blueprint.graph.create",
+      "scope": "producer",
+      "params": {
+        "graphName": "SharedGeneratedFunction",
+        "graphType": "function"
+      }
+    }
+  ]
+}

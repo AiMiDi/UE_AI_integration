@@ -42,6 +42,23 @@ if(UE_WORKFLOW_BUILD_TESTS AND BUILD_TESTING)
             doctor
     )
     add_test(
+        NAME ue_workflow_cli_capabilities
+        COMMAND ue-workflow
+            --json
+            --contract-root "${CMAKE_SOURCE_DIR}/Workflow/Contracts"
+            --capability-root "${CMAKE_SOURCE_DIR}/Resources/Capabilities"
+            capabilities
+            --query widget
+            --domain content
+            --limit 5
+    )
+    set_tests_properties(
+        ue_workflow_cli_capabilities
+        PROPERTIES
+            PASS_REGULAR_EXPRESSION
+                "\"limit\":5.*\"schema\":\"ue.workflow-capabilities.v1\""
+    )
+    add_test(
         NAME ue_workflow_cli_plan
         COMMAND ue-workflow
             --json

@@ -3,8 +3,13 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Editor.h"
 #include "EditorAssetLibrary.h"
+#include "EdGraph/EdGraph.h"
 #include "Engine/Blueprint.h"
+#include "Infrastructure/EngineeringContractUtils.h"
+#include "Infrastructure/Sha256.h"
+#include "Interfaces/IPluginManager.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
@@ -48,6 +53,18 @@ TSharedPtr<FJsonObject> MakeOperation(
 	return Operation;
 }
 
+TSharedPtr<FJsonObject> MakeScopedOperation(
+	const FString& Id,
+	const FString& Type,
+	const FString& ScopeId,
+	const TSharedPtr<FJsonObject>& Params)
+{
+	TSharedPtr<FJsonObject> Operation =
+		MakeOperation(Id, Type, Params);
+	Operation->SetStringField(TEXT("scope"), ScopeId);
+	return Operation;
+}
+
 TSharedPtr<FJsonObject> MakeWorkflow(
 	const FString& WorkflowId,
 	const TSharedPtr<FJsonObject>& Scope,
@@ -65,6 +82,32 @@ TSharedPtr<FJsonObject> MakeWorkflow(
 	TSharedPtr<FJsonObject> Verify = MakeShared<FJsonObject>();
 	Verify->SetBoolField(TEXT("compile"), true);
 	Workflow->SetObjectField(TEXT("verify"), Verify);
+	return Workflow;
+}
+
+TSharedPtr<FJsonObject> MakeWorkflowV2(
+	const FString& WorkflowId,
+	const TMap<FString, TSharedPtr<FJsonObject>>& Scopes,
+	const TArray<TSharedPtr<FJsonValue>>& Operations)
+{
+	TSharedPtr<FJsonObject> Workflow = MakeShared<FJsonObject>();
+	Workflow->SetStringField(TEXT("dsl"), TEXT("ue.workflow"));
+	Workflow->SetStringField(TEXT("dslVersion"), TEXT("2.0"));
+	Workflow->SetStringField(TEXT("workflowKind"), TEXT("assetEdit"));
+	Workflow->SetStringField(TEXT("workflowId"), WorkflowId);
+	TSharedPtr<FJsonObject> ScopeObject = MakeShared<FJsonObject>();
+	TArray<FString> ScopeIds;
+	Scopes.GetKeys(ScopeIds);
+	ScopeIds.Sort();
+	for (const FString& ScopeId : ScopeIds)
+	{
+		ScopeObject->SetObjectField(
+			ScopeId,
+			Scopes.FindChecked(ScopeId));
+	}
+	Workflow->SetObjectField(TEXT("scopes"), ScopeObject);
+	Workflow->SetStringField(TEXT("persistence"), TEXT("dirtyOnly"));
+	Workflow->SetArrayField(TEXT("operations"), Operations);
 	return Workflow;
 }
 
@@ -433,7 +476,7 @@ bool CreateFixtureAsset(
 		Params->SetStringField(TEXT("name"), AssetName);
 		Params->SetStringField(
 			Capability == TEXT("content.widget.blueprint.create")
-				? TEXT("package_path")
+				? TEXT("packagePath")
 				: TEXT("packagePath"),
 			PackagePath);
 	}
@@ -504,19 +547,22 @@ bool FUEWorkflowActionContractTest::RunTest(const FString& Parameters)
 		Handshake.Data->GetStringField(TEXT("dsl")),
 		FString(TEXT("ue.workflow")));
 	TestEqual(
-		TEXT("Workflow handshake advertises terminal reattach resume"),
+		TEXT("Workflow handshake advertises durable boundary resume"),
 		Handshake.Data->GetObjectField(TEXT("features"))
 			->GetStringField(TEXT("resume")),
-		FString(TEXT("sameInstanceTerminalReattach")));
+		FString(TEXT("durableSegmentBoundary")));
 
 	TSharedPtr<FJsonObject> Params = MakeShared<FJsonObject>();
 	Params->SetStringField(TEXT("property"), TEXT("twoSided"));
 	Params->SetStringField(TEXT("value"), TEXT("true"));
+	const FString ApprovalAssetPath =
+		UniqueAssetPath(TEXT("M_Approval"));
+	CleanupAsset(ApprovalAssetPath);
 	const TSharedPtr<FJsonObject> Workflow = MakeWorkflow(
 		TEXT("approval-contract"),
 		MakeScope(
 			TEXT("material"),
-			UniqueAssetPath(TEXT("M_Approval"))),
+			ApprovalAssetPath),
 		{MakeShared<FJsonValueObject>(
 			MakeOperation(
 				TEXT("setProperty"),
@@ -526,6 +572,21 @@ bool FUEWorkflowActionContractTest::RunTest(const FString& Parameters)
 	const FMCPResult Plan = PlanWorkflow(Runtime, Workflow);
 	FString Digest;
 	TestTrue(TEXT("Workflow plan succeeds"), GetPlanDigest(Plan, Digest));
+	const FString CoreDigest =
+		Plan.Data->GetStringField(TEXT("corePlanDigest"));
+	TestTrue(
+		TEXT("Editor plan is asset-bound and execution ready"),
+		Plan.Data->GetBoolField(TEXT("executionReady"))
+			&& !CoreDigest.IsEmpty()
+			&& CoreDigest != Digest);
+	const TSharedPtr<FJsonObject>* Preconditions = nullptr;
+	TestTrue(
+		TEXT("Editor plan exposes prepared asset preconditions"),
+		Plan.Data->TryGetObjectField(
+			TEXT("preconditions"),
+			Preconditions)
+			&& Preconditions && Preconditions->IsValid()
+			&& (*Preconditions)->GetBoolField(TEXT("prepared")));
 	TestEqual(TEXT("Plan defaults to standard detail"),
 	          Plan.Data->GetStringField(TEXT("detailLevel")), FString(TEXT("standard")));
 
@@ -576,6 +637,19 @@ bool FUEWorkflowActionContractTest::RunTest(const FString& Parameters)
 
 	MissingApproval->SetStringField(
 		TEXT("approvePlanDigest"),
+		CoreDigest);
+	const FMCPResult OfflineApprovalResult =
+		Runtime.HandleRequest(MissingApproval);
+	TestFalse(
+		TEXT("Offline Core digest is rejected"),
+		OfflineApprovalResult.bOk);
+	TestEqual(
+		TEXT("Offline digest requires Editor asset preconditions"),
+		OfflineApprovalResult.Error.Code,
+		FString(TEXT("asset_precondition_required")));
+
+	MissingApproval->SetStringField(
+		TEXT("approvePlanDigest"),
 		TEXT("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"));
 	const FMCPResult WrongApprovalResult =
 		Runtime.HandleRequest(MissingApproval);
@@ -583,7 +657,64 @@ bool FUEWorkflowActionContractTest::RunTest(const FString& Parameters)
 	TestEqual(
 		TEXT("Wrong approval code"),
 		WrongApprovalResult.Error.Code,
-		FString(TEXT("plan_digest_mismatch")));
+		FString(TEXT("asset_precondition_required")));
+
+	TestTrue(
+		TEXT("External fixture is created after planning"),
+		CreateFixtureAsset(
+			*Subsystem->GetRegistry(),
+			TEXT("content.material.create"),
+			ApprovalAssetPath));
+	const FMCPResult StaleApprovalResult =
+		ExecuteWorkflow(Runtime, Workflow, Digest);
+	TestFalse(
+		TEXT("Asset mutation after plan blocks execution"),
+		StaleApprovalResult.bOk);
+	TestEqual(
+		TEXT("Stale asset plan returns asset_precondition_failed"),
+		StaleApprovalResult.Error.Code,
+		FString(TEXT("asset_precondition_failed")));
+	CleanupAsset(ApprovalAssetPath);
+
+	const FString DirtyAssetPath =
+		UniqueAssetPath(TEXT("M_DirtyPlan"));
+	CleanupAsset(DirtyAssetPath);
+	TestTrue(
+		TEXT("Dirty-plan fixture is created"),
+		CreateFixtureAsset(
+			*Subsystem->GetRegistry(),
+			TEXT("content.material.create"),
+			DirtyAssetPath));
+	UMaterial* DirtyMaterial =
+		LoadObject<UMaterial>(nullptr, *DirtyAssetPath);
+	TestNotNull(TEXT("Dirty-plan fixture loads"), DirtyMaterial);
+	if (DirtyMaterial)
+	{
+		DirtyMaterial->Modify();
+		DirtyMaterial->TwoSided = !DirtyMaterial->TwoSided;
+		DirtyMaterial->MarkPackageDirty();
+		const TSharedPtr<FJsonObject> DirtyWorkflow = MakeWorkflow(
+			TEXT("dirty-plan-contract"),
+			MakeScope(
+				TEXT("material"),
+				DirtyAssetPath,
+				false),
+			{MakeShared<FJsonValueObject>(
+				MakeOperation(
+					TEXT("setProperty"),
+					TEXT("content.material.property.set"),
+					Params))});
+		const FMCPResult DirtyPlan =
+			PlanWorkflow(Runtime, DirtyWorkflow);
+		TestFalse(
+			TEXT("Editor plan refuses an existing dirty asset"),
+			DirtyPlan.bOk);
+		TestEqual(
+			TEXT("Dirty-plan rejection has stable code"),
+			DirtyPlan.Error.Code,
+			FString(TEXT("asset_dirty")));
+	}
+	CleanupAsset(DirtyAssetPath);
 
 	TSharedPtr<FJsonObject> InvalidRun = MakeShared<FJsonObject>();
 	InvalidRun->SetStringField(TEXT("action"), TEXT("status"));
@@ -726,6 +857,14 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 		1);
 	if (BlueprintResult.bOk)
 	{
+		TestTrue(
+			TEXT("Workflow v1 execution uses durable v2 runtime"),
+			BlueprintResult.Data->GetObjectField(TEXT("receipt"))
+				->GetBoolField(TEXT("durableResume")));
+		TestEqual(
+			TEXT("Workflow v1 durable runtime keeps one public scope"),
+			BlueprintResult.Data->GetNumberField(TEXT("assetCount")),
+			1.0);
 		TestEqual(
 			TEXT("Blueprint receipt is completed"),
 			BlueprintResult.Data->GetStringField(TEXT("status")),
@@ -889,30 +1028,23 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 			BlueprintRunId);
 		const FMCPResult CrossInstanceResumeResult =
 			JournalReader.HandleRequest(CrossInstanceResume);
-		TestFalse(
-			TEXT("Journal-only run cannot resume in another instance"),
-			CrossInstanceResumeResult.bOk);
-		TestEqual(
-			TEXT("Cross-instance resume has a structured error"),
-			CrossInstanceResumeResult.Error.Code,
-			FString(TEXT("workflow_instance_changed")));
 		TestTrue(
-			TEXT("Cross-instance resume includes structured details"),
-			CrossInstanceResumeResult.Error.Details.IsValid());
-		if (CrossInstanceResumeResult.Error.Details.IsValid())
+			TEXT("Journal-only v1 run reattaches across runtime instances"),
+			CrossInstanceResumeResult.bOk);
+		if (CrossInstanceResumeResult.bOk)
 		{
 			TestEqual(
-				TEXT("Cross-instance resume reports rejected mode"),
-				CrossInstanceResumeResult.Error.Details->GetStringField(
+				TEXT("Cross-instance v1 resume remains terminal"),
+				CrossInstanceResumeResult.Data->GetStringField(
 					TEXT("resumeMode")),
-				FString(TEXT("rejectedDifferentInstance")));
-			TestFalse(
-				TEXT("Cross-instance resume does not claim reattachment"),
-				CrossInstanceResumeResult.Error.Details->GetBoolField(
+				FString(TEXT("terminalReattach")));
+			TestTrue(
+				TEXT("Cross-instance v1 resume reports reattachment"),
+				CrossInstanceResumeResult.Data->GetBoolField(
 					TEXT("reattached")));
 			TestFalse(
-				TEXT("Cross-instance resume does not claim execution continued"),
-				CrossInstanceResumeResult.Error.Details->GetBoolField(
+				TEXT("Terminal v1 resume does not replay execution"),
+				CrossInstanceResumeResult.Data->GetBoolField(
 					TEXT("resumedExecution")));
 		}
 	}
@@ -974,7 +1106,7 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 	PropertyBinding->SetStringField(TEXT("path"), TEXT("/widgetRef/name"));
 	TSharedPtr<FJsonObject> PropertyBindings = MakeShared<FJsonObject>();
 	PropertyBindings->SetObjectField(
-		TEXT("/widget_name"),
+		TEXT("/widgetName"),
 		PropertyBinding);
 	PropertyOperation->SetObjectField(TEXT("bindings"), PropertyBindings);
 	const TSharedPtr<FJsonObject> WidgetWorkflow = MakeWorkflow(
@@ -1650,6 +1782,597 @@ bool FUEWorkflowExplicitScopeInitializerTest::RunTest(
 			Material->TwoSided != 0);
 	}
 	CleanupAsset(MaterialPath);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUEWorkflowV2MultiAssetRollbackTest,
+	"UE_AI_integration.Workflow.V2.MultiAssetExecuteAndRollback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FUEWorkflowV2MultiAssetRollbackTest::RunTest(
+	const FString& Parameters)
+{
+	UUEAIIntegrationSubsystem* Subsystem =
+		GEditor
+		? GEditor->GetEditorSubsystem<UUEAIIntegrationSubsystem>()
+		: nullptr;
+	if (!Subsystem || !Subsystem->GetRegistry())
+	{
+		AddError(TEXT("UE integration subsystem is not initialized."));
+		return false;
+	}
+
+	const FString ConsumerPath =
+		UniqueAssetPath(TEXT("BP_V2Consumer"));
+	const FString ProducerPath =
+		UniqueAssetPath(TEXT("BP_V2Producer"));
+	CleanupAsset(ConsumerPath);
+	CleanupAsset(ProducerPath);
+
+	TSharedPtr<FJsonObject> ConsumerParams =
+		MakeShared<FJsonObject>();
+	ConsumerParams->SetStringField(
+		TEXT("graphType"),
+		TEXT("function"));
+	const TSharedPtr<FJsonObject> Consumer =
+		MakeScopedOperation(
+			TEXT("consumerGraph"),
+			TEXT("blueprint.graph.create"),
+			TEXT("consumer"),
+			ConsumerParams);
+	TSharedPtr<FJsonObject> Binding =
+		MakeShared<FJsonObject>();
+	Binding->SetStringField(
+		TEXT("from"),
+		TEXT("producerGraph"));
+	Binding->SetStringField(
+		TEXT("path"),
+		TEXT("/graphName"));
+	TSharedPtr<FJsonObject> Bindings =
+		MakeShared<FJsonObject>();
+	Bindings->SetObjectField(TEXT("/graphName"), Binding);
+	Consumer->SetObjectField(TEXT("bindings"), Bindings);
+
+	TSharedPtr<FJsonObject> ProducerParams =
+		MakeShared<FJsonObject>();
+	ProducerParams->SetStringField(
+		TEXT("graphName"),
+		TEXT("SharedGeneratedFunction"));
+	ProducerParams->SetStringField(
+		TEXT("graphType"),
+		TEXT("function"));
+	const TSharedPtr<FJsonObject> Producer =
+		MakeScopedOperation(
+			TEXT("producerGraph"),
+			TEXT("blueprint.graph.create"),
+			TEXT("producer"),
+			ProducerParams);
+
+	TMap<FString, TSharedPtr<FJsonObject>> Scopes;
+	Scopes.Add(
+		TEXT("consumer"),
+		MakeScope(TEXT("blueprint"), ConsumerPath, true));
+	Scopes.Add(
+		TEXT("producer"),
+		MakeScope(TEXT("blueprint"), ProducerPath, true));
+	const TSharedPtr<FJsonObject> Workflow =
+		MakeWorkflowV2(
+			TEXT("multi-asset-create-and-rollback"),
+			Scopes,
+			{
+				MakeShared<FJsonValueObject>(Consumer),
+				MakeShared<FJsonValueObject>(Producer),
+			});
+
+	UEAIIntegration::Workflow::FWorkflowRuntime Runtime(
+		*Subsystem->GetRegistry());
+	const FMCPResult Plan = PlanWorkflow(Runtime, Workflow);
+	FString Digest;
+	if (!GetPlanDigest(Plan, Digest))
+	{
+		AddError(TEXT("Workflow v2 did not plan."));
+		return false;
+	}
+	const TArray<TSharedPtr<FJsonValue>>* AssetSet = nullptr;
+	TestTrue(
+		TEXT("Workflow v2 plan exposes two canonically locked assets"),
+		Plan.Data->TryGetArrayField(TEXT("assetSet"), AssetSet)
+			&& AssetSet && AssetSet->Num() == 2
+			&& (*AssetSet)[0]->AsObject()->GetStringField(TEXT("asset"))
+				< (*AssetSet)[1]->AsObject()->GetStringField(TEXT("asset")));
+
+	const FMCPResult Result =
+		ExecuteWorkflow(Runtime, Workflow, Digest);
+	TestTrue(TEXT("Workflow v2 executes"), Result.bOk);
+	TestEqual(
+		TEXT("Workflow v2 result identifies the DSL version"),
+		Result.Data->GetStringField(TEXT("dslVersion")),
+		FString(TEXT("2.0")));
+	TestTrue(
+		TEXT("Both Workflow v2 assets exist after execution"),
+		AssetExistsWithoutLoading(ConsumerPath)
+			&& AssetExistsWithoutLoading(ProducerPath));
+
+	UBlueprint* ConsumerBlueprint = Cast<UBlueprint>(
+		UEditorAssetLibrary::LoadAsset(ConsumerPath));
+	UBlueprint* ProducerBlueprint = Cast<UBlueprint>(
+		UEditorAssetLibrary::LoadAsset(ProducerPath));
+	auto HasSharedGraph = [](const UBlueprint* Blueprint)
+	{
+		return Blueprint
+			&& Blueprint->FunctionGraphs.ContainsByPredicate(
+				[](const UEdGraph* Graph)
+				{
+					return Graph
+						&& Graph->GetFName()
+							== TEXT("SharedGeneratedFunction");
+				});
+	};
+	TestTrue(
+		TEXT("Cross-scope output drives the consumer graph name"),
+		HasSharedGraph(ConsumerBlueprint)
+			&& HasSharedGraph(ProducerBlueprint));
+
+	TSharedPtr<FJsonObject> RollbackRequest =
+		MakeShared<FJsonObject>();
+	RollbackRequest->SetStringField(
+		TEXT("action"),
+		TEXT("rollback"));
+	RollbackRequest->SetStringField(
+		TEXT("runId"),
+		Result.Data->GetStringField(TEXT("runId")));
+	RollbackRequest->SetStringField(
+		TEXT("approvePlanDigest"),
+		Digest);
+	const FMCPResult Rollback =
+		Runtime.HandleRequest(RollbackRequest);
+	TestTrue(TEXT("Workflow v2 full rollback succeeds"), Rollback.bOk);
+	TestTrue(
+		TEXT("Workflow v2 rollback removes both newly-created assets"),
+		!AssetExistsWithoutLoading(ConsumerPath)
+			&& !AssetExistsWithoutLoading(ProducerPath));
+	CleanupAsset(ConsumerPath);
+	CleanupAsset(ProducerPath);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUEWorkflowV2DurableRollbackAndConflictTest,
+	"UE_AI_integration.Workflow.V2.DurableRollbackAndConflict",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FUEWorkflowV2DurableRollbackAndConflictTest::RunTest(
+	const FString& Parameters)
+{
+	UUEAIIntegrationSubsystem* Subsystem =
+		GEditor
+		? GEditor->GetEditorSubsystem<UUEAIIntegrationSubsystem>()
+		: nullptr;
+	if (!Subsystem || !Subsystem->GetRegistry())
+	{
+		AddError(TEXT("UE integration subsystem is not initialized."));
+		return false;
+	}
+	FMCPToolRegistry& Registry = *Subsystem->GetRegistry();
+
+	const FString FirstPath =
+		UniqueAssetPath(TEXT("BP_V2DurableA"));
+	const FString SecondPath =
+		UniqueAssetPath(TEXT("BP_V2DurableB"));
+	CleanupAsset(FirstPath);
+	CleanupAsset(SecondPath);
+	if (!CreateFixtureAsset(
+			Registry,
+			TEXT("blueprint.asset.create"),
+			FirstPath)
+		|| !CreateFixtureAsset(
+			Registry,
+			TEXT("blueprint.asset.create"),
+			SecondPath))
+	{
+		AddError(TEXT("Could not create Workflow v2 durable fixtures."));
+		return false;
+	}
+	UObject* FirstAsset = UEditorAssetLibrary::LoadAsset(FirstPath);
+	UObject* SecondAsset = UEditorAssetLibrary::LoadAsset(SecondPath);
+	if (!FirstAsset || !SecondAsset
+		|| !UEditorAssetLibrary::SaveLoadedAsset(FirstAsset, true)
+		|| !UEditorAssetLibrary::SaveLoadedAsset(SecondAsset, true))
+	{
+		AddError(TEXT("Could not save Workflow v2 durable fixtures."));
+		CleanupAsset(FirstPath);
+		CleanupAsset(SecondPath);
+		return false;
+	}
+	const FString FirstHashBefore =
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(FirstAsset);
+	const FString SecondHashBefore =
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(SecondAsset);
+
+	auto VariableOperation = [](
+		const FString& Id,
+		const FString& ScopeId,
+		const FString& Variable)
+	{
+		TSharedPtr<FJsonObject> Params = MakeShared<FJsonObject>();
+		Params->SetStringField(TEXT("variableName"), Variable);
+		Params->SetStringField(TEXT("variableType"), TEXT("Boolean"));
+		return MakeScopedOperation(
+			Id,
+			TEXT("blueprint.variable.add"),
+			ScopeId,
+			Params);
+	};
+	TMap<FString, TSharedPtr<FJsonObject>> Scopes;
+	Scopes.Add(
+		TEXT("first"),
+		MakeScope(TEXT("blueprint"), FirstPath, false));
+	Scopes.Add(
+		TEXT("second"),
+		MakeScope(TEXT("blueprint"), SecondPath, false));
+	const TSharedPtr<FJsonObject> Workflow =
+		MakeWorkflowV2(
+			TEXT("durable-two-asset-edit"),
+			Scopes,
+			{
+				MakeShared<FJsonValueObject>(
+					VariableOperation(
+						TEXT("firstVariable"),
+						TEXT("first"),
+						TEXT("WorkflowValueA"))),
+				MakeShared<FJsonValueObject>(
+					VariableOperation(
+						TEXT("secondVariable"),
+						TEXT("second"),
+						TEXT("WorkflowValueB"))),
+			});
+
+	UEAIIntegration::Workflow::FWorkflowRuntime Runtime(
+		Registry);
+	const FMCPResult Plan = PlanWorkflow(Runtime, Workflow);
+	FString Digest;
+	if (!GetPlanDigest(Plan, Digest))
+	{
+		AddError(TEXT("Durable Workflow v2 did not plan."));
+		return false;
+	}
+	const FMCPResult Result =
+		ExecuteWorkflow(Runtime, Workflow, Digest, true);
+	TestTrue(TEXT("Durable Workflow v2 executes and saves"), Result.bOk);
+	if (!Result.bOk)
+	{
+		CleanupAsset(FirstPath);
+		CleanupAsset(SecondPath);
+		return false;
+	}
+	const TSharedPtr<FJsonObject>* Receipt = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* ReceiptAssets = nullptr;
+	if (Result.Data->TryGetObjectField(TEXT("receipt"), Receipt)
+		&& Receipt && Receipt->IsValid()
+		&& (*Receipt)->TryGetArrayField(
+			TEXT("assetSet"),
+			ReceiptAssets)
+		&& ReceiptAssets)
+	{
+		TestEqual(
+			TEXT("Durable receipt records both assets"),
+			ReceiptAssets->Num(),
+			2);
+		for (const TSharedPtr<FJsonValue>& AssetValue : *ReceiptAssets)
+		{
+			const TSharedPtr<FJsonObject> AssetRecord =
+				AssetValue.IsValid() &&
+					AssetValue->Type == EJson::Object
+				? AssetValue->AsObject()
+				: nullptr;
+			TestTrue(
+				TEXT("Receipt records package SHA-256 before execution"),
+				AssetRecord.IsValid() &&
+					!AssetRecord->GetStringField(
+						TEXT("packageSha256Before")).IsEmpty());
+			TestTrue(
+				TEXT("Receipt records current package SHA-256"),
+				AssetRecord.IsValid() &&
+					!AssetRecord->GetStringField(
+						TEXT("currentPackageSha256")).IsEmpty());
+		}
+	}
+	else
+	{
+		AddError(TEXT("Durable Workflow v2 receipt has no assetSet."));
+	}
+
+	UEAIIntegration::Workflow::FWorkflowRuntime JournalRuntime(
+		Registry);
+	TSharedPtr<FJsonObject> RollbackRequest =
+		MakeShared<FJsonObject>();
+	RollbackRequest->SetStringField(TEXT("action"), TEXT("rollback"));
+	RollbackRequest->SetStringField(
+		TEXT("runId"),
+		Result.Data->GetStringField(TEXT("runId")));
+	RollbackRequest->SetStringField(
+		TEXT("approvePlanDigest"),
+		Digest);
+	const FMCPResult DurableRollback =
+		JournalRuntime.HandleRequest(RollbackRequest);
+	TestTrue(
+		TEXT("A new runtime instance restores both staged snapshots"),
+		DurableRollback.bOk);
+	FirstAsset = UEditorAssetLibrary::LoadAsset(FirstPath);
+	SecondAsset = UEditorAssetLibrary::LoadAsset(SecondPath);
+	TestEqual(
+		TEXT("First staged asset hash is restored"),
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(FirstAsset),
+		FirstHashBefore);
+	TestEqual(
+		TEXT("Second staged asset hash is restored"),
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(SecondAsset),
+		SecondHashBefore);
+
+	// Simulate an Editor restart after a persisted segment boundary. The
+	// package set is back at the staged baseline, so a new runtime must replay
+	// from that baseline and complete without relying on the old Undo stack.
+	const FString DurableRunId =
+		Result.Data->GetStringField(TEXT("runId"));
+	const FString JournalPath = FPaths::Combine(
+		FPaths::ProjectSavedDir(),
+		TEXT("UEWorkflow"),
+		DurableRunId + TEXT(".json"));
+	FString JournalText;
+	TSharedPtr<FJsonObject> Journal;
+	if (FFileHelper::LoadFileToString(JournalText, *JournalPath))
+	{
+		const TSharedRef<TJsonReader<>> JournalReaderJson =
+			TJsonReaderFactory<>::Create(JournalText);
+		FJsonSerializer::Deserialize(JournalReaderJson, Journal);
+	}
+	if (Journal.IsValid())
+	{
+		Journal->SetStringField(TEXT("status"), TEXT("running"));
+		Journal->SetStringField(
+			TEXT("rollbackStatus"),
+			TEXT("notRequested"));
+		Journal->SetStringField(
+			TEXT("currentPhase"),
+			TEXT("operations"));
+		Journal->SetNumberField(TEXT("nextInitializerIndex"), 0);
+		Journal->SetNumberField(TEXT("nextOperationIndex"), 1);
+		Journal->SetNumberField(TEXT("nextFinalizerIndex"), 0);
+		Journal->SetBoolField(TEXT("rollbackAvailable"), false);
+		Journal->SetArrayField(
+			TEXT("operations"),
+			TArray<TSharedPtr<FJsonValue>>());
+		Journal->SetArrayField(
+			TEXT("finalizers"),
+			TArray<TSharedPtr<FJsonValue>>());
+		Journal->SetObjectField(
+			TEXT("operationOutputs"),
+			MakeShared<FJsonObject>());
+		TestTrue(
+			TEXT("Synthetic restart journal is persisted"),
+			FFileHelper::SaveStringToFile(
+				SerializeJsonObject(Journal),
+				*JournalPath,
+				FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM));
+	}
+	else
+	{
+		AddError(TEXT("Could not read the durable Workflow v2 journal."));
+	}
+
+	UEAIIntegration::Workflow::FWorkflowRuntime ResumeRuntime(
+		Registry);
+	TSharedPtr<FJsonObject> ResumeRequest =
+		MakeShared<FJsonObject>();
+	ResumeRequest->SetStringField(TEXT("action"), TEXT("resume"));
+	ResumeRequest->SetStringField(TEXT("runId"), DurableRunId);
+	const FMCPResult ResumeResult =
+		ResumeRuntime.HandleRequest(ResumeRequest);
+	TestTrue(
+		TEXT("A new runtime resumes the staged operation boundary"),
+		ResumeResult.bOk);
+	if (ResumeResult.bOk)
+	{
+		TestEqual(
+			TEXT("Restart recovery reports baseline replay"),
+			ResumeResult.Data->GetStringField(TEXT("resumeMode")),
+			FString(TEXT("restartFromStagedBaseline")));
+		TestTrue(
+			TEXT("Restart recovery reports resumed execution"),
+			ResumeResult.Data->GetBoolField(TEXT("resumedExecution")));
+		TSharedPtr<FJsonObject> ReplayRollback =
+			MakeShared<FJsonObject>();
+		ReplayRollback->SetStringField(
+			TEXT("action"),
+			TEXT("rollback"));
+		ReplayRollback->SetStringField(
+			TEXT("runId"),
+			DurableRunId);
+		ReplayRollback->SetStringField(
+			TEXT("approvePlanDigest"),
+			Digest);
+		TestTrue(
+			TEXT("Replayed Workflow v2 restores its staged baseline"),
+			ResumeRuntime.HandleRequest(ReplayRollback).bOk);
+	}
+
+	// A second run demonstrates conflict refusal after an external structural
+	// change. The runtime must not overwrite that newer edit.
+	const FMCPResult ConflictPlan =
+		PlanWorkflow(Runtime, Workflow);
+	FString ConflictDigest;
+	if (!GetPlanDigest(ConflictPlan, ConflictDigest))
+	{
+		AddError(
+			TEXT("Conflict fixture Workflow v2 did not re-plan."));
+		CleanupAsset(FirstPath);
+		CleanupAsset(SecondPath);
+		return false;
+	}
+	const FMCPResult ConflictResult =
+		ExecuteWorkflow(
+			Runtime,
+			Workflow,
+			ConflictDigest,
+			false);
+	if (ConflictResult.bOk)
+	{
+		UBlueprint* ExternallyEditedBlueprint =
+			LoadObject<UBlueprint>(nullptr, *FirstPath);
+		TestNotNull(
+			TEXT("External property-only edit target loads"),
+			ExternallyEditedBlueprint);
+		if (ExternallyEditedBlueprint)
+		{
+			ExternallyEditedBlueprint->Modify();
+			ExternallyEditedBlueprint->BlueprintDescription =
+				TEXT("External property-only edit");
+			ExternallyEditedBlueprint->MarkPackageDirty();
+		}
+		TSharedPtr<FJsonObject> ConflictRollback =
+			MakeShared<FJsonObject>();
+		ConflictRollback->SetStringField(
+			TEXT("action"),
+			TEXT("rollback"));
+		ConflictRollback->SetStringField(
+			TEXT("runId"),
+			ConflictResult.Data->GetStringField(TEXT("runId")));
+		ConflictRollback->SetStringField(
+			TEXT("approvePlanDigest"),
+			ConflictDigest);
+		const FMCPResult Conflict =
+			Runtime.HandleRequest(ConflictRollback);
+		TestFalse(
+			TEXT("External property-only edit blocks rollback"),
+			Conflict.bOk);
+		TestEqual(
+			TEXT("External modification returns resume_conflict"),
+			Conflict.Error.Code,
+			FString(TEXT("resume_conflict")));
+
+		UEAIIntegration::Workflow::FWorkflowRuntime
+			CrossInstanceRuntime(Registry);
+		const FMCPResult CrossInstanceConflict =
+			CrossInstanceRuntime.HandleRequest(ConflictRollback);
+		TestFalse(
+			TEXT(
+				"Different runtime instance also refuses the loaded "
+				"property-only Dirty edit"),
+			CrossInstanceConflict.bOk);
+		TestEqual(
+			TEXT(
+				"Different runtime Dirty refusal returns "
+				"resume_conflict"),
+			CrossInstanceConflict.Error.Code,
+			FString(TEXT("resume_conflict")));
+		TestEqual(
+			TEXT(
+				"Different runtime refusal preserves the external "
+				"Blueprint description"),
+			ExternallyEditedBlueprint->BlueprintDescription,
+			FString(TEXT("External property-only edit")));
+		TestTrue(
+			TEXT(
+				"Different runtime refusal leaves the externally "
+				"edited package Dirty"),
+			ExternallyEditedBlueprint->GetOutermost()->IsDirty());
+	}
+	else
+	{
+		AddError(TEXT("Conflict fixture Workflow v2 did not execute."));
+	}
+
+	CleanupAsset(FirstPath);
+	CleanupAsset(SecondPath);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUEWorkflowCanonicalJsonGoldenVectorsTest,
+	"UE_AI_integration.Workflow.V2.CanonicalJsonGoldenVectors",
+	EAutomationTestFlags::EditorContext |
+		EAutomationTestFlags::EngineFilter)
+
+bool FUEWorkflowCanonicalJsonGoldenVectorsTest::RunTest(
+	const FString& Parameters)
+{
+	const TSharedPtr<IPlugin> Plugin =
+		IPluginManager::Get().FindPlugin(TEXT("UE_AI_integration"));
+	if (!Plugin.IsValid())
+	{
+		AddError(TEXT("UE_AI_integration plugin descriptor was not found."));
+		return false;
+	}
+	const FString VectorPath = FPaths::Combine(
+		Plugin->GetBaseDir(),
+		TEXT("Resources"),
+		TEXT("Contracts"),
+		TEXT("canonical-json-vectors.v1.json"));
+	FString JsonText;
+	if (!FFileHelper::LoadFileToString(JsonText, *VectorPath))
+	{
+		AddError(
+			FString::Printf(
+				TEXT("Could not read canonical vectors: %s"),
+				*VectorPath));
+		return false;
+	}
+	TSharedPtr<FJsonObject> Root;
+	const TSharedRef<TJsonReader<>> Reader =
+		TJsonReaderFactory<>::Create(JsonText);
+	if (!FJsonSerializer::Deserialize(Reader, Root) ||
+		!Root.IsValid())
+	{
+		AddError(TEXT("Canonical vector JSON is invalid."));
+		return false;
+	}
+	const TArray<TSharedPtr<FJsonValue>>* Vectors = nullptr;
+	if (!Root->TryGetArrayField(TEXT("vectors"), Vectors) || !Vectors)
+	{
+		AddError(TEXT("Canonical vector JSON has no vectors array."));
+		return false;
+	}
+	for (const TSharedPtr<FJsonValue>& VectorValue : *Vectors)
+	{
+		const TSharedPtr<FJsonObject> Vector =
+			VectorValue.IsValid() &&
+				VectorValue->Type == EJson::Object
+			? VectorValue->AsObject()
+			: nullptr;
+		if (!Vector.IsValid())
+		{
+			AddError(TEXT("Canonical vector entry is not an object."));
+			continue;
+		}
+		const FString Name =
+			Vector->GetStringField(TEXT("name"));
+		const TSharedPtr<FJsonValue> Value =
+			Vector->TryGetField(TEXT("value"));
+		const FString Canonical =
+			UEAIIntegration::Infrastructure::CanonicalizeJsonValue(
+				Value);
+		TestEqual(
+			*FString::Printf(TEXT("%s canonical JSON"), *Name),
+			Canonical,
+			Vector->GetStringField(TEXT("canonical")));
+		FTCHARToUTF8 Utf8(*Canonical);
+		FString Digest;
+		TestTrue(
+			*FString::Printf(TEXT("%s SHA-256 computes"), *Name),
+			UEAIIntegration::Infrastructure::TrySha256Hex(
+				Utf8.Get(),
+				static_cast<uint64>(Utf8.Length()),
+				Digest));
+		TestEqual(
+			*FString::Printf(TEXT("%s SHA-256"), *Name),
+			Digest,
+			Vector->GetStringField(TEXT("sha256")));
+	}
 	return true;
 }
 

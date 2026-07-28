@@ -114,9 +114,22 @@ bool CreateBlueprintFixture(
 		TEXT("packagePath"),
 		FPackageName::GetLongPackagePath(PackageName));
 	Params->SetStringField(TEXT("parentClass"), TEXT("Actor"));
-	return Registry.ExecuteTool(
+	const FMCPToolResult CreateResult = Registry.ExecuteTool(
 		TEXT("blueprint.asset.create"),
-		Params).bSuccess;
+		Params);
+	if (!CreateResult.bSuccess)
+	{
+		return false;
+	}
+
+	// Connected planning deliberately rejects Dirty assets. Persist the
+	// fixture before deriving its approval digest so this test exercises an
+	// actual existing-asset baseline instead of bypassing that safety gate.
+	TSharedPtr<FJsonObject> SaveParams = MakeShared<FJsonObject>();
+	SaveParams->SetStringField(TEXT("blueprint"), AssetPath);
+	return Registry.ExecuteTool(
+		TEXT("blueprint.asset.save"),
+		SaveParams).bSuccess;
 }
 
 UObject* FindLoadedFixture(const FString& AssetPath)
@@ -372,11 +385,18 @@ bool FMCPWorkflowHttpRuntimeE2ETest::RunTest(const FString& Parameters)
 
 	const TSharedPtr<FJsonObject> Workflow =
 		MakeBlueprintEditWorkflow(AssetPath);
-	UEAIIntegration::Workflow::FWorkflowRuntime PlannerRuntime(*Registry);
+	UEAIIntegration::Workflow::FWorkflowRuntime* PlannerRuntime =
+		Server->GetWorkflowRuntimeForTesting();
+	if (!PlannerRuntime)
+	{
+		CleanupBlueprintFixture(AssetPath);
+		AddError(TEXT("The server workflow runtime is not available."));
+		return false;
+	}
 	TSharedPtr<FJsonObject> PlanRequest = MakeShared<FJsonObject>();
 	PlanRequest->SetStringField(TEXT("action"), TEXT("plan"));
 	PlanRequest->SetObjectField(TEXT("workflow"), Workflow);
-	const FMCPResult PlanResult = PlannerRuntime.HandleRequest(PlanRequest);
+	const FMCPResult PlanResult = PlannerRuntime->HandleRequest(PlanRequest);
 	FString PlanDigest;
 	if (!PlanResult.bOk
 		|| !PlanResult.Data.IsValid()
