@@ -1,82 +1,82 @@
 #!/usr/bin/env python3
-"""
-UE5UltimateMCP End-to-End Test (correct API)
+"""End-to-end smoke: query, mutate, image response, and cleanup."""
 
-Exercises real editor mutations against a running UE5 editor with the plugin:
-spawn actors -> verify they appear -> worldgen -> capture viewport -> cleanup.
+from __future__ import annotations
 
-Envelope: POST /api/tool  body {"tool": <name>, ...params}
-Response: {"success": bool, "result": {...}, "error": "..."}
-"""
-import json, sys, urllib.request, urllib.error
+import argparse
+import sys
 
-BASE = "http://localhost:9847"
+from mcp_client import MCPApiError, UEAIIntegrationClient
 
-def call(tool, **params):
-    body = {"tool": tool}; body.update(params)
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(BASE + "/api/tool", data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=9847)
+    args = parser.parse_args()
+    client = UEAIIntegrationClient(args.port, timeout=60)
+
+    checks: list[tuple[str, bool, str]] = []
+
+    def check(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, condition, detail))
+        print(f"  [{'PASS' if condition else 'FAIL'}] {name} -- {detail}")
+
+    light_name = "MCP_V2_E2E_Light"
+    cube_name = "MCP_V2_E2E_Cube"
+
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return json.loads(r.read().decode())
-    except urllib.error.HTTPError as e:
-        try: return json.loads(e.read().decode())
-        except Exception: return {"success": False, "error": f"HTTP {e.code}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        baseline = client.execute("scene.actor.list")
+        baseline_count = int(baseline.get("count", 0))
+        check("baseline actor query", True, f"{baseline_count} actors")
 
-results = []
-def check(name, ok, detail=""):
-    results.append(bool(ok))
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" -- {detail}" if detail else ""))
+        client.execute(
+            "scene.actor.spawn",
+            {
+                "type": "PointLight",
+                "name": light_name,
+                "location": [0, 0, 300],
+            },
+        )
+        check("spawn PointLight", True, light_name)
 
-print("=" * 60); print("UE5UltimateMCP End-to-End Test"); print("=" * 60)
+        client.execute(
+            "scene.actor.spawn",
+            {
+                "type": "StaticMeshActor",
+                "name": cube_name,
+                "location": [200, 0, 100],
+                "static_mesh": "/Engine/BasicShapes/Cube.Cube",
+            },
+        )
+        check("spawn StaticMeshActor", True, cube_name)
 
-# 1. baseline
-r = call("get_actors_in_level")
-base = r.get("result", {}).get("count", 0)
-check("get_actors_in_level (baseline)", r.get("success"), f"{base} actors in level")
+        after = client.execute("scene.actor.list")
+        after_count = int(after.get("count", 0))
+        check("actor count increased", after_count >= baseline_count + 2, f"{baseline_count} -> {after_count}")
 
-# 2. spawn a point light
-r = call("spawn_actor", type="PointLight", location=[0, 0, 300], name="MCP_E2E_Light")
-check("spawn_actor PointLight", r.get("success"), r.get("error") or "spawned")
+        matches = client.execute("scene.actor.find", {"pattern": "MCP_V2_E2E"})
+        actors = matches.get("matches", matches.get("actors", []))
+        check("find spawned actors", isinstance(actors, list) and len(actors) >= 2, f"{len(actors)} matches")
 
-# 3. spawn a cube static mesh
-r = call("spawn_actor", type="StaticMeshActor", location=[200, 0, 100],
-         name="MCP_E2E_Cube", static_mesh="/Engine/BasicShapes/Cube")
-check("spawn_actor StaticMeshActor(Cube)", r.get("success"), r.get("error") or "spawned")
+        image = client.execute(
+            "scene.viewport.capture", {"width": 640, "height": 480}
+        ).get("image_base64", "")
+        check("capture viewport", isinstance(image, str) and len(image) > 100, f"{len(image)} chars")
 
-# 4. verify count grew by >=2
-r = call("get_actors_in_level")
-now = r.get("result", {}).get("count", 0)
-check("actor count increased", now >= base + 2, f"{base} -> {now}")
+    except (AssertionError, MCPApiError) as error:
+        check("end-to-end execution", False, str(error))
+    finally:
+        removed = 0
+        for name in (light_name, cube_name):
+            try:
+                client.execute("scene.actor.delete", {"name": name})
+                removed += 1
+            except MCPApiError:
+                pass
+        check("cleanup", removed == 2, f"{removed}/2 actors removed")
 
-# 5. find our actors by name
-r = call("find_actors_by_name", pattern="MCP_E2E")
-matches = r.get("result", {}).get("matches", r.get("result", {}).get("actors", []))
-check("find_actors_by_name 'MCP_E2E'", r.get("success") and len(matches) >= 2, f"found {len(matches)}")
+    return 0 if all(result for _, result, _ in checks) else 1
 
-# 6. worldgen: build a tower
-r = call("create_tower", location=[600, 0, 0], height=6, base_size=3, style="square")
-tcount = r.get("result", {}).get("count", r.get("result", {}).get("blocks", "?"))
-check("create_tower (worldgen)", r.get("success"), r.get("error") or f"placed {tcount} blocks")
 
-# 7. capture viewport -> real JPEG bytes
-r = call("capture_viewport", width=640, height=480)
-img = r.get("result", {}).get("image_base64", "")
-check("capture_viewport", r.get("success") and len(img) > 100, f"{len(img)} b64 chars")
-
-# 8. console command
-r = call("run_console_command", command="stat unit")
-check("run_console_command", r.get("success"), r.get("error") or "ok")
-
-# 9. cleanup spawned test actors
-deleted = 0
-for nm in ["MCP_E2E_Light", "MCP_E2E_Cube"]:
-    if call("delete_actor", name=nm).get("success"): deleted += 1
-check("cleanup test actors", deleted == 2, f"deleted {deleted}/2")
-
-p = sum(results); t = len(results)
-print("=" * 60); print(f"Results: {p}/{t} passed"); print("=" * 60)
-sys.exit(0 if p == t else 1)
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# UE5UltimateMCP - MCP Server Smoke Test
+# UE_AI_integration - MCP Server Smoke Test
 #
 # Checks that the Node.js MCP server can start up without errors.
 # Does NOT require Unreal Editor to be running.
@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MCP_DIR="$PROJECT_DIR/MCP"
 DIST_INDEX="$MCP_DIR/dist/index.js"
-LOG_FILE="/tmp/ue5mcp_test_$$.log"
+LOG_FILE="/tmp/ue_ai_integration_test_$$.log"
 SERVER_PID=""
 
 passed=0
@@ -39,7 +39,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "============================================================"
-echo "UE5UltimateMCP - MCP Server Smoke Test"
+echo "UE_AI_integration - MCP Server Smoke Test"
 echo "============================================================"
 echo "  Project: $PROJECT_DIR"
 echo "  MCP dir: $MCP_DIR"

@@ -1,108 +1,78 @@
 #!/usr/bin/env python3
-"""
-UE5UltimateMCP Health Check
+"""Validate the live UE_AI_integration health and capability catalog."""
 
-Connects to the UE5 HTTP server and prints server status, version, tool count,
-and lists all tools grouped by category.
+from __future__ import annotations
 
-Usage:
-    python test_health.py [--port 9847]
-"""
-
-import json
+import argparse
+import collections
 import sys
-import urllib.request
-import urllib.error
 
-BASE_URL = "http://localhost:9847"
+from mcp_client import MCPApiError, UEAIIntegrationClient
 
 
-def parse_args():
-    port = 9847
-    args = sys.argv[1:]
-    i = 0
-    while i < len(args):
-        if args[i] == "--port" and i + 1 < len(args):
-            port = int(args[i + 1])
-            i += 2
-        else:
-            i += 1
-    return port
+EXPECTED_DOMAIN_COUNTS = {
+    "blueprint": 58,
+    "scene": 54,
+    "content": 59,
+    "animation": 10,
+    "ai": 9,
+    "production": 22,
+}
 
 
-def api_get(endpoint, timeout=5):
-    """GET request to the UE5 server. Returns parsed JSON or None."""
-    url = f"{BASE_URL}{endpoint}"
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=9847)
+    args = parser.parse_args()
+
+    client = UEAIIntegrationClient(args.port, timeout=10)
     try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.URLError as e:
-        print(f"  Connection failed: {e.reason}")
-        return None
-    except Exception as e:
-        print(f"  Error: {e}")
-        return None
+        health = client.health()
+        capabilities = client.capabilities()
+    except MCPApiError as error:
+        print(f"FAIL: {error}")
+        return 1
 
+    counts = collections.Counter(
+        item.get("domain") for item in capabilities if isinstance(item, dict)
+    )
 
-def check_health():
-    print("=" * 60)
-    print("UE5UltimateMCP Health Check")
-    print("=" * 60)
-    print(f"\nServer: {BASE_URL}")
-    print("-" * 40)
+    print("UE_AI_integration")
+    print(f"  state:        {health.get('state')}")
+    print(f"  plugin:       {health.get('plugin')}")
+    print(f"  version:      {health.get('version')}")
+    print(f"  engineVersion:{health.get('engineVersion')}")
+    print(f"  projectName:  {health.get('projectName')}")
+    print(f"  capabilities: {len(capabilities)}")
+    for domain, expected in EXPECTED_DOMAIN_COUNTS.items():
+        print(f"  {domain:10} {counts[domain]:3} / {expected}")
 
-    # Health endpoint
-    print("\n[1] Checking /api/health ...")
-    health = api_get("/api/health")
-    if health is None:
-        print("  FAIL - Server is not reachable")
-        print("  Make sure Unreal Editor is running with the UE5UltimateMCP plugin enabled.")
-        return False
+    errors: list[str] = []
+    if health.get("state") != "ready":
+        errors.append(f"server state is {health.get('state')!r}")
+    if health.get("plugin") != "UE_AI_integration":
+        errors.append(f"unexpected plugin: {health.get('plugin')!r}")
+    if health.get("version") != "0.3.0":
+        errors.append(f"unexpected version: {health.get('version')!r}")
+    if health.get("capabilityCount") != 212:
+        errors.append(
+            f"health reported {health.get('capabilityCount')!r} capabilities"
+        )
+    if len(capabilities) != 212:
+        errors.append(f"expected 212 capabilities, got {len(capabilities)}")
+    if dict(counts) != EXPECTED_DOMAIN_COUNTS:
+        errors.append(
+            f"domain counts differ: expected {EXPECTED_DOMAIN_COUNTS}, got {dict(counts)}"
+        )
 
-    print(f"  Status:         {health.get('status', 'unknown')}")
-    print(f"  Mode:           {health.get('mode', 'unknown')}")
-    print(f"  Engine Version: {health.get('engineVersion', 'unknown')}")
-    print(f"  Project Name:   {health.get('projectName', 'unknown')}")
-    print(f"  Plugin Version: {health.get('pluginVersion', 'unknown')}")
-    print(f"  Tool Count:     {health.get('toolCount', 'unknown')}")
+    if errors:
+        for error in errors:
+            print(f"FAIL: {error}")
+        return 1
 
-    # Tools endpoint
-    print("\n[2] Fetching /api/tools ...")
-    tools_data = api_get("/api/tools", timeout=10)
-    if tools_data is None:
-        print("  FAIL - Could not fetch tool list")
-        return False
-
-    tools = tools_data.get("tools", [])
-    print(f"  Total tools: {len(tools)}")
-
-    # Group by category
-    categories = {}
-    for tool in tools:
-        cat = tool.get("category", "uncategorized")
-        if cat not in categories:
-            categories[cat] = []
-        categories[cat].append(tool["name"])
-
-    print(f"  Categories: {len(categories)}")
-    print("\n[3] Tools by Category:")
-    print("-" * 40)
-
-    for cat in sorted(categories.keys()):
-        tool_names = sorted(categories[cat])
-        print(f"\n  {cat} ({len(tool_names)} tools):")
-        for name in tool_names:
-            print(f"    - {name}")
-
-    print("\n" + "=" * 60)
-    print("Health check PASSED")
-    print("=" * 60)
-    return True
+    print("PASS")
+    return 0
 
 
 if __name__ == "__main__":
-    port = parse_args()
-    BASE_URL = f"http://localhost:{port}"
-    success = check_health()
-    sys.exit(0 if success else 1)
+    sys.exit(main())
