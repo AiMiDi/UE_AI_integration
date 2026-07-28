@@ -11,7 +11,6 @@ staging/
 build/
 build-*/
 cmake-build-*/
-.ua/
 .pytest_cache/
 __pycache__/
 *.py[cod]
@@ -23,3 +22,11 @@ Config/*
 
 # Packaged release artifacts (publish to GitHub Releases, not the repo tree)
 *.zip
+
+# Understand Anything runtime-only files; analysis data under .ua is tracked.
+.ua/intermediate/
+!.ua/intermediate/
+!.ua/intermediate/**
+.ua/.trash-*
+.ua/*.log
+.ua/*.pid

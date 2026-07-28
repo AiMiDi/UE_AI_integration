@@ -1,0 +1,693 @@
+{
+  "name": "ue-ai-integration",
+  "description": "这是一个由 manifest 驱动的 MCP bridge，通过九个稳定的领域工具控制正在运行的 Unreal Editor。项目采用单一 Unreal Editor Module 与 TypeScript stdio bridge，为 MCP 客户端提供 Blueprint、场景、内容资产、动画、AI 和生产流程的查询与修改能力。",
+  "languages": [
+    "batch",
+    "c",
+    "config",
+    "cpp",
+    "csharp",
+    "javascript",
+    "json",
+    "markdown",
+    "python",
+    "shell",
+    "typescript",
+    "uplugin"
+  ],
+  "frameworks": [
+    "Model Context Protocol SDK",
+    "Unreal Engine 5"
+  ],
+  "files": [
+    {
+      "path": ".claude-plugin/plugin.json",
+      "language": "json",
+      "sizeLines": 9,
+      "fileCategory": "config"
+    },
+    {
+      "path": ".mcp.json",
+      "language": "json",
+      "sizeLines": 8,
+      "fileCategory": "config"
+    },
+    {
+      "path": "CLAUDE.md",
+      "language": "markdown",
+      "sizeLines": 64,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "Config/FilterPlugin.ini",
+      "language": "config",
+      "sizeLines": 15,
+      "fileCategory": "config"
+    },
+    {
+      "path": "MCP/.mcp.json",
+      "language": "json",
+      "sizeLines": 9,
+      "fileCategory": "config"
+    },
+    {
+      "path": "MCP/package.json",
+      "language": "json",
+      "sizeLines": 27,
+      "fileCategory": "config"
+    },
+    {
+      "path": "MCP/src/__tests__/capability-catalog.test.ts",
+      "language": "typescript",
+      "sizeLines": 87,
+      "fileCategory": "code"
+    },
+    {
+      "path": "MCP/src/__tests__/mcp-contract.test.ts",
+      "language": "typescript",
+      "sizeLines": 330,
+      "fileCategory": "code"
+    },
+    {
+      "path": "MCP/src/capability-catalog.ts",
+      "language": "typescript",
+      "sizeLines": 315,
+      "fileCategory": "code"
+    },
+    {
+      "path": "MCP/src/domain-router.ts",
+      "language": "typescript",
+      "sizeLines": 85,
+      "fileCategory": "code"
+    },
+    {
+      "path": "MCP/src/helpers.ts",
+      "language": "typescript",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "MCP/src/index.ts",
+      "language": "typescript",
+      "sizeLines": 78,
+      "fileCategory": "code"
+    },
+    {
+      "path": "MCP/src/mcp-server.ts",
+      "language": "typescript",
+      "sizeLines": 265,
+      "fileCategory": "code"
+    },
+    {
+      "path": "MCP/src/ue-bridge.ts",
+      "language": "typescript",
+      "sizeLines": 228,
+      "fileCategory": "code"
+    },
+    {
+      "path": "MCP/tsconfig.json",
+      "language": "json",
+      "sizeLines": 17,
+      "fileCategory": "config"
+    },
+    {
+      "path": "README_EN.md",
+      "language": "markdown",
+      "sizeLines": 278,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "README.md",
+      "language": "markdown",
+      "sizeLines": 263,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "Resources/Capabilities/ai.json",
+      "language": "json",
+      "sizeLines": 299,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/Capabilities/animation.json",
+      "language": "json",
+      "sizeLines": 463,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/Capabilities/blueprint.json",
+      "language": "json",
+      "sizeLines": 1977,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/Capabilities/content.json",
+      "language": "json",
+      "sizeLines": 1403,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/Capabilities/production.json",
+      "language": "json",
+      "sizeLines": 404,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/Capabilities/scene.json",
+      "language": "json",
+      "sizeLines": 1101,
+      "fileCategory": "config"
+    },
+    {
+      "path": "scripts/build_plugin.bat",
+      "language": "batch",
+      "sizeLines": 76,
+      "fileCategory": "script"
+    },
+    {
+      "path": "scripts/setup.sh",
+      "language": "shell",
+      "sizeLines": 72,
+      "fileCategory": "script"
+    },
+    {
+      "path": "scripts/validate_capabilities.mjs",
+      "language": "javascript",
+      "sizeLines": 289,
+      "fileCategory": "code"
+    },
+    {
+      "path": "skills/setup-ue5/SKILL.md",
+      "language": "markdown",
+      "sizeLines": 85,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Core/MCPCapabilityCatalog.cpp",
+      "language": "cpp",
+      "sizeLines": 544,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Core/MCPCapabilityCatalog.h",
+      "language": "c",
+      "sizeLines": 33,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Core/MCPExecutionTypes.h",
+      "language": "c",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Core/MCPExecutor.cpp",
+      "language": "cpp",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Core/MCPExecutor.h",
+      "language": "c",
+      "sizeLines": 20,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Core/MCPToolRegistry.cpp",
+      "language": "cpp",
+      "sizeLines": 234,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/AI/Command/BehaviorTree.cpp",
+      "language": "cpp",
+      "sizeLines": 642,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Animation/Command/Animation.cpp",
+      "language": "cpp",
+      "sizeLines": 908,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Graphs.cpp",
+      "language": "cpp",
+      "sizeLines": 451,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Mutation.cpp",
+      "language": "cpp",
+      "sizeLines": 795,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Components.cpp",
+      "language": "cpp",
+      "sizeLines": 247,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Dispatchers.cpp",
+      "language": "cpp",
+      "sizeLines": 194,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Interfaces.cpp",
+      "language": "cpp",
+      "sizeLines": 230,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Params.cpp",
+      "language": "cpp",
+      "sizeLines": 294,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Variables.cpp",
+      "language": "cpp",
+      "sizeLines": 413,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Query/Blueprint_Read.cpp",
+      "language": "cpp",
+      "sizeLines": 476,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Query/Discovery.cpp",
+      "language": "cpp",
+      "sizeLines": 367,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Validation/DiffBlueprints.cpp",
+      "language": "cpp",
+      "sizeLines": 255,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Validation/Snapshot.cpp",
+      "language": "cpp",
+      "sizeLines": 642,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Validation/Validation.cpp",
+      "language": "cpp",
+      "sizeLines": 254,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Content/Command/DataTable.cpp",
+      "language": "cpp",
+      "sizeLines": 480,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Content/Command/Material_Mutation.cpp",
+      "language": "cpp",
+      "sizeLines": 1271,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Content/Command/Niagara.cpp",
+      "language": "cpp",
+      "sizeLines": 366,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Content/Command/UI_UMG.cpp",
+      "language": "cpp",
+      "sizeLines": 489,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Content/Command/UserTypes.cpp",
+      "language": "cpp",
+      "sizeLines": 334,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Content/Query/Material_Read.cpp",
+      "language": "cpp",
+      "sizeLines": 750,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Production/Command/Build.cpp",
+      "language": "cpp",
+      "sizeLines": 294,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Production/Command/Sequencer.cpp",
+      "language": "cpp",
+      "sizeLines": 569,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Scene/Command/Actors.cpp",
+      "language": "cpp",
+      "sizeLines": 642,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Scene/Command/Foliage.cpp",
+      "language": "cpp",
+      "sizeLines": 375,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Scene/Command/Navigation.cpp",
+      "language": "cpp",
+      "sizeLines": 351,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Scene/Command/PIE.cpp",
+      "language": "cpp",
+      "sizeLines": 95,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Scene/Command/WorldGen.cpp",
+      "language": "cpp",
+      "sizeLines": 961,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Domains/Scene/Query/Viewport.cpp",
+      "language": "cpp",
+      "sizeLines": 435,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/Compatibility/UEVersionCompat.h",
+      "language": "c",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/MaterialAssetHelpers.h",
+      "language": "c",
+      "sizeLines": 122,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/MCPToolHelpers.h",
+      "language": "c",
+      "sizeLines": 564,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/PIESessionController.cpp",
+      "language": "cpp",
+      "sizeLines": 172,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/PIESessionController.h",
+      "language": "c",
+      "sizeLines": 40,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/SEHWrappers.cpp",
+      "language": "cpp",
+      "sizeLines": 58,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Tests/MCPExecutorTests.cpp",
+      "language": "cpp",
+      "sizeLines": 111,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Tests/MCPHttpContractTests.cpp",
+      "language": "cpp",
+      "sizeLines": 73,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Tests/MCPRegistryTests.cpp",
+      "language": "cpp",
+      "sizeLines": 136,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Transport/MCPHttpContract.cpp",
+      "language": "cpp",
+      "sizeLines": 56,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Transport/MCPHttpContract.h",
+      "language": "c",
+      "sizeLines": 23,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Transport/UEAIIntegrationServer.cpp",
+      "language": "cpp",
+      "sizeLines": 388,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/UEAIIntegrationModule.cpp",
+      "language": "cpp",
+      "sizeLines": 17,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/UEAIIntegrationSubsystem.cpp",
+      "language": "cpp",
+      "sizeLines": 150,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Public/Tools/MCPToolBase.h",
+      "language": "c",
+      "sizeLines": 55,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Public/Tools/MCPToolRegistry.h",
+      "language": "c",
+      "sizeLines": 66,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Public/UEAIIntegrationModule.h",
+      "language": "c",
+      "sizeLines": 10,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Public/UEAIIntegrationServer.h",
+      "language": "c",
+      "sizeLines": 81,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Public/UEAIIntegrationSubsystem.h",
+      "language": "c",
+      "sizeLines": 44,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/UE_AI_integration.Build.cs",
+      "language": "csharp",
+      "sizeLines": 100,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/mcp_client.py",
+      "language": "python",
+      "sizeLines": 119,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_e2e.py",
+      "language": "python",
+      "sizeLines": 82,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_full.py",
+      "language": "python",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_health.py",
+      "language": "python",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_mcp.sh",
+      "language": "shell",
+      "sizeLines": 125,
+      "fileCategory": "script"
+    },
+    {
+      "path": "tests/test_tools.py",
+      "language": "python",
+      "sizeLines": 93,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_worldgen.py",
+      "language": "python",
+      "sizeLines": 93,
+      "fileCategory": "code"
+    },
+    {
+      "path": "UE_AI_integration.uplugin",
+      "language": "uplugin",
+      "sizeLines": 31,
+      "fileCategory": "code"
+    }
+  ],
+  "totalFiles": 89,
+  "filteredByIgnore": 60,
+  "estimatedComplexity": "moderate",
+  "importMap": {
+    ".claude-plugin/plugin.json": [],
+    ".mcp.json": [],
+    "CLAUDE.md": [],
+    "Config/FilterPlugin.ini": [],
+    "MCP/.mcp.json": [],
+    "MCP/package.json": [],
+    "MCP/src/__tests__/capability-catalog.test.ts": [
+      "MCP/src/capability-catalog.ts"
+    ],
+    "MCP/src/__tests__/mcp-contract.test.ts": [
+      "MCP/src/capability-catalog.ts",
+      "MCP/src/domain-router.ts",
+      "MCP/src/helpers.ts",
+      "MCP/src/index.ts",
+      "MCP/src/mcp-server.ts",
+      "MCP/src/ue-bridge.ts"
+    ],
+    "MCP/src/capability-catalog.ts": [],
+    "MCP/src/domain-router.ts": [
+      "MCP/src/capability-catalog.ts",
+      "MCP/src/helpers.ts",
+      "MCP/src/ue-bridge.ts"
+    ],
+    "MCP/src/helpers.ts": [
+      "MCP/src/capability-catalog.ts",
+      "MCP/src/ue-bridge.ts"
+    ],
+    "MCP/src/index.ts": [
+      "MCP/src/mcp-server.ts",
+      "MCP/src/ue-bridge.ts"
+    ],
+    "MCP/src/mcp-server.ts": [
+      "MCP/src/capability-catalog.ts",
+      "MCP/src/domain-router.ts",
+      "MCP/src/helpers.ts",
+      "MCP/src/ue-bridge.ts"
+    ],
+    "MCP/src/ue-bridge.ts": [
+      "MCP/src/capability-catalog.ts"
+    ],
+    "MCP/tsconfig.json": [],
+    "README_EN.md": [],
+    "README.md": [],
+    "Resources/Capabilities/ai.json": [],
+    "Resources/Capabilities/animation.json": [],
+    "Resources/Capabilities/blueprint.json": [],
+    "Resources/Capabilities/content.json": [],
+    "Resources/Capabilities/production.json": [],
+    "Resources/Capabilities/scene.json": [],
+    "scripts/build_plugin.bat": [],
+    "scripts/setup.sh": [],
+    "scripts/validate_capabilities.mjs": [],
+    "skills/setup-ue5/SKILL.md": [],
+    "Source/UE_AI_integration/Private/Core/MCPCapabilityCatalog.cpp": [],
+    "Source/UE_AI_integration/Private/Core/MCPCapabilityCatalog.h": [],
+    "Source/UE_AI_integration/Private/Core/MCPExecutionTypes.h": [],
+    "Source/UE_AI_integration/Private/Core/MCPExecutor.cpp": [],
+    "Source/UE_AI_integration/Private/Core/MCPExecutor.h": [],
+    "Source/UE_AI_integration/Private/Core/MCPToolRegistry.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/AI/Command/BehaviorTree.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Animation/Command/Animation.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Graphs.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Mutation.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Components.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Dispatchers.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Interfaces.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Params.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Variables.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Query/Blueprint_Read.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Query/Discovery.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Validation/DiffBlueprints.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Validation/Snapshot.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Validation/Validation.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Content/Command/DataTable.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Content/Command/Material_Mutation.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Content/Command/Niagara.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Content/Command/UI_UMG.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Content/Command/UserTypes.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Content/Query/Material_Read.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Production/Command/Build.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Production/Command/Sequencer.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Scene/Command/Actors.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Scene/Command/Foliage.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Scene/Command/Navigation.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Scene/Command/PIE.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Scene/Command/WorldGen.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Scene/Query/Viewport.cpp": [],
+    "Source/UE_AI_integration/Private/Infrastructure/Compatibility/UEVersionCompat.h": [],
+    "Source/UE_AI_integration/Private/Infrastructure/MaterialAssetHelpers.h": [],
+    "Source/UE_AI_integration/Private/Infrastructure/MCPToolHelpers.h": [],
+    "Source/UE_AI_integration/Private/Infrastructure/PIESessionController.cpp": [],
+    "Source/UE_AI_integration/Private/Infrastructure/PIESessionController.h": [],
+    "Source/UE_AI_integration/Private/Infrastructure/SEHWrappers.cpp": [],
+    "Source/UE_AI_integration/Private/Tests/MCPExecutorTests.cpp": [],
+    "Source/UE_AI_integration/Private/Tests/MCPHttpContractTests.cpp": [],
+    "Source/UE_AI_integration/Private/Tests/MCPRegistryTests.cpp": [],
+    "Source/UE_AI_integration/Private/Transport/MCPHttpContract.cpp": [],
+    "Source/UE_AI_integration/Private/Transport/MCPHttpContract.h": [],
+    "Source/UE_AI_integration/Private/Transport/UEAIIntegrationServer.cpp": [],
+    "Source/UE_AI_integration/Private/UEAIIntegrationModule.cpp": [],
+    "Source/UE_AI_integration/Private/UEAIIntegrationSubsystem.cpp": [
+      "Source/UE_AI_integration/Private/Core/MCPExecutor.h",
+      "Source/UE_AI_integration/Private/Infrastructure/PIESessionController.h"
+    ],
+    "Source/UE_AI_integration/Public/Tools/MCPToolBase.h": [],
+    "Source/UE_AI_integration/Public/Tools/MCPToolRegistry.h": [],
+    "Source/UE_AI_integration/Public/UEAIIntegrationModule.h": [],
+    "Source/UE_AI_integration/Public/UEAIIntegrationServer.h": [],
+    "Source/UE_AI_integration/Public/UEAIIntegrationSubsystem.h": [
+      "Source/UE_AI_integration/Public/UEAIIntegrationServer.h"
+    ],
+    "Source/UE_AI_integration/UE_AI_integration.Build.cs": [],
+    "tests/mcp_client.py": [],
+    "tests/test_e2e.py": [
+      "tests/mcp_client.py"
+    ],
+    "tests/test_full.py": [
+      "tests/mcp_client.py"
+    ],
+    "tests/test_health.py": [
+      "tests/mcp_client.py"
+    ],
+    "tests/test_mcp.sh": [],
+    "tests/test_tools.py": [
+      "tests/mcp_client.py"
+    ],
+    "tests/test_worldgen.py": [
+      "tests/mcp_client.py"
+    ],
+    "UE_AI_integration.uplugin": []
+  }
+}
