@@ -10,11 +10,11 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "blueprint_name": {
+          "blueprintName": {
             "type": "string",
             "description": "Blueprint asset name or path"
           },
-          "actor_name": {
+          "actorName": {
             "type": "string",
             "description": "Label for the spawned actor"
           },
@@ -30,8 +30,8 @@
           }
         },
         "required": [
-          "blueprint_name",
-          "actor_name"
+          "blueprintName",
+          "actorName"
         ],
         "additionalProperties": false
       },
@@ -212,7 +212,7 @@
             "items": {},
             "description": "[x, y, z] scale"
           },
-          "static_mesh": {
+          "staticMesh": {
             "type": "string",
             "description": "Asset path for StaticMeshActor mesh (e.g. /Engine/BasicShapes/Cube.Cube)"
           }
@@ -309,20 +309,20 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "bounds_min": {
+          "boundsMin": {
             "type": "object",
             "additionalProperties": true,
             "description": "{ x, y, z } minimum bounds corner"
           },
-          "bounds_max": {
+          "boundsMax": {
             "type": "object",
             "additionalProperties": true,
             "description": "{ x, y, z } maximum bounds corner"
           }
         },
         "required": [
-          "bounds_min",
-          "bounds_max"
+          "boundsMin",
+          "boundsMax"
         ],
         "additionalProperties": false
       },
@@ -370,25 +370,25 @@
             "type": "number",
             "description": "Number of instances to scatter"
           },
-          "bounds_min": {
+          "boundsMin": {
             "type": "object",
             "additionalProperties": true,
             "description": "{ x, y, z } minimum bounds corner"
           },
-          "bounds_max": {
+          "boundsMax": {
             "type": "object",
             "additionalProperties": true,
             "description": "{ x, y, z } maximum bounds corner"
           },
-          "min_scale": {
+          "minScale": {
             "type": "number",
             "description": "Minimum random scale (default: 0.8)"
           },
-          "max_scale": {
+          "maxScale": {
             "type": "number",
             "description": "Maximum random scale (default: 1.2)"
           },
-          "align_to_normal": {
+          "alignToNormal": {
             "type": "boolean",
             "description": "Align instances to surface normal via trace (default: true)"
           }
@@ -396,8 +396,8 @@
         "required": [
           "mesh",
           "count",
-          "bounds_min",
-          "bounds_max"
+          "boundsMin",
+          "boundsMax"
         ],
         "additionalProperties": false
       },
@@ -422,11 +422,11 @@
             "type": "string",
             "description": "Asset path of the Static Mesh"
           },
-          "min_scale": {
+          "minScale": {
             "type": "number",
             "description": "Minimum uniform scale (default: 0.8)"
           },
-          "max_scale": {
+          "maxScale": {
             "type": "number",
             "description": "Maximum uniform scale (default: 1.2)"
           },
@@ -476,13 +476,13 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "level_path": {
+          "levelPath": {
             "type": "string",
             "description": "Content path to the level (e.g. /Game/Maps/MyLevel)"
           }
         },
         "required": [
-          "level_path"
+          "levelPath"
         ],
         "additionalProperties": false
       },
@@ -537,12 +537,12 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "bounds_min": {
+          "boundsMin": {
             "type": "object",
             "additionalProperties": true,
             "description": "{ x, y, z } minimum bounds (optional, omit for full rebuild)"
           },
-          "bounds_max": {
+          "boundsMax": {
             "type": "object",
             "additionalProperties": true,
             "description": "{ x, y, z } maximum bounds (optional, omit for full rebuild)"
@@ -596,7 +596,7 @@
             "additionalProperties": true,
             "description": "{ x, y, z } half-extent"
           },
-          "area_class": {
+          "areaClass": {
             "type": "string",
             "description": "Nav area class: 'default', 'null' (blocked), 'obstacle'. Default: 'null'"
           }
@@ -921,11 +921,11 @@
             "type": "number",
             "description": "Columns (default 8)"
           },
-          "cell_size": {
+          "cellSize": {
             "type": "number",
             "description": "Cell size in cm (default 300)"
           },
-          "wall_height": {
+          "wallHeight": {
             "type": "number",
             "description": "Wall height in blocks (default 3)"
           },
@@ -954,11 +954,11 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "base_size": {
+          "baseSize": {
             "type": "number",
             "description": "Base size in blocks per side (default 3)"
           },
-          "block_size": {
+          "blockSize": {
             "type": "number",
             "description": "Block size in cm (default 100)"
           },
@@ -991,7 +991,7 @@
             "type": "number",
             "description": "Number of steps (default 5)"
           },
-          "step_size": {
+          "stepSize": {
             "type": "array",
             "items": {},
             "description": "[width, depth, height] per step in cm (default [100,100,50])"
@@ -1025,11 +1025,11 @@
             "type": "number",
             "description": "Tower height in levels (default 10)"
           },
-          "base_size": {
+          "baseSize": {
             "type": "number",
             "description": "Tower base size in blocks (default 4)"
           },
-          "block_size": {
+          "blockSize": {
             "type": "number",
             "description": "Block size in cm (default 100)"
           },
@@ -1091,7 +1091,7 @@
       "id": "scene.world.wall.create",
       "domain": "scene",
       "kind": "command",
-      "description": "Create a wall from cubes. Specify length (blocks), height (blocks), orientation (x or y), and block_size.",
+      "description": "Create a wall from cubes. Specify length (blocks), height (blocks), orientation (x or y), and blockSize.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1103,7 +1103,7 @@
             "type": "number",
             "description": "Wall height in blocks (default 2)"
           },
-          "block_size": {
+          "blockSize": {
             "type": "number",
             "description": "Size of each block in cm (default 100)"
           },
@@ -1575,8 +1575,17 @@
             "additionalProperties": false
           }
         },
-        "required": [
-          "objectRef"
+        "anyOf": [
+          {
+            "required": [
+              "objectRef"
+            ]
+          },
+          {
+            "required": [
+              "position"
+            ]
+          }
         ],
         "additionalProperties": false
       },
@@ -1984,7 +1993,7 @@
       "id": "scene.runtime.input.pointer",
       "domain": "scene",
       "kind": "command",
-      "description": "Dispatch a real Slate pointer action through the Automation Driver to a runtime widget or viewport position.",
+      "description": "Dispatch one immediate real Slate pointer action to a runtime widget or absolute screen position.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2061,11 +2070,6 @@
               "right",
               "middle"
             ]
-          },
-          "durationMs": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 10000
           }
         },
         "required": [
@@ -2109,6 +2113,383 @@
       "traits": {
         "readOnly": false,
         "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.input.pointer_sequence",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Start a Tick-driven pointer sequence with real elapsed duration, coordinate-space resolution, hit verification, and bounded per-step evidence.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sessionId",
+              "generation",
+              "objectId"
+            ],
+            "additionalProperties": false
+          },
+          "coordinateSpace": {
+            "type": "string",
+            "enum": [
+              "screenAbsolute",
+              "window",
+              "widgetLocal",
+              "widgetNormalized",
+              "viewportNormalized"
+            ],
+            "default": "screenAbsolute"
+          },
+          "requireTargetHit": {
+            "type": "boolean",
+            "default": false
+          },
+          "actions": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 256,
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "down",
+                    "move",
+                    "up",
+                    "doubleClick",
+                    "wheel",
+                    "cancel"
+                  ]
+                },
+                "position": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y"
+                  ],
+                  "additionalProperties": false
+                },
+                "path": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 1024,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "x",
+                      "y"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "button": {
+                  "type": "string",
+                  "enum": [
+                    "left",
+                    "right",
+                    "middle"
+                  ],
+                  "default": "left"
+                },
+                "wheelDelta": {
+                  "type": "number"
+                },
+                "durationMs": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 60000
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "actions"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "requireTargetHit": {
+                  "const": true
+                }
+              },
+              "required": [
+                "requireTargetHit"
+              ]
+            },
+            "then": {
+              "required": [
+                "target"
+              ]
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.input.pointer_sequence.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Read running or terminal pointer-sequence status and bounded per-step evidence.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sequenceId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "sequenceId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.viewport.capture",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Capture only the SViewport bound to the specified live PIE session and return capture provenance plus a raw-pixel SHA-256.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4096
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4096
+          },
+          "quality": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "image"
+      }
+    },
+    {
+      "id": "scene.runtime.wait.until",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Start a non-blocking Tick-driven runtime wait for PIE, widget, property, generation, or bounded log predicates.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "predicate": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "pieReady",
+                  "widgetExists",
+                  "propertyEquals",
+                  "generationChanged",
+                  "logContains",
+                  "logNotContains"
+                ]
+              },
+              "objectRef": {
+                "type": "object",
+                "properties": {
+                  "sessionId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "generation": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "objectId": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "sessionId",
+                  "generation",
+                  "objectId"
+                ],
+                "additionalProperties": false
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "class": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "property": {
+                "type": "string",
+                "minLength": 1
+              },
+              "expected": {},
+              "text": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120000
+          },
+          "pollIntervalMs": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "predicate"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "scene.runtime.wait.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Read running or terminal status and evidence for a Tick-driven runtime wait.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "waitId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
         "expensive": false
       },
       "output": {

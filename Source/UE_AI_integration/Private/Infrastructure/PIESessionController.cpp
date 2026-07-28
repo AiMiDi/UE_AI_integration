@@ -238,6 +238,8 @@ FPIEControlResult FPIESessionController::Resume()
 
 void FPIESessionController::Tick()
 {
+	RuntimeService->Tick();
+
 	if (!bRestartPending || !GEditor)
 	{
 		return;

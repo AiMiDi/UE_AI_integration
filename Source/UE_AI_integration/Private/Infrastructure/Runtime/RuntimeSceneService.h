@@ -42,6 +42,7 @@ public:
 	void BeginSession();
 	void EndSession();
 	void SetPaused(bool bInPaused);
+	void Tick();
 
 	const FString& GetSessionId() const;
 	uint64 GetGeneration() const;
@@ -66,8 +67,14 @@ public:
 	FRuntimeServiceResult BroadcastDelegate(const TSharedPtr<FJsonObject>& Params);
 
 	FRuntimeServiceResult PointerInput(const TSharedPtr<FJsonObject>& Params);
+	FRuntimeServiceResult StartPointerSequence(const TSharedPtr<FJsonObject>& Params);
+	FRuntimeServiceResult GetPointerSequence(const TSharedPtr<FJsonObject>& Params);
 	FRuntimeServiceResult KeyInput(const TSharedPtr<FJsonObject>& Params);
 	FRuntimeServiceResult SetInputMode(const TSharedPtr<FJsonObject>& Params);
+	FRuntimeServiceResult CapturePIEViewport(const TSharedPtr<FJsonObject>& Params);
+
+	FRuntimeServiceResult StartWait(const TSharedPtr<FJsonObject>& Params);
+	FRuntimeServiceResult GetWait(const TSharedPtr<FJsonObject>& Params);
 
 	/** Resolve a public objectRef. Intended for Scenario composition. */
 	FRuntimeServiceResult ResolveObjectRef(
@@ -78,6 +85,15 @@ public:
 	FRuntimeServiceResult MakeObjectRef(
 		UObject* Object,
 		TSharedPtr<FJsonObject>& OutObjectRef);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 GetActivePointerSequenceCountForTesting() const;
+	int32 GetPressedPointerButtonCountForTesting() const;
+	int32 GetPressedKeyCountForTesting() const;
+	bool SetWaitLogPathForTesting(
+		const FString& WaitId,
+		const FString& InLogPath);
+#endif
 
 private:
 	class FImpl;

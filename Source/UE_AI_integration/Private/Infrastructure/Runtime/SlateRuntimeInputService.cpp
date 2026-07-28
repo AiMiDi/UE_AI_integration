@@ -112,6 +112,11 @@ TSharedRef<IElementLocator, ESPMode::ThreadSafe> MakeWidgetLocator(UWidget* Widg
 }
 }
 
+FSlateRuntimeInputService::~FSlateRuntimeInputService()
+{
+	ReleaseInputState();
+}
+
 FRuntimeServiceResult FSlateRuntimeInputService::Focus(UWidget* Widget, uint32 UserIndex)
 {
 	if (!FSlateApplication::IsInitialized())
@@ -153,7 +158,8 @@ FRuntimeServiceResult FSlateRuntimeInputService::Pointer(
 	UWidget* TargetWidget,
 	const TOptional<FVector2D>& Position,
 	const TOptional<FVector2D>& EndPosition,
-	const FString& Button)
+	const FString& Button,
+	float WheelDelta)
 {
 	if (!FSlateApplication::IsInitialized())
 	{
@@ -287,15 +293,21 @@ FRuntimeServiceResult FSlateRuntimeInputService::Pointer(
 		MoveCursor(StartPosition.GetValue());
 		bHandled = SendMouseButton(StartPosition.GetValue(), EffectingButton, false);
 	}
-	else if (Action == TEXT("click") || Action == TEXT("doubleClick"))
+	else if (Action == TEXT("click"))
 	{
 		MoveCursor(StartPosition.GetValue());
-		const int32 Count = Action == TEXT("doubleClick") ? 2 : 1;
-		for (int32 Index = 0; Index < Count; ++Index)
-		{
-			bHandled |= SendMouseButton(StartPosition.GetValue(), EffectingButton, true);
-			bHandled |= SendMouseButton(StartPosition.GetValue(), EffectingButton, false);
-		}
+		bHandled |= SendMouseButton(StartPosition.GetValue(), EffectingButton, true);
+		bHandled |= SendMouseButton(StartPosition.GetValue(), EffectingButton, false);
+	}
+	else if (Action == TEXT("doubleClick"))
+	{
+		MoveCursor(StartPosition.GetValue());
+		// Match the native Slate double-click event order. Two ordinary clicks
+		// do not exercise OnMouseButtonDoubleClick handlers.
+		bHandled |= SendMouseButton(StartPosition.GetValue(), EffectingButton, true);
+		bHandled |= SendMouseButton(StartPosition.GetValue(), EffectingButton, false);
+		bHandled |= SendMouseDoubleClick(StartPosition.GetValue(), EffectingButton);
+		bHandled |= SendMouseButton(StartPosition.GetValue(), EffectingButton, false);
 	}
 	else if (Action == TEXT("drag"))
 	{
@@ -307,6 +319,20 @@ FRuntimeServiceResult FSlateRuntimeInputService::Pointer(
 		bHandled |= SendMouseButton(StartPosition.GetValue(), EffectingButton, true);
 		bHandled |= MoveCursor(EndPosition.GetValue());
 		bHandled |= SendMouseButton(EndPosition.GetValue(), EffectingButton, false);
+	}
+	else if (Action == TEXT("wheel"))
+	{
+		MoveCursor(StartPosition.GetValue());
+		if (FMath::IsNearlyZero(WheelDelta))
+		{
+			return InputError(TEXT("Wheel requires a non-zero wheelDelta."));
+		}
+		bHandled = SendMouseWheel(StartPosition.GetValue(), WheelDelta);
+	}
+	else if (Action == TEXT("cancel"))
+	{
+		ReleaseInputState();
+		bHandled = true;
 	}
 	else
 	{
@@ -322,6 +348,23 @@ FRuntimeServiceResult FSlateRuntimeInputService::Pointer(
 		Data->SetNumberField(TEXT("endY"), EndPosition->Y);
 	}
 	return FRuntimeServiceResult::Ok(Data);
+}
+
+void FSlateRuntimeInputService::ReleasePointerState()
+{
+	if (!FSlateApplication::IsInitialized())
+	{
+		PressedMouseButtons.Reset();
+		return;
+	}
+
+	const TArray<FKey> Buttons = PressedMouseButtons.Array();
+	for (const FKey& Button : Buttons)
+	{
+		SendMouseButton(LastCursorPosition, Button, false);
+	}
+	PressedMouseButtons.Reset();
+	FSlateApplication::Get().ReleaseAllPointerCapture();
 }
 
 FRuntimeServiceResult FSlateRuntimeInputService::Key(
@@ -396,6 +439,14 @@ FRuntimeServiceResult FSlateRuntimeInputService::Key(
 					bHandled = Action == TEXT("press")
 						? Element->Press(Key)
 						: Element->Release(Key);
+					if (Action == TEXT("press"))
+					{
+						TrackKeyPressed(Key);
+					}
+					else
+					{
+						TrackKeyReleased(Key);
+					}
 				}
 				else if (Action == TEXT("chord"))
 				{
@@ -479,11 +530,11 @@ FRuntimeServiceResult FSlateRuntimeInputService::Key(
 		}
 		for (const FKey& Key : Keys)
 		{
-			bHandled |= Slate.ProcessKeyDownEvent(FKeyEvent(Key, NoModifiers, 0, false, 0, 0));
+			bHandled |= SendKey(Key, true);
 		}
 		for (int32 Index = Keys.Num() - 1; Index >= 0; --Index)
 		{
-			bHandled |= Slate.ProcessKeyUpEvent(FKeyEvent(Keys[Index], NoModifiers, 0, false, 0, 0));
+			bHandled |= SendKey(Keys[Index], false);
 		}
 	}
 	else
@@ -493,14 +544,13 @@ FRuntimeServiceResult FSlateRuntimeInputService::Key(
 		{
 			return InputError(FString::Printf(TEXT("Unknown key '%s'."), *KeyName));
 		}
-		const FKeyEvent Event(Key, NoModifiers, 0, false, 0, 0);
 		if (Action == TEXT("press"))
 		{
-			bHandled = Slate.ProcessKeyDownEvent(Event);
+			bHandled = SendKey(Key, true);
 		}
 		else if (Action == TEXT("release"))
 		{
-			bHandled = Slate.ProcessKeyUpEvent(Event);
+			bHandled = SendKey(Key, false);
 		}
 		else
 		{
@@ -509,6 +559,29 @@ FRuntimeServiceResult FSlateRuntimeInputService::Key(
 	}
 
 	return FRuntimeServiceResult::Ok(MakeInputResult(Action, bHandled));
+}
+
+void FSlateRuntimeInputService::ReleaseInputState()
+{
+	if (!FSlateApplication::IsInitialized())
+	{
+		PressedKeys.Reset();
+		PressedKeysInOrder.Reset();
+		ReleasePointerState();
+		return;
+	}
+
+	for (int32 Index = PressedKeysInOrder.Num() - 1; Index >= 0; --Index)
+	{
+		const FKey Key = PressedKeysInOrder[Index];
+		if (PressedKeys.Contains(Key))
+		{
+			SendKey(Key, false);
+		}
+	}
+	PressedKeys.Reset();
+	PressedKeysInOrder.Reset();
+	ReleasePointerState();
 }
 
 FRuntimeServiceResult FSlateRuntimeInputService::SetPlayerInputMode(
@@ -582,7 +655,75 @@ bool FSlateRuntimeInputService::MoveCursor(const FVector2D& Position)
 		0.0f,
 		FModifierKeysState());
 	LastCursorPosition = Position;
-	return Slate.ProcessMouseMoveEvent(Event, true);
+	// These are real routed pointer movements. Marking the event synthetic
+	// bypasses behavior that intentionally distinguishes hardware-like input.
+	return Slate.ProcessMouseMoveEvent(Event, false);
+}
+
+FModifierKeysState FSlateRuntimeInputService::BuildModifierKeysState() const
+{
+	return FModifierKeysState(
+		PressedKeys.Contains(EKeys::LeftShift),
+		PressedKeys.Contains(EKeys::RightShift),
+		PressedKeys.Contains(EKeys::LeftControl),
+		PressedKeys.Contains(EKeys::RightControl),
+		PressedKeys.Contains(EKeys::LeftAlt),
+		PressedKeys.Contains(EKeys::RightAlt),
+		PressedKeys.Contains(EKeys::LeftCommand),
+		PressedKeys.Contains(EKeys::RightCommand),
+		false);
+}
+
+void FSlateRuntimeInputService::TrackKeyPressed(const FKey& Key)
+{
+	if (!PressedKeys.Contains(Key))
+	{
+		PressedKeys.Add(Key);
+		PressedKeysInOrder.Add(Key);
+	}
+}
+
+void FSlateRuntimeInputService::TrackKeyReleased(const FKey& Key)
+{
+	if (PressedKeys.Remove(Key) > 0)
+	{
+		PressedKeysInOrder.RemoveSingle(Key);
+	}
+}
+
+bool FSlateRuntimeInputService::SendKey(const FKey& Key, bool bPressed)
+{
+	if (!FSlateApplication::IsInitialized())
+	{
+		if (bPressed)
+		{
+			TrackKeyPressed(Key);
+		}
+		else
+		{
+			TrackKeyReleased(Key);
+		}
+		return false;
+	}
+
+	if (bPressed)
+	{
+		TrackKeyPressed(Key);
+	}
+	else
+	{
+		TrackKeyReleased(Key);
+	}
+	const FKeyEvent Event(
+		Key,
+		BuildModifierKeysState(),
+		0,
+		false,
+		0,
+		0);
+	return bPressed
+		? FSlateApplication::Get().ProcessKeyDownEvent(Event)
+		: FSlateApplication::Get().ProcessKeyUpEvent(Event);
 }
 
 bool FSlateRuntimeInputService::SendMouseButton(
@@ -623,5 +764,50 @@ bool FSlateRuntimeInputService::SendMouseButton(
 		return false;
 	}
 	return Slate.ProcessMouseButtonDownEvent(Path.GetWindow()->GetNativeWindow(), Event);
+}
+
+bool FSlateRuntimeInputService::SendMouseDoubleClick(
+	const FVector2D& Position,
+	const FKey& Button)
+{
+	FSlateApplication& Slate = FSlateApplication::Get();
+	PressedMouseButtons.Add(Button);
+	const FPointerEvent Event(
+		0,
+		Position,
+		LastCursorPosition,
+		PressedMouseButtons,
+		Button,
+		0.0f,
+		FModifierKeysState());
+	LastCursorPosition = Position;
+
+	const FWidgetPath Path = Slate.LocateWindowUnderMouse(
+		Position,
+		Slate.GetInteractiveTopLevelWindows());
+	if (!Path.IsValid())
+	{
+		return false;
+	}
+	return Slate.ProcessMouseButtonDoubleClickEvent(
+		Path.GetWindow()->GetNativeWindow(),
+		Event);
+}
+
+bool FSlateRuntimeInputService::SendMouseWheel(
+	const FVector2D& Position,
+	float WheelDelta)
+{
+	FSlateApplication& Slate = FSlateApplication::Get();
+	const FPointerEvent Event(
+		0,
+		Position,
+		LastCursorPosition,
+		PressedMouseButtons,
+		FKey(),
+		WheelDelta,
+		FModifierKeysState());
+	LastCursorPosition = Position;
+	return Slate.ProcessMouseWheelOrGestureEvent(Event, nullptr);
 }
 }

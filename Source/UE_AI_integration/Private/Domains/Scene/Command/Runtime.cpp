@@ -113,6 +113,21 @@ public:
 	}
 };
 
+class FTool_RuntimePointerSequence final : public FRuntimeCommandToolBase
+{
+public:
+	using FRuntimeCommandToolBase::FRuntimeCommandToolBase;
+	virtual FString GetCapabilityId() const override
+	{
+		return TEXT("scene.runtime.input.pointer_sequence");
+	}
+	virtual FMCPToolResult Execute(
+		const TSharedPtr<FJsonObject>& Params) override
+	{
+		return ToToolResult(Service.StartPointerSequence(Params));
+	}
+};
+
 class FTool_RuntimeKeyInput final : public FRuntimeCommandToolBase
 {
 public:
@@ -149,6 +164,7 @@ void RegisterSceneRuntimeCommandTools(
 	Registry.Register(MakeShared<FTool_UnbindRuntimeDelegate>(Controller));
 	Registry.Register(MakeShared<FTool_BroadcastRuntimeDelegate>(Controller));
 	Registry.Register(MakeShared<FTool_RuntimePointerInput>(Controller));
+	Registry.Register(MakeShared<FTool_RuntimePointerSequence>(Controller));
 	Registry.Register(MakeShared<FTool_RuntimeKeyInput>(Controller));
 	Registry.Register(MakeShared<FTool_SetRuntimeInputMode>(Controller));
 }

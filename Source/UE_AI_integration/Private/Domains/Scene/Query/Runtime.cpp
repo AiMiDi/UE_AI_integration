@@ -103,6 +103,66 @@ public:
 	}
 };
 
+class FTool_GetRuntimePointerSequence final : public FRuntimeQueryToolBase
+{
+public:
+	using FRuntimeQueryToolBase::FRuntimeQueryToolBase;
+	virtual FString GetCapabilityId() const override
+	{
+		return TEXT("scene.runtime.input.pointer_sequence.get");
+	}
+	virtual FMCPToolResult Execute(
+		const TSharedPtr<FJsonObject>& Params) override
+	{
+		return ToRuntimeQueryToolResult(Service.GetPointerSequence(Params));
+	}
+};
+
+class FTool_CaptureRuntimeViewport final : public FRuntimeQueryToolBase
+{
+public:
+	using FRuntimeQueryToolBase::FRuntimeQueryToolBase;
+	virtual FString GetCapabilityId() const override
+	{
+		return TEXT("scene.runtime.viewport.capture");
+	}
+	virtual FMCPToolResult Execute(
+		const TSharedPtr<FJsonObject>& Params) override
+	{
+		return ToRuntimeQueryToolResult(Service.CapturePIEViewport(Params));
+	}
+};
+
+class FTool_StartRuntimeWait final : public FRuntimeQueryToolBase
+{
+public:
+	using FRuntimeQueryToolBase::FRuntimeQueryToolBase;
+	virtual FString GetCapabilityId() const override
+	{
+		return TEXT("scene.runtime.wait.until");
+	}
+	virtual FMCPToolResult Execute(
+		const TSharedPtr<FJsonObject>& Params) override
+	{
+		return ToRuntimeQueryToolResult(Service.StartWait(Params));
+	}
+};
+
+class FTool_GetRuntimeWait final : public FRuntimeQueryToolBase
+{
+public:
+	using FRuntimeQueryToolBase::FRuntimeQueryToolBase;
+	virtual FString GetCapabilityId() const override
+	{
+		return TEXT("scene.runtime.wait.get");
+	}
+	virtual FMCPToolResult Execute(
+		const TSharedPtr<FJsonObject>& Params) override
+	{
+		return ToRuntimeQueryToolResult(Service.GetWait(Params));
+	}
+};
+
 class FTool_ListRuntimeDelegates final : public FRuntimeQueryToolBase
 {
 public:
@@ -138,6 +198,10 @@ void RegisterSceneRuntimeQueryTools(
 	Registry.Register(MakeShared<FTool_GetRuntimeWidgetTree>(Controller));
 	Registry.Register(MakeShared<FTool_GetRuntimeWidgetState>(Controller));
 	Registry.Register(MakeShared<FTool_HitTestRuntimeWidget>(Controller));
+	Registry.Register(MakeShared<FTool_GetRuntimePointerSequence>(Controller));
+	Registry.Register(MakeShared<FTool_CaptureRuntimeViewport>(Controller));
+	Registry.Register(MakeShared<FTool_StartRuntimeWait>(Controller));
+	Registry.Register(MakeShared<FTool_GetRuntimeWait>(Controller));
 	Registry.Register(MakeShared<FTool_ListRuntimeDelegates>(Controller));
 	Registry.Register(MakeShared<FTool_IsRuntimeDelegateBound>(Controller));
 }
