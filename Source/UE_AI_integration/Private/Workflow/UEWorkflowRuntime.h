@@ -42,6 +42,20 @@ public:
 	static FString ComputeAssetStructureHash(UObject* Asset);
 
 private:
+	enum class EDetailLevel : uint8
+	{
+		Summary,
+		Standard,
+		Full,
+	};
+
+	struct FResponseOptions
+	{
+		EDetailLevel DetailLevel = EDetailLevel::Summary;
+		TSet<FString> Sections;
+		bool bUsedDeprecatedDetails = false;
+	};
+
 	struct FRunRecord
 	{
 		FString RunId;
@@ -74,17 +88,21 @@ private:
 		TSharedPtr<FJsonObject> StructureAfter;
 		TSharedPtr<FJsonObject> StructureAfterRollback;
 
-		TSharedPtr<FJsonObject> ToJson() const;
-		TSharedPtr<FJsonObject> ToResultJson() const;
+		TSharedPtr<FJsonObject> ToJournalJson() const;
+		TSharedPtr<FJsonObject> ToReceiptJson() const;
+		TSharedPtr<FJsonObject> ToResultJson(const FResponseOptions& Options) const;
 		static bool FromJson(const TSharedPtr<FJsonObject>& Json, FRunRecord& OutRecord);
 	};
 
-	FMCPResult ValidateWorkflow(const TSharedPtr<FJsonObject>& Workflow) const;
-	FMCPResult PlanWorkflow(const TSharedPtr<FJsonObject>& Workflow) const;
-	FMCPResult ExecuteWorkflow(const TSharedPtr<FJsonObject>& Request);
-	FMCPResult GetStatus(const FString& RunId);
-	FMCPResult ResumeRun(const FString& RunId);
-	FMCPResult Rollback(const TSharedPtr<FJsonObject>& Request);
+	FMCPResult ValidateWorkflow(const TSharedPtr<FJsonObject>& Workflow,
+	                            const FResponseOptions& Options) const;
+	FMCPResult PlanWorkflow(const TSharedPtr<FJsonObject>& Workflow,
+	                        const FResponseOptions& Options) const;
+	FMCPResult ExecuteWorkflow(const TSharedPtr<FJsonObject>& Request,
+	                           const FResponseOptions& Options);
+	FMCPResult GetStatus(const FString& RunId, const FResponseOptions& Options);
+	FMCPResult ResumeRun(const FString& RunId, const FResponseOptions& Options);
+	FMCPResult Rollback(const TSharedPtr<FJsonObject>& Request, const FResponseOptions& Options);
 
 	bool TryPlan(
 		const TSharedPtr<FJsonObject>& Workflow,
@@ -131,6 +149,10 @@ private:
 	static TSharedPtr<FJsonObject> MakeStructuralDiff(
 		const TSharedPtr<FJsonObject>& Before,
 		const TSharedPtr<FJsonObject>& After);
+	static bool ParseResponseOptions(const TSharedPtr<FJsonObject>& Request, const FString& Action,
+	                                 FResponseOptions& OutOptions, FMCPResult& OutFailure);
+	static TSharedPtr<FJsonObject> ProjectPlanningResponse(const TSharedPtr<FJsonObject>& Response,
+	                                                       const FResponseOptions& Options);
 	static bool VerifyOrCleanRollback(FRunRecord& Record);
 	static FString GetStringField(
 		const TSharedPtr<FJsonObject>& Object,

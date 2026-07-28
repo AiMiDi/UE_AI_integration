@@ -1732,6 +1732,7 @@ public:
         json finalizers = json::array();
         std::vector<std::string> post_compile_dependencies = authored_ids;
         std::vector<std::string> read_back_finalizer_ids;
+        std::map<std::string, std::size_t> grouped_read_back_indices;
         const auto verify = workflow.value("verify", json::object());
         const auto compile = scope_config.find("compile");
         if (compile != scope_config.end() && compile->is_object())
@@ -1822,14 +1823,38 @@ public:
                 continue;
             }
             const auto finalizer_id = "$finalizer.readBack." + key;
-            finalizers.push_back({
-                { "id", finalizer_id },
-                { "kind", "readBack" },
-                { "readBackKey", key },
-                { "automatic", true },
-                { "operationType", entry->value("operationType", std::string{}) },
-                { "dependsOn", post_compile_dependencies },
-            });
+            const auto operation_type = entry->value("operationType", std::string{});
+            const auto params = entry->value("params", json::object());
+            const auto group_key = operation_type + "\n" + params.dump();
+            if (const auto grouped = grouped_read_back_indices.find(group_key);
+                grouped != grouped_read_back_indices.end())
+            {
+                auto& existing = finalizers.at(grouped->second);
+                if (!existing.contains("readBackKeys"))
+                {
+                    existing["readBackKeys"] = json::array({
+                        existing.value("readBackKey", std::string{}),
+                    });
+                    existing.erase("readBackKey");
+                }
+                existing["readBackKeys"].push_back(key);
+                continue;
+            }
+
+            json finalizer = {
+                {"id", finalizer_id},
+                {"kind", "readBack"},
+                {"readBackKey", key},
+                {"automatic", true},
+                {"operationType", operation_type},
+                {"dependsOn", post_compile_dependencies},
+            };
+            if (!params.empty())
+            {
+                finalizer["params"] = params;
+            }
+            grouped_read_back_indices.emplace(group_key, finalizers.size());
+            finalizers.push_back(std::move(finalizer));
             read_back_finalizer_ids.push_back(finalizer_id);
         }
         if (read_back_finalizer_ids.empty())

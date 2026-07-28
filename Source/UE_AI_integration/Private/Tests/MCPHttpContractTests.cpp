@@ -258,57 +258,28 @@ bool FWaitForWorkflowHttpE2E::Update()
 			(*Receipt)->TryGetStringField(TEXT("status"), Status)
 				&& Status == TEXT("completed"));
 
-		const TArray<TSharedPtr<FJsonValue>>* Operations = nullptr;
-		const TSharedPtr<FJsonObject>* OperationData = nullptr;
-		bool bSaved = true;
-		bool bDeferredCompile = false;
-		const bool bDeferredStep =
-			(*Receipt)->TryGetArrayField(TEXT("operations"), Operations)
-			&& Operations
-			&& Operations->Num() == 1
-			&& (*Operations)[0].IsValid()
-			&& (*Operations)[0]->Type == EJson::Object
-			&& (*Operations)[0]->AsObject()->TryGetObjectField(
-				TEXT("data"),
-				OperationData)
-			&& OperationData
-			&& OperationData->IsValid()
-			&& (*OperationData)->TryGetBoolField(TEXT("saved"), bSaved)
-			&& !bSaved
-			&& (*OperationData)->TryGetBoolField(
-				TEXT("deferredCompile"),
-				bDeferredCompile)
-			&& bDeferredCompile;
+		Test->TestEqual(TEXT("HTTP execute defaults to summary detail"),
+		                (*Receipt)->GetStringField(TEXT("detailLevel")), FString(TEXT("summary")));
+		Test->TestFalse(TEXT("HTTP summary omits operation output"),
+		                (*Receipt)->HasField(TEXT("operations")));
+		Test->TestFalse(TEXT("HTTP summary omits full sections"),
+		                (*Receipt)->HasField(TEXT("sections")));
+		const TSharedPtr<FJsonObject>* Summary = nullptr;
+		const TSharedPtr<FJsonObject>* Operations = nullptr;
+		const TSharedPtr<FJsonObject>* Finalizers = nullptr;
+		double OperationTotal = 0.0;
+		double FinalizerSucceeded = 0.0;
 		Test->TestTrue(
-			TEXT("HTTP edit step is deferred and unsaved"),
-			bDeferredStep);
-
-		const TArray<TSharedPtr<FJsonValue>>* Finalizers = nullptr;
-		int32 CompileFinalizerCount = 0;
-		if ((*Receipt)->TryGetArrayField(TEXT("finalizers"), Finalizers)
-			&& Finalizers)
-		{
-			for (const TSharedPtr<FJsonValue>& Value : *Finalizers)
-			{
-				FString Id;
-				FString FinalizerStatus;
-				if (Value.IsValid()
-					&& Value->Type == EJson::Object
-					&& Value->AsObject()->TryGetStringField(TEXT("id"), Id)
-					&& Id == TEXT("$finalizer.compile")
-					&& Value->AsObject()->TryGetStringField(
-						TEXT("status"),
-						FinalizerStatus)
-					&& FinalizerStatus == TEXT("succeeded"))
-				{
-					++CompileFinalizerCount;
-				}
-			}
-		}
-		Test->TestEqual(
-			TEXT("HTTP receipt contains one successful compile finalizer"),
-			CompileFinalizerCount,
-			1);
+		    TEXT("HTTP summary reports operation/finalizer counts"),
+		    (*Receipt)->TryGetObjectField(TEXT("summary"), Summary) && Summary &&
+		        (*Summary)->TryGetObjectField(TEXT("operations"), Operations) && Operations &&
+		        (*Operations)->TryGetNumberField(TEXT("total"), OperationTotal) &&
+		        OperationTotal == 1.0 &&
+		        (*Summary)->TryGetObjectField(TEXT("finalizers"), Finalizers) && Finalizers &&
+		        (*Finalizers)->TryGetNumberField(TEXT("succeeded"), FinalizerSucceeded) &&
+		        FinalizerSucceeded > 0.0);
+		Test->TestTrue(TEXT("HTTP default execute response stays below 8 KiB"),
+		               FTCHARToUTF8(*State->ResponseBody).Length() <= 8 * 1024);
 	}
 	Test->TestTrue(
 		TEXT("HTTP workflow fixture is removed"),

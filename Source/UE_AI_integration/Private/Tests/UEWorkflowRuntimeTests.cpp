@@ -11,6 +11,8 @@
 #include "Materials/Material.h"
 #include "Materials/MaterialExpression.h"
 #include "ObjectTools.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "Tools/MCPToolRegistry.h"
 #include "UEAIIntegrationSubsystem.h"
 #include "UObject/Package.h"
@@ -76,21 +78,52 @@ FMCPResult PlanWorkflow(
 	return Runtime.HandleRequest(Request);
 }
 
-FMCPResult ExecuteWorkflow(
-	UEAIIntegration::Workflow::FWorkflowRuntime& Runtime,
-	const TSharedPtr<FJsonObject>& Workflow,
-	const FString& PlanDigest,
-	bool bSaveOnSuccess = false)
+FMCPResult ExecuteWorkflow(UEAIIntegration::Workflow::FWorkflowRuntime& Runtime,
+                           const TSharedPtr<FJsonObject>& Workflow, const FString& PlanDigest,
+                           bool bSaveOnSuccess = false, const FString& DetailLevel = TEXT("full"))
 {
 	TSharedPtr<FJsonObject> Request = MakeShared<FJsonObject>();
 	Request->SetStringField(TEXT("action"), TEXT("execute"));
 	Request->SetObjectField(TEXT("workflow"), Workflow);
 	Request->SetStringField(TEXT("approvePlanDigest"), PlanDigest);
+	Request->SetStringField(TEXT("detailLevel"), DetailLevel);
 	if (bSaveOnSuccess)
 	{
 		Request->SetBoolField(TEXT("saveOnSuccess"), true);
 	}
 	return Runtime.HandleRequest(Request);
+}
+
+const TSharedPtr<FJsonObject>* GetResultSections(const TSharedPtr<FJsonObject>& Result)
+{
+	const TSharedPtr<FJsonObject>* Sections = nullptr;
+	return Result.IsValid() && Result->TryGetObjectField(TEXT("sections"), Sections) && Sections &&
+	               Sections->IsValid()
+	           ? Sections
+	           : nullptr;
+}
+
+bool TryGetResultArray(const TSharedPtr<FJsonObject>& Result, const FString& SectionName,
+                       const TArray<TSharedPtr<FJsonValue>>*& OutValues)
+{
+	const TSharedPtr<FJsonObject>* Sections = GetResultSections(Result);
+	return Sections && (*Sections)->TryGetArrayField(SectionName, OutValues) && OutValues;
+}
+
+bool TryGetResultObject(const TSharedPtr<FJsonObject>& Result, const FString& SectionName,
+                        const TSharedPtr<FJsonObject>*& OutValue)
+{
+	const TSharedPtr<FJsonObject>* Sections = GetResultSections(Result);
+	return Sections && (*Sections)->TryGetObjectField(SectionName, OutValue) && OutValue &&
+	       OutValue->IsValid();
+}
+
+FString SerializeJsonObject(const TSharedPtr<FJsonObject>& Object)
+{
+	FString Json;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Json);
+	FJsonSerializer::Serialize(Object.ToSharedRef(), Writer);
+	return Json;
 }
 
 UObject* FindAssetWithoutLoading(const FString& AssetPath)
@@ -228,10 +261,8 @@ bool AllSucceededStepsReportDeferredAndUnsaved(
 	const TSharedPtr<FJsonObject>& Receipt)
 {
 	const TArray<TSharedPtr<FJsonValue>>* Operations = nullptr;
-	if (!Receipt.IsValid()
-		|| !Receipt->TryGetArrayField(TEXT("operations"), Operations)
-		|| !Operations
-		|| Operations->IsEmpty())
+	if (!Receipt.IsValid() || !TryGetResultArray(Receipt, TEXT("operations"), Operations) ||
+	    !Operations || Operations->IsEmpty())
 	{
 		return false;
 	}
@@ -268,13 +299,11 @@ bool AllSucceededStepsReportDeferredAndUnsaved(
 	return SucceededCount > 0;
 }
 
-bool AllExecutableFinalizersReportCompletedAndUnsaved(
-	const TSharedPtr<FJsonObject>& Receipt)
+bool AllExecutableFinalizersReportSucceededWithoutOutput(const TSharedPtr<FJsonObject>& Receipt)
 {
 	const TArray<TSharedPtr<FJsonValue>>* Finalizers = nullptr;
-	if (!Receipt.IsValid()
-		|| !Receipt->TryGetArrayField(TEXT("finalizers"), Finalizers)
-		|| !Finalizers)
+	if (!Receipt.IsValid() || !TryGetResultArray(Receipt, TEXT("finalizers"), Finalizers) ||
+	    !Finalizers)
 	{
 		return false;
 	}
@@ -294,19 +323,8 @@ bool AllExecutableFinalizersReportCompletedAndUnsaved(
 			continue;
 		}
 		++ExecutableCount;
-		const TSharedPtr<FJsonObject>* Data = nullptr;
-		bool bSaved = true;
-		bool bDeferredCompile = true;
-		if (Finalizer->GetStringField(TEXT("status")) != TEXT("succeeded")
-			|| !Finalizer->TryGetObjectField(TEXT("data"), Data)
-			|| !Data
-			|| !Data->IsValid()
-			|| !(*Data)->TryGetBoolField(TEXT("saved"), bSaved)
-			|| bSaved
-			|| !(*Data)->TryGetBoolField(
-				TEXT("deferredCompile"),
-				bDeferredCompile)
-			|| bDeferredCompile)
+		if (Finalizer->GetStringField(TEXT("status")) != TEXT("succeeded") ||
+		    Finalizer->HasField(TEXT("data")))
 		{
 			return false;
 		}
@@ -316,11 +334,12 @@ bool AllExecutableFinalizersReportCompletedAndUnsaved(
 
 bool HasDirtyPackages(const TSharedPtr<FJsonObject>& Receipt)
 {
-	const TArray<TSharedPtr<FJsonValue>>* Packages = nullptr;
-	return Receipt.IsValid()
-		&& Receipt->TryGetArrayField(TEXT("dirtyPackages"), Packages)
-		&& Packages
-		&& !Packages->IsEmpty();
+	const TSharedPtr<FJsonObject>* Summary = nullptr;
+	double DirtyPackageCount = 0.0;
+	return Receipt.IsValid() && Receipt->TryGetObjectField(TEXT("summary"), Summary) && Summary &&
+	       Summary->IsValid() &&
+	       (*Summary)->TryGetNumberField(TEXT("dirtyPackageCount"), DirtyPackageCount) &&
+	       DirtyPackageCount > 0.0;
 }
 
 bool OperationReportsBool(
@@ -330,9 +349,8 @@ bool OperationReportsBool(
 	bool Expected)
 {
 	const TArray<TSharedPtr<FJsonValue>>* Operations = nullptr;
-	if (!Receipt.IsValid()
-		|| !Receipt->TryGetArrayField(TEXT("operations"), Operations)
-		|| !Operations)
+	if (!Receipt.IsValid() || !TryGetResultArray(Receipt, TEXT("operations"), Operations) ||
+	    !Operations)
 	{
 		return false;
 	}
@@ -366,9 +384,8 @@ bool GetOperationString(
 	FString& OutValue)
 {
 	const TArray<TSharedPtr<FJsonValue>>* Operations = nullptr;
-	if (!Receipt.IsValid()
-		|| !Receipt->TryGetArrayField(TEXT("operations"), Operations)
-		|| !Operations)
+	if (!Receipt.IsValid() || !TryGetResultArray(Receipt, TEXT("operations"), Operations) ||
+	    !Operations)
 	{
 		return false;
 	}
@@ -509,6 +526,42 @@ bool FUEWorkflowActionContractTest::RunTest(const FString& Parameters)
 	const FMCPResult Plan = PlanWorkflow(Runtime, Workflow);
 	FString Digest;
 	TestTrue(TEXT("Workflow plan succeeds"), GetPlanDigest(Plan, Digest));
+	TestEqual(TEXT("Plan defaults to standard detail"),
+	          Plan.Data->GetStringField(TEXT("detailLevel")), FString(TEXT("standard")));
+
+	TSharedPtr<FJsonObject> SummaryPlanRequest = MakeShared<FJsonObject>();
+	SummaryPlanRequest->SetStringField(TEXT("action"), TEXT("plan"));
+	SummaryPlanRequest->SetObjectField(TEXT("workflow"), Workflow);
+	SummaryPlanRequest->SetStringField(TEXT("detailLevel"), TEXT("summary"));
+	const FMCPResult SummaryPlan = Runtime.HandleRequest(SummaryPlanRequest);
+	TestTrue(TEXT("Explicit summary plan succeeds"), SummaryPlan.bOk);
+	TestFalse(TEXT("Summary plan omits normalized workflow"),
+	          SummaryPlan.Data->HasField(TEXT("normalizedWorkflow")));
+	TestFalse(TEXT("Summary plan omits operation records by default"),
+	          SummaryPlan.Data->HasField(TEXT("operations")));
+
+	TSharedPtr<FJsonObject> LegacySummaryPlanRequest = MakeShared<FJsonObject>();
+	LegacySummaryPlanRequest->SetStringField(TEXT("action"), TEXT("plan"));
+	LegacySummaryPlanRequest->SetObjectField(TEXT("workflow"), Workflow);
+	LegacySummaryPlanRequest->SetBoolField(TEXT("details"), false);
+	const FMCPResult LegacySummaryPlan = Runtime.HandleRequest(LegacySummaryPlanRequest);
+	TestTrue(TEXT("details=false remains accepted"), LegacySummaryPlan.bOk);
+	TestEqual(TEXT("details=false maps to summary"),
+	          LegacySummaryPlan.Data->GetStringField(TEXT("detailLevel")),
+	          FString(TEXT("summary")));
+	TestTrue(TEXT("Deprecated details alias is reported"),
+	         LegacySummaryPlan.Data->HasTypedField<EJson::Array>(TEXT("deprecations")));
+
+	TSharedPtr<FJsonObject> ConflictingDetailRequest = MakeShared<FJsonObject>();
+	ConflictingDetailRequest->SetStringField(TEXT("action"), TEXT("plan"));
+	ConflictingDetailRequest->SetObjectField(TEXT("workflow"), Workflow);
+	ConflictingDetailRequest->SetBoolField(TEXT("details"), false);
+	ConflictingDetailRequest->SetStringField(TEXT("detailLevel"), TEXT("summary"));
+	const FMCPResult ConflictingDetail = Runtime.HandleRequest(ConflictingDetailRequest);
+	TestFalse(TEXT("details and detailLevel conflict is rejected"), ConflictingDetail.bOk);
+	TestEqual(TEXT("Conflicting detail error code"), ConflictingDetail.Error.Code,
+	          FString(TEXT("invalid_workflow_request")));
+	TestEqual(TEXT("Conflicting detail HTTP status"), ConflictingDetail.Error.HttpStatus, 422);
 
 	TSharedPtr<FJsonObject> MissingApproval = MakeShared<FJsonObject>();
 	MissingApproval->SetStringField(TEXT("action"), TEXT("execute"));
@@ -680,26 +733,19 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 		TestTrue(
 			TEXT("Blueprint steps do not save individually"),
 			AllSucceededStepsReportDeferredAndUnsaved(BlueprintResult.Data));
-		TestTrue(
-			TEXT("Blueprint finalizers report completed compile/read-back"),
-			AllExecutableFinalizersReportCompletedAndUnsaved(
-				BlueprintResult.Data));
+		TestTrue(TEXT("Blueprint finalizers report completed compile/read-back"),
+			     AllExecutableFinalizersReportSucceededWithoutOutput(BlueprintResult.Data));
 		TestTrue(
 			TEXT("Blueprint receipt reports dirty package"),
 			HasDirtyPackages(BlueprintResult.Data));
 		const TSharedPtr<FJsonObject>* AssetDiff = nullptr;
-		TestTrue(
-			TEXT("Blueprint receipt contains readable structural diff"),
-			BlueprintResult.Data->TryGetObjectField(
-				TEXT("assetDiff"),
-				AssetDiff)
-				&& AssetDiff
-				&& (*AssetDiff)->GetStringField(TEXT("snapshotKind"))
-					== TEXT("structuralVerification")
-				&& (*AssetDiff)->HasTypedField<EJson::Array>(
-					TEXT("added"))
-				&& (*AssetDiff)->HasTypedField<EJson::Array>(
-					TEXT("changedFields")));
+		TestTrue(TEXT("Blueprint receipt contains readable structural diff"),
+			     TryGetResultObject(BlueprintResult.Data, TEXT("assetDiff"), AssetDiff) &&
+			         AssetDiff &&
+			         (*AssetDiff)->GetStringField(TEXT("snapshotKind")) ==
+			             TEXT("structuralVerification") &&
+			         (*AssetDiff)->HasTypedField<EJson::Array>(TEXT("added")) &&
+			         (*AssetDiff)->HasTypedField<EJson::Array>(TEXT("changedFields")));
 		TestTrue(
 			TEXT("Blueprint remains dirty"),
 			UEditorAssetLibrary::LoadAsset(BlueprintPath)
@@ -707,23 +753,54 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 					->GetOutermost()->IsDirty());
 		const TSharedPtr<FJsonObject>* BlueprintReadBack = nullptr;
 		const TSharedPtr<FJsonObject>* GraphReadBack = nullptr;
-		TestTrue(
-			TEXT("Blueprint receipt exposes read-back"),
-			BlueprintResult.Data->TryGetObjectField(
-				TEXT("readBack"),
-				BlueprintReadBack)
-				&& BlueprintReadBack
-				&& (*BlueprintReadBack)->TryGetObjectField(
-					TEXT("graphs"),
-					GraphReadBack)
-				&& GraphReadBack
-				&& (*GraphReadBack)->HasTypedField<EJson::Object>(
-					TEXT("ComputeWorkflowValue"))
-				&& (*GraphReadBack)->HasTypedField<EJson::Object>(
-					TEXT("ComputeOtherValue")));
+		TestTrue(TEXT("Blueprint receipt exposes read-back"),
+			     TryGetResultObject(BlueprintResult.Data, TEXT("readBack"), BlueprintReadBack) &&
+			         BlueprintReadBack &&
+			         (*BlueprintReadBack)->TryGetObjectField(TEXT("graphs"), GraphReadBack) &&
+			         GraphReadBack &&
+			         (*GraphReadBack)->HasTypedField<EJson::Object>(TEXT("ComputeWorkflowValue")) &&
+			         (*GraphReadBack)->HasTypedField<EJson::Object>(TEXT("ComputeOtherValue")));
 
 		const FString BlueprintRunId =
 			BlueprintResult.Data->GetStringField(TEXT("runId"));
+		TSharedPtr<FJsonObject> CompactStatusRequest = MakeShared<FJsonObject>();
+		CompactStatusRequest->SetStringField(TEXT("action"), TEXT("status"));
+		CompactStatusRequest->SetStringField(TEXT("runId"), BlueprintRunId);
+		const FMCPResult CompactStatus = Runtime.HandleRequest(CompactStatusRequest);
+		TestTrue(TEXT("Default status projection succeeds"), CompactStatus.bOk);
+		if (CompactStatus.bOk)
+		{
+			TestEqual(TEXT("Status defaults to summary detail"),
+				      CompactStatus.Data->GetStringField(TEXT("detailLevel")),
+				      FString(TEXT("summary")));
+			TestFalse(TEXT("Summary status omits full sections"),
+				      CompactStatus.Data->HasField(TEXT("sections")));
+			TestFalse(TEXT("Summary status does not duplicate operations"),
+				      CompactStatus.Data->HasField(TEXT("operations")));
+			const TSharedPtr<FJsonObject>* CompactReceipt = nullptr;
+			TestTrue(TEXT("Summary carries compact receipt"),
+				     CompactStatus.Data->TryGetObjectField(TEXT("receipt"), CompactReceipt) &&
+				         CompactReceipt && !(*CompactReceipt)->HasField(TEXT("operations")) &&
+				         !(*CompactReceipt)->HasField(TEXT("readBack")) &&
+				         !(*CompactReceipt)->HasField(TEXT("assetDiff")));
+			const int32 CompactBytes =
+				FTCHARToUTF8(*SerializeJsonObject(CompactStatus.Data)).Length();
+			TestTrue(TEXT("Default workflow status stays below 8 KiB"), CompactBytes <= 8 * 1024);
+		}
+
+		TSharedPtr<FJsonObject> DiffOnlyStatusRequest = MakeShared<FJsonObject>();
+		DiffOnlyStatusRequest->SetStringField(TEXT("action"), TEXT("status"));
+		DiffOnlyStatusRequest->SetStringField(TEXT("runId"), BlueprintRunId);
+		DiffOnlyStatusRequest->SetStringField(TEXT("detailLevel"), TEXT("summary"));
+		DiffOnlyStatusRequest->SetArrayField(TEXT("sections"),
+			                                 {MakeShared<FJsonValueString>(TEXT("assetDiff"))});
+		const FMCPResult DiffOnlyStatus = Runtime.HandleRequest(DiffOnlyStatusRequest);
+		const TSharedPtr<FJsonObject>* DiffOnlySections = nullptr;
+		TestTrue(TEXT("Explicit assetDiff section is available from summary"),
+			     DiffOnlyStatus.bOk &&
+			         DiffOnlyStatus.Data->TryGetObjectField(TEXT("sections"), DiffOnlySections) &&
+			         DiffOnlySections && (*DiffOnlySections)->Values.Num() == 1 &&
+			         (*DiffOnlySections)->HasTypedField<EJson::Object>(TEXT("assetDiff")));
 		TSharedPtr<FJsonObject> ResumeRequest = MakeShared<FJsonObject>();
 		ResumeRequest->SetStringField(TEXT("action"), TEXT("resume"));
 		ResumeRequest->SetStringField(TEXT("runId"), BlueprintRunId);
@@ -796,10 +873,12 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 				TEXT("Serialized receipt status"),
 				SerializedReceipt.Data->GetStringField(TEXT("status")),
 				FString(TEXT("completed")));
+			const TSharedPtr<FJsonObject>* SerializedSummary = nullptr;
 			TestTrue(
-				TEXT("Serialized receipt contains rollback object"),
-				SerializedReceipt.Data->HasTypedField<EJson::Object>(
-					TEXT("rollback")));
+				TEXT("Serialized receipt contains rollback summary"),
+				SerializedReceipt.Data->TryGetObjectField(TEXT("summary"), SerializedSummary) &&
+				    SerializedSummary &&
+				    (*SerializedSummary)->HasTypedField<EJson::Object>(TEXT("rollback")));
 		}
 
 		TSharedPtr<FJsonObject> CrossInstanceResume =
@@ -941,16 +1020,18 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 		TestTrue(
 			TEXT("Widget steps do not save individually"),
 			AllSucceededStepsReportDeferredAndUnsaved(WidgetResult.Data));
-		TestTrue(
-			TEXT("Widget finalizers report completed compile/read-back"),
-			AllExecutableFinalizersReportCompletedAndUnsaved(
-				WidgetResult.Data));
+		TestTrue(TEXT("Widget finalizers report completed compile/read-back"),
+			     AllExecutableFinalizersReportSucceededWithoutOutput(WidgetResult.Data));
 		TestTrue(
 			TEXT("Widget receipt reports dirty package"),
 			HasDirtyPackages(WidgetResult.Data));
-		TestTrue(
-			TEXT("Widget receipt contains readBack"),
-			WidgetResult.Data->HasTypedField<EJson::Object>(TEXT("readBack")));
+		const TSharedPtr<FJsonObject>* WidgetReadBack = nullptr;
+		TestTrue(TEXT("Widget receipt contains one projected readBack section"),
+			     TryGetResultObject(WidgetResult.Data, TEXT("readBack"), WidgetReadBack) &&
+			         WidgetReadBack &&
+			         (*WidgetReadBack)->HasTypedField<EJson::Object>(TEXT("widgetTree")) &&
+			         (*WidgetReadBack)->HasTypedField<EJson::Array>(TEXT("bindings")) &&
+			         (*WidgetReadBack)->HasTypedField<EJson::Array>(TEXT("layout")));
 	}
 
 	// Material: create -> property edits -> one material compile finalizer.
@@ -1061,10 +1142,8 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 		TestTrue(
 			TEXT("Material steps do not save individually"),
 			AllSucceededStepsReportDeferredAndUnsaved(MaterialResult.Data));
-		TestTrue(
-			TEXT("Material finalizers report completed compile/read-back"),
-			AllExecutableFinalizersReportCompletedAndUnsaved(
-				MaterialResult.Data));
+		TestTrue(TEXT("Material finalizers report completed compile/read-back"),
+			     AllExecutableFinalizersReportSucceededWithoutOutput(MaterialResult.Data));
 		TestTrue(
 			TEXT("Material receipt reports dirty package"),
 			HasDirtyPackages(MaterialResult.Data));

@@ -409,6 +409,114 @@ TSharedPtr<FJsonObject> MakeOperationRecord(
 	return Record;
 }
 
+void CollectWidgetLayouts(const TSharedPtr<FJsonObject>& Node,
+                          TArray<TSharedPtr<FJsonValue>>& OutLayouts)
+{
+	if (!Node.IsValid())
+	{
+		return;
+	}
+
+	const TSharedPtr<FJsonObject>* Layout = nullptr;
+	FString SlotClass;
+	const bool bHasLayout =
+	    Node->TryGetObjectField(TEXT("layout"), Layout) && Layout && Layout->IsValid();
+	const bool bHasSlotClass =
+	    Node->TryGetStringField(TEXT("slotClass"), SlotClass) && !SlotClass.IsEmpty();
+	if (bHasLayout || bHasSlotClass)
+	{
+		TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
+		FString Name;
+		FString ClassName;
+		if (Node->TryGetStringField(TEXT("name"), Name))
+		{
+			Entry->SetStringField(TEXT("name"), Name);
+		}
+		if (Node->TryGetStringField(TEXT("class"), ClassName))
+		{
+			Entry->SetStringField(TEXT("class"), ClassName);
+		}
+		if (bHasSlotClass)
+		{
+			Entry->SetStringField(TEXT("slotClass"), SlotClass);
+		}
+		const TSharedPtr<FJsonObject>* WidgetRef = nullptr;
+		if (Node->TryGetObjectField(TEXT("widgetRef"), WidgetRef) && WidgetRef &&
+		    WidgetRef->IsValid())
+		{
+			Entry->SetObjectField(TEXT("widgetRef"), *WidgetRef);
+		}
+		if (bHasLayout)
+		{
+			Entry->SetObjectField(TEXT("layout"), *Layout);
+		}
+		OutLayouts.Add(MakeShared<FJsonValueObject>(Entry));
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
+	if (Node->TryGetArrayField(TEXT("children"), Children) && Children)
+	{
+		for (const TSharedPtr<FJsonValue>& Child : *Children)
+		{
+			if (Child.IsValid() && Child->Type == EJson::Object)
+			{
+				CollectWidgetLayouts(Child->AsObject(), OutLayouts);
+			}
+		}
+	}
+}
+
+TSharedPtr<FJsonValue> ProjectReadBackValue(const FString& Key,
+                                            const TSharedPtr<FJsonObject>& Output)
+{
+	if (!Output.IsValid())
+	{
+		return MakeShared<FJsonValueNull>();
+	}
+
+	if (Key == TEXT("widgetTree"))
+	{
+		TSharedPtr<FJsonObject> Tree = MakeShared<FJsonObject>();
+		FString WidgetBlueprint;
+		double Count = 0.0;
+		if (Output->TryGetStringField(TEXT("widget_bp"), WidgetBlueprint))
+		{
+			Tree->SetStringField(TEXT("widget_bp"), WidgetBlueprint);
+		}
+		if (Output->TryGetNumberField(TEXT("count"), Count))
+		{
+			Tree->SetNumberField(TEXT("count"), Count);
+		}
+		const TSharedPtr<FJsonObject>* Root = nullptr;
+		if (Output->TryGetObjectField(TEXT("root"), Root) && Root && Root->IsValid())
+		{
+			Tree->SetObjectField(TEXT("root"), *Root);
+		}
+		return MakeShared<FJsonValueObject>(Tree);
+	}
+
+	if (Key == TEXT("bindings"))
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Bindings = nullptr;
+		return Output->TryGetArrayField(TEXT("bindings"), Bindings) && Bindings
+		           ? MakeShared<FJsonValueArray>(*Bindings)
+		           : MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>());
+	}
+
+	if (Key == TEXT("layout"))
+	{
+		TArray<TSharedPtr<FJsonValue>> Layouts;
+		const TSharedPtr<FJsonObject>* Root = nullptr;
+		if (Output->TryGetObjectField(TEXT("root"), Root) && Root && Root->IsValid())
+		{
+			CollectWidgetLayouts(*Root, Layouts);
+		}
+		return MakeShared<FJsonValueArray>(Layouts);
+	}
+
+	return MakeShared<FJsonValueObject>(Output);
+}
+
 bool IsConfirmWriteRisk(const TSharedPtr<FJsonObject>& Plan)
 {
 	const TSharedPtr<FJsonObject>* Risk = nullptr;
@@ -1028,6 +1136,186 @@ FMCPResult FWorkflowRuntime::MakeHandshake() const
 	return FMCPResult::Ok(Data);
 }
 
+bool FWorkflowRuntime::ParseResponseOptions(const TSharedPtr<FJsonObject>& Request,
+                                            const FString& Action, FResponseOptions& OutOptions,
+                                            FMCPResult& OutFailure)
+{
+	OutOptions = FResponseOptions();
+	OutOptions.DetailLevel = Action == TEXT("validate") || Action == TEXT("plan")
+	                             ? EDetailLevel::Standard
+	                             : EDetailLevel::Summary;
+
+	const bool bHasDetails = Request->HasField(TEXT("details"));
+	const bool bHasDetailLevel = Request->HasField(TEXT("detailLevel"));
+	if (bHasDetails && bHasDetailLevel)
+	{
+		OutFailure = FMCPResult::Fail(
+		    TEXT("invalid_workflow_request"),
+		    TEXT("Fields 'details' and 'detailLevel' cannot be used together."), 422);
+		return false;
+	}
+
+	if (bHasDetails)
+	{
+		bool bDetails = false;
+		if (!Request->TryGetBoolField(TEXT("details"), bDetails))
+		{
+			OutFailure = FMCPResult::Fail(TEXT("invalid_workflow_request"),
+			                              TEXT("Field 'details' must be a boolean."), 422);
+			return false;
+		}
+		OutOptions.DetailLevel = bDetails ? EDetailLevel::Full : EDetailLevel::Summary;
+		OutOptions.bUsedDeprecatedDetails = true;
+	}
+	else if (bHasDetailLevel)
+	{
+		FString DetailLevel;
+		if (!Request->TryGetStringField(TEXT("detailLevel"), DetailLevel))
+		{
+			OutFailure = FMCPResult::Fail(TEXT("invalid_workflow_request"),
+			                              TEXT("Field 'detailLevel' must be a string."), 422);
+			return false;
+		}
+		if (DetailLevel == TEXT("summary"))
+		{
+			OutOptions.DetailLevel = EDetailLevel::Summary;
+		}
+		else if (DetailLevel == TEXT("standard"))
+		{
+			OutOptions.DetailLevel = EDetailLevel::Standard;
+		}
+		else if (DetailLevel == TEXT("full"))
+		{
+			OutOptions.DetailLevel = EDetailLevel::Full;
+		}
+		else
+		{
+			OutFailure = FMCPResult::Fail(
+			    TEXT("invalid_workflow_request"),
+			    TEXT("Field 'detailLevel' must be summary, standard, or full."), 422);
+			return false;
+		}
+	}
+
+	if (!Request->HasField(TEXT("sections")))
+	{
+		return true;
+	}
+	const TArray<TSharedPtr<FJsonValue>>* Sections = nullptr;
+	if (!Request->TryGetArrayField(TEXT("sections"), Sections) || !Sections)
+	{
+		OutFailure = FMCPResult::Fail(TEXT("invalid_workflow_request"),
+		                              TEXT("Field 'sections' must be an array of strings."), 422);
+		return false;
+	}
+
+	static const TSet<FString> SupportedSections = {
+	    TEXT("operations"), TEXT("finalizers"), TEXT("readBack"),    TEXT("assetDiff"),
+	    TEXT("structures"), TEXT("rollback"),   TEXT("diagnostics"),
+	};
+	for (const TSharedPtr<FJsonValue>& SectionValue : *Sections)
+	{
+		if (!SectionValue.IsValid() || SectionValue->Type != EJson::String)
+		{
+			OutFailure = FMCPResult::Fail(TEXT("invalid_workflow_request"),
+			                              TEXT("Every 'sections' entry must be a string."), 422);
+			return false;
+		}
+		const FString Section = SectionValue->AsString();
+		if (!SupportedSections.Contains(Section))
+		{
+			OutFailure = FMCPResult::Fail(
+			    TEXT("invalid_workflow_request"),
+			    FString::Printf(TEXT("Unsupported workflow response section '%s'."), *Section),
+			    422);
+			return false;
+		}
+		OutOptions.Sections.Add(Section);
+	}
+	return true;
+}
+
+TSharedPtr<FJsonObject> FWorkflowRuntime::ProjectPlanningResponse(
+    const TSharedPtr<FJsonObject>& Response, const FResponseOptions& Options)
+{
+	if (!Response.IsValid())
+	{
+		return MakeShared<FJsonObject>();
+	}
+
+	if (Options.DetailLevel != EDetailLevel::Summary)
+	{
+		TSharedPtr<FJsonObject> Projected = CloneObject(Response);
+		Projected->SetStringField(TEXT("detailLevel"), Options.DetailLevel == EDetailLevel::Full
+		                                                   ? TEXT("full")
+		                                                   : TEXT("standard"));
+		if (Options.bUsedDeprecatedDetails)
+		{
+			Projected->SetArrayField(
+			    TEXT("deprecations"),
+			    {
+			        MakeShared<FJsonValueString>(
+			            TEXT("'details' is deprecated; use 'detailLevel' instead.")),
+			    });
+		}
+		return Projected;
+	}
+
+	TSharedPtr<FJsonObject> Projected = MakeShared<FJsonObject>();
+	static const TSet<FString> SummaryFields = {
+	    TEXT("schema"),     TEXT("plannerVersion"), TEXT("contractSetDigest"),
+	    TEXT("planDigest"), TEXT("contractSet"),    TEXT("validationScope"),
+	    TEXT("risk"),       TEXT("approval"),       TEXT("valid"),
+	};
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Response->Values)
+	{
+		if (SummaryFields.Contains(Field.Key))
+		{
+			Projected->SetField(Field.Key, Field.Value);
+		}
+	}
+	Projected->SetStringField(TEXT("detailLevel"), TEXT("summary"));
+
+	TSharedPtr<FJsonObject> Summary = MakeShared<FJsonObject>();
+	for (const FString& ArrayField :
+	     {TEXT("initializers"), TEXT("operations"), TEXT("finalizers"), TEXT("diagnostics")})
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+		if (Response->TryGetArrayField(ArrayField, Values) && Values)
+		{
+			Summary->SetNumberField(ArrayField + TEXT("Count"), Values->Num());
+		}
+	}
+	Projected->SetObjectField(TEXT("summary"), Summary);
+
+	TSharedPtr<FJsonObject> Sections = MakeShared<FJsonObject>();
+	for (const FString& SectionName : {TEXT("operations"), TEXT("finalizers"), TEXT("diagnostics")})
+	{
+		if (!Options.Sections.Contains(SectionName))
+		{
+			continue;
+		}
+		const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+		if (Response->TryGetArrayField(SectionName, Values) && Values)
+		{
+			Sections->SetArrayField(SectionName, *Values);
+		}
+	}
+	if (!Sections->Values.IsEmpty())
+	{
+		Projected->SetObjectField(TEXT("sections"), Sections);
+	}
+	if (Options.bUsedDeprecatedDetails)
+	{
+		Projected->SetArrayField(TEXT("deprecations"),
+		                         {
+		                             MakeShared<FJsonValueString>(TEXT(
+		                                 "'details' is deprecated; use 'detailLevel' instead.")),
+		                         });
+	}
+	return Projected;
+}
+
 FMCPResult FWorkflowRuntime::HandleRequest(
 	const TSharedPtr<FJsonObject>& Request)
 {
@@ -1040,13 +1328,9 @@ FMCPResult FWorkflowRuntime::HandleRequest(
 	}
 
 	static const TSet<FString> AllowedFields = {
-		TEXT("action"),
-		TEXT("workflow"),
-		TEXT("approvePlanDigest"),
-		TEXT("runId"),
-		TEXT("saveOnSuccess"),
-		TEXT("confirmWrite"),
-		TEXT("details"),
+	    TEXT("action"),  TEXT("workflow"),      TEXT("approvePlanDigest"),
+	    TEXT("runId"),   TEXT("saveOnSuccess"), TEXT("confirmWrite"),
+	    TEXT("details"), TEXT("detailLevel"),   TEXT("sections"),
 	};
 	for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Request->Values)
 	{
@@ -1088,7 +1372,12 @@ FMCPResult FWorkflowRuntime::HandleRequest(
 			422);
 	}
 
-	TSet<FString> ActionFields = {TEXT("action"), TEXT("details")};
+	TSet<FString> ActionFields = {
+	    TEXT("action"),
+	    TEXT("details"),
+	    TEXT("detailLevel"),
+	    TEXT("sections"),
+	};
 	if (Action == TEXT("validate") || Action == TEXT("plan"))
 	{
 		ActionFields.Add(TEXT("workflow"));
@@ -1137,6 +1426,13 @@ FMCPResult FWorkflowRuntime::HandleRequest(
 		}
 	}
 
+	FResponseOptions ResponseOptions;
+	FMCPResult ResponseOptionsFailure;
+	if (!ParseResponseOptions(Request, Action, ResponseOptions, ResponseOptionsFailure))
+	{
+		return ResponseOptionsFailure;
+	}
+
 	if (!CoreLoadResult.ok && Action != TEXT("status"))
 	{
 		return FMCPResult::Fail(
@@ -1158,14 +1454,13 @@ FMCPResult FWorkflowRuntime::HandleRequest(
 				TEXT("Action requires object field 'workflow'."),
 				422);
 		}
-		return Action == TEXT("validate")
-			? ValidateWorkflow(*Workflow)
-			: PlanWorkflow(*Workflow);
+		return Action == TEXT("validate") ? ValidateWorkflow(*Workflow, ResponseOptions)
+		                                  : PlanWorkflow(*Workflow, ResponseOptions);
 	}
 
 	if (Action == TEXT("execute"))
 	{
-		return ExecuteWorkflow(Request);
+		return ExecuteWorkflow(Request, ResponseOptions);
 	}
 
 	FString RunId;
@@ -1187,15 +1482,15 @@ FMCPResult FWorkflowRuntime::HandleRequest(
 
 	if (Action == TEXT("status"))
 	{
-		return GetStatus(RunId);
+		return GetStatus(RunId, ResponseOptions);
 	}
 	if (Action == TEXT("resume"))
 	{
-		return ResumeRun(RunId);
+		return ResumeRun(RunId, ResponseOptions);
 	}
 	if (Action == TEXT("rollback"))
 	{
-		return Rollback(Request);
+		return Rollback(Request, ResponseOptions);
 	}
 
 	return FMCPResult::Fail(
@@ -1204,8 +1499,8 @@ FMCPResult FWorkflowRuntime::HandleRequest(
 		422);
 }
 
-FMCPResult FWorkflowRuntime::ValidateWorkflow(
-	const TSharedPtr<FJsonObject>& Workflow) const
+FMCPResult FWorkflowRuntime::ValidateWorkflow(const TSharedPtr<FJsonObject>& Workflow,
+                                              const FResponseOptions& Options) const
 {
 	const ue::workflow::Result CoreResult =
 		CoreEngine.ValidateJson(ToUtf8(JsonStringify(Workflow)));
@@ -1226,11 +1521,11 @@ FMCPResult FWorkflowRuntime::ValidateWorkflow(
 			TEXT("UEWorkflowCore returned invalid validation JSON."),
 			500);
 	}
-	return FMCPResult::Ok(Data);
+	return FMCPResult::Ok(ProjectPlanningResponse(Data, Options));
 }
 
-FMCPResult FWorkflowRuntime::PlanWorkflow(
-	const TSharedPtr<FJsonObject>& Workflow) const
+FMCPResult FWorkflowRuntime::PlanWorkflow(const TSharedPtr<FJsonObject>& Workflow,
+                                          const FResponseOptions& Options) const
 {
 	TSharedPtr<FJsonObject> Plan;
 	FMCPResult Failure;
@@ -1238,7 +1533,7 @@ FMCPResult FWorkflowRuntime::PlanWorkflow(
 	{
 		return Failure;
 	}
-	return FMCPResult::Ok(Plan);
+	return FMCPResult::Ok(ProjectPlanningResponse(Plan, Options));
 }
 
 bool FWorkflowRuntime::TryPlan(
@@ -1268,8 +1563,8 @@ bool FWorkflowRuntime::TryPlan(
 	return true;
 }
 
-FMCPResult FWorkflowRuntime::ExecuteWorkflow(
-	const TSharedPtr<FJsonObject>& Request)
+FMCPResult FWorkflowRuntime::ExecuteWorkflow(const TSharedPtr<FJsonObject>& Request,
+                                             const FResponseOptions& Options)
 {
 	const TSharedPtr<FJsonObject>* Workflow = nullptr;
 	if (!Request->TryGetObjectField(TEXT("workflow"), Workflow)
@@ -1674,52 +1969,62 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(
 					{
 						Record.ReadBack = MakeShared<FJsonObject>();
 					}
-					const FString ReadBackKey =
-						GetStringField(Finalizer, TEXT("readBackKey"));
-					if (ReadBackKey == TEXT("graphs"))
+					TArray<FString> ReadBackKeys;
+					const TArray<TSharedPtr<FJsonValue>>* GroupedKeys = nullptr;
+					if (Finalizer->TryGetArrayField(TEXT("readBackKeys"), GroupedKeys) &&
+					    GroupedKeys)
 					{
-						TSharedPtr<FJsonObject> GraphResults;
-						const TSharedPtr<FJsonObject>* Existing = nullptr;
-						if (Record.ReadBack->TryGetObjectField(
-							ReadBackKey,
-							Existing)
-							&& Existing
-							&& Existing->IsValid())
+						for (const TSharedPtr<FJsonValue>& KeyValue : *GroupedKeys)
 						{
-							GraphResults = *Existing;
+							if (KeyValue.IsValid() && KeyValue->Type == EJson::String)
+							{
+								ReadBackKeys.Add(KeyValue->AsString());
+							}
+						}
+					}
+					if (ReadBackKeys.IsEmpty())
+					{
+						const FString ReadBackKey = GetStringField(Finalizer, TEXT("readBackKey"));
+						if (!ReadBackKey.IsEmpty())
+						{
+							ReadBackKeys.Add(ReadBackKey);
+						}
+					}
+
+					for (const FString& ReadBackKey : ReadBackKeys)
+					{
+						if (ReadBackKey == TEXT("graphs"))
+						{
+							TSharedPtr<FJsonObject> GraphResults;
+							const TSharedPtr<FJsonObject>* Existing = nullptr;
+							if (Record.ReadBack->TryGetObjectField(ReadBackKey, Existing) &&
+							    Existing && Existing->IsValid())
+							{
+								GraphResults = *Existing;
+							}
+							else
+							{
+								GraphResults = MakeShared<FJsonObject>();
+								Record.ReadBack->SetObjectField(ReadBackKey, GraphResults);
+							}
+							FString GraphName;
+							const TSharedPtr<FJsonObject>* FinalizerParams = nullptr;
+							if (Finalizer->TryGetObjectField(TEXT("params"), FinalizerParams) &&
+							    FinalizerParams && FinalizerParams->IsValid())
+							{
+								(*FinalizerParams)->TryGetStringField(TEXT("graph"), GraphName);
+							}
+							if (GraphName.IsEmpty())
+							{
+								GraphName = GetStringField(Finalizer, TEXT("id"));
+							}
+							GraphResults->SetObjectField(GraphName, Output);
 						}
 						else
 						{
-							GraphResults = MakeShared<FJsonObject>();
-							Record.ReadBack->SetObjectField(
-								ReadBackKey,
-								GraphResults);
+							Record.ReadBack->SetField(ReadBackKey,
+							                          ProjectReadBackValue(ReadBackKey, Output));
 						}
-						FString GraphName;
-						const TSharedPtr<FJsonObject>* FinalizerParams = nullptr;
-						if (Finalizer->TryGetObjectField(
-							TEXT("params"),
-							FinalizerParams)
-							&& FinalizerParams
-							&& FinalizerParams->IsValid())
-						{
-							(*FinalizerParams)->TryGetStringField(
-								TEXT("graph"),
-								GraphName);
-						}
-						if (GraphName.IsEmpty())
-						{
-							GraphName = GetStringField(
-								Finalizer,
-								TEXT("id"));
-						}
-						GraphResults->SetObjectField(GraphName, Output);
-					}
-					else
-					{
-						Record.ReadBack->SetObjectField(
-							ReadBackKey,
-							Output);
 					}
 				}
 				else if (FinalizerKind == TEXT("diff"))
@@ -1841,7 +2146,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(
 		const bool bJournalSaved = SaveRun(Record, JournalError);
 		Runs.Add(Record.RunId, Record);
 
-		TSharedPtr<FJsonObject> Details = Record.ToResultJson();
+		TSharedPtr<FJsonObject> Details = Record.ToResultJson(Options);
 		Details->SetStringField(
 			TEXT("causeCode"),
 			ExecutionFailure.Error.Code);
@@ -1885,7 +2190,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(
 			Runs.Add(Record.RunId, Record);
 			if (!bJournalSaved)
 			{
-				TSharedPtr<FJsonObject> Details = Record.ToResultJson();
+				TSharedPtr<FJsonObject> Details = Record.ToResultJson(Options);
 				Details->SetStringField(TEXT("journalError"), JournalError);
 				return FMCPResult::Fail(
 					TEXT("journal_write_failed"),
@@ -1893,11 +2198,9 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(
 					500,
 					Details);
 			}
-			return FMCPResult::Fail(
-				TEXT("workflow_save_failed"),
-				TEXT("Workflow verified, but the final asset save failed."),
-				500,
-				Record.ToResultJson());
+			return FMCPResult::Fail(TEXT("workflow_save_failed"),
+			                        TEXT("Workflow verified, but the final asset save failed."),
+			                        500, Record.ToResultJson(Options));
 		}
 		Record.RollbackStatus = TEXT("notAvailableAfterSave");
 		Record.bRollbackAvailable = false;
@@ -1935,7 +2238,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(
 	if (!SaveRun(Record, JournalError))
 	{
 		Runs.Add(Record.RunId, Record);
-		TSharedPtr<FJsonObject> Details = Record.ToResultJson();
+		TSharedPtr<FJsonObject> Details = Record.ToResultJson(Options);
 		Details->SetStringField(TEXT("journalError"), JournalError);
 		return FMCPResult::Fail(
 			TEXT("journal_write_failed"),
@@ -1944,7 +2247,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(
 			Details);
 	}
 	Runs.Add(Record.RunId, Record);
-	return FMCPResult::Ok(Record.ToResultJson());
+	return FMCPResult::Ok(Record.ToResultJson(Options));
 }
 
 bool FWorkflowRuntime::ExecuteOperation(
@@ -2405,7 +2708,7 @@ bool FWorkflowRuntime::ResolveBindings(
 	return true;
 }
 
-FMCPResult FWorkflowRuntime::GetStatus(const FString& RunId)
+FMCPResult FWorkflowRuntime::GetStatus(const FString& RunId, const FResponseOptions& Options)
 {
 	FRunRecord Record;
 	if (!LoadRun(RunId, Record))
@@ -2462,7 +2765,7 @@ FMCPResult FWorkflowRuntime::GetStatus(const FString& RunId)
 		FString JournalError;
 		if (!SaveRun(Record, JournalError))
 		{
-			TSharedPtr<FJsonObject> Details = Record.ToResultJson();
+			TSharedPtr<FJsonObject> Details = Record.ToResultJson(Options);
 			Details->SetStringField(TEXT("journalError"), JournalError);
 			return FMCPResult::Fail(
 				TEXT("journal_write_failed"),
@@ -2472,10 +2775,10 @@ FMCPResult FWorkflowRuntime::GetStatus(const FString& RunId)
 		}
 		Runs.Add(Record.RunId, Record);
 	}
-	return FMCPResult::Ok(Record.ToResultJson());
+	return FMCPResult::Ok(Record.ToResultJson(Options));
 }
 
-FMCPResult FWorkflowRuntime::ResumeRun(const FString& RunId)
+FMCPResult FWorkflowRuntime::ResumeRun(const FString& RunId, const FResponseOptions& Options)
 {
 	const FRunRecord* Existing = Runs.Find(RunId);
 	if (!Existing)
@@ -2484,8 +2787,7 @@ FMCPResult FWorkflowRuntime::ResumeRun(const FString& RunId)
 		if (LoadRun(RunId, JournalRecord)
 			&& JournalRecord.ServerInstanceId != ServerInstanceId)
 		{
-			TSharedPtr<FJsonObject> Details =
-				JournalRecord.ToResultJson();
+			TSharedPtr<FJsonObject> Details = JournalRecord.ToResultJson(Options);
 			Details->SetStringField(
 				TEXT("resumeMode"),
 				TEXT("rejectedDifferentInstance"));
@@ -2515,7 +2817,7 @@ FMCPResult FWorkflowRuntime::ResumeRun(const FString& RunId)
 
 	if (Existing->ServerInstanceId != ServerInstanceId)
 	{
-		TSharedPtr<FJsonObject> Details = Existing->ToResultJson();
+		TSharedPtr<FJsonObject> Details = Existing->ToResultJson(Options);
 		Details->SetStringField(
 			TEXT("resumeMode"),
 			TEXT("rejectedDifferentInstance"));
@@ -2536,7 +2838,7 @@ FMCPResult FWorkflowRuntime::ResumeRun(const FString& RunId)
 	};
 	if (!TerminalStatuses.Contains(Existing->Status))
 	{
-		TSharedPtr<FJsonObject> Details = Existing->ToResultJson();
+		TSharedPtr<FJsonObject> Details = Existing->ToResultJson(Options);
 		Details->SetStringField(
 			TEXT("resumeMode"),
 			TEXT("rejectedUnsafeContinuation"));
@@ -2551,7 +2853,7 @@ FMCPResult FWorkflowRuntime::ResumeRun(const FString& RunId)
 			Details);
 	}
 
-	TSharedPtr<FJsonObject> Result = Existing->ToResultJson();
+	TSharedPtr<FJsonObject> Result = Existing->ToResultJson(Options);
 	Result->SetStringField(
 		TEXT("resumeMode"),
 		TEXT("terminalReattach"));
@@ -2560,8 +2862,8 @@ FMCPResult FWorkflowRuntime::ResumeRun(const FString& RunId)
 	return FMCPResult::Ok(Result);
 }
 
-FMCPResult FWorkflowRuntime::Rollback(
-	const TSharedPtr<FJsonObject>& Request)
+FMCPResult FWorkflowRuntime::Rollback(const TSharedPtr<FJsonObject>& Request,
+                                      const FResponseOptions& Options)
 {
 	const FString RunId = GetStringField(Request, TEXT("runId"));
 	FRunRecord Record;
@@ -2575,17 +2877,16 @@ FMCPResult FWorkflowRuntime::Rollback(
 	if (Record.ServerInstanceId != ServerInstanceId)
 	{
 		return FMCPResult::Fail(
-			TEXT("workflow_instance_changed"),
-			TEXT("Rollback is only available in the Editor instance that executed the run."),
-			409,
-			Record.ToResultJson());
+		    TEXT("workflow_instance_changed"),
+		    TEXT("Rollback is only available in the Editor instance that executed the run."), 409,
+		    Record.ToResultJson(Options));
 	}
 
 	FString ApprovedDigest;
 	if (!Request->TryGetStringField(TEXT("approvePlanDigest"), ApprovedDigest)
 		|| ApprovedDigest != Record.PlanDigest)
 	{
-		TSharedPtr<FJsonObject> Details = Record.ToResultJson();
+		TSharedPtr<FJsonObject> Details = Record.ToResultJson(Options);
 		Details->SetStringField(TEXT("requiredPlanDigest"), Record.PlanDigest);
 		return FMCPResult::Fail(
 			TEXT("plan_digest_mismatch"),
@@ -2620,7 +2921,7 @@ FMCPResult FWorkflowRuntime::Rollback(
 		FString JournalError;
 		if (!SaveRun(Record, JournalError))
 		{
-			TSharedPtr<FJsonObject> Details = Record.ToResultJson();
+			TSharedPtr<FJsonObject> Details = Record.ToResultJson(Options);
 			Details->SetStringField(TEXT("journalError"), JournalError);
 			return FMCPResult::Fail(
 				TEXT("journal_write_failed"),
@@ -2630,10 +2931,10 @@ FMCPResult FWorkflowRuntime::Rollback(
 		}
 		Runs.Add(Record.RunId, Record);
 		return FMCPResult::Fail(
-			TEXT("workflow_rollback_not_available"),
-			TEXT("Workflow rollback is no longer safe because neither the Undo transaction nor an unchanged in-memory post-state is available."),
-			409,
-			Record.ToResultJson());
+		    TEXT("workflow_rollback_not_available"),
+		    TEXT("Workflow rollback is no longer safe because neither the Undo transaction nor an "
+		         "unchanged in-memory post-state is available."),
+		    409, Record.ToResultJson(Options));
 	}
 
 	bool bUndoApplied = false;
@@ -2698,7 +2999,7 @@ FMCPResult FWorkflowRuntime::Rollback(
 	if (!SaveRun(Record, JournalError))
 	{
 		Runs.Add(Record.RunId, Record);
-		TSharedPtr<FJsonObject> Details = Record.ToResultJson();
+		TSharedPtr<FJsonObject> Details = Record.ToResultJson(Options);
 		Details->SetStringField(TEXT("journalError"), JournalError);
 		return FMCPResult::Fail(
 			TEXT("journal_write_failed"),
@@ -2710,15 +3011,14 @@ FMCPResult FWorkflowRuntime::Rollback(
 	if (!Record.bRollbackVerified)
 	{
 		return FMCPResult::Fail(
-			TEXT("workflow_rollback_verification_failed"),
-			TEXT("Workflow rollback could not restore and verify the pre-run scope structure."),
-			500,
-			Record.ToResultJson());
+		    TEXT("workflow_rollback_verification_failed"),
+		    TEXT("Workflow rollback could not restore and verify the pre-run scope structure."),
+		    500, Record.ToResultJson(Options));
 	}
-	return FMCPResult::Ok(Record.ToResultJson());
+	return FMCPResult::Ok(Record.ToResultJson(Options));
 }
 
-TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToJson() const
+TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToJournalJson() const
 {
 	TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
 	Json->SetStringField(TEXT("schema"), TEXT("ue.workflow-run.v1"));
@@ -2795,10 +3095,44 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToJson() const
 	return Json;
 }
 
-TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson() const
+TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToReceiptJson() const
 {
-	TSharedPtr<FJsonObject> Json = ToJson();
+	TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
+	Json->SetStringField(TEXT("schema"), TEXT("ue.workflow-run.v1"));
+	Json->SetStringField(TEXT("runId"), RunId);
+	Json->SetStringField(TEXT("serverInstanceId"), ServerInstanceId);
+	Json->SetStringField(TEXT("workflowId"), WorkflowId);
+	Json->SetStringField(TEXT("scopeAsset"), ScopeAsset);
+	Json->SetStringField(TEXT("planDigest"), PlanDigest);
+	Json->SetStringField(TEXT("contractSetDigest"), ContractSetDigest);
+	Json->SetStringField(TEXT("status"), Status);
+	Json->SetStringField(TEXT("rollbackStatus"), RollbackStatus);
+	Json->SetBoolField(TEXT("rollbackAvailable"), bRollbackAvailable);
+	Json->SetBoolField(TEXT("rollbackVerified"), bRollbackVerified);
+	Json->SetStringField(TEXT("structureHashBefore"), StructureHashBefore);
+	Json->SetStringField(TEXT("structureHashAfter"), StructureHashAfter);
+	Json->SetStringField(TEXT("structureHashAfterRollback"), StructureHashAfterRollback);
+	return Json;
+}
+
+TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson(
+    const FResponseOptions& Options) const
+{
+	TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
 	Json->SetStringField(TEXT("schema"), TEXT("ue.workflow-result.v1"));
+	Json->SetStringField(TEXT("runId"), RunId);
+	Json->SetStringField(TEXT("workflowId"), WorkflowId);
+	Json->SetStringField(TEXT("scopeAsset"), ScopeAsset);
+	Json->SetStringField(TEXT("status"), Status);
+	Json->SetStringField(TEXT("planDigest"), PlanDigest);
+	Json->SetStringField(TEXT("contractSetDigest"), ContractSetDigest);
+	Json->SetStringField(TEXT("rollbackStatus"), RollbackStatus);
+	Json->SetBoolField(TEXT("rollbackAvailable"), bRollbackAvailable);
+	Json->SetBoolField(TEXT("rollbackVerified"), bRollbackVerified);
+	Json->SetStringField(TEXT("detailLevel"),
+	                     Options.DetailLevel == EDetailLevel::Full       ? TEXT("full")
+	                     : Options.DetailLevel == EDetailLevel::Standard ? TEXT("standard")
+	                                                                     : TEXT("summary"));
 	bool bChanged = false;
 	if (AssetDiff.IsValid())
 	{
@@ -2825,6 +3159,46 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson() const
 		}
 	}
 	const bool bCompleted = Status == TEXT("completed");
+	auto ProjectMutationDiagnostics = [this](const bool bWarnings)
+	{
+		TArray<TSharedPtr<FJsonValue>> Projected;
+		for (const TSharedPtr<FJsonValue>& DiagnosticValue : Diagnostics)
+		{
+			if (!DiagnosticValue.IsValid())
+			{
+				continue;
+			}
+			if (DiagnosticValue->Type != EJson::Object)
+			{
+				if (!bWarnings)
+				{
+					Projected.Add(DiagnosticValue);
+				}
+				continue;
+			}
+
+			const TSharedPtr<FJsonObject> Diagnostic = DiagnosticValue->AsObject();
+			FString Severity;
+			Diagnostic->TryGetStringField(TEXT("severity"), Severity);
+			const bool bIsWarning = Severity.Equals(TEXT("warning"), ESearchCase::IgnoreCase);
+			if (bIsWarning != bWarnings)
+			{
+				continue;
+			}
+
+			TSharedPtr<FJsonObject> Compact = MakeShared<FJsonObject>();
+			for (const TCHAR* FieldName : {TEXT("severity"), TEXT("code"), TEXT("message")})
+			{
+				FString Value;
+				if (Diagnostic->TryGetStringField(FieldName, Value) && !Value.IsEmpty())
+				{
+					Compact->SetStringField(FieldName, Value);
+				}
+			}
+			Projected.Add(MakeShared<FJsonValueObject>(Compact));
+		}
+		return Projected;
+	};
 	TSharedPtr<FJsonObject> Mutation = MakeShared<FJsonObject>();
 	Mutation->SetBoolField(TEXT("changed"), bChanged);
 	Mutation->SetBoolField(TEXT("compiled"), bCompiled);
@@ -2846,14 +3220,189 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson() const
 	Mutation->SetStringField(TEXT("afterHash"), StructureHashAfter);
 	Mutation->SetArrayField(
 		TEXT("warnings"),
-		TArray<TSharedPtr<FJsonValue>>());
+		ProjectMutationDiagnostics(true));
 	Mutation->SetArrayField(
 		TEXT("errors"),
 		bCompleted
 			? TArray<TSharedPtr<FJsonValue>>()
-			: Diagnostics);
+			: ProjectMutationDiagnostics(false));
 	Json->SetObjectField(TEXT("mutation"), Mutation);
-	Json->SetObjectField(TEXT("receipt"), ToJson());
+	Json->SetObjectField(TEXT("receipt"), ToReceiptJson());
+	auto MakeStatusCounts = [](const TArray<TSharedPtr<FJsonValue>>& Records)
+	{
+		TSharedPtr<FJsonObject> Counts = MakeShared<FJsonObject>();
+		Counts->SetNumberField(TEXT("total"), Records.Num());
+		TMap<FString, int32> StatusCounts;
+		for (const TSharedPtr<FJsonValue>& Value : Records)
+		{
+			if (!Value.IsValid() || Value->Type != EJson::Object)
+			{
+				continue;
+			}
+			FString RecordStatus;
+			if (Value->AsObject()->TryGetStringField(TEXT("status"), RecordStatus) &&
+			    !RecordStatus.IsEmpty())
+			{
+				++StatusCounts.FindOrAdd(RecordStatus);
+			}
+		}
+		TArray<FString> StatusNames;
+		StatusCounts.GetKeys(StatusNames);
+		StatusNames.Sort();
+		for (const FString& StatusName : StatusNames)
+		{
+			Counts->SetNumberField(StatusName, StatusCounts.FindChecked(StatusName));
+		}
+		return Counts;
+	};
+
+	TSharedPtr<FJsonObject> DiffSummary = MakeShared<FJsonObject>();
+	DiffSummary->SetBoolField(TEXT("changed"), bChanged);
+	if (AssetDiff.IsValid())
+	{
+		const TSharedPtr<FJsonObject>* ExistingSummary = nullptr;
+		if (AssetDiff->TryGetObjectField(TEXT("summary"), ExistingSummary) && ExistingSummary &&
+		    ExistingSummary->IsValid())
+		{
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : (*ExistingSummary)->Values)
+			{
+				DiffSummary->SetField(Field.Key, Field.Value);
+			}
+		}
+	}
+	DiffSummary->SetStringField(TEXT("beforeHash"), StructureHashBefore);
+	DiffSummary->SetStringField(TEXT("afterHash"), StructureHashAfter);
+
+	TSharedPtr<FJsonObject> Summary = MakeShared<FJsonObject>();
+	Summary->SetObjectField(TEXT("operations"), MakeStatusCounts(Operations));
+	Summary->SetObjectField(TEXT("finalizers"), MakeStatusCounts(Finalizers));
+	Summary->SetNumberField(TEXT("dirtyPackageCount"), DirtyPackages.Num());
+	Summary->SetNumberField(TEXT("diagnosticCount"), Diagnostics.Num());
+	Summary->SetObjectField(TEXT("diff"), DiffSummary);
+	TSharedPtr<FJsonObject> RollbackSummary = MakeShared<FJsonObject>();
+	RollbackSummary->SetStringField(TEXT("status"), RollbackStatus);
+	RollbackSummary->SetBoolField(TEXT("available"), bRollbackAvailable);
+	RollbackSummary->SetBoolField(TEXT("verified"), bRollbackVerified);
+	Summary->SetObjectField(TEXT("rollback"), RollbackSummary);
+	Json->SetObjectField(TEXT("summary"), Summary);
+
+	static const TArray<FString> AvailableSectionNames = {
+	    TEXT("operations"), TEXT("finalizers"), TEXT("readBack"),    TEXT("assetDiff"),
+	    TEXT("structures"), TEXT("rollback"),   TEXT("diagnostics"),
+	};
+	TArray<TSharedPtr<FJsonValue>> AvailableSections;
+	for (const FString& SectionName : AvailableSectionNames)
+	{
+		AvailableSections.Add(MakeShared<FJsonValueString>(SectionName));
+	}
+	Json->SetArrayField(TEXT("availableSections"), AvailableSections);
+	TSharedPtr<FJsonObject> ResultRef = MakeShared<FJsonObject>();
+	ResultRef->SetStringField(TEXT("runId"), RunId);
+	ResultRef->SetStringField(TEXT("action"), TEXT("status"));
+	ResultRef->SetArrayField(TEXT("availableSections"), AvailableSections);
+	Json->SetObjectField(TEXT("resultRef"), ResultRef);
+
+	auto StripRecordData = [](const TArray<TSharedPtr<FJsonValue>>& Records)
+	{
+		TArray<TSharedPtr<FJsonValue>> Projected;
+		Projected.Reserve(Records.Num());
+		for (const TSharedPtr<FJsonValue>& Value : Records)
+		{
+			if (!Value.IsValid() || Value->Type != EJson::Object)
+			{
+				continue;
+			}
+			TSharedPtr<FJsonObject> Record = MakeShared<FJsonObject>();
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Value->AsObject()->Values)
+			{
+				if (Field.Key != TEXT("data"))
+				{
+					Record->SetField(Field.Key, Field.Value);
+				}
+			}
+			Projected.Add(MakeShared<FJsonValueObject>(Record));
+		}
+		return Projected;
+	};
+
+	auto ShouldInclude = [&Options](const FString& SectionName)
+	{
+		if (Options.DetailLevel == EDetailLevel::Full || Options.Sections.Contains(SectionName))
+		{
+			return true;
+		}
+		return Options.DetailLevel == EDetailLevel::Standard &&
+		       (SectionName == TEXT("operations") || SectionName == TEXT("finalizers") ||
+		        SectionName == TEXT("diagnostics"));
+	};
+
+	TSharedPtr<FJsonObject> Sections = MakeShared<FJsonObject>();
+	if (ShouldInclude(TEXT("operations")))
+	{
+		Sections->SetArrayField(TEXT("operations"),
+		                        Options.DetailLevel == EDetailLevel::Full ||
+		                                Options.Sections.Contains(TEXT("operations"))
+		                            ? Operations
+		                            : StripRecordData(Operations));
+	}
+	if (ShouldInclude(TEXT("finalizers")))
+	{
+		// Read-back and diff payloads live in their dedicated sections.
+		Sections->SetArrayField(TEXT("finalizers"), StripRecordData(Finalizers));
+	}
+	if (ShouldInclude(TEXT("readBack")))
+	{
+		Sections->SetObjectField(TEXT("readBack"),
+		                         ReadBack.IsValid() ? ReadBack : MakeShared<FJsonObject>());
+	}
+	if (ShouldInclude(TEXT("assetDiff")))
+	{
+		Sections->SetObjectField(TEXT("assetDiff"),
+		                         AssetDiff.IsValid() ? AssetDiff : MakeShared<FJsonObject>());
+	}
+	if (ShouldInclude(TEXT("structures")))
+	{
+		TSharedPtr<FJsonObject> Structures = MakeShared<FJsonObject>();
+		Structures->SetObjectField(TEXT("before"), StructureBefore.IsValid()
+		                                               ? StructureBefore
+		                                               : MakeShared<FJsonObject>());
+		Structures->SetObjectField(
+		    TEXT("after"), StructureAfter.IsValid() ? StructureAfter : MakeShared<FJsonObject>());
+		Structures->SetObjectField(TEXT("afterRollback"), StructureAfterRollback.IsValid()
+		                                                      ? StructureAfterRollback
+		                                                      : MakeShared<FJsonObject>());
+		Sections->SetObjectField(TEXT("structures"), Structures);
+	}
+	if (ShouldInclude(TEXT("rollback")))
+	{
+		TSharedPtr<FJsonObject> Rollback = MakeShared<FJsonObject>();
+		Rollback->SetStringField(TEXT("status"), RollbackStatus);
+		Rollback->SetBoolField(TEXT("available"), bRollbackAvailable);
+		Rollback->SetBoolField(TEXT("verified"), bRollbackVerified);
+		Rollback->SetBoolField(TEXT("executionMemorySnapshotCaptured"), bMemorySnapshotCaptured);
+		Rollback->SetBoolField(TEXT("executionMemoryRestoreAttempted"),
+		                       bMemorySnapshotRestoreAttempted);
+		Rollback->SetBoolField(TEXT("executionMemoryRestored"), bMemorySnapshotRestored);
+		Rollback->SetStringField(TEXT("structureHashAfter"), StructureHashAfterRollback);
+		Sections->SetObjectField(TEXT("rollback"), Rollback);
+	}
+	if (ShouldInclude(TEXT("diagnostics")))
+	{
+		Sections->SetArrayField(TEXT("diagnostics"), Diagnostics);
+	}
+	if (!Sections->Values.IsEmpty())
+	{
+		Json->SetObjectField(TEXT("sections"), Sections);
+	}
+
+	if (Options.bUsedDeprecatedDetails)
+	{
+		Json->SetArrayField(TEXT("deprecations"),
+		                    {
+		                        MakeShared<FJsonValueString>(
+		                            TEXT("'details' is deprecated; use 'detailLevel' instead.")),
+		                    });
+	}
 	return Json;
 }
 
@@ -3000,10 +3549,8 @@ bool FWorkflowRuntime::SaveRun(
 
 	const FString FinalPath = GetRunPath(Record.RunId);
 	const FString TemporaryPath = FinalPath + TEXT(".tmp");
-	if (!FFileHelper::SaveStringToFile(
-		JsonStringify(Record.ToJson()),
-		*TemporaryPath,
-		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	if (!FFileHelper::SaveStringToFile(JsonStringify(Record.ToJournalJson()), *TemporaryPath,
+	                                   FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 	{
 		OutError = FString::Printf(
 			TEXT("Could not write journal '%s'."),

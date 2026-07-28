@@ -105,25 +105,20 @@ int main()
             "widget initializer uses widget create capability");
     require(widget["operations"][0]["dependsOn"][0] == "$initializer.create",
             "authored operations depend on initializer");
-    require(widget["finalizers"].size() == 5, "widget compile/readback/diff finalizers emitted");
+    require(widget["finalizers"].size() == 3,
+            "widget compile/grouped readback/diff finalizers emitted");
     require(
         widget["finalizers"][0]["operationType"] == "blueprint.asset.compile",
         "widget workflow uses the lifecycle compile finalizer");
-    for (std::size_t index = 1; index + 1 < widget["finalizers"].size(); ++index)
-    {
-        require(
-            widget["finalizers"][index]["dependsOn"] ==
-                json::array({ "$finalizer.compile" }),
-            "read-back finalizers depend on compile");
-    }
-    json read_back_ids = json::array();
-    for (std::size_t index = 1; index + 1 < widget["finalizers"].size(); ++index)
-    {
-        read_back_ids.push_back(widget["finalizers"][index]["id"]);
-    }
-    require(
-        widget["finalizers"].back()["dependsOn"] == read_back_ids,
-        "diff depends on every read-back finalizer");
+    const auto& grouped_readback = widget["finalizers"][1];
+    require(grouped_readback["operationType"] == "content.widget.hierarchy.get",
+            "widget read-back uses one hierarchy query");
+    require(grouped_readback["dependsOn"] == json::array({"$finalizer.compile"}),
+            "grouped read-back depends on compile");
+    require(grouped_readback["readBackKeys"] == json::array({"widgetTree", "bindings", "layout"}),
+            "grouped read-back preserves deterministic projection order");
+    require(widget["finalizers"].back()["dependsOn"] == json::array({grouped_readback["id"]}),
+            "diff depends on the grouped read-back finalizer");
     require(widget["approval"]["required"] == true, "write plan requires approval");
     require(widget["approval"]["confirmWriteRequired"] == false,
             "safe widget plan does not require confirmWrite");

@@ -40,6 +40,45 @@
     "receipt": {
       "type": "object"
     },
+    "detailLevel": {
+      "enum": [
+        "summary",
+        "standard",
+        "full"
+      ]
+    },
+    "summary": {
+      "type": "object"
+    },
+    "resultRef": {
+      "type": "object"
+    },
+    "availableSections": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "operations",
+          "finalizers",
+          "readBack",
+          "assetDiff",
+          "structures",
+          "rollback",
+          "diagnostics"
+        ]
+      }
+    },
+    "sections": {
+      "type": "object"
+    },
+    "mutation": {
+      "type": "object"
+    },
+    "deprecations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "operations": {
       "type": "array"
     },
