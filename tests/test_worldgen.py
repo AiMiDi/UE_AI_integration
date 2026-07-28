@@ -54,7 +54,7 @@ def main() -> int:
                         "name": name,
                         "location": location,
                         "scale": scale,
-                        "static_mesh": "/Engine/BasicShapes/Cube.Cube",
+                        "staticMesh": "/Engine/BasicShapes/Cube.Cube",
                     },
                 )
                 spawned.append(name)

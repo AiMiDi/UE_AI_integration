@@ -158,8 +158,8 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString BBPath = Params->GetStringField(TEXT("blackboard"));
-		FString KeyName = Params->GetStringField(TEXT("key_name"));
-		FString KeyType = Params->GetStringField(TEXT("key_type")).ToLower();
+		FString KeyName = Params->GetStringField(TEXT("keyName"));
+		FString KeyType = Params->GetStringField(TEXT("keyType")).ToLower();
 
 		UBlackboardData* BB = LoadObject<UBlackboardData>(nullptr, *BBPath);
 		if (!BB)
@@ -202,8 +202,8 @@ public:
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("blackboard"), BBPath);
-		Result->SetStringField(TEXT("key_name"), KeyName);
-		Result->SetStringField(TEXT("key_type"), KeyType);
+		Result->SetStringField(TEXT("keyName"), KeyName);
+		Result->SetStringField(TEXT("keyType"), KeyType);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -222,8 +222,8 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString TreePath = Params->GetStringField(TEXT("tree"));
-		FString TaskClassName = Params->GetStringField(TEXT("task_class"));
-		int32 ParentIndex = Params->HasField(TEXT("parent_index")) ? (int32)Params->GetNumberField(TEXT("parent_index")) : 0;
+		FString TaskClassName = Params->GetStringField(TEXT("taskClass"));
+		int32 ParentIndex = Params->HasField(TEXT("parentIndex")) ? (int32)Params->GetNumberField(TEXT("parentIndex")) : 0;
 
 		UBehaviorTree* BT = LoadObject<UBehaviorTree>(nullptr, *TreePath);
 		if (!BT)
@@ -296,7 +296,7 @@ public:
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("tree"), TreePath);
-		Result->SetStringField(TEXT("task_class"), TaskClassName);
+		Result->SetStringField(TEXT("taskClass"), TaskClassName);
 		Result->SetNumberField(TEXT("child_index"), ParentNode->Children.Num() - 1);
 		return FMCPToolResult::Ok(Result);
 	}
@@ -316,8 +316,8 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString TreePath = Params->GetStringField(TEXT("tree"));
-		FString DecClassName = Params->GetStringField(TEXT("decorator_class"));
-		int32 NodeIndex = Params->HasField(TEXT("node_index")) ? (int32)Params->GetNumberField(TEXT("node_index")) : 0;
+		FString DecClassName = Params->GetStringField(TEXT("decoratorClass"));
+		int32 NodeIndex = Params->HasField(TEXT("nodeIndex")) ? (int32)Params->GetNumberField(TEXT("nodeIndex")) : 0;
 
 		UBehaviorTree* BT = LoadObject<UBehaviorTree>(nullptr, *TreePath);
 		if (!BT || !BT->RootNode)
@@ -380,8 +380,8 @@ public:
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("tree"), TreePath);
-		Result->SetStringField(TEXT("decorator_class"), DecClassName);
-		Result->SetNumberField(TEXT("node_index"), NodeIndex);
+		Result->SetStringField(TEXT("decoratorClass"), DecClassName);
+		Result->SetNumberField(TEXT("nodeIndex"), NodeIndex);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -400,8 +400,8 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString TreePath = Params->GetStringField(TEXT("tree"));
-		FString SvcClassName = Params->GetStringField(TEXT("service_class"));
-		int32 NodeIndex = Params->HasField(TEXT("node_index")) ? (int32)Params->GetNumberField(TEXT("node_index")) : 0;
+		FString SvcClassName = Params->GetStringField(TEXT("serviceClass"));
+		int32 NodeIndex = Params->HasField(TEXT("nodeIndex")) ? (int32)Params->GetNumberField(TEXT("nodeIndex")) : 0;
 
 		UBehaviorTree* BT = LoadObject<UBehaviorTree>(nullptr, *TreePath);
 		if (!BT || !BT->RootNode)
@@ -454,8 +454,8 @@ public:
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("tree"), TreePath);
-		Result->SetStringField(TEXT("service_class"), SvcClassName);
-		Result->SetNumberField(TEXT("node_index"), NodeIndex);
+		Result->SetStringField(TEXT("serviceClass"), SvcClassName);
+		Result->SetNumberField(TEXT("nodeIndex"), NodeIndex);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -474,7 +474,7 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString TreePath = Params->GetStringField(TEXT("tree"));
-		int32 ParentIndex = Params->HasField(TEXT("parent_index")) ? (int32)Params->GetNumberField(TEXT("parent_index")) : 0;
+		int32 ParentIndex = Params->HasField(TEXT("parentIndex")) ? (int32)Params->GetNumberField(TEXT("parentIndex")) : 0;
 
 		UBehaviorTree* BT = LoadObject<UBehaviorTree>(nullptr, *TreePath);
 		if (!BT || !BT->RootNode)
@@ -516,7 +516,7 @@ public:
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("tree"), TreePath);
 		Result->SetStringField(TEXT("type"), TEXT("Selector"));
-		Result->SetNumberField(TEXT("parent_index"), ParentIndex);
+		Result->SetNumberField(TEXT("parentIndex"), ParentIndex);
 		Result->SetNumberField(TEXT("child_index"), ParentNode->Children.Num() - 1);
 		return FMCPToolResult::Ok(Result);
 	}
@@ -536,7 +536,7 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString TreePath = Params->GetStringField(TEXT("tree"));
-		int32 ParentIndex = Params->HasField(TEXT("parent_index")) ? (int32)Params->GetNumberField(TEXT("parent_index")) : 0;
+		int32 ParentIndex = Params->HasField(TEXT("parentIndex")) ? (int32)Params->GetNumberField(TEXT("parentIndex")) : 0;
 
 		UBehaviorTree* BT = LoadObject<UBehaviorTree>(nullptr, *TreePath);
 		if (!BT || !BT->RootNode)
@@ -578,7 +578,7 @@ public:
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("tree"), TreePath);
 		Result->SetStringField(TEXT("type"), TEXT("Sequence"));
-		Result->SetNumberField(TEXT("parent_index"), ParentIndex);
+		Result->SetNumberField(TEXT("parentIndex"), ParentIndex);
 		Result->SetNumberField(TEXT("child_index"), ParentNode->Children.Num() - 1);
 		return FMCPToolResult::Ok(Result);
 	}

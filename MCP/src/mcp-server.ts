@@ -293,7 +293,7 @@ export function createMcpServer(
   const cliLocator = options.cliLocator ?? locateWorkflowCli;
   const server = new McpServer({
     name: "ue-ai-integration",
-    version: "0.3.1",
+    version: "0.5.0",
   });
 
   server.tool(

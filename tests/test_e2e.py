@@ -45,7 +45,7 @@ def main() -> int:
                 "type": "StaticMeshActor",
                 "name": cube_name,
                 "location": [200, 0, 100],
-                "static_mesh": "/Engine/BasicShapes/Cube.Cube",
+                "staticMesh": "/Engine/BasicShapes/Cube.Cube",
             },
         )
         check("spawn StaticMeshActor", True, cube_name)

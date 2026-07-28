@@ -1,6 +1,6 @@
 {
   "name": "ue-ai-integration",
-  "version": "0.3.1",
+  "version": "0.5.0",
   "description": "Manifest-driven MCP bridge for controlling a running Unreal Editor through eleven stable tools",
   "type": "module",
   "main": "dist/index.js",

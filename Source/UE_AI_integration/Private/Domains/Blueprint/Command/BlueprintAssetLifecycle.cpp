@@ -274,7 +274,7 @@ public:
 		}
 		bool bOnlyIfDirty = false;
 		Params->TryGetBoolField(
-			TEXT("only_if_dirty"),
+			TEXT("onlyIfDirty"),
 			bOnlyIfDirty);
 		const bool bDirtyBefore = Package->IsDirty();
 		if (bOnlyIfDirty && !bDirtyBefore)

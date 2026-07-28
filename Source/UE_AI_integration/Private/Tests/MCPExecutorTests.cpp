@@ -221,7 +221,7 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 
 	TSharedPtr<FJsonObject> LegacyPackageParams = MakeShared<FJsonObject>();
 	LegacyPackageParams->SetStringField(TEXT("platform"), TEXT("Win64"));
-	LegacyPackageParams->SetStringField(TEXT("output_dir"), TEXT("LegacyPackage"));
+	LegacyPackageParams->SetStringField(TEXT("outputDir"), TEXT("LegacyPackage"));
 	const FMCPResult LegacyPackage = Executor.Execute(
 		{TEXT("production.project.package"), LegacyPackageParams});
 	TestTrue(
@@ -230,7 +230,7 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 
 	TSharedPtr<FJsonObject> LegacyCommandletParams = MakeShared<FJsonObject>();
 	LegacyCommandletParams->SetStringField(
-		TEXT("commandlet_name"),
+		TEXT("commandletName"),
 		TEXT("ResavePackages"));
 	const FMCPResult LegacyCommandlet = Executor.Execute(
 		{TEXT("production.commandlet.run"), LegacyCommandletParams});

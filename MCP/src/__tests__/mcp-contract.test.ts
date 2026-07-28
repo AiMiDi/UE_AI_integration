@@ -654,9 +654,9 @@ test("forwards an optional requestId through a domain router", async () => {
     "content",
     "content.widget.event.unbind",
     {
-      widget_bp: "/Game/UI/WBP_Test",
-      widget_name: "ApplyButton",
-      event_name: "OnClicked",
+      widgetBp: "/Game/UI/WBP_Test",
+      widgetName: "ApplyButton",
+      eventName: "OnClicked",
     },
     "request-001",
   );
@@ -666,9 +666,9 @@ test("forwards an optional requestId through a domain router", async () => {
     {
       operation: "content.widget.event.unbind",
       params: {
-        widget_bp: "/Game/UI/WBP_Test",
-        widget_name: "ApplyButton",
-        event_name: "OnClicked",
+        widgetBp: "/Game/UI/WBP_Test",
+        widgetName: "ApplyButton",
+        eventName: "OnClicked",
       },
       requestId: "request-001",
     },

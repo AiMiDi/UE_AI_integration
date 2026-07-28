@@ -63,6 +63,49 @@ test("loads all six shipped manifests without regressing the shipped baseline", 
   }
 });
 
+test("uses lower camelCase for every public capability input field", () => {
+  const catalog = loadCapabilityCatalog();
+  const visit = (schema: Record<string, unknown>, path: string): void => {
+    const properties = schema.properties;
+    if (
+      properties !== null &&
+      typeof properties === "object" &&
+      !Array.isArray(properties)
+    ) {
+      for (const [field, child] of Object.entries(properties)) {
+        assert.match(field, /^[a-z][A-Za-z0-9]*$/, `${path}.${field}`);
+        if (child !== null && typeof child === "object" && !Array.isArray(child)) {
+          visit(child as Record<string, unknown>, `${path}.${field}`);
+        }
+      }
+    }
+    const items = schema.items;
+    if (items !== null && typeof items === "object" && !Array.isArray(items)) {
+      visit(items as Record<string, unknown>, `${path}.items`);
+    }
+    for (const combinator of ["allOf", "anyOf", "oneOf"]) {
+      const entries = schema[combinator];
+      if (Array.isArray(entries)) {
+        entries.forEach((entry, index) => {
+          if (entry !== null && typeof entry === "object" && !Array.isArray(entry)) {
+            visit(
+              entry as Record<string, unknown>,
+              `${path}.${combinator}[${index}]`,
+            );
+          }
+        });
+      }
+    }
+  };
+
+  for (const capability of catalog.capabilities) {
+    visit(
+      capability.inputSchema as Record<string, unknown>,
+      capability.id,
+    );
+  }
+});
+
 test("ships the exact 0.3.0 capability additions with strict root schemas", () => {
   const catalog = loadCapabilityCatalog();
   const additions = [

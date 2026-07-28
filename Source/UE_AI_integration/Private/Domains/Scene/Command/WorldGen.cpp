@@ -96,7 +96,7 @@ public:
 
 		int32 Length    = Params->HasField(TEXT("length"))     ? static_cast<int32>(Params->GetNumberField(TEXT("length")))    : 5;
 		int32 Height    = Params->HasField(TEXT("height"))     ? static_cast<int32>(Params->GetNumberField(TEXT("height")))    : 2;
-		float BlockSize = Params->HasField(TEXT("block_size")) ? static_cast<float>(Params->GetNumberField(TEXT("block_size"))): 100.f;
+		float BlockSize = Params->HasField(TEXT("blockSize")) ? static_cast<float>(Params->GetNumberField(TEXT("blockSize"))): 100.f;
 		FString Orient  = TEXT("x");
 		Params->TryGetStringField(TEXT("orientation"), Orient);
 		FVector Origin  = JsonArrayToVec(Params, TEXT("location"));
@@ -145,8 +145,8 @@ public:
 		if (!World) return FMCPToolResult::Error(TEXT("No editor world"));
 
 		int32 Height    = Params->HasField(TEXT("height"))     ? static_cast<int32>(Params->GetNumberField(TEXT("height")))    : 10;
-		int32 BaseSize  = Params->HasField(TEXT("base_size"))  ? static_cast<int32>(Params->GetNumberField(TEXT("base_size"))) : 4;
-		float BlockSize = Params->HasField(TEXT("block_size")) ? static_cast<float>(Params->GetNumberField(TEXT("block_size"))): 100.f;
+		int32 BaseSize  = Params->HasField(TEXT("baseSize"))  ? static_cast<int32>(Params->GetNumberField(TEXT("baseSize"))) : 4;
+		float BlockSize = Params->HasField(TEXT("blockSize")) ? static_cast<float>(Params->GetNumberField(TEXT("blockSize"))): 100.f;
 		FVector Origin  = JsonArrayToVec(Params, TEXT("location"));
 		FString Style   = TEXT("cylindrical");
 		Params->TryGetStringField(TEXT("style"), Style);
@@ -265,7 +265,7 @@ public:
 		if (!World) return FMCPToolResult::Error(TEXT("No editor world"));
 
 		int32 Steps = Params->HasField(TEXT("steps")) ? static_cast<int32>(Params->GetNumberField(TEXT("steps"))) : 5;
-		FVector StepSize = JsonArrayToVec(Params, TEXT("step_size"), FVector(100.f, 100.f, 50.f));
+		FVector StepSize = JsonArrayToVec(Params, TEXT("stepSize"), FVector(100.f, 100.f, 50.f));
 		FVector Origin = JsonArrayToVec(Params, TEXT("location"));
 
 		int32 Count = 0;
@@ -341,8 +341,8 @@ public:
 		UWorld* World = GetWorld();
 		if (!World) return FMCPToolResult::Error(TEXT("No editor world"));
 
-		int32 BaseSize  = Params->HasField(TEXT("base_size"))  ? static_cast<int32>(Params->GetNumberField(TEXT("base_size")))  : 3;
-		float BlockSize = Params->HasField(TEXT("block_size")) ? static_cast<float>(Params->GetNumberField(TEXT("block_size"))) : 100.f;
+		int32 BaseSize  = Params->HasField(TEXT("baseSize"))  ? static_cast<int32>(Params->GetNumberField(TEXT("baseSize")))  : 3;
+		float BlockSize = Params->HasField(TEXT("blockSize")) ? static_cast<float>(Params->GetNumberField(TEXT("blockSize"))) : 100.f;
 		FVector Origin  = JsonArrayToVec(Params, TEXT("location"));
 
 		float Scale = BlockSize / 100.f;
@@ -392,8 +392,8 @@ public:
 
 		int32 Rows       = Params->HasField(TEXT("rows"))        ? static_cast<int32>(Params->GetNumberField(TEXT("rows")))        : 8;
 		int32 Cols       = Params->HasField(TEXT("cols"))        ? static_cast<int32>(Params->GetNumberField(TEXT("cols")))         : 8;
-		float CellSize   = Params->HasField(TEXT("cell_size"))   ? static_cast<float>(Params->GetNumberField(TEXT("cell_size")))   : 300.f;
-		int32 WallHeight = Params->HasField(TEXT("wall_height")) ? static_cast<int32>(Params->GetNumberField(TEXT("wall_height"))) : 3;
+		float CellSize   = Params->HasField(TEXT("cellSize"))   ? static_cast<float>(Params->GetNumberField(TEXT("cellSize")))   : 300.f;
+		int32 WallHeight = Params->HasField(TEXT("wallHeight")) ? static_cast<int32>(Params->GetNumberField(TEXT("wallHeight"))) : 3;
 		FVector Origin   = JsonArrayToVec(Params, TEXT("location"));
 
 		// Clamp for sanity

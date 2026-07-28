@@ -32,18 +32,18 @@ public:
 
 		const TSharedPtr<FJsonObject>* MinObjPtr = nullptr;
 		const TSharedPtr<FJsonObject>* MaxObjPtr = nullptr;
-		if (!Params->TryGetObjectField(TEXT("bounds_min"), MinObjPtr) || !Params->TryGetObjectField(TEXT("bounds_max"), MaxObjPtr))
+		if (!Params->TryGetObjectField(TEXT("boundsMin"), MinObjPtr) || !Params->TryGetObjectField(TEXT("boundsMax"), MaxObjPtr))
 		{
-			return FMCPToolResult::Error(TEXT("Both 'bounds_min' and 'bounds_max' { x, y, z } objects are required."));
+			return FMCPToolResult::Error(TEXT("Both 'boundsMin' and 'boundsMax' { x, y, z } objects are required."));
 		}
 		const TSharedPtr<FJsonObject>& MinObj = *MinObjPtr;
 		const TSharedPtr<FJsonObject>& MaxObj = *MaxObjPtr;
 		FVector BoundsMin(MinObj->GetNumberField(TEXT("x")), MinObj->GetNumberField(TEXT("y")), MinObj->GetNumberField(TEXT("z")));
 		FVector BoundsMax(MaxObj->GetNumberField(TEXT("x")), MaxObj->GetNumberField(TEXT("y")), MaxObj->GetNumberField(TEXT("z")));
 
-		float MinScale = Params->HasField(TEXT("min_scale")) ? (float)Params->GetNumberField(TEXT("min_scale")) : 0.8f;
-		float MaxScale = Params->HasField(TEXT("max_scale")) ? (float)Params->GetNumberField(TEXT("max_scale")) : 1.2f;
-		bool bAlignToNormal = Params->HasField(TEXT("align_to_normal")) ? Params->GetBoolField(TEXT("align_to_normal")) : true;
+		float MinScale = Params->HasField(TEXT("minScale")) ? (float)Params->GetNumberField(TEXT("minScale")) : 0.8f;
+		float MaxScale = Params->HasField(TEXT("maxScale")) ? (float)Params->GetNumberField(TEXT("maxScale")) : 1.2f;
+		bool bAlignToNormal = Params->HasField(TEXT("alignToNormal")) ? Params->GetBoolField(TEXT("alignToNormal")) : true;
 
 		UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *MeshPath);
 		if (!Mesh)
@@ -164,8 +164,8 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString MeshPath = Params->GetStringField(TEXT("mesh"));
-		float MinScale = Params->HasField(TEXT("min_scale")) ? (float)Params->GetNumberField(TEXT("min_scale")) : 0.8f;
-		float MaxScale = Params->HasField(TEXT("max_scale")) ? (float)Params->GetNumberField(TEXT("max_scale")) : 1.2f;
+		float MinScale = Params->HasField(TEXT("minScale")) ? (float)Params->GetNumberField(TEXT("minScale")) : 0.8f;
+		float MaxScale = Params->HasField(TEXT("maxScale")) ? (float)Params->GetNumberField(TEXT("maxScale")) : 1.2f;
 
 		UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *MeshPath);
 		if (!Mesh)
@@ -217,8 +217,8 @@ public:
 		Result->SetStringField(TEXT("path"), PackagePath);
 		Result->SetStringField(TEXT("name"), AssetName);
 		Result->SetStringField(TEXT("mesh"), MeshPath);
-		Result->SetNumberField(TEXT("min_scale"), MinScale);
-		Result->SetNumberField(TEXT("max_scale"), MaxScale);
+		Result->SetNumberField(TEXT("minScale"), MinScale);
+		Result->SetNumberField(TEXT("maxScale"), MaxScale);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -238,9 +238,9 @@ public:
 	{
 		const TSharedPtr<FJsonObject>* MinObjPtr = nullptr;
 		const TSharedPtr<FJsonObject>* MaxObjPtr = nullptr;
-		if (!Params->TryGetObjectField(TEXT("bounds_min"), MinObjPtr) || !Params->TryGetObjectField(TEXT("bounds_max"), MaxObjPtr))
+		if (!Params->TryGetObjectField(TEXT("boundsMin"), MinObjPtr) || !Params->TryGetObjectField(TEXT("boundsMax"), MaxObjPtr))
 		{
-			return FMCPToolResult::Error(TEXT("Both 'bounds_min' and 'bounds_max' { x, y, z } objects are required."));
+			return FMCPToolResult::Error(TEXT("Both 'boundsMin' and 'boundsMax' { x, y, z } objects are required."));
 		}
 		const TSharedPtr<FJsonObject>& MinObj = *MinObjPtr;
 		const TSharedPtr<FJsonObject>& MaxObj = *MaxObjPtr;

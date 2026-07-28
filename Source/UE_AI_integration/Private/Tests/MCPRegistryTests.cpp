@@ -143,6 +143,40 @@ bool FMCPRegistryCatalogTest::RunTest(const FString& Parameters)
 			PointerWithoutTarget,
 			ParamErrors));
 
+	TSharedPtr<FJsonObject> ImmediatePointer = MakeShared<FJsonObject>();
+	ImmediatePointer->SetStringField(TEXT("action"), TEXT("move"));
+	TSharedPtr<FJsonObject> ImmediatePosition = MakeShared<FJsonObject>();
+	ImmediatePosition->SetNumberField(TEXT("x"), 10.0);
+	ImmediatePosition->SetNumberField(TEXT("y"), 20.0);
+	ImmediatePointer->SetObjectField(TEXT("position"), ImmediatePosition);
+	ImmediatePointer->SetNumberField(TEXT("durationMs"), 25.0);
+	ParamErrors.Reset();
+	TestFalse(
+		TEXT("Immediate pointer no longer accepts ignored durationMs"),
+		Registry.ValidateParams(
+			TEXT("scene.runtime.input.pointer"),
+			ImmediatePointer,
+			ParamErrors));
+
+	TSharedPtr<FJsonObject> PositionOnlyHitTest = MakeShared<FJsonObject>();
+	PositionOnlyHitTest->SetObjectField(TEXT("position"), ImmediatePosition);
+	ParamErrors.Reset();
+	TestTrue(
+		TEXT("Runtime hit test accepts an explicit position without objectRef"),
+		Registry.ValidateParams(
+			TEXT("scene.runtime.widget.hit_test"),
+			PositionOnlyHitTest,
+			ParamErrors));
+
+	TSharedPtr<FJsonObject> EmptyHitTest = MakeShared<FJsonObject>();
+	ParamErrors.Reset();
+	TestFalse(
+		TEXT("Runtime hit test still requires objectRef or position"),
+		Registry.ValidateParams(
+			TEXT("scene.runtime.widget.hit_test"),
+			EmptyHitTest,
+			ParamErrors));
+
 	FMCPToolRegistry InvalidIdRegistry;
 	InvalidIdRegistry.BeginDomainRegistration(TEXT("blueprint"));
 	InvalidIdRegistry.Register(MakeShared<FRegistryTestTool>(TEXT("legacy_snake_case")));

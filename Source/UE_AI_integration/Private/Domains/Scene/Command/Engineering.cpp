@@ -1127,7 +1127,7 @@ public:
 
 		TSharedRef<FJsonObject> DelegateParams = MakeShared<FJsonObject>();
 		DelegateParams->SetStringField(
-			TEXT("commandlet_name"),
+			TEXT("commandletName"),
 			TEXT("WorldPartitionBuilderCommandlet"));
 		DelegateParams->SetArrayField(TEXT("arguments"), Arguments);
 		DelegateParams->SetStringField(TEXT("requestId"), RequestId);

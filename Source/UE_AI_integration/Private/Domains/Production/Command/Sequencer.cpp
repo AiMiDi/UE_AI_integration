@@ -444,7 +444,7 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString SeqPath = Params->GetStringField(TEXT("sequence"));
-		FString OutputPath = Params->GetStringField(TEXT("output_path"));
+		FString OutputPath = Params->GetStringField(TEXT("outputPath"));
 		FString Resolution = Params->HasField(TEXT("resolution")) ? Params->GetStringField(TEXT("resolution")) : TEXT("1920x1080");
 
 		ULevelSequence* Sequence = LoadObject<ULevelSequence>(nullptr, *SeqPath);
@@ -488,7 +488,7 @@ public:
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("sequence"), SeqPath);
-		Result->SetStringField(TEXT("output_path"), OutputPath);
+		Result->SetStringField(TEXT("outputPath"), OutputPath);
 		Result->SetStringField(TEXT("resolution"), FString::Printf(TEXT("%dx%d"), ResX, ResY));
 		Result->SetStringField(TEXT("status"), TEXT("capture_initiated"));
 		return FMCPToolResult::Ok(Result);

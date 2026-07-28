@@ -172,7 +172,7 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString SystemPath = Params->GetStringField(TEXT("system"));
-		FString EmitterPath = Params->GetStringField(TEXT("emitter_template"));
+		FString EmitterPath = Params->GetStringField(TEXT("emitterTemplate"));
 
 		UNiagaraSystem* System = LoadObject<UNiagaraSystem>(nullptr, *SystemPath);
 		if (!System)
@@ -214,9 +214,9 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString ActorName = Params->GetStringField(TEXT("actor"));
-		FString ParamName = Params->GetStringField(TEXT("param_name"));
+		FString ParamName = Params->GetStringField(TEXT("paramName"));
 		FString Value = Params->GetStringField(TEXT("value"));
-		FString ParamType = Params->HasField(TEXT("param_type")) ? Params->GetStringField(TEXT("param_type")).ToLower() : TEXT("float");
+		FString ParamType = Params->HasField(TEXT("paramType")) ? Params->GetStringField(TEXT("paramType")).ToLower() : TEXT("float");
 
 		UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
 		if (!World)
@@ -295,14 +295,14 @@ public:
 		}
 		else
 		{
-			return FMCPToolResult::Error(FString::Printf(TEXT("Unknown param_type '%s'. Use: float, int, bool, vector, color."), *ParamType));
+			return FMCPToolResult::Error(FString::Printf(TEXT("Unknown paramType '%s'. Use: float, int, bool, vector, color."), *ParamType));
 		}
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("actor"), ActorName);
-		Result->SetStringField(TEXT("param_name"), ParamName);
+		Result->SetStringField(TEXT("paramName"), ParamName);
 		Result->SetStringField(TEXT("value"), Value);
-		Result->SetStringField(TEXT("param_type"), ParamType);
+		Result->SetStringField(TEXT("paramType"), ParamType);
 		return FMCPToolResult::Ok(Result);
 	}
 };

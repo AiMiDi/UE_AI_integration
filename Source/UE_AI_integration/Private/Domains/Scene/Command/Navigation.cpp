@@ -42,10 +42,10 @@ public:
 			return FMCPToolResult::Error(TEXT("Navigation system not available. Ensure your project has navigation enabled."));
 		}
 
-		if (Params->HasField(TEXT("bounds_min")) && Params->HasField(TEXT("bounds_max")))
+		if (Params->HasField(TEXT("boundsMin")) && Params->HasField(TEXT("boundsMax")))
 		{
-			const TSharedPtr<FJsonObject>& MinObj = Params->GetObjectField(TEXT("bounds_min"));
-			const TSharedPtr<FJsonObject>& MaxObj = Params->GetObjectField(TEXT("bounds_max"));
+			const TSharedPtr<FJsonObject>& MinObj = Params->GetObjectField(TEXT("boundsMin"));
+			const TSharedPtr<FJsonObject>& MaxObj = Params->GetObjectField(TEXT("boundsMax"));
 			FVector Min(MinObj->GetNumberField(TEXT("x")), MinObj->GetNumberField(TEXT("y")), MinObj->GetNumberField(TEXT("z")));
 			FVector Max(MaxObj->GetNumberField(TEXT("x")), MaxObj->GetNumberField(TEXT("y")), MaxObj->GetNumberField(TEXT("z")));
 
@@ -235,13 +235,13 @@ public:
 			Min->SetNumberField(TEXT("x"), NavBounds.Min.X);
 			Min->SetNumberField(TEXT("y"), NavBounds.Min.Y);
 			Min->SetNumberField(TEXT("z"), NavBounds.Min.Z);
-			Result->SetObjectField(TEXT("bounds_min"), Min);
+			Result->SetObjectField(TEXT("boundsMin"), Min);
 
 			TSharedPtr<FJsonObject> Max = MakeShared<FJsonObject>();
 			Max->SetNumberField(TEXT("x"), NavBounds.Max.X);
 			Max->SetNumberField(TEXT("y"), NavBounds.Max.Y);
 			Max->SetNumberField(TEXT("z"), NavBounds.Max.Z);
-			Result->SetObjectField(TEXT("bounds_max"), Max);
+			Result->SetObjectField(TEXT("boundsMax"), Max);
 		}
 
 		// Count NavMeshBoundsVolumes
@@ -260,7 +260,7 @@ public:
 				ENavigationDataResolution::Default;
 			Result->SetNumberField(TEXT("tile_size_uu"), RecastNavMesh->TileSizeUU);
 			Result->SetNumberField(
-				TEXT("cell_size"),
+				TEXT("cellSize"),
 				RecastNavMesh->GetCellSize(Resolution));
 			Result->SetNumberField(
 				TEXT("cell_height"),
@@ -303,7 +303,7 @@ public:
 		FVector Location(LocObj->GetNumberField(TEXT("x")), LocObj->GetNumberField(TEXT("y")), LocObj->GetNumberField(TEXT("z")));
 		FVector Extent(ExtObj->GetNumberField(TEXT("x")), ExtObj->GetNumberField(TEXT("y")), ExtObj->GetNumberField(TEXT("z")));
 
-		FString AreaClassName = Params->HasField(TEXT("area_class")) ? Params->GetStringField(TEXT("area_class")).ToLower() : TEXT("null");
+		FString AreaClassName = Params->HasField(TEXT("areaClass")) ? Params->GetStringField(TEXT("areaClass")).ToLower() : TEXT("null");
 
 		TSubclassOf<UNavArea> AreaClass = UNavArea_Null::StaticClass();
 		if (AreaClassName == TEXT("default"))
@@ -330,7 +330,7 @@ public:
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("actor"), ModVolume->GetName());
-		Result->SetStringField(TEXT("area_class"), AreaClassName);
+		Result->SetStringField(TEXT("areaClass"), AreaClassName);
 		return FMCPToolResult::Ok(Result);
 	}
 };

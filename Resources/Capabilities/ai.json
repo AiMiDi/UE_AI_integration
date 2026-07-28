@@ -73,18 +73,18 @@
             "type": "string",
             "description": "Asset path of the Behavior Tree"
           },
-          "decorator_class": {
+          "decoratorClass": {
             "type": "string",
             "description": "Class name of the decorator (e.g. 'BTDecorator_Blackboard')"
           },
-          "node_index": {
+          "nodeIndex": {
             "type": "number",
             "description": "Index of the composite node to attach to (0 = root)"
           }
         },
         "required": [
           "tree",
-          "decorator_class"
+          "decoratorClass"
         ],
         "additionalProperties": false
       },
@@ -109,7 +109,7 @@
             "type": "string",
             "description": "Asset path of the Behavior Tree"
           },
-          "parent_index": {
+          "parentIndex": {
             "type": "number",
             "description": "Index of parent composite (0 = root). Default: 0"
           }
@@ -140,7 +140,7 @@
             "type": "string",
             "description": "Asset path of the Behavior Tree"
           },
-          "parent_index": {
+          "parentIndex": {
             "type": "number",
             "description": "Index of parent composite (0 = root). Default: 0"
           }
@@ -171,18 +171,18 @@
             "type": "string",
             "description": "Asset path of the Behavior Tree"
           },
-          "service_class": {
+          "serviceClass": {
             "type": "string",
             "description": "Class name of the service (e.g. 'BTService_DefaultFocus')"
           },
-          "node_index": {
+          "nodeIndex": {
             "type": "number",
             "description": "Index of the composite node to attach to (0 = root)"
           }
         },
         "required": [
           "tree",
-          "service_class"
+          "serviceClass"
         ],
         "additionalProperties": false
       },
@@ -207,18 +207,18 @@
             "type": "string",
             "description": "Asset path of the Behavior Tree"
           },
-          "task_class": {
+          "taskClass": {
             "type": "string",
             "description": "Class name of the BTTask (e.g. 'BTTask_MoveTo', 'BTTask_Wait')"
           },
-          "parent_index": {
+          "parentIndex": {
             "type": "number",
             "description": "Index of the parent composite node (0 = root). Default: 0"
           }
         },
         "required": [
           "tree",
-          "task_class"
+          "taskClass"
         ],
         "additionalProperties": false
       },
@@ -270,19 +270,19 @@
             "type": "string",
             "description": "Asset path of the Blackboard Data"
           },
-          "key_name": {
+          "keyName": {
             "type": "string",
             "description": "Name of the new key"
           },
-          "key_type": {
+          "keyType": {
             "type": "string",
             "description": "Type: bool, int, float, string, vector, rotator, object, name, class, enum"
           }
         },
         "required": [
           "blackboard",
-          "key_name",
-          "key_type"
+          "keyName",
+          "keyType"
         ],
         "additionalProperties": false
       },

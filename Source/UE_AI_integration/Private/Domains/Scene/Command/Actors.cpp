@@ -190,7 +190,7 @@ public:
 			if (MeshActor)
 			{
 				FString MeshPath;
-				if (Params->TryGetStringField(TEXT("static_mesh"), MeshPath))
+				if (Params->TryGetStringField(TEXT("staticMesh"), MeshPath))
 				{
 					UStaticMesh* Mesh = Cast<UStaticMesh>(UEditorAssetLibrary::LoadAsset(MeshPath));
 					if (Mesh)
@@ -386,12 +386,12 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString BlueprintName;
-		if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
-			return FMCPToolResult::Error(TEXT("Missing 'blueprint_name' parameter"));
+		if (!Params->TryGetStringField(TEXT("blueprintName"), BlueprintName))
+			return FMCPToolResult::Error(TEXT("Missing 'blueprintName' parameter"));
 
 		FString ActorName;
-		if (!Params->TryGetStringField(TEXT("actor_name"), ActorName))
-			return FMCPToolResult::Error(TEXT("Missing 'actor_name' parameter"));
+		if (!Params->TryGetStringField(TEXT("actorName"), ActorName))
+			return FMCPToolResult::Error(TEXT("Missing 'actorName' parameter"));
 
 		// Resolve blueprint path
 		FString ObjectPath;
@@ -503,7 +503,7 @@ public:
 		}
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetStringField(TEXT("actor_name"), Actor->GetName());
+		Result->SetStringField(TEXT("actorName"), Actor->GetName());
 		Result->SetStringField(TEXT("actor_class"), Actor->GetClass()->GetName());
 		Result->SetObjectField(TEXT("properties"), Props);
 		return FMCPToolResult::Ok(Result);

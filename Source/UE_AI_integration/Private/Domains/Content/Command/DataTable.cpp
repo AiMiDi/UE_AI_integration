@@ -72,11 +72,11 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString Name = Params->GetStringField(TEXT("name"));
-		FString RowStructName = Params->GetStringField(TEXT("row_struct"));
+		FString RowStructName = Params->GetStringField(TEXT("rowStruct"));
 
 		if (Name.IsEmpty() || RowStructName.IsEmpty())
 		{
-			return FMCPToolResult::Error(TEXT("Both 'name' and 'row_struct' are required."));
+			return FMCPToolResult::Error(TEXT("Both 'name' and 'rowStruct' are required."));
 		}
 
 		// Find the struct.
@@ -179,7 +179,7 @@ public:
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("path"), PackagePath);
 		Result->SetStringField(TEXT("name"), Name);
-		Result->SetStringField(TEXT("row_struct"), RowStruct->GetPathName());
+		Result->SetStringField(TEXT("rowStruct"), RowStruct->GetPathName());
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -198,7 +198,7 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString TablePath = Params->GetStringField(TEXT("table"));
-		FString RowName = Params->GetStringField(TEXT("row_name"));
+		FString RowName = Params->GetStringField(TEXT("rowName"));
 		const TSharedPtr<FJsonObject>& Values = Params->GetObjectField(TEXT("values"));
 
 		UDataTable* DataTable = ResolveDataTable(TablePath);
@@ -303,7 +303,7 @@ public:
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("table"), TablePath);
-		Result->SetStringField(TEXT("row_name"), RowName);
+		Result->SetStringField(TEXT("rowName"), RowName);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -341,7 +341,7 @@ public:
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("table"), TablePath);
-		Result->SetStringField(TEXT("row_struct"), DataTable->RowStruct ? DataTable->RowStruct->GetName() : TEXT("None"));
+		Result->SetStringField(TEXT("rowStruct"), DataTable->RowStruct ? DataTable->RowStruct->GetName() : TEXT("None"));
 
 		TArray<FName> RowNames = DataTable->GetRowNames();
 		Result->SetNumberField(TEXT("row_count"), RowNames.Num());
@@ -358,7 +358,7 @@ public:
 			}
 
 			TSharedPtr<FJsonObject> RowObj = MakeShared<FJsonObject>();
-			RowObj->SetStringField(TEXT("_row_name"), RowName.ToString());
+			RowObj->SetStringField(TEXT("_rowName"), RowName.ToString());
 
 			// Export each property
 			for (TFieldIterator<FProperty> PropIt(RowStruct); PropIt; ++PropIt)
@@ -393,7 +393,7 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString TablePath = Params->GetStringField(TEXT("table"));
-		FString RowName = Params->GetStringField(TEXT("row_name"));
+		FString RowName = Params->GetStringField(TEXT("rowName"));
 
 		UDataTable* DataTable = ResolveDataTable(TablePath);
 		if (!DataTable)
@@ -430,7 +430,7 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString TablePath = Params->GetStringField(TEXT("table"));
-		FString CSVPath = Params->GetStringField(TEXT("csv_path"));
+		FString CSVPath = Params->GetStringField(TEXT("csvPath"));
 
 		UDataTable* DataTable = ResolveDataTable(TablePath);
 		if (!DataTable)

@@ -122,7 +122,7 @@ void ValidateBlackboardSelectors(
 		{
 			AddFinding(
 				Findings,
-				TEXT("ai.behavior_tree.blackboard_key_type_mismatch"),
+				TEXT("ai.behavior_tree.blackboard_keyType_mismatch"),
 				TEXT("error"),
 				FString::Printf(
 					TEXT("Blackboard key '%s' type is incompatible with node selector '%s'."),
@@ -205,7 +205,7 @@ public:
 					{
 						AddFinding(
 							Findings,
-							TEXT("ai.behavior_tree.missing_service_class"),
+							TEXT("ai.behavior_tree.missing_serviceClass"),
 							TEXT("error"),
 							TEXT("Composite contains a null Service reference."),
 							Tree->GetPathName(),
@@ -260,7 +260,7 @@ public:
 						{
 							AddFinding(
 								Findings,
-								TEXT("ai.behavior_tree.missing_decorator_class"),
+								TEXT("ai.behavior_tree.missing_decoratorClass"),
 								TEXT("error"),
 								TEXT("Child contains a null Decorator reference."),
 								Tree->GetPathName(),
@@ -340,7 +340,7 @@ public:
 			{
 				AddFinding(
 					Findings,
-					TEXT("ai.blackboard.empty_key_name"),
+					TEXT("ai.blackboard.empty_keyName"),
 					TEXT("error"),
 					TEXT("Blackboard contains an unnamed key."),
 					Blackboard->GetPathName());
@@ -361,7 +361,7 @@ public:
 			{
 				AddFinding(
 					Findings,
-					TEXT("ai.blackboard.missing_key_type"),
+					TEXT("ai.blackboard.missing_keyType"),
 					TEXT("error"),
 					FString::Printf(
 						TEXT("Blackboard key '%s' has no type."),

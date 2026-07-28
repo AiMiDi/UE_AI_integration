@@ -92,6 +92,31 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function validateCamelCaseProperties(schema, location) {
+  if (!isPlainObject(schema)) return;
+  if (isPlainObject(schema.properties)) {
+    for (const [field, child] of Object.entries(schema.properties)) {
+      if (!/^[a-z][A-Za-z0-9]*$/.test(field)) {
+        fail(`${location}.properties.${field} must use lower camelCase`);
+      }
+      validateCamelCaseProperties(child, `${location}.properties.${field}`);
+    }
+  }
+  if (schema.items !== undefined) {
+    validateCamelCaseProperties(schema.items, `${location}.items`);
+  }
+  for (const combinator of ["allOf", "anyOf", "oneOf"]) {
+    if (Array.isArray(schema[combinator])) {
+      schema[combinator].forEach((entry, index) =>
+        validateCamelCaseProperties(
+          entry,
+          `${location}.${combinator}[${index}]`
+        )
+      );
+    }
+  }
+}
+
 function listFilesRecursive(directory, predicate) {
   if (!fs.existsSync(directory)) return [];
   const results = [];
@@ -175,7 +200,11 @@ for (const [domain, baselineCount] of Object.entries(baselineCounts)) {
     }
     if (!isPlainObject(capability.inputSchema)) {
       fail(`${location}.inputSchema must be an object`);
-    } else if (addedCapabilityIds.has(capability.id)) {
+    } else {
+      validateCamelCaseProperties(
+        capability.inputSchema,
+        `${location}.inputSchema`
+      );
       if (capability.inputSchema.type !== "object") {
         fail(`${location}.inputSchema.type must be object`);
       }

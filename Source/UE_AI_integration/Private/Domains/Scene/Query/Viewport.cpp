@@ -590,8 +590,8 @@ public:
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString LevelPath;
-		if (!Params->TryGetStringField(TEXT("level_path"), LevelPath))
-			return FMCPToolResult::Error(TEXT("Missing 'level_path' parameter"));
+		if (!Params->TryGetStringField(TEXT("levelPath"), LevelPath))
+			return FMCPToolResult::Error(TEXT("Missing 'levelPath' parameter"));
 
 		if (LevelPath.IsEmpty() || LevelPath.Len() > 512)
 			return FMCPToolResult::Error(TEXT("Invalid level path"));
@@ -615,7 +615,7 @@ public:
 		double WaitTime = WaitForLevelStreaming();
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetStringField(TEXT("level_path"), LevelPath);
+		Result->SetStringField(TEXT("levelPath"), LevelPath);
 		Result->SetStringField(TEXT("map_name"), LoadedWorld->GetMapName());
 		Result->SetNumberField(TEXT("streaming_wait_seconds"), WaitTime);
 		return FMCPToolResult::Ok(Result);

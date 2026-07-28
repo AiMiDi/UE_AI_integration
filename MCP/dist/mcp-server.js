@@ -151,7 +151,7 @@ export function createMcpServer(options = {}) {
     const cliLocator = options.cliLocator ?? locateWorkflowCli;
     const server = new McpServer({
         name: "ue-ai-integration",
-        version: "0.3.1",
+        version: "0.5.0",
     });
     server.tool("ue_status", "Check the running Unreal Editor's UE_AI_integration health status.", {}, async () => {
         try {

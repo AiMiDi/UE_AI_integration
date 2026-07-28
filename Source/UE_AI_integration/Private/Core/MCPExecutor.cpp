@@ -1,6 +1,7 @@
 #include "Core/MCPExecutor.h"
 
 #include "Dom/JsonValue.h"
+#include "Infrastructure/EngineeringContractUtils.h"
 #include "Tools/MCPToolRegistry.h"
 
 namespace
@@ -14,67 +15,6 @@ namespace
 			|| Capability == TEXT("production.commandlet.run");
 	}
 
-	FString CanonicalizeJsonValue(const TSharedPtr<FJsonValue>& Value)
-	{
-		if (!Value.IsValid() || Value->IsNull())
-		{
-			return TEXT("z");
-		}
-
-		switch (Value->Type)
-		{
-		case EJson::String:
-		{
-			const FString Text = Value->AsString();
-			return FString::Printf(TEXT("s%d:%s"), Text.Len(), *Text);
-		}
-		case EJson::Number:
-			return FString::Printf(TEXT("n%.17g"), Value->AsNumber());
-		case EJson::Boolean:
-			return Value->AsBool() ? TEXT("b1") : TEXT("b0");
-		case EJson::Array:
-		{
-			FString Result(TEXT("a"));
-			for (const TSharedPtr<FJsonValue>& Item : Value->AsArray())
-			{
-				const FString CanonicalItem = CanonicalizeJsonValue(Item);
-				Result += FString::Printf(
-					TEXT("%d:%s"),
-					CanonicalItem.Len(),
-					*CanonicalItem);
-			}
-			return Result;
-		}
-		case EJson::Object:
-		{
-			const TSharedPtr<FJsonObject> Object = Value->AsObject();
-			if (!Object.IsValid())
-			{
-				return TEXT("o");
-			}
-
-			TArray<FString> Keys;
-			Object->Values.GetKeys(Keys);
-			Keys.Sort();
-
-			FString Result(TEXT("o"));
-			for (const FString& Key : Keys)
-			{
-				const FString CanonicalItem =
-					CanonicalizeJsonValue(Object->Values.FindRef(Key));
-				Result += FString::Printf(
-					TEXT("%d:%s%d:%s"),
-					Key.Len(),
-					*Key,
-					CanonicalItem.Len(),
-					*CanonicalItem);
-			}
-			return Result;
-		}
-		default:
-			return TEXT("z");
-		}
-	}
 }
 
 FMCPExecutor::FMCPExecutor(FMCPToolRegistry& InRegistry)
@@ -253,7 +193,8 @@ FString FMCPExecutor::MakePayloadKey(const FMCPExecutionContext& Context)
 		Params->RemoveField(TEXT("requestId"));
 	}
 	const FString CanonicalParams =
-		CanonicalizeJsonValue(MakeShared<FJsonValueObject>(Params));
+		UEAIIntegration::Infrastructure::CanonicalizeJsonValue(
+			MakeShared<FJsonValueObject>(Params));
 	return FString::Printf(
 		TEXT("%d:%s%s"),
 		Context.Capability.Len(),
