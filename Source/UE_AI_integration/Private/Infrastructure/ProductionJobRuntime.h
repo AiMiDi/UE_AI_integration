@@ -51,8 +51,34 @@ public:
 		const TSharedPtr<FJsonObject>& BaselineResult,
 		const TSharedPtr<FJsonObject>& CandidateResult,
 		const TSharedPtr<FJsonObject>& Params);
+	static TSharedPtr<FJsonObject> ResolveProcessTimeoutPolicy(
+		const TSharedPtr<FJsonObject>& Params,
+		double DefaultExecutionTimeoutSeconds);
+	static FString BuildHeadlessProfileArguments(
+		const FString& Profile,
+		FString& OutError);
+	static FString InferAutomationPhase(
+		const FString& CurrentPhase,
+		const FString& LogChunk);
 
 private:
+	struct FProcessLaunchSpec
+	{
+		FString Kind;
+		FString Executable;
+		FString Arguments;
+		FString WorkingDirectory;
+		FString PostProcess;
+		double DefaultExecutionTimeoutSeconds = 1800.0;
+		bool bEditorProcess = false;
+		bool bAutomationProcess = false;
+		TFunction<FString(
+			const FString& JobId,
+			const FString& JobDirectory,
+			const FString& EditorLogPath,
+			const FString& ReportDirectory)> BuildArguments;
+	};
+
 	struct FArtifact
 	{
 		FString Id;
@@ -80,8 +106,18 @@ private:
 		FString RequestId;
 		FString InputDigest;
 		double Progress = 0.0;
+		double CreatedAtSeconds = 0.0;
 		double StartedAtSeconds = 0.0;
 		double TimeoutAtSeconds = 0.0;
+		double PhaseStartedAtSeconds = 0.0;
+		double StartupTimeoutSeconds = 300.0;
+		double ExecutionTimeoutSeconds = 1800.0;
+		double ShutdownTimeoutSeconds = 60.0;
+		double HardTimeoutSeconds = 2160.0;
+		double StartupDeadlineSeconds = 0.0;
+		double ExecutionDeadlineSeconds = 0.0;
+		double ShutdownDeadlineSeconds = 0.0;
+		double HardDeadlineSeconds = 0.0;
 		uint32 ProcessId = 0;
 		int32 ReturnCode = INDEX_NONE;
 		FProcHandle ProcessHandle;
@@ -90,10 +126,18 @@ private:
 		FString Executable;
 		FString Arguments;
 		FString WorkingDirectory;
+		FString EditorLogPath;
+		FString ReportDirectory;
 		FString Output;
 		int64 LogBaseCursor = 0;
 		int64 LogTotalChars = 0;
 		FString PostProcess;
+		FString HeadlessProfile;
+		bool bEditorProcess = false;
+		bool bAutomationProcess = false;
+		bool bTerminationRequested = false;
+		TMap<FString, double> PhaseDurationsSeconds;
+		TArray<FString> PhaseHistory;
 		TSharedPtr<FJsonObject> Input;
 		TSharedPtr<FJsonObject> Result;
 		TArray<FArtifact> Artifacts;
@@ -170,6 +214,10 @@ private:
 		const FString& PostProcess,
 		const TSharedPtr<FJsonObject>& Input,
 		FString& OutError);
+	TSharedPtr<FJob> StartProcessJob(
+		const FProcessLaunchSpec& Spec,
+		const TSharedPtr<FJsonObject>& Input,
+		FString& OutError);
 	TSharedPtr<FJob> CreateJob(
 		const FString& Kind,
 		const TSharedPtr<FJsonObject>& Input);
@@ -178,6 +226,14 @@ private:
 		const TSharedPtr<FJsonObject>& Input,
 		bool& bOutConflict) const;
 	void TickProcessJob(FJob& Job);
+	void TransitionProcessPhase(
+		FJob& Job,
+		const FString& NewPhase,
+		double NowSeconds = 0.0);
+	void UpdateProcessPhaseFromLog(
+		FJob& Job,
+		const FString& LogChunk);
+	void TerminateProcessTree(FJob& Job);
 	void TickPerformanceJob(FJob& Job);
 	void TickTraceAnalysisJob(FJob& Job);
 	void SamplePerformanceFrame(FJob& Job);

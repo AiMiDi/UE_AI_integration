@@ -6,6 +6,7 @@
 #include "HAL/PlatformFileManager.h"
 #include "HAL/PlatformMisc.h"
 #include "Infrastructure/PIESessionController.h"
+#include "Infrastructure/PerformanceRegressionService.h"
 #include "Infrastructure/ProductionJobRuntime.h"
 #include "Interfaces/IPluginManager.h"
 #include "JsonUtils/JsonPointer.h"
@@ -304,6 +305,19 @@ FProductionRuntimeController::FProductionRuntimeController(
 			}))
 {
 	IFileManager::Get().MakeDirectory(*ScenarioDirectory(), true);
+	PerformanceRegression =
+		MakeUnique<FPerformanceRegressionService>(
+			[this](
+				const FString& CapabilityId,
+				const TSharedPtr<FJsonObject>& Params)
+			{
+				return JobRuntime.IsValid()
+					? JobRuntime->Execute(CapabilityId, Params)
+					: FMCPToolResult::Error(
+						TEXT("The production job runtime is unavailable."),
+						TEXT("job_runtime_unavailable"),
+						503);
+			});
 }
 
 FProductionRuntimeController::~FProductionRuntimeController()
@@ -352,6 +366,10 @@ void FProductionRuntimeController::Tick(float DeltaTime)
 	{
 		JobRuntime->Tick(DeltaTime);
 	}
+	if (PerformanceRegression.IsValid())
+	{
+		PerformanceRegression->Tick();
+	}
 }
 
 FMCPToolResult FProductionRuntimeController::ExecuteProductionJobOperation(
@@ -365,7 +383,9 @@ FMCPToolResult FProductionRuntimeController::ExecuteProductionJobOperation(
 			TEXT("job_runtime_unavailable"),
 			503);
 	}
-	return JobRuntime->Execute(CapabilityId, Params);
+	return PerformanceRegression.IsValid()
+		? PerformanceRegression->Execute(CapabilityId, Params)
+		: JobRuntime->Execute(CapabilityId, Params);
 }
 
 FMCPToolResult FProductionRuntimeController::ValidateScenario(

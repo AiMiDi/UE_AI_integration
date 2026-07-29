@@ -47,6 +47,31 @@ namespace ProductionJobRuntimePrivate
 	constexpr int32 MaxTraceTimers = 200;
 	constexpr int32 MaxTraceCounters = 64;
 	constexpr int32 MaxTraceCounterValues = 10000;
+	constexpr double MaxStartupTimeoutSeconds = 3600.0;
+	constexpr double MaxExecutionTimeoutSeconds = 43200.0;
+	constexpr double MaxShutdownTimeoutSeconds = 600.0;
+	constexpr double MaxHardTimeoutSeconds = 86400.0;
+
+	bool IsStartupPhase(const FString& Phase)
+	{
+		return Phase == TEXT("launching")
+			|| Phase == TEXT("loading")
+			|| Phase == TEXT("discovering");
+	}
+
+	bool IsExecutionPhase(const FString& Phase)
+	{
+		return Phase == TEXT("running")
+			|| Phase == TEXT("reporting");
+	}
+
+	bool IsEditorExecutable(const FString& Executable)
+	{
+		const FString Name =
+			FPaths::GetCleanFilename(Executable).ToLower();
+		return Name.Contains(TEXT("unrealeditor"))
+			|| Name.Contains(TEXT("ue4editor"));
+	}
 
 	FString PackageOutputRoot()
 	{
@@ -848,17 +873,18 @@ FProductionJobRuntime::~FProductionJobRuntime()
 		{
 			if (FPlatformProcess::IsProcRunning(Job.ProcessHandle))
 			{
-				FPlatformProcess::TerminateProc(Job.ProcessHandle, true);
+				TerminateProcessTree(Job);
 			}
 			if (!IsTerminalStatus(Job.Status))
 			{
 				Job.Status = TEXT("interrupted");
-				Job.Phase = TEXT("complete");
 				Job.ErrorCode = TEXT("editor_shutdown");
 				Job.Message =
 					TEXT("The Editor shut down before this job completed.");
 				Job.CompletedAtUtc = FDateTime::UtcNow().ToIso8601();
 				Job.Progress = 1.0;
+				TransitionProcessPhase(Job, TEXT("complete"));
+				PostProcessJob(Job);
 				SaveJournal(Job);
 			}
 			FPlatformProcess::CloseProc(Job.ProcessHandle);
@@ -879,12 +905,12 @@ FProductionJobRuntime::~FProductionJobRuntime()
 		if (!IsTerminalStatus(Job.Status))
 		{
 			Job.Status = TEXT("interrupted");
-			Job.Phase = TEXT("complete");
 			Job.ErrorCode = TEXT("editor_shutdown");
 			Job.Message =
 				TEXT("The Editor shut down before this job completed.");
 			Job.CompletedAtUtc = FDateTime::UtcNow().ToIso8601();
 			Job.Progress = 1.0;
+			TransitionProcessPhase(Job, TEXT("complete"));
 			SaveJournal(Job);
 		}
 	}
@@ -1095,7 +1121,7 @@ FMCPToolResult FProductionJobRuntime::CancelJob(
 	}
 	if (Job.ProcessHandle.IsValid())
 	{
-		FPlatformProcess::TerminateProc(Job.ProcessHandle, true);
+		TerminateProcessTree(Job);
 	}
 	FinishJob(Job, TEXT("cancelled"), TEXT("cancelled"), TEXT("Cancellation requested."));
 	return FMCPToolResult::Ok(MakeJobSummary(Job, false));
@@ -1284,6 +1310,9 @@ FProductionJobRuntime::CreateJob(
 	Job->Status = TEXT("queued");
 	Job->Phase = TEXT("queued");
 	Job->CreatedAtUtc = FDateTime::UtcNow().ToIso8601();
+	Job->CreatedAtSeconds = FPlatformTime::Seconds();
+	Job->PhaseStartedAtSeconds = Job->CreatedAtSeconds;
+	Job->PhaseHistory.Add(TEXT("queued"));
 	Job->Input = CopyObject(Input);
 	Job->RequestId = GetStringFieldOr(Input, TEXT("requestId"));
 	Job->InputDigest = ComputeChangePlanDigest(Job->Input);
@@ -1336,10 +1365,29 @@ FProductionJobRuntime::StartProcessJob(
 	const TSharedPtr<FJsonObject>& Input,
 	FString& OutError)
 {
+	FProcessLaunchSpec Spec;
+	Spec.Kind = Kind;
+	Spec.Executable = Executable;
+	Spec.Arguments = Arguments;
+	Spec.WorkingDirectory = WorkingDirectory;
+	Spec.PostProcess = PostProcess;
+	Spec.DefaultExecutionTimeoutSeconds = TimeoutSeconds;
+	Spec.bEditorProcess = IsEditorExecutable(Executable);
+	Spec.bAutomationProcess =
+		Spec.bEditorProcess && PostProcess == TEXT("test");
+	return StartProcessJob(Spec, Input, OutError);
+}
+
+TSharedPtr<FProductionJobRuntime::FJob>
+FProductionJobRuntime::StartProcessJob(
+	const FProcessLaunchSpec& Spec,
+	const TSharedPtr<FJsonObject>& Input,
+	FString& OutError)
+{
 	OutError.Reset();
 	bool bIdempotencyConflict = false;
 	if (TSharedPtr<FJob> Existing =
-		FindIdempotentJob(Kind, Input, bIdempotencyConflict))
+		FindIdempotentJob(Spec.Kind, Input, bIdempotencyConflict))
 	{
 		return Existing;
 	}
@@ -1361,38 +1409,132 @@ FProductionJobRuntime::StartProcessJob(
 		}
 		ActiveHeavyJobId.Reset();
 	}
-	if (Executable.IsEmpty()
-		|| (!Executable.Equals(TEXT("git.exe"), ESearchCase::IgnoreCase)
-			&& !IFileManager::Get().FileExists(*Executable)))
+	if (Spec.Executable.IsEmpty()
+		|| (!Spec.Executable.Equals(
+				TEXT("git.exe"),
+				ESearchCase::IgnoreCase)
+			&& !IFileManager::Get().FileExists(*Spec.Executable)))
 	{
 		OutError = FString::Printf(
 			TEXT("Required executable '%s' is unavailable."),
-			*Executable);
+			*Spec.Executable);
 		return nullptr;
 	}
 
-	TSharedPtr<FJob> Job = CreateJob(Kind, Input);
-	Job->Executable = Executable;
-	Job->Arguments = Arguments;
-	Job->WorkingDirectory = WorkingDirectory;
-	Job->PostProcess = PostProcess;
-	Job->Status = TEXT("running");
-	Job->Phase = TEXT("launching");
-	Job->StartedAtUtc = FDateTime::UtcNow().ToIso8601();
-	Job->StartedAtSeconds = FPlatformTime::Seconds();
-	Job->TimeoutAtSeconds =
-		TimeoutSeconds > 0.0
-			? Job->StartedAtSeconds + TimeoutSeconds
-			: 0.0;
-	if (!FPlatformProcess::CreatePipe(Job->ReadPipe, Job->WritePipe))
+	TSharedPtr<FJob> Job = CreateJob(Spec.Kind, Input);
+	Job->Executable = Spec.Executable;
+	Job->WorkingDirectory = Spec.WorkingDirectory;
+	Job->PostProcess = Spec.PostProcess;
+	Job->bEditorProcess =
+		Spec.bEditorProcess || IsEditorExecutable(Spec.Executable);
+	Job->bAutomationProcess =
+		Spec.bAutomationProcess
+		|| (Job->bEditorProcess && Spec.PostProcess == TEXT("test"));
+	Job->HeadlessProfile =
+		GetStringFieldOr(
+			Input,
+			TEXT("headlessProfile"),
+			Job->bAutomationProcess
+				? FString(TEXT("minimal"))
+				: FString());
+	const FString Directory = JobDirectory(Job->Id);
+	IFileManager::Get().MakeDirectory(*Directory, true);
+	Job->EditorLogPath =
+		Job->bEditorProcess
+			? FPaths::Combine(Directory, TEXT("editor.log"))
+			: FString();
+	Job->ReportDirectory =
+		Spec.PostProcess == TEXT("test")
+			? FPaths::Combine(Directory, TEXT("report"))
+			: FString();
+	if (!Job->ReportDirectory.IsEmpty())
 	{
-		OutError = TEXT("Failed to create the job output pipe.");
+		IFileManager::Get().MakeDirectory(
+			*Job->ReportDirectory,
+			true);
+	}
+	Job->Arguments =
+		Spec.BuildArguments
+			? Spec.BuildArguments(
+				Job->Id,
+				Directory,
+				Job->EditorLogPath,
+				Job->ReportDirectory)
+			: Spec.Arguments;
+	if (Job->Arguments.IsEmpty())
+	{
+		OutError = TEXT("The constrained job argument builder failed.");
 		Job->Status = TEXT("failed");
-		Job->Phase = TEXT("complete");
 		Job->ErrorCode = TEXT("job_start_failed");
 		Job->Message = OutError;
 		Job->Progress = 1.0;
 		Job->CompletedAtUtc = FDateTime::UtcNow().ToIso8601();
+		TransitionProcessPhase(*Job, TEXT("complete"));
+		SaveJournal(*Job);
+		return nullptr;
+	}
+	if (Job->bEditorProcess)
+	{
+		if (!Job->Arguments.Contains(
+				TEXT("-stdout"),
+				ESearchCase::IgnoreCase))
+		{
+			Job->Arguments += TEXT(" -stdout");
+		}
+		if (!Job->Arguments.Contains(
+				TEXT("-FullStdOutLogOutput"),
+				ESearchCase::IgnoreCase))
+		{
+			Job->Arguments += TEXT(" -FullStdOutLogOutput");
+		}
+		if (!Job->Arguments.Contains(
+				TEXT("-NoSound"),
+				ESearchCase::IgnoreCase))
+		{
+			Job->Arguments += TEXT(" -NoSound");
+		}
+		if (!Job->Arguments.Contains(
+				TEXT("-abslog="),
+				ESearchCase::IgnoreCase))
+		{
+			Job->Arguments += TEXT(" -abslog=")
+				+ QuoteArgument(Job->EditorLogPath);
+		}
+	}
+
+	const TSharedPtr<FJsonObject> TimeoutPolicy =
+		ResolveProcessTimeoutPolicy(
+			Input,
+			Spec.DefaultExecutionTimeoutSeconds);
+	Job->StartupTimeoutSeconds =
+		TimeoutPolicy->GetNumberField(TEXT("startupTimeoutSeconds"));
+	Job->ExecutionTimeoutSeconds =
+		TimeoutPolicy->GetNumberField(TEXT("executionTimeoutSeconds"));
+	Job->ShutdownTimeoutSeconds =
+		TimeoutPolicy->GetNumberField(TEXT("shutdownTimeoutSeconds"));
+	Job->HardTimeoutSeconds =
+		TimeoutPolicy->GetNumberField(TEXT("hardTimeoutSeconds"));
+	Job->Status = TEXT("running");
+	Job->StartedAtUtc = FDateTime::UtcNow().ToIso8601();
+	Job->StartedAtSeconds = FPlatformTime::Seconds();
+	Job->StartupDeadlineSeconds =
+		Job->StartedAtSeconds + Job->StartupTimeoutSeconds;
+	Job->HardDeadlineSeconds =
+		Job->StartedAtSeconds + Job->HardTimeoutSeconds;
+	Job->TimeoutAtSeconds = Job->HardDeadlineSeconds;
+	TransitionProcessPhase(
+		*Job,
+		TEXT("launching"),
+		Job->StartedAtSeconds);
+	if (!FPlatformProcess::CreatePipe(Job->ReadPipe, Job->WritePipe))
+	{
+		OutError = TEXT("Failed to create the job output pipe.");
+		Job->Status = TEXT("failed");
+		Job->ErrorCode = TEXT("job_start_failed");
+		Job->Message = OutError;
+		Job->Progress = 1.0;
+		Job->CompletedAtUtc = FDateTime::UtcNow().ToIso8601();
+		TransitionProcessPhase(*Job, TEXT("complete"));
 		SaveJournal(*Job);
 		return nullptr;
 	}
@@ -1400,27 +1542,31 @@ FProductionJobRuntime::StartProcessJob(
 	uint32 ProcessId = 0;
 #if PLATFORM_WINDOWS
 	Job->ProcessHandle = FPlatformProcess::CreateProc(
-		*Executable,
-		*Arguments,
+		*Spec.Executable,
+		*Job->Arguments,
 		false,
 		true,
 		true,
 		&ProcessId,
 		0,
-		WorkingDirectory.IsEmpty() ? nullptr : *WorkingDirectory,
+		Spec.WorkingDirectory.IsEmpty()
+			? nullptr
+			: *Spec.WorkingDirectory,
 		Job->WritePipe,
 		nullptr,
 		Job->WritePipe);
 #else
 	Job->ProcessHandle = FPlatformProcess::CreateProc(
-		*Executable,
-		*Arguments,
+		*Spec.Executable,
+		*Job->Arguments,
 		false,
 		true,
 		true,
 		&ProcessId,
 		0,
-		WorkingDirectory.IsEmpty() ? nullptr : *WorkingDirectory,
+		Spec.WorkingDirectory.IsEmpty()
+			? nullptr
+			: *Spec.WorkingDirectory,
 		Job->WritePipe,
 		nullptr);
 #endif
@@ -1431,21 +1577,113 @@ FProductionJobRuntime::StartProcessJob(
 		Job->WritePipe = nullptr;
 		OutError = FString::Printf(
 			TEXT("Failed to launch %s job."),
-			*Kind);
+			*Spec.Kind);
 		Job->Status = TEXT("failed");
-		Job->Phase = TEXT("complete");
 		Job->ErrorCode = TEXT("job_start_failed");
 		Job->Message = OutError;
 		Job->Progress = 1.0;
 		Job->CompletedAtUtc = FDateTime::UtcNow().ToIso8601();
+		TransitionProcessPhase(*Job, TEXT("complete"));
 		SaveJournal(*Job);
 		return nullptr;
 	}
 	Job->ProcessId = ProcessId;
-	Job->Phase = TEXT("running");
+	TransitionProcessPhase(
+		*Job,
+		Job->bAutomationProcess ? TEXT("loading") : TEXT("running"));
 	ActiveHeavyJobId = Job->Id;
 	SaveJournal(*Job);
 	return Job;
+}
+
+void FProductionJobRuntime::TransitionProcessPhase(
+	FJob& Job,
+	const FString& NewPhase,
+	double NowSeconds)
+{
+	if (NewPhase.IsEmpty() || Job.Phase == NewPhase)
+	{
+		return;
+	}
+	if (NowSeconds <= 0.0)
+	{
+		NowSeconds = FPlatformTime::Seconds();
+	}
+	if (!Job.Phase.IsEmpty() && Job.PhaseStartedAtSeconds > 0.0)
+	{
+		Job.PhaseDurationsSeconds.FindOrAdd(Job.Phase) +=
+			FMath::Max(0.0, NowSeconds - Job.PhaseStartedAtSeconds);
+	}
+	Job.Phase = NewPhase;
+	Job.PhaseStartedAtSeconds = NowSeconds;
+	if (Job.PhaseHistory.IsEmpty()
+		|| Job.PhaseHistory.Last() != NewPhase)
+	{
+		Job.PhaseHistory.Add(NewPhase);
+	}
+	if (NewPhase == TEXT("running")
+		&& Job.ExecutionDeadlineSeconds <= 0.0)
+	{
+		Job.ExecutionDeadlineSeconds =
+			NowSeconds + Job.ExecutionTimeoutSeconds;
+	}
+	else if (NewPhase == TEXT("exiting")
+		&& Job.ShutdownDeadlineSeconds <= 0.0)
+	{
+		Job.ShutdownDeadlineSeconds =
+			NowSeconds + Job.ShutdownTimeoutSeconds;
+	}
+}
+
+void FProductionJobRuntime::UpdateProcessPhaseFromLog(
+	FJob& Job,
+	const FString& LogChunk)
+{
+	if (!Job.bAutomationProcess || LogChunk.IsEmpty())
+	{
+		return;
+	}
+	const FString Target =
+		InferAutomationPhase(Job.Phase, LogChunk);
+	static const TArray<FString> OrderedPhases = {
+		TEXT("launching"),
+		TEXT("loading"),
+		TEXT("discovering"),
+		TEXT("running"),
+		TEXT("reporting"),
+		TEXT("exiting"),
+		TEXT("complete")
+	};
+	const int32 CurrentIndex = OrderedPhases.IndexOfByKey(Job.Phase);
+	const int32 TargetIndex = OrderedPhases.IndexOfByKey(Target);
+	if (CurrentIndex == INDEX_NONE
+		|| TargetIndex == INDEX_NONE
+		|| TargetIndex <= CurrentIndex)
+	{
+		return;
+	}
+	const double Now = FPlatformTime::Seconds();
+	for (int32 Index = CurrentIndex + 1;
+		Index <= TargetIndex;
+		++Index)
+	{
+		TransitionProcessPhase(Job, OrderedPhases[Index], Now);
+	}
+	SaveJournal(Job);
+}
+
+void FProductionJobRuntime::TerminateProcessTree(FJob& Job)
+{
+	if (!Job.ProcessHandle.IsValid())
+	{
+		return;
+	}
+	Job.bTerminationRequested = true;
+	if (FPlatformProcess::IsProcRunning(Job.ProcessHandle))
+	{
+		FPlatformProcess::TerminateProc(Job.ProcessHandle, true);
+		FPlatformProcess::WaitForProc(Job.ProcessHandle);
+	}
 }
 
 void FProductionJobRuntime::TickProcessJob(FJob& Job)
@@ -1471,21 +1709,56 @@ void FProductionJobRuntime::TickProcessJob(FJob& Job)
 				FFileHelper::EEncodingOptions::AutoDetect,
 				&IFileManager::Get(),
 				FILEWRITE_Append);
+			UpdateProcessPhaseFromLog(Job, Chunk);
 		}
 	}
 
-	if (Job.TimeoutAtSeconds > 0.0
-		&& FPlatformTime::Seconds() >= Job.TimeoutAtSeconds)
+	const double Now = FPlatformTime::Seconds();
+	if (Job.HardDeadlineSeconds > 0.0
+		&& Now >= Job.HardDeadlineSeconds)
 	{
-		if (Job.ProcessHandle.IsValid())
-		{
-			FPlatformProcess::TerminateProc(Job.ProcessHandle, true);
-		}
+		TerminateProcessTree(Job);
 		FinishJob(
 			Job,
 			TEXT("failed"),
-			TEXT("job_timeout"),
-			TEXT("The job exceeded its configured timeout."));
+			TEXT("job_hard_timeout"),
+			TEXT("The job exceeded its total hard timeout."));
+		return;
+	}
+	if (IsStartupPhase(Job.Phase)
+		&& Job.StartupDeadlineSeconds > 0.0
+		&& Now >= Job.StartupDeadlineSeconds)
+	{
+		TerminateProcessTree(Job);
+		FinishJob(
+			Job,
+			TEXT("failed"),
+			TEXT("job_startup_timeout"),
+			TEXT("The job did not reach its running phase before startupTimeoutSeconds."));
+		return;
+	}
+	if (IsExecutionPhase(Job.Phase)
+		&& Job.ExecutionDeadlineSeconds > 0.0
+		&& Now >= Job.ExecutionDeadlineSeconds)
+	{
+		TerminateProcessTree(Job);
+		FinishJob(
+			Job,
+			TEXT("failed"),
+			TEXT("job_execution_timeout"),
+			TEXT("The job exceeded executionTimeoutSeconds."));
+		return;
+	}
+	if (Job.Phase == TEXT("exiting")
+		&& Job.ShutdownDeadlineSeconds > 0.0
+		&& Now >= Job.ShutdownDeadlineSeconds)
+	{
+		TerminateProcessTree(Job);
+		FinishJob(
+			Job,
+			TEXT("failed"),
+			TEXT("job_shutdown_timeout"),
+			TEXT("The job did not exit before shutdownTimeoutSeconds."));
 		return;
 	}
 	if (!Job.ProcessHandle.IsValid())
@@ -1499,17 +1772,30 @@ void FProductionJobRuntime::TickProcessJob(FJob& Job)
 	}
 	if (FPlatformProcess::IsProcRunning(Job.ProcessHandle))
 	{
-		const double TimeoutSpan =
-			Job.TimeoutAtSeconds > Job.StartedAtSeconds
-				? Job.TimeoutAtSeconds - Job.StartedAtSeconds
-				: 0.0;
-		if (TimeoutSpan > 0.0)
+		if (IsStartupPhase(Job.Phase))
 		{
 			Job.Progress = FMath::Clamp(
-				(FPlatformTime::Seconds() - Job.StartedAtSeconds)
-					/ TimeoutSpan,
+				((Now - Job.StartedAtSeconds)
+					/ Job.StartupTimeoutSeconds) * 0.2,
 				0.0,
-				0.95);
+				0.2);
+		}
+		else if (IsExecutionPhase(Job.Phase)
+			&& Job.ExecutionDeadlineSeconds > 0.0)
+		{
+			const double ExecutionStarted =
+				Job.ExecutionDeadlineSeconds
+					- Job.ExecutionTimeoutSeconds;
+			Job.Progress = FMath::Clamp(
+				0.2
+					+ ((Now - ExecutionStarted)
+						/ Job.ExecutionTimeoutSeconds) * 0.7,
+				0.2,
+				0.9);
+		}
+		else if (Job.Phase == TEXT("exiting"))
+		{
+			Job.Progress = 0.95;
 		}
 		return;
 	}
@@ -1585,7 +1871,6 @@ void FProductionJobRuntime::FinishJob(
 		Job.LogBaseCursor += Removed;
 	}
 	Job.Status = Status;
-	Job.Phase = TEXT("complete");
 	Job.ErrorCode = ErrorCode;
 	Job.Message = Message;
 	Job.Progress = 1.0;
@@ -1594,7 +1879,19 @@ void FProductionJobRuntime::FinishJob(
 	{
 		ActiveHeavyJobId.Reset();
 	}
+	if (Job.Phase != TEXT("reporting")
+		&& Job.Phase != TEXT("exiting")
+		&& Job.Phase != TEXT("complete"))
+	{
+		TransitionProcessPhase(Job, TEXT("reporting"));
+	}
 	PostProcessJob(Job);
+	if (Job.Phase != TEXT("exiting")
+		&& Job.Phase != TEXT("complete"))
+	{
+		TransitionProcessPhase(Job, TEXT("exiting"));
+	}
+	TransitionProcessPhase(Job, TEXT("complete"));
 	SaveJournal(Job);
 }
 
@@ -2901,6 +3198,165 @@ TSharedPtr<FJsonObject> FProductionJobRuntime::ComparePerformanceResults(
 	return Data;
 }
 
+TSharedPtr<FJsonObject> FProductionJobRuntime::ResolveProcessTimeoutPolicy(
+	const TSharedPtr<FJsonObject>& Params,
+	const double DefaultExecutionTimeoutSeconds)
+{
+	const double DefaultExecution = FMath::Clamp(
+		DefaultExecutionTimeoutSeconds,
+		1.0,
+		MaxExecutionTimeoutSeconds);
+	const double LegacyExecution = GetNumberFieldOr(
+		Params,
+		TEXT("timeoutSeconds"),
+		DefaultExecution);
+	const double Startup = FMath::Clamp(
+		GetNumberFieldOr(
+			Params,
+			TEXT("startupTimeoutSeconds"),
+			300.0),
+		1.0,
+		MaxStartupTimeoutSeconds);
+	const double Execution = FMath::Clamp(
+		GetNumberFieldOr(
+			Params,
+			TEXT("executionTimeoutSeconds"),
+			LegacyExecution),
+		1.0,
+		MaxExecutionTimeoutSeconds);
+	const double Shutdown = FMath::Clamp(
+		GetNumberFieldOr(
+			Params,
+			TEXT("shutdownTimeoutSeconds"),
+			60.0),
+		1.0,
+		MaxShutdownTimeoutSeconds);
+	const double RequestedHard = GetNumberFieldOr(
+		Params,
+		TEXT("hardTimeoutSeconds"),
+		Startup + Execution + Shutdown);
+	const double Hard = FMath::Clamp(
+		RequestedHard,
+		1.0,
+		MaxHardTimeoutSeconds);
+
+	TSharedPtr<FJsonObject> Policy = MakeShared<FJsonObject>();
+	Policy->SetNumberField(TEXT("startupTimeoutSeconds"), Startup);
+	Policy->SetNumberField(TEXT("executionTimeoutSeconds"), Execution);
+	Policy->SetNumberField(TEXT("shutdownTimeoutSeconds"), Shutdown);
+	Policy->SetNumberField(TEXT("hardTimeoutSeconds"), Hard);
+	Policy->SetNumberField(
+		TEXT("hardLimitSeconds"),
+		MaxHardTimeoutSeconds);
+	Policy->SetBoolField(
+		TEXT("hardTimeoutIsLimiting"),
+		Hard < Startup + Execution + Shutdown);
+	return Policy;
+}
+
+FString FProductionJobRuntime::BuildHeadlessProfileArguments(
+	const FString& Profile,
+	FString& OutError)
+{
+	OutError.Reset();
+	const FString Effective =
+		Profile.IsEmpty() ? TEXT("minimal") : Profile;
+	const FString Common = TEXT("-unattended -nop4 -nosplash -NoSound");
+	const FString XrDisabled =
+		TEXT(" -DisablePlugins=OpenXR,OpenXREyeTracker,")
+		TEXT("OpenXRHandTracking,OpenXRMsftHandInteraction");
+	if (Effective == TEXT("minimal"))
+	{
+		return Common
+			+ TEXT(" -NullRHI -DisablePlugins=OpenXR,OpenXREyeTracker,")
+			+ TEXT("OpenXRHandTracking,OpenXRMsftHandInteraction,")
+			+ TEXT("PerforceSourceControl,PlasticSourceControl,")
+			+ TEXT("SubversionSourceControl");
+	}
+	if (Effective == TEXT("project"))
+	{
+		return Common + XrDisabled + TEXT(" -NullRHI");
+	}
+	if (Effective == TEXT("rendering"))
+	{
+		return Common + XrDisabled;
+	}
+	OutError =
+		TEXT("headlessProfile must be 'minimal', 'project', or 'rendering'.");
+	return FString();
+}
+
+FString FProductionJobRuntime::InferAutomationPhase(
+	const FString& CurrentPhase,
+	const FString& LogChunk)
+{
+	FString Phase = CurrentPhase;
+	if (LogChunk.Contains(
+			TEXT("Ready to start automation"),
+			ESearchCase::IgnoreCase)
+		|| LogChunk.Contains(
+			TEXT("FindWorkers"),
+			ESearchCase::IgnoreCase)
+		|| LogChunk.Contains(
+			TEXT("Requesting test list"),
+			ESearchCase::IgnoreCase))
+	{
+		if (Phase == TEXT("launching") || Phase == TEXT("loading"))
+		{
+			Phase = TEXT("discovering");
+		}
+	}
+	if (LogChunk.Contains(
+			TEXT("automation tests based on"),
+			ESearchCase::IgnoreCase)
+		|| LogChunk.Contains(
+			TEXT("Test Started."),
+			ESearchCase::IgnoreCase)
+		|| LogChunk.Contains(
+			TEXT("Sending RunTest"),
+			ESearchCase::IgnoreCase))
+	{
+		if (IsStartupPhase(Phase))
+		{
+			Phase = TEXT("running");
+		}
+	}
+	if (LogChunk.Contains(
+			TEXT("Automation Test Queue Empty"),
+			ESearchCase::IgnoreCase))
+	{
+		if (IsStartupPhase(Phase))
+		{
+			Phase = TEXT("running");
+		}
+		if (Phase == TEXT("running"))
+		{
+			Phase = TEXT("reporting");
+		}
+	}
+	if (LogChunk.Contains(
+			TEXT("Successfully wrote html results file"),
+			ESearchCase::IgnoreCase))
+	{
+		// The test report is complete; any remaining process lifetime belongs
+		// to Editor shutdown and is governed by shutdownTimeoutSeconds.
+		Phase = TEXT("exiting");
+	}
+	if (LogChunk.Contains(
+			TEXT("Engine exit requested"),
+			ESearchCase::IgnoreCase)
+		|| LogChunk.Contains(
+			TEXT("Requesting Exit"),
+			ESearchCase::IgnoreCase)
+		|| LogChunk.Contains(
+			TEXT("LogExit:"),
+			ESearchCase::IgnoreCase))
+	{
+		Phase = TEXT("exiting");
+	}
+	return Phase;
+}
+
 FMCPToolResult FProductionJobRuntime::ListTests(
 	const TSharedPtr<FJsonObject>& Params) const
 {
@@ -2982,10 +3438,6 @@ FMCPToolResult FProductionJobRuntime::StartTestRun(
 			TEXT("invalid_params"),
 			422);
 	}
-	const double TimeoutSeconds = FMath::Clamp(
-		GetNumberFieldOr(Params, TEXT("timeoutSeconds"), 1800.0),
-		1.0,
-		21600.0);
 	FString Executable;
 	FString Arguments;
 	const FString ProjectFile =
@@ -3003,6 +3455,23 @@ FMCPToolResult FProductionJobRuntime::StartTestRun(
 	}
 	else
 	{
+		const FString HeadlessProfile =
+			GetStringFieldOr(
+				Params,
+				TEXT("headlessProfile"),
+				TEXT("minimal"));
+		FString ProfileError;
+		const FString HeadlessArguments =
+			BuildHeadlessProfileArguments(
+				HeadlessProfile,
+				ProfileError);
+		if (!ProfileError.IsEmpty())
+		{
+			return FMCPToolResult::Error(
+				ProfileError,
+				TEXT("invalid_params"),
+				422);
+		}
 		Executable = GetEditorCommandletExecutable();
 		if (!IFileManager::Get().FileExists(*Executable))
 		{
@@ -3011,44 +3480,42 @@ FMCPToolResult FProductionJobRuntime::StartTestRun(
 				TEXT("test_unavailable"),
 				503);
 		}
-		const FString ReportDirectory =
-			FPaths::Combine(
-				JobsRoot(),
-				NewOpaqueId(TEXT("test-report")));
-		IFileManager::Get().MakeDirectory(*ReportDirectory, true);
-		Arguments = FString::Printf(
-			TEXT("%s -unattended -nop4 -nosplash -NullRHI -ExecCmds=%s -TestExit=%s -ReportExportPath=%s -log"),
-			*QuoteArgument(ProjectFile),
-			*QuoteArgument(
-				FString::Printf(
-					TEXT("Automation RunTests %s;Quit"),
-					*Test)),
-			*QuoteArgument(TEXT("Automation Test Queue Empty")),
-			*QuoteArgument(ReportDirectory));
 
+		FProcessLaunchSpec Spec;
+		Spec.Kind = TEXT("test");
+		Spec.Executable = Executable;
+		Spec.WorkingDirectory = FPaths::ProjectDir();
+		Spec.PostProcess = TEXT("test");
+		Spec.DefaultExecutionTimeoutSeconds = 1800.0;
+		Spec.bEditorProcess = true;
+		Spec.bAutomationProcess = true;
+		Spec.BuildArguments =
+			[ProjectFile, Test, HeadlessArguments](
+				const FString&,
+				const FString&,
+				const FString&,
+				const FString& ReportDirectory)
+			{
+				return FString::Printf(
+					TEXT("%s %s -ExecCmds=%s -TestExit=%s -ReportExportPath=%s -log"),
+					*QuoteArgument(ProjectFile),
+					*HeadlessArguments,
+					*QuoteArgument(
+						FString::Printf(
+							TEXT("Automation RunTests %s;Quit"),
+							*Test)),
+					*QuoteArgument(
+						TEXT("Automation Test Queue Empty")),
+					*QuoteArgument(ReportDirectory));
+			};
 		FString Error;
 		TSharedPtr<FJob> Job = StartProcessJob(
-			TEXT("test"),
-			Executable,
-			Arguments,
-			FPaths::ProjectDir(),
-			TimeoutSeconds,
-			TEXT("test"),
+			Spec,
 			Params,
 			Error);
 		if (!Job.IsValid())
 		{
 			return MakeJobStartFailure(Error);
-		}
-		// The actual job id differs from the reservation; rewrite the report path
-		// before launch is not possible, so retain it as an explicit input field.
-		if (!Job->Input->HasTypedField<EJson::String>(
-				TEXT("reportDirectory")))
-		{
-			Job->Input->SetStringField(
-				TEXT("reportDirectory"),
-				ReportDirectory);
-			SaveJournal(*Job);
 		}
 		return FMCPToolResult::Ok(MakeJobSummary(*Job, false));
 	}
@@ -3059,7 +3526,7 @@ FMCPToolResult FProductionJobRuntime::StartTestRun(
 		Executable,
 		Arguments,
 		FPaths::ProjectDir(),
-		TimeoutSeconds,
+		GetNumberFieldOr(Params, TEXT("timeoutSeconds"), 1800.0),
 		TEXT("test"),
 		Params,
 		Error);
@@ -3721,12 +4188,7 @@ FMCPToolResult FProductionJobRuntime::ExecuteSourceControlChange(
 	}
 
 	FString Error;
-	TSharedPtr<FJsonObject> JobInput = CopyObject(Request);
-	const FString RequestId = GetStringFieldOr(Params, TEXT("requestId"));
-	if (!RequestId.IsEmpty())
-	{
-		JobInput->SetStringField(TEXT("requestId"), RequestId);
-	}
+	TSharedPtr<FJsonObject> JobInput = CopyObject(Params);
 	TSharedPtr<FJob> Job = StartProcessJob(
 		TEXT("sourceControl"),
 		TEXT("git.exe"),
@@ -4057,8 +4519,7 @@ void FProductionJobRuntime::PostProcessJob(FJob& Job)
 {
 	const FString JobLogFile =
 		FPaths::Combine(JobDirectory(Job.Id), TEXT("job.log"));
-	if (!Job.Output.IsEmpty()
-		&& !IFileManager::Get().FileExists(*JobLogFile))
+	if (!IFileManager::Get().FileExists(*JobLogFile))
 	{
 		FFileHelper::SaveStringToFile(Job.Output, *JobLogFile);
 	}
@@ -4068,6 +4529,15 @@ void FProductionJobRuntime::PostProcessJob(FJob& Job)
 			Job,
 			JobLogFile,
 			TEXT("job.log"),
+			TEXT("text/plain"));
+	}
+	if (!Job.EditorLogPath.IsEmpty()
+		&& IFileManager::Get().FileExists(*Job.EditorLogPath))
+	{
+		AddArtifact(
+			Job,
+			Job.EditorLogPath,
+			TEXT("editor.log"),
 			TEXT("text/plain"));
 	}
 	if (Job.PostProcess == TEXT("test"))
@@ -4160,10 +4630,9 @@ void FProductionJobRuntime::PostProcessJob(FJob& Job)
 void FProductionJobRuntime::WriteTestReports(FJob& Job)
 {
 	const FString ReportDirectory =
-		GetStringFieldOr(
-			Job.Input,
-			TEXT("reportDirectory"),
-			FPaths::Combine(JobDirectory(Job.Id), TEXT("report")));
+		Job.ReportDirectory.IsEmpty()
+			? FPaths::Combine(JobDirectory(Job.Id), TEXT("report"))
+			: Job.ReportDirectory;
 	const FString NativeIndex =
 		FPaths::Combine(ReportDirectory, TEXT("index.json"));
 	if (IFileManager::Get().FileExists(*NativeIndex))
@@ -4537,6 +5006,63 @@ TSharedPtr<FJsonObject> FProductionJobRuntime::MakeJobSummary(
 	}
 	Data->SetObjectField(TEXT("progress"), Progress);
 	Data->SetStringField(TEXT("phase"), Job.Phase);
+	TSharedPtr<FJsonObject> PhaseDurations = MakeShared<FJsonObject>();
+	static const TArray<FString> ProcessPhases = {
+		TEXT("launching"),
+		TEXT("loading"),
+		TEXT("discovering"),
+		TEXT("running"),
+		TEXT("reporting"),
+		TEXT("exiting"),
+		TEXT("complete")
+	};
+	for (const FString& Phase : ProcessPhases)
+	{
+		double Duration =
+			Job.PhaseDurationsSeconds.FindRef(Phase);
+		if (Job.Phase == Phase
+			&& !IsTerminalStatus(Job.Status)
+			&& Job.PhaseStartedAtSeconds > 0.0)
+		{
+			Duration += FMath::Max(
+				0.0,
+				FPlatformTime::Seconds()
+					- Job.PhaseStartedAtSeconds);
+		}
+		PhaseDurations->SetNumberField(Phase, Duration);
+	}
+	Data->SetObjectField(
+		TEXT("phaseDurationsSeconds"),
+		PhaseDurations);
+	TArray<TSharedPtr<FJsonValue>> PhaseHistory;
+	for (const FString& Phase : Job.PhaseHistory)
+	{
+		PhaseHistory.Add(MakeShared<FJsonValueString>(Phase));
+	}
+	Data->SetArrayField(TEXT("phaseHistory"), PhaseHistory);
+	TSharedPtr<FJsonObject> Timeouts = MakeShared<FJsonObject>();
+	Timeouts->SetNumberField(
+		TEXT("startupTimeoutSeconds"),
+		Job.StartupTimeoutSeconds);
+	Timeouts->SetNumberField(
+		TEXT("executionTimeoutSeconds"),
+		Job.ExecutionTimeoutSeconds);
+	Timeouts->SetNumberField(
+		TEXT("shutdownTimeoutSeconds"),
+		Job.ShutdownTimeoutSeconds);
+	Timeouts->SetNumberField(
+		TEXT("hardTimeoutSeconds"),
+		Job.HardTimeoutSeconds);
+	Timeouts->SetNumberField(
+		TEXT("hardLimitSeconds"),
+		MaxHardTimeoutSeconds);
+	Data->SetObjectField(TEXT("timeouts"), Timeouts);
+	if (!Job.HeadlessProfile.IsEmpty())
+	{
+		Data->SetStringField(
+			TEXT("headlessProfile"),
+			Job.HeadlessProfile);
+	}
 	Data->SetStringField(TEXT("createdAt"), Job.CreatedAtUtc);
 	Data->SetStringField(TEXT("startedAt"), Job.StartedAtUtc);
 	Data->SetStringField(TEXT("finishedAt"), Job.CompletedAtUtc);
@@ -4692,6 +5218,75 @@ void FProductionJobRuntime::LoadJournals()
 			GetNumberFieldOr(Root, TEXT("processId"), 0.0));
 		Job->ReturnCode = static_cast<int32>(
 			GetNumberFieldOr(Root, TEXT("returnCode"), INDEX_NONE));
+		Job->StartupTimeoutSeconds =
+			GetNumberFieldOr(
+				Root,
+				TEXT("startupTimeoutSeconds"),
+				300.0);
+		Job->ExecutionTimeoutSeconds =
+			GetNumberFieldOr(
+				Root,
+				TEXT("executionTimeoutSeconds"),
+				1800.0);
+		Job->ShutdownTimeoutSeconds =
+			GetNumberFieldOr(
+				Root,
+				TEXT("shutdownTimeoutSeconds"),
+				60.0);
+		Job->HardTimeoutSeconds =
+			GetNumberFieldOr(
+				Root,
+				TEXT("hardTimeoutSeconds"),
+				FMath::Min(
+					MaxHardTimeoutSeconds,
+					Job->StartupTimeoutSeconds
+						+ Job->ExecutionTimeoutSeconds
+						+ Job->ShutdownTimeoutSeconds));
+		Job->EditorLogPath =
+			GetStringFieldOr(Root, TEXT("editorLogPath"));
+		Job->ReportDirectory =
+			GetStringFieldOr(Root, TEXT("reportDirectory"));
+		Job->HeadlessProfile =
+			GetStringFieldOr(Root, TEXT("headlessProfile"));
+		Job->bEditorProcess =
+			GetBoolFieldOr(Root, TEXT("editorProcess"), false);
+		Job->bAutomationProcess =
+			GetBoolFieldOr(
+				Root,
+				TEXT("automationProcess"),
+				false);
+		if (Root->HasTypedField<EJson::Object>(
+				TEXT("phaseDurationsSeconds")))
+		{
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair :
+				Root->GetObjectField(
+					TEXT("phaseDurationsSeconds"))->Values)
+			{
+				double Duration = 0.0;
+				if (Pair.Value.IsValid()
+					&& Pair.Value->TryGetNumber(Duration))
+				{
+					Job->PhaseDurationsSeconds.Add(
+						Pair.Key,
+						FMath::Max(0.0, Duration));
+				}
+			}
+		}
+		if (Root->HasTypedField<EJson::Array>(TEXT("phaseHistory")))
+		{
+			for (const TSharedPtr<FJsonValue>& Value :
+				Root->GetArrayField(TEXT("phaseHistory")))
+			{
+				if (Value.IsValid() && Value->Type == EJson::String)
+				{
+					Job->PhaseHistory.Add(Value->AsString());
+				}
+			}
+		}
+		if (Job->PhaseHistory.IsEmpty() && !Job->Phase.IsEmpty())
+		{
+			Job->PhaseHistory.Add(Job->Phase);
+		}
 		Job->LogBaseCursor = static_cast<int64>(
 			GetNumberFieldOr(Root, TEXT("logBaseCursor"), 0.0));
 		Job->LogTotalChars = static_cast<int64>(
@@ -4810,6 +5405,7 @@ void FProductionJobRuntime::LoadJournals()
 			Job->CompletedAtUtc = FDateTime::UtcNow().ToIso8601();
 			Job->Progress = 1.0;
 		}
+		Job->PhaseStartedAtSeconds = FPlatformTime::Seconds();
 		Jobs.Add(Job->Id, Job);
 		SaveJournal(*Job);
 	}
@@ -4833,6 +5429,48 @@ void FProductionJobRuntime::SaveJournal(const FJob& Job) const
 	Root->SetNumberField(TEXT("progress"), Job.Progress);
 	Root->SetNumberField(TEXT("processId"), Job.ProcessId);
 	Root->SetNumberField(TEXT("returnCode"), Job.ReturnCode);
+	Root->SetNumberField(
+		TEXT("startupTimeoutSeconds"),
+		Job.StartupTimeoutSeconds);
+	Root->SetNumberField(
+		TEXT("executionTimeoutSeconds"),
+		Job.ExecutionTimeoutSeconds);
+	Root->SetNumberField(
+		TEXT("shutdownTimeoutSeconds"),
+		Job.ShutdownTimeoutSeconds);
+	Root->SetNumberField(
+		TEXT("hardTimeoutSeconds"),
+		Job.HardTimeoutSeconds);
+	Root->SetStringField(
+		TEXT("editorLogPath"),
+		Job.EditorLogPath);
+	Root->SetStringField(
+		TEXT("reportDirectory"),
+		Job.ReportDirectory);
+	Root->SetStringField(
+		TEXT("headlessProfile"),
+		Job.HeadlessProfile);
+	Root->SetBoolField(
+		TEXT("editorProcess"),
+		Job.bEditorProcess);
+	Root->SetBoolField(
+		TEXT("automationProcess"),
+		Job.bAutomationProcess);
+	TSharedPtr<FJsonObject> PhaseDurations = MakeShared<FJsonObject>();
+	for (const TPair<FString, double>& Pair :
+		Job.PhaseDurationsSeconds)
+	{
+		PhaseDurations->SetNumberField(Pair.Key, Pair.Value);
+	}
+	Root->SetObjectField(
+		TEXT("phaseDurationsSeconds"),
+		PhaseDurations);
+	TArray<TSharedPtr<FJsonValue>> PhaseHistory;
+	for (const FString& Phase : Job.PhaseHistory)
+	{
+		PhaseHistory.Add(MakeShared<FJsonValueString>(Phase));
+	}
+	Root->SetArrayField(TEXT("phaseHistory"), PhaseHistory);
 	Root->SetNumberField(TEXT("logBaseCursor"), Job.LogBaseCursor);
 	Root->SetNumberField(TEXT("logTotalChars"), Job.LogTotalChars);
 	Root->SetStringField(TEXT("requestId"), Job.RequestId);

@@ -163,6 +163,127 @@ bool FProductionJobRuntimeContractTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FProductionJobLifecycleContractTest,
+	"UE_AI_integration.Production.JobRuntime.LifecycleContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FProductionJobLifecycleContractTest::RunTest(
+	const FString& Parameters)
+{
+	TSharedPtr<FJsonObject> TimeoutParams = MakeShared<FJsonObject>();
+	TimeoutParams->SetNumberField(TEXT("startupTimeoutSeconds"), 120.0);
+	TimeoutParams->SetNumberField(TEXT("executionTimeoutSeconds"), 15.0);
+	TimeoutParams->SetNumberField(TEXT("shutdownTimeoutSeconds"), 5.0);
+	TimeoutParams->SetNumberField(TEXT("hardTimeoutSeconds"), 10.0);
+	const TSharedPtr<FJsonObject> Policy =
+		FProductionJobRuntime::ResolveProcessTimeoutPolicy(
+			TimeoutParams,
+			1800.0);
+	TestEqual(
+		TEXT("Startup timeout is independent"),
+		Policy->GetNumberField(TEXT("startupTimeoutSeconds")),
+		120.0);
+	TestEqual(
+		TEXT("Execution timeout is independent"),
+		Policy->GetNumberField(TEXT("executionTimeoutSeconds")),
+		15.0);
+	TestEqual(
+		TEXT("Shutdown timeout is independent"),
+		Policy->GetNumberField(TEXT("shutdownTimeoutSeconds")),
+		5.0);
+	TestEqual(
+		TEXT("Hard timeout can terminate before phase budgets"),
+		Policy->GetNumberField(TEXT("hardTimeoutSeconds")),
+		10.0);
+	TestTrue(
+		TEXT("Policy reports when the hard timeout is limiting"),
+		Policy->GetBoolField(TEXT("hardTimeoutIsLimiting")));
+
+	TSharedPtr<FJsonObject> LegacyParams = MakeShared<FJsonObject>();
+	LegacyParams->SetNumberField(TEXT("timeoutSeconds"), 321.0);
+	const TSharedPtr<FJsonObject> LegacyPolicy =
+		FProductionJobRuntime::ResolveProcessTimeoutPolicy(
+			LegacyParams,
+			1800.0);
+	TestEqual(
+		TEXT("Legacy timeout remains the execution timeout"),
+		LegacyPolicy->GetNumberField(TEXT("executionTimeoutSeconds")),
+		321.0);
+	TestEqual(
+		TEXT("Hard timeout has an absolute 24 hour limit"),
+		LegacyPolicy->GetNumberField(TEXT("hardLimitSeconds")),
+		86400.0);
+
+	FString ProfileError;
+	const FString MinimalProfile =
+		FProductionJobRuntime::BuildHeadlessProfileArguments(
+			TEXT("minimal"),
+			ProfileError);
+	TestTrue(TEXT("Minimal profile is accepted"), ProfileError.IsEmpty());
+	TestTrue(
+		TEXT("Minimal profile disables audio"),
+		MinimalProfile.Contains(TEXT("-NoSound")));
+	TestTrue(
+		TEXT("Minimal profile disables OpenXR"),
+		MinimalProfile.Contains(TEXT("-DisablePlugins=OpenXR")));
+	TestTrue(
+		TEXT("Minimal profile disables unrelated source-control plugins"),
+		MinimalProfile.Contains(TEXT("PerforceSourceControl")));
+	TestFalse(
+		TEXT("Minimal profile preserves required Engine plugin dependencies"),
+		MinimalProfile.Contains(TEXT("-NoEnginePlugins")));
+	TestTrue(
+		TEXT("Minimal profile uses NullRHI"),
+		MinimalProfile.Contains(TEXT("-NullRHI")));
+
+	const FString RejectedProfile =
+		FProductionJobRuntime::BuildHeadlessProfileArguments(
+			TEXT("minimal -ExecCmds=Quit"),
+			ProfileError);
+	TestTrue(
+		TEXT("Unknown profile cannot inject raw arguments"),
+		RejectedProfile.IsEmpty() && !ProfileError.IsEmpty());
+
+	FString Phase = TEXT("loading");
+	Phase = FProductionJobRuntime::InferAutomationPhase(
+		Phase,
+		TEXT("LogAutomationCommandLine: Ready to start automation"));
+	TestEqual(
+		TEXT("Automation readiness enters discovery"),
+		Phase,
+		FString(TEXT("discovering")));
+	Phase = FProductionJobRuntime::InferAutomationPhase(
+		Phase,
+		TEXT("LogAutomationController: Display: Test Started."));
+	TestEqual(
+		TEXT("First real test enters execution"),
+		Phase,
+		FString(TEXT("running")));
+	Phase = FProductionJobRuntime::InferAutomationPhase(
+		Phase,
+		TEXT("Automation Test Queue Empty"));
+	TestEqual(
+		TEXT("Queue completion enters reporting"),
+		Phase,
+		FString(TEXT("reporting")));
+	Phase = FProductionJobRuntime::InferAutomationPhase(
+		Phase,
+		TEXT("Successfully wrote html results file"));
+	TestEqual(
+		TEXT("Completed report enters bounded Editor shutdown"),
+		Phase,
+		FString(TEXT("exiting")));
+	Phase = FProductionJobRuntime::InferAutomationPhase(
+		Phase,
+		TEXT("LogExit: Exiting."));
+	TestEqual(
+		TEXT("Engine exit enters shutdown"),
+		Phase,
+		FString(TEXT("exiting")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FProductionPerformanceScenarioWindowTest,
 	"UE_AI_integration.Production.Performance.ScenarioMeasurementWindow",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -433,6 +554,51 @@ bool FProductionCapabilityAdmissionTest::RunTest(const FString& Parameters)
 			&& PerformanceRun->GetObjectField(TEXT("inputSchema"))
 				->GetObjectField(TEXT("properties"))
 				->HasField(TEXT("repeatCount")));
+
+	for (const FString ProcessCapabilityId : {
+		FString(TEXT("production.commandlet.run")),
+		FString(TEXT("production.project.cook")),
+		FString(TEXT("production.project.package")),
+		FString(TEXT("production.test.run")),
+		FString(TEXT("production.source_control.change.execute")),
+		FString(TEXT("production.ddc.job.start")),
+		FString(TEXT("production.buildgraph.run"))})
+	{
+		const TSharedPtr<FJsonObject> ProcessCapability =
+			CapabilitiesById.FindRef(ProcessCapabilityId);
+		if (!TestTrue(
+				*FString::Printf(
+					TEXT("%s exists"),
+					*ProcessCapabilityId),
+				ProcessCapability.IsValid()))
+		{
+			continue;
+		}
+		const TSharedPtr<FJsonObject> Properties =
+			ProcessCapability->GetObjectField(TEXT("inputSchema"))
+				->GetObjectField(TEXT("properties"));
+		for (const FString TimeoutField : {
+			FString(TEXT("startupTimeoutSeconds")),
+			FString(TEXT("executionTimeoutSeconds")),
+			FString(TEXT("shutdownTimeoutSeconds")),
+			FString(TEXT("hardTimeoutSeconds"))})
+		{
+			TestTrue(
+				*FString::Printf(
+					TEXT("%s exposes %s"),
+					*ProcessCapabilityId,
+					*TimeoutField),
+				Properties->HasField(TimeoutField));
+		}
+	}
+	const TSharedPtr<FJsonObject> TestRun =
+		CapabilitiesById.FindRef(TEXT("production.test.run"));
+	TestTrue(
+		TEXT("Automation runs expose a controlled headless profile"),
+		TestRun.IsValid()
+			&& TestRun->GetObjectField(TEXT("inputSchema"))
+				->GetObjectField(TEXT("properties"))
+				->HasField(TEXT("headlessProfile")));
 
 	const TSharedPtr<FJsonObject> PerformanceCompare =
 		CapabilitiesById.FindRef(TEXT("production.performance.compare"));

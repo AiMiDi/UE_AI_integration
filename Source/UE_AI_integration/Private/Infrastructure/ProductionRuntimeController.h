@@ -10,6 +10,7 @@ namespace UEAIIntegration::Infrastructure
 {
 class FPIESessionController;
 class FProductionJobRuntime;
+class FPerformanceRegressionService;
 
 /**
  * Owns the asynchronous production jobs exposed by the production domain.
@@ -155,5 +156,6 @@ private:
 	FDelegateHandle LiveCodingPatchHandle;
 	FDateTime InitializedAtUtc;
 	TUniquePtr<FProductionJobRuntime> JobRuntime;
+	TUniquePtr<FPerformanceRegressionService> PerformanceRegression;
 };
 }

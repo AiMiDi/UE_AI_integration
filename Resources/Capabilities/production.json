@@ -129,6 +129,27 @@
             "type": "number",
             "minimum": 1,
             "maximum": 21600
+          },
+          "startupTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "executionTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 43200
+          },
+          "shutdownTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 600
+          },
+          "hardTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 86400,
+            "description": "Absolute wall-clock limit across startup, execution, reporting, and shutdown."
           }
         },
         "required": [
@@ -202,6 +223,27 @@
             "type": "number",
             "minimum": 1,
             "maximum": 21600
+          },
+          "startupTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "executionTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 43200
+          },
+          "shutdownTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 600
+          },
+          "hardTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 86400,
+            "description": "Absolute wall-clock limit across startup, execution, reporting, and shutdown."
           }
         },
         "required": [
@@ -269,6 +311,27 @@
             "type": "number",
             "minimum": 1,
             "maximum": 21600
+          },
+          "startupTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "executionTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 43200
+          },
+          "shutdownTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 600
+          },
+          "hardTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 86400,
+            "description": "Absolute wall-clock limit across startup, execution, reporting, and shutdown."
           }
         },
         "required": [
@@ -1033,7 +1096,7 @@
       "id": "production.job.status",
       "domain": "production",
       "kind": "query",
-      "description": "Return a compact ue.job.v1 status for a durable production job.",
+      "description": "Return a compact ue.job.v1 status with lifecycle phase, phase durations, timeout policy, and artifact refs.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1418,10 +1481,85 @@
       "id": "production.performance.run",
       "domain": "production",
       "kind": "command",
-      "description": "Run repeatable window or marker-bounded Scenario performance samples with p50/p95/p99 evidence.",
+      "description": "Run repeatable window, marker-bounded Scenario, or fixed standard Scenario performance samples with p50/p95/p99 evidence and a regression-grade environment fingerprint.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "profile": {
+            "type": "string",
+            "enum": [
+              "custom",
+              "standardScenario"
+            ],
+            "description": "standardScenario expands a deterministic PIE profile and defaults to at least five repetitions; custom preserves existing window/scenario behavior."
+          },
+          "standardProfile": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "map": {
+                "type": "string",
+                "pattern": "^/Game/",
+                "description": "Exact active map package. The service refuses to silently switch maps."
+              },
+              "camera": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": "Runtime camera/actor name that must exist after PIE starts."
+                  },
+                  "location": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "items": {
+                      "type": "number"
+                    },
+                    "description": "Declared fixed camera location included in the profile digest."
+                  },
+                  "rotation": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "items": {
+                      "type": "number"
+                    },
+                    "description": "Declared fixed camera rotation included in the profile digest."
+                  }
+                },
+                "required": [
+                  "name",
+                  "location",
+                  "rotation"
+                ],
+                "additionalProperties": false
+              },
+              "inputSteps": {
+                "type": "array",
+                "maxItems": 64,
+                "description": "Deterministic Scenario input steps executed after PIE/camera verification and before metrics.begin.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "captureScreenshot": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "map",
+              "camera"
+            ],
+            "additionalProperties": false
+          },
           "mode": {
             "type": "string",
             "enum": [
@@ -1485,7 +1623,7 @@
       "id": "production.performance.result.get",
       "domain": "production",
       "kind": "query",
-      "description": "Return one durable performance run and its bounded metric summaries.",
+      "description": "Return one durable performance run, bounded metric summaries, and its persisted Git/map/scalability/CVar/GPU environment fingerprint.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1519,7 +1657,7 @@
       "id": "production.performance.compare",
       "domain": "production",
       "kind": "validation",
-      "description": "Compare context-compatible performance runs across one or more thresholds and return pass, regression, or inconclusive.",
+      "description": "Compare fingerprint-compatible performance runs, emit JSON/JUnit regression artifacts, and optionally submit a bounded trace rerun when thresholds fail.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1606,6 +1744,15 @@
               ],
               "additionalProperties": false
             }
+          },
+          "autoTraceOnRegression": {
+            "type": "boolean",
+            "description": "When true and the verdict is regression, submit traceRerun with captureTrace enabled and attach bounded TraceServices top scopes asynchronously."
+          },
+          "traceRerun": {
+            "type": "object",
+            "description": "A production.performance.run request used to reproduce the candidate workload for diagnostic trace capture. Required for automatic trace submission.",
+            "additionalProperties": true
           }
         },
         "required": [
@@ -1615,9 +1762,9 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
+        "readOnly": false,
         "destructive": false,
-        "expensive": false
+        "expensive": true
       },
       "output": {
         "kind": "json"
@@ -1682,7 +1829,7 @@
       "id": "production.test.run",
       "domain": "production",
       "kind": "command",
-      "description": "Run Automation, Functional, or Gauntlet tests as a durable constrained job.",
+      "description": "Run Automation, Functional, or Gauntlet tests as a durable constrained job with separate startup, execution, shutdown, and hard timeouts.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1715,10 +1862,44 @@
               "DebugGame"
             ]
           },
+          "headlessProfile": {
+            "type": "string",
+            "enum": [
+              "minimal",
+              "project",
+              "rendering"
+            ],
+            "default": "minimal",
+            "description": "Controlled Editor profile. No raw process arguments are accepted."
+          },
           "timeoutSeconds": {
             "type": "number",
             "minimum": 1,
             "maximum": 21600
+          },
+          "startupTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 3600,
+            "default": 300
+          },
+          "executionTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 43200,
+            "default": 1800
+          },
+          "shutdownTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 600,
+            "default": 60
+          },
+          "hardTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 86400,
+            "description": "Absolute wall-clock limit across startup, execution, reporting, and shutdown."
           },
           "requestId": {
             "type": "string",
@@ -2023,6 +2204,27 @@
             "type": "number",
             "minimum": 1,
             "maximum": 3600
+          },
+          "startupTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "executionTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 43200
+          },
+          "shutdownTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 600
+          },
+          "hardTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 86400,
+            "description": "Absolute wall-clock limit across startup, execution, reporting, and shutdown."
           }
         },
         "required": [
@@ -2105,6 +2307,27 @@
             "type": "number",
             "minimum": 1,
             "maximum": 21600
+          },
+          "startupTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "executionTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 43200
+          },
+          "shutdownTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 600
+          },
+          "hardTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 86400,
+            "description": "Absolute wall-clock limit across startup, execution, reporting, and shutdown."
           }
         },
         "required": [
@@ -2208,6 +2431,27 @@
             "type": "number",
             "minimum": 1,
             "maximum": 21600
+          },
+          "startupTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "executionTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 43200
+          },
+          "shutdownTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 600
+          },
+          "hardTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 86400,
+            "description": "Absolute wall-clock limit across startup, execution, reporting, and shutdown."
           }
         },
         "required": [
