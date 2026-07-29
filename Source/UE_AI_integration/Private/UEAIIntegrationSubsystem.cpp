@@ -1,10 +1,12 @@
 #include "UEAIIntegrationSubsystem.h"
 
 #include "Core/MCPExecutor.h"
+#include "Infrastructure/ClientActivityService.h"
 #include "Infrastructure/PIESessionController.h"
 #include "Infrastructure/ProductionRuntimeController.h"
 #include "Infrastructure/Runtime/BlueprintDebugService.h"
 #include "Tools/MCPToolRegistry.h"
+#include "UEAIIntegrationEditorSettings.h"
 #include "UEAIIntegrationServer.h"
 #include "HAL/PlatformMisc.h"
 
@@ -44,6 +46,7 @@ namespace UEAIIntegrationTools
 	void RegisterDiffTools(FMCPToolRegistry& Registry);
 	void RegisterContentAssetReadTools(FMCPToolRegistry& Registry);
 	void RegisterContentAssetChangeTools(FMCPToolRegistry& Registry);
+	void RegisterContentAssetSettingsTools(FMCPToolRegistry& Registry);
 	void RegisterMaterialReadTools(FMCPToolRegistry& Registry);
 	void RegisterMaterialMutationTools(FMCPToolRegistry& Registry);
 	void RegisterAnimationTools(FMCPToolRegistry& Registry);
@@ -72,12 +75,20 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	UE_LOG(LogTemp, Log, TEXT("[UE_AI_integration] Subsystem initializing API..."));
 
+	const UUEAIIntegrationEditorSettings* Settings =
+		GetDefault<UUEAIIntegrationEditorSettings>();
+	bServerEnableRequested = Settings->bServerEnabled;
+	ServerPort = Settings->Port;
+	ServerPort = FMath::Clamp(ServerPort, 1, 65535);
+
 	PIEController =
 		MakeShared<UEAIIntegration::Infrastructure::FPIESessionController>();
 	BlueprintDebugService =
 		MakeShared<UEAIIntegration::Infrastructure::FBlueprintDebugService>(
 			*PIEController);
 	Registry = MakeUnique<FMCPToolRegistry>();
+	ClientActivityService =
+		MakeShared<UEAIIntegration::Infrastructure::FClientActivityService>();
 	ProductionController =
 		MakeShared<UEAIIntegration::Infrastructure::FProductionRuntimeController>(
 			*Registry,
@@ -122,6 +133,7 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Registry->BeginDomainRegistration(TEXT("content"));
 	UEAIIntegrationTools::RegisterContentAssetReadTools(*Registry);
 	UEAIIntegrationTools::RegisterContentAssetChangeTools(*Registry);
+	UEAIIntegrationTools::RegisterContentAssetSettingsTools(*Registry);
 	UEAIIntegrationTools::RegisterUserTypeTools(*Registry);
 	UEAIIntegrationTools::RegisterMaterialReadTools(*Registry);
 	UEAIIntegrationTools::RegisterMaterialMutationTools(*Registry);
@@ -150,7 +162,6 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Registry->LoadCapabilityManifests();
 
 	Executor = MakeUnique<FMCPExecutor>(*Registry);
-	int32 ServerPort = 9847;
 	const FString ConfiguredPort =
 		FPlatformMisc::GetEnvironmentVariable(TEXT("UE_PORT"));
 	if (!ConfiguredPort.IsEmpty())
@@ -174,8 +185,16 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Server = MakeUnique<FUEAIIntegrationServer>(
 		*Registry,
 		*Executor,
+		*ClientActivityService,
 		BlueprintDebugService.Get());
-	if (Server->Start(ServerPort))
+	if (!bServerEnableRequested)
+	{
+		UE_LOG(
+			LogTemp,
+			Log,
+			TEXT("[UE_AI_integration] Local HTTP service is disabled in Editor user settings."));
+	}
+	else if (Server->Start(ServerPort))
 	{
 		UE_LOG(
 			LogTemp,
@@ -205,6 +224,7 @@ void UUEAIIntegrationSubsystem::Deinitialize()
 	}
 	Executor.Reset();
 	ProductionController.Reset();
+	ClientActivityService.Reset();
 	Registry.Reset();
 	BlueprintDebugService.Reset();
 	PIEController.Reset();
@@ -229,9 +249,56 @@ void UUEAIIntegrationSubsystem::Tick(float DeltaTime)
 	{
 		Server->Tick(DeltaTime);
 	}
+	if (ClientActivityService.IsValid())
+	{
+		ClientActivityService->ExpireSessions();
+	}
 }
 
 TStatId UUEAIIntegrationSubsystem::GetStatId() const
 {
 	RETURN_QUICK_DECLARE_CYCLE_STAT(UUEAIIntegrationSubsystem, STATGROUP_Tickables);
+}
+
+bool UUEAIIntegrationSubsystem::SetServerEnabled(const bool bEnabled)
+{
+	bServerEnableRequested = bEnabled;
+	UUEAIIntegrationEditorSettings* Settings =
+		GetMutableDefault<UUEAIIntegrationEditorSettings>();
+	Settings->bServerEnabled = bServerEnableRequested;
+	Settings->SaveConfig();
+	if (!Server.IsValid())
+	{
+		return false;
+	}
+	if (!bEnabled)
+	{
+		Server->Stop();
+		if (ClientActivityService.IsValid())
+		{
+			ClientActivityService->DisconnectAllSessions();
+		}
+		return true;
+	}
+	return Server->Start(ServerPort);
+}
+
+bool UUEAIIntegrationSubsystem::RestartServer()
+{
+	if (!Server.IsValid())
+	{
+		return false;
+	}
+	bServerEnableRequested = true;
+	Server->Stop();
+	if (ClientActivityService.IsValid())
+	{
+		ClientActivityService->DisconnectAllSessions();
+	}
+	return Server->Start(ServerPort);
+}
+
+bool UUEAIIntegrationSubsystem::IsServerEnabled() const
+{
+	return Server.IsValid() && Server->IsRunning();
 }

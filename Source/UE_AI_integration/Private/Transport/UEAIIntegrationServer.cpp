@@ -4,6 +4,7 @@
 #include "Dom/JsonValue.h"
 #include "HttpServerModule.h"
 #include "Interfaces/IPluginManager.h"
+#include "Infrastructure/ClientActivityService.h"
 #include "Infrastructure/Runtime/BlueprintDebugService.h"
 #include "HAL/PlatformProperties.h"
 #include "Misc/App.h"
@@ -252,15 +253,133 @@ bool IsBlueprintDebugCapability(const FString& Capability)
 	};
 	return Capabilities.Contains(Capability);
 }
+
+FString RequestBodyToString(const FHttpServerRequest& Request)
+{
+	if (Request.Body.IsEmpty())
+	{
+		return FString();
+	}
+	const FUTF8ToTCHAR Converter(
+		reinterpret_cast<const ANSICHAR*>(Request.Body.GetData()),
+		Request.Body.Num());
+	return FString(Converter.Length(), Converter.Get());
+}
+
+FString FindHeaderValue(
+	const FHttpServerRequest& Request,
+	const FString& HeaderName)
+{
+	for (const TPair<FString, TArray<FString>>& Pair : Request.Headers)
+	{
+		if (Pair.Key.Equals(HeaderName, ESearchCase::IgnoreCase)
+			&& !Pair.Value.IsEmpty())
+		{
+			return Pair.Value[0].TrimStartAndEnd();
+		}
+	}
+	return FString();
+}
+
+uint32 ParseProcessId(const FString& Value)
+{
+	if (Value.IsEmpty() || !Value.IsNumeric())
+	{
+		return 0;
+	}
+	const uint64 Parsed = FCString::Strtoui64(*Value, nullptr, 10);
+	return Parsed <= MAX_uint32 ? static_cast<uint32>(Parsed) : 0;
+}
+
+UEAIIntegration::Infrastructure::FCallerContext ParseCallerContext(
+	const FHttpServerRequest& Request)
+{
+	using UEAIIntegration::Infrastructure::FCallerContext;
+	FCallerContext Caller;
+	const FString CallerType =
+		FindHeaderValue(Request, TEXT("X-UEAI-Caller-Type"));
+	if (!CallerType.IsEmpty())
+	{
+		Caller.ClientKind = CallerType;
+	}
+	const FString CallerName =
+		FindHeaderValue(Request, TEXT("X-UEAI-Caller"));
+	if (!CallerName.IsEmpty())
+	{
+		Caller.Name = CallerName;
+	}
+	Caller.Version =
+		FindHeaderValue(Request, TEXT("X-UEAI-Caller-Version"));
+	Caller.InstanceId =
+		FindHeaderValue(Request, TEXT("X-UEAI-Instance-Id"));
+	Caller.InvocationId =
+		FindHeaderValue(Request, TEXT("X-UEAI-Invocation-Id"));
+	Caller.SessionId =
+		FindHeaderValue(Request, TEXT("X-UEAI-Session-Id"));
+	const FString Transport =
+		FindHeaderValue(Request, TEXT("X-UEAI-Transport"));
+	if (!Transport.IsEmpty())
+	{
+		Caller.Transport = Transport;
+	}
+	Caller.Command = FindHeaderValue(Request, TEXT("X-UEAI-Command"));
+	Caller.Pid = ParseProcessId(
+		FindHeaderValue(Request, TEXT("X-UEAI-Process-Id")));
+	return Caller;
+}
+
+FString FindCapabilityRisk(
+	const FMCPToolRegistry& Registry,
+	const FString& Capability)
+{
+	for (const TSharedPtr<FJsonObject>& Descriptor :
+		Registry.GetCapabilityDescriptors())
+	{
+		FString Id;
+		if (!Descriptor.IsValid()
+			|| !Descriptor->TryGetStringField(TEXT("id"), Id)
+			|| Id != Capability)
+		{
+			continue;
+		}
+		const TSharedPtr<FJsonObject>* Dsl = nullptr;
+		FString Risk;
+		if (Descriptor->TryGetObjectField(TEXT("dsl"), Dsl)
+			&& Dsl && Dsl->IsValid())
+		{
+			(*Dsl)->TryGetStringField(TEXT("risk"), Risk);
+		}
+		return Risk;
+	}
+	return FString();
+}
+
+bool DeserializeRequestObject(
+	const FHttpServerRequest& Request,
+	TSharedPtr<FJsonObject>& OutObject)
+{
+	const FString Body = RequestBodyToString(Request);
+	if (Body.IsEmpty())
+	{
+		return false;
+	}
+	const TSharedRef<TJsonReader<>> Reader =
+		TJsonReaderFactory<>::Create(Body);
+	return FJsonSerializer::Deserialize(Reader, OutObject)
+		&& OutObject.IsValid();
+}
 } // namespace
 
 FUEAIIntegrationServer::FUEAIIntegrationServer(
 	FMCPToolRegistry& InRegistry,
 	FMCPExecutor& InExecutor,
+	UEAIIntegration::Infrastructure::FClientActivityService&
+		InClientActivityService,
 	UEAIIntegration::Infrastructure::FBlueprintDebugService*
 		InBlueprintDebugService)
 	: Registry(InRegistry)
 	, Executor(InExecutor)
+	, ClientActivityService(InClientActivityService)
 	, BlueprintDebugService(InBlueprintDebugService)
 	, WorkflowRuntime(
 		MakeUnique<UEAIIntegration::Workflow::FWorkflowRuntime>(InRegistry))
@@ -298,7 +417,13 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 		EHttpServerRequestVerbs::VERB_GET,
 		[this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 		{
-			return HandleHealth(Request, OnComplete);
+			return HandleCallerObserved(
+				Request,
+				OnComplete,
+				[this, &Request](const FHttpResultCallback& ObservedComplete)
+				{
+					return HandleHealth(Request, ObservedComplete);
+				});
 		});
 	if (!HealthRoute.IsValid())
 	{
@@ -313,7 +438,13 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 		EHttpServerRequestVerbs::VERB_GET,
 		[this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 		{
-			return HandleCapabilities(Request, OnComplete);
+			return HandleCallerObserved(
+				Request,
+				OnComplete,
+				[this, &Request](const FHttpResultCallback& ObservedComplete)
+				{
+					return HandleCapabilities(Request, ObservedComplete);
+				});
 		});
 	if (!CapabilitiesRoute.IsValid())
 	{
@@ -378,6 +509,69 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 	}
 	RouteHandles.Add(WorkflowRoute);
 
+	const FHttpRouteHandle RegisterClientRoute = Router->BindRoute(
+		FHttpPath(TEXT("/api/v1/clients/register")),
+		EHttpServerRequestVerbs::VERB_POST,
+		[this](
+			const FHttpServerRequest& Request,
+			const FHttpResultCallback& OnComplete)
+		{
+			return HandleClientRegister(Request, OnComplete);
+		});
+	if (!RegisterClientRoute.IsValid())
+	{
+		UE_LOG(
+			LogUEAIIntegrationServer,
+			Error,
+			TEXT("Failed to bind /api/v1/clients/register."));
+		UnbindRoutes();
+		Router.Reset();
+		return false;
+	}
+	RouteHandles.Add(RegisterClientRoute);
+
+	const FHttpRouteHandle HeartbeatClientRoute = Router->BindRoute(
+		FHttpPath(TEXT("/api/v1/clients/heartbeat")),
+		EHttpServerRequestVerbs::VERB_POST,
+		[this](
+			const FHttpServerRequest& Request,
+			const FHttpResultCallback& OnComplete)
+		{
+			return HandleClientHeartbeat(Request, OnComplete);
+		});
+	if (!HeartbeatClientRoute.IsValid())
+	{
+		UE_LOG(
+			LogUEAIIntegrationServer,
+			Error,
+			TEXT("Failed to bind /api/v1/clients/heartbeat."));
+		UnbindRoutes();
+		Router.Reset();
+		return false;
+	}
+	RouteHandles.Add(HeartbeatClientRoute);
+
+	const FHttpRouteHandle UnregisterClientRoute = Router->BindRoute(
+		FHttpPath(TEXT("/api/v1/clients/unregister")),
+		EHttpServerRequestVerbs::VERB_POST,
+		[this](
+			const FHttpServerRequest& Request,
+			const FHttpResultCallback& OnComplete)
+		{
+			return HandleClientUnregister(Request, OnComplete);
+		});
+	if (!UnregisterClientRoute.IsValid())
+	{
+		UE_LOG(
+			LogUEAIIntegrationServer,
+			Error,
+			TEXT("Failed to bind /api/v1/clients/unregister."));
+		UnbindRoutes();
+		Router.Reset();
+		return false;
+	}
+	RouteHandles.Add(UnregisterClientRoute);
+
 	bIsRunning = true;
 
 	UE_LOG(
@@ -405,6 +599,11 @@ void FUEAIIntegrationServer::Stop()
 	{
 		if (Pending.IsValid())
 		{
+			if (!Pending->ActivityId.IsEmpty())
+			{
+				ClientActivityService.MarkActivityRejected(
+					Pending->ActivityId);
+			}
 			SendError(
 				Pending->OnComplete,
 				503,
@@ -427,6 +626,10 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 	if (!RequestQueue.Dequeue(Pending) || !Pending.IsValid())
 	{
 		return;
+	}
+	if (!Pending->ActivityId.IsEmpty())
+	{
+		ClientActivityService.MarkActivityStarted(Pending->ActivityId);
 	}
 
 	if (Pending->Kind == EUEAIIntegrationRequestKind::WorkflowHandshake)
@@ -473,6 +676,13 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 
 	if (Pending->Kind == EUEAIIntegrationRequestKind::WorkflowAction)
 	{
+		FString Action;
+		RequestObject->TryGetStringField(TEXT("action"), Action);
+		ClientActivityService.UpdateWorkflowActivity(
+			Pending->ActivityId,
+			Action,
+			FString(),
+			TEXT("workflow"));
 #if WITH_DEV_AUTOMATION_TESTS
 		if (WorkflowDispatchObserverForTesting)
 		{
@@ -520,6 +730,11 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 			TEXT("Field 'capability' must be a non-empty dotted capability id."));
 		return;
 	}
+	ClientActivityService.UpdateCapabilityActivity(
+		Pending->ActivityId,
+		CapabilityId,
+		FString(),
+		FindCapabilityRisk(Registry, CapabilityId));
 
 	TSharedPtr<FJsonObject> Params = MakeShared<FJsonObject>();
 	if (RequestObject->HasField(TEXT("params")))
@@ -551,6 +766,11 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 			return;
 		}
 	}
+	ClientActivityService.UpdateCapabilityActivity(
+		Pending->ActivityId,
+		CapabilityId,
+		RequestId,
+		FindCapabilityRisk(Registry, CapabilityId));
 
 	FMCPExecutionContext Context;
 	Context.Capability = CapabilityId;
@@ -594,6 +814,12 @@ bool FUEAIIntegrationServer::HandleHealth(
 	Data->SetStringField(TEXT("projectName"), FApp::GetProjectName());
 	Data->SetStringField(TEXT("mode"), TEXT("editor"));
 	Data->SetNumberField(TEXT("capabilityCount"), Registry.GetCapabilityCount());
+	Data->SetNumberField(
+		TEXT("onlineMcpCount"),
+		ClientActivityService.GetOnlineMcpCount());
+	Data->SetNumberField(
+		TEXT("activeCliCount"),
+		ClientActivityService.GetRunningCliCount());
 
 	TSharedPtr<FJsonObject> DomainCounts = MakeShared<FJsonObject>();
 	for (const TPair<FString, int32>& Pair : Registry.GetDomainCounts())
@@ -845,6 +1071,39 @@ bool FUEAIIntegrationServer::HandleExecute(
 	if (BlueprintDebugService
 		&& BlueprintDebugService->IsPausedTransportActive())
 	{
+		UEAIIntegration::Infrastructure::FCallerContext Caller =
+			ParseCallerContext(Request);
+		FString CallerError;
+		if (!ClientActivityService.BeginRequest(
+				Caller,
+				CallerError))
+		{
+			SendError(
+				OnComplete,
+				401,
+				TEXT("client_session_expired"),
+				CallerError);
+			return true;
+		}
+		const FString ActivityId = ClientActivityService.BeginActivity(
+			Caller,
+			TEXT("capability"));
+		ClientActivityService.MarkActivityStarted(ActivityId);
+		const FHttpResultCallback Original = OnComplete;
+		const FHttpResultCallback EffectiveOnComplete =
+			[this, ActivityId, Caller, Original](
+				TUniquePtr<FHttpServerResponse>&& Response) mutable
+			{
+				if (Response.IsValid())
+				{
+					ClientActivityService.CompleteActivityFromHttp(
+						ActivityId,
+						static_cast<int32>(Response->Code),
+						Response->Body);
+				}
+				ClientActivityService.EndRequest(Caller);
+				Original(MoveTemp(Response));
+			};
 		FString Body;
 		if (Request.Body.Num() > 0)
 		{
@@ -860,7 +1119,7 @@ bool FUEAIIntegrationServer::HandleExecute(
 			|| !RequestObject.IsValid())
 		{
 			SendError(
-				OnComplete,
+				EffectiveOnComplete,
 				400,
 				TEXT("invalid_json"),
 				TEXT("Request body contains invalid JSON."));
@@ -871,10 +1130,15 @@ bool FUEAIIntegrationServer::HandleExecute(
 		if (RequestObject->TryGetStringField(TEXT("capability"), Capability)
 			&& IsBlueprintDebugCapability(Capability))
 		{
+			ClientActivityService.UpdateCapabilityActivity(
+				ActivityId,
+				Capability,
+				FString(),
+				FindCapabilityRisk(Registry, Capability));
 			if (!Registry.IsReady())
 			{
 				SendError(
-					OnComplete,
+					EffectiveOnComplete,
 					503,
 					TEXT("service_degraded"),
 					TEXT("Capability bindings failed validation."),
@@ -889,7 +1153,7 @@ bool FUEAIIntegrationServer::HandleExecute(
 					&& Field.Key != TEXT("requestId"))
 				{
 					SendError(
-						OnComplete,
+						EffectiveOnComplete,
 						422,
 						TEXT("invalid_params"),
 						FString::Printf(
@@ -905,7 +1169,7 @@ bool FUEAIIntegrationServer::HandleExecute(
 				if (!RequestObject->HasTypedField<EJson::Object>(TEXT("params")))
 				{
 					SendError(
-						OnComplete,
+						EffectiveOnComplete,
 						422,
 						TEXT("invalid_params"),
 						TEXT("Field 'params' must be a JSON object."));
@@ -917,7 +1181,7 @@ bool FUEAIIntegrationServer::HandleExecute(
 			if (!Registry.ValidateParams(Capability, Params, ValidationErrors))
 			{
 				SendError(
-					OnComplete,
+					EffectiveOnComplete,
 					422,
 					TEXT("invalid_params"),
 					TEXT("Capability parameters failed manifest schema validation."),
@@ -932,13 +1196,18 @@ bool FUEAIIntegrationServer::HandleExecute(
 					|| RequestId.Len() > 200))
 			{
 				SendError(
-					OnComplete,
+					EffectiveOnComplete,
 					422,
 					TEXT("invalid_params"),
 					TEXT(
 						"Field 'requestId' must be a non-empty string of at most 200 characters."));
 				return true;
 			}
+			ClientActivityService.UpdateCapabilityActivity(
+				ActivityId,
+				Capability,
+				RequestId,
+				FindCapabilityRisk(Registry, Capability));
 
 			UEAIIntegration::Infrastructure::FBlueprintDebugResult Result;
 			if (BlueprintDebugService->TryHandlePausedRequest(
@@ -949,12 +1218,12 @@ bool FUEAIIntegrationServer::HandleExecute(
 			{
 				if (Result.bSuccess)
 				{
-					SendSuccess(OnComplete, Result.Data);
+					SendSuccess(EffectiveOnComplete, Result.Data);
 				}
 				else
 				{
 					SendError(
-						OnComplete,
+						EffectiveOnComplete,
 						Result.HttpStatus,
 						Result.ErrorCode,
 						Result.ErrorMessage);
@@ -963,7 +1232,7 @@ bool FUEAIIntegrationServer::HandleExecute(
 			}
 		}
 		SendError(
-			OnComplete,
+			EffectiveOnComplete,
 			423,
 			TEXT("debug_session_paused"),
 			TEXT(
@@ -984,12 +1253,19 @@ bool FUEAIIntegrationServer::HandleWorkflowHandshake(
 	if (BlueprintDebugService
 		&& BlueprintDebugService->IsPausedTransportActive())
 	{
-		SendError(
+		return HandleCallerObserved(
+			Request,
 			OnComplete,
-			423,
-			TEXT("debug_session_paused"),
-			TEXT("Workflow routes are unavailable while Kismet is paused."));
-		return true;
+			[this](const FHttpResultCallback& ObservedComplete)
+			{
+				SendError(
+					ObservedComplete,
+					423,
+					TEXT("debug_session_paused"),
+					TEXT(
+						"Workflow routes are unavailable while Kismet is paused."));
+				return true;
+			});
 	}
 	return QueueRequest(
 		EUEAIIntegrationRequestKind::WorkflowHandshake,
@@ -1004,8 +1280,56 @@ bool FUEAIIntegrationServer::HandleWorkflow(
 	if (BlueprintDebugService
 		&& BlueprintDebugService->IsPausedTransportActive())
 	{
+		UEAIIntegration::Infrastructure::FCallerContext Caller =
+			ParseCallerContext(Request);
+		FString CallerError;
+		if (!ClientActivityService.BeginRequest(Caller, CallerError))
+		{
+			SendError(
+				OnComplete,
+				401,
+				TEXT("client_session_expired"),
+				CallerError);
+			return true;
+		}
+		const FString ActivityId = ClientActivityService.BeginActivity(
+			Caller,
+			TEXT("workflow"));
+		ClientActivityService.MarkActivityStarted(ActivityId);
+		TSharedPtr<FJsonObject> RequestObject;
+		const FString Body = RequestBodyToString(Request);
+		const TSharedRef<TJsonReader<>> Reader =
+			TJsonReaderFactory<>::Create(Body);
+		if (FJsonSerializer::Deserialize(Reader, RequestObject)
+			&& RequestObject.IsValid())
+		{
+			FString Action;
+			FString RequestId;
+			RequestObject->TryGetStringField(TEXT("action"), Action);
+			RequestObject->TryGetStringField(TEXT("requestId"), RequestId);
+			ClientActivityService.UpdateWorkflowActivity(
+				ActivityId,
+				Action,
+				RequestId,
+				TEXT("interactive"));
+		}
+		const FHttpResultCallback Original = OnComplete;
+		const FHttpResultCallback ObservedComplete =
+			[this, ActivityId, Caller, Original](
+				TUniquePtr<FHttpServerResponse>&& Response) mutable
+			{
+				if (Response.IsValid())
+				{
+					ClientActivityService.CompleteActivityFromHttp(
+						ActivityId,
+						static_cast<int32>(Response->Code),
+						Response->Body);
+				}
+				ClientActivityService.EndRequest(Caller);
+				Original(MoveTemp(Response));
+			};
 		SendError(
-			OnComplete,
+			ObservedComplete,
 			423,
 			TEXT("debug_session_paused"),
 			TEXT("Workflow routes are unavailable while Kismet is paused."));
@@ -1017,6 +1341,219 @@ bool FUEAIIntegrationServer::HandleWorkflow(
 		OnComplete);
 }
 
+bool FUEAIIntegrationServer::HandleClientRegister(
+	const FHttpServerRequest& Request,
+	const FHttpResultCallback& OnComplete)
+{
+	TSharedPtr<FJsonObject> Object;
+	if (!DeserializeRequestObject(Request, Object))
+	{
+		SendError(
+			OnComplete,
+			400,
+			TEXT("invalid_json"),
+			TEXT("Client registration body must be a JSON object."));
+		return true;
+	}
+	static const TSet<FString> AllowedFields = {
+		TEXT("clientKind"),
+		TEXT("name"),
+		TEXT("version"),
+		TEXT("transport"),
+		TEXT("pid"),
+		TEXT("instanceId"),
+		TEXT("invocationId"),
+		TEXT("command"),
+	};
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Object->Values)
+	{
+		if (!AllowedFields.Contains(Field.Key))
+		{
+			SendError(
+				OnComplete,
+				422,
+				TEXT("invalid_client_registration"),
+				FString::Printf(
+					TEXT("Unknown client registration field '%s'."),
+					*Field.Key));
+			return true;
+		}
+	}
+
+	using UEAIIntegration::Infrastructure::FClientRegistration;
+	FClientRegistration Registration;
+	if (!Object->TryGetStringField(
+			TEXT("clientKind"),
+			Registration.ClientKind)
+		|| !Object->TryGetStringField(TEXT("name"), Registration.Name)
+		|| !Object->TryGetStringField(
+			TEXT("instanceId"),
+			Registration.InstanceId))
+	{
+		SendError(
+			OnComplete,
+			422,
+			TEXT("invalid_client_registration"),
+			TEXT("clientKind, name, and instanceId are required strings."));
+		return true;
+	}
+	Object->TryGetStringField(TEXT("version"), Registration.Version);
+	if (!Object->TryGetStringField(TEXT("transport"), Registration.Transport))
+	{
+		Registration.Transport = TEXT("http");
+	}
+	Object->TryGetStringField(
+		TEXT("invocationId"),
+		Registration.InvocationId);
+	Object->TryGetStringField(TEXT("command"), Registration.Command);
+	double ProcessId = 0.0;
+	if (Object->HasField(TEXT("pid"))
+		&& (!Object->TryGetNumberField(TEXT("pid"), ProcessId)
+			|| ProcessId < 0.0
+			|| ProcessId > static_cast<double>(MAX_uint32)
+			|| FMath::FloorToDouble(ProcessId) != ProcessId))
+	{
+		SendError(
+			OnComplete,
+			422,
+			TEXT("invalid_client_registration"),
+			TEXT("pid must be an unsigned 32-bit integer."));
+		return true;
+	}
+	Registration.Pid = static_cast<uint32>(ProcessId);
+
+	FString SessionId;
+	FString Error;
+	if (!ClientActivityService.RegisterClient(
+			Registration,
+			SessionId,
+			Error))
+	{
+		SendError(
+			OnComplete,
+			422,
+			TEXT("invalid_client_registration"),
+			Error);
+		return true;
+	}
+
+	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("sessionId"), SessionId);
+	Data->SetNumberField(
+		TEXT("heartbeatIntervalMs"),
+		UEAIIntegration::Infrastructure::FClientActivityService::
+			HeartbeatIntervalMs);
+	Data->SetNumberField(
+		TEXT("expiresAfterMs"),
+		UEAIIntegration::Infrastructure::FClientActivityService::
+			ExpiresAfterMs);
+	SendSuccess(OnComplete, Data);
+	return true;
+}
+
+bool FUEAIIntegrationServer::HandleClientHeartbeat(
+	const FHttpServerRequest& Request,
+	const FHttpResultCallback& OnComplete)
+{
+	const FString SessionId =
+		FindHeaderValue(Request, TEXT("X-UEAI-Session-Id"));
+	if (SessionId.IsEmpty())
+	{
+		SendError(
+			OnComplete,
+			422,
+			TEXT("client_session_required"),
+			TEXT("X-UEAI-Session-Id is required."));
+		return true;
+	}
+	FString Error;
+	if (!ClientActivityService.Heartbeat(SessionId, Error))
+	{
+		SendError(
+			OnComplete,
+			404,
+			TEXT("client_session_not_found"),
+			Error);
+		return true;
+	}
+	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("sessionId"), SessionId);
+	Data->SetStringField(TEXT("status"), TEXT("online"));
+	SendSuccess(OnComplete, Data);
+	return true;
+}
+
+bool FUEAIIntegrationServer::HandleClientUnregister(
+	const FHttpServerRequest& Request,
+	const FHttpResultCallback& OnComplete)
+{
+	const FString SessionId =
+		FindHeaderValue(Request, TEXT("X-UEAI-Session-Id"));
+	if (SessionId.IsEmpty())
+	{
+		SendError(
+			OnComplete,
+			422,
+			TEXT("client_session_required"),
+			TEXT("X-UEAI-Session-Id is required."));
+		return true;
+	}
+	FString Error;
+	if (!ClientActivityService.UnregisterClient(SessionId, Error))
+	{
+		const bool bBusy =
+			Error == TEXT("Client session has active requests.");
+		SendError(
+			OnComplete,
+			bBusy ? 409 : 404,
+			bBusy
+				? TEXT("client_session_busy")
+				: TEXT("client_session_not_found"),
+			Error);
+		return true;
+	}
+	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("sessionId"), SessionId);
+	Data->SetStringField(TEXT("status"), TEXT("offline"));
+	SendSuccess(OnComplete, Data);
+	return true;
+}
+
+bool FUEAIIntegrationServer::HandleCallerObserved(
+	const FHttpServerRequest& Request,
+	const FHttpResultCallback& OnComplete,
+	TFunctionRef<bool(const FHttpResultCallback&)> Handler)
+{
+	TSharedPtr<UEAIIntegration::Infrastructure::FCallerContext> Caller =
+		MakeShared<UEAIIntegration::Infrastructure::FCallerContext>(
+			ParseCallerContext(Request));
+	FString CallerError;
+	if (!ClientActivityService.BeginRequest(*Caller, CallerError))
+	{
+		SendError(
+			OnComplete,
+			401,
+			TEXT("client_session_expired"),
+			CallerError);
+		return true;
+	}
+
+	const FHttpResultCallback Original = OnComplete;
+	const FHttpResultCallback ObservedComplete =
+		[this, Caller, Original](
+			TUniquePtr<FHttpServerResponse>&& Response) mutable
+		{
+			ClientActivityService.EndRequest(*Caller);
+			Original(MoveTemp(Response));
+		};
+	const bool bHandled = Handler(ObservedComplete);
+	if (!bHandled)
+	{
+		ClientActivityService.EndRequest(*Caller);
+	}
+	return bHandled;
+}
+
 bool FUEAIIntegrationServer::QueueRequest(
 	EUEAIIntegrationRequestKind Kind,
 	const FHttpServerRequest& Request,
@@ -1025,14 +1562,67 @@ bool FUEAIIntegrationServer::QueueRequest(
 	TSharedPtr<FPendingMCPExecuteRequest> Pending =
 		MakeShared<FPendingMCPExecuteRequest>();
 	Pending->Kind = Kind;
-	Pending->OnComplete = OnComplete;
-
-	if (Request.Body.Num() > 0)
+	Pending->Caller =
+		MakeShared<UEAIIntegration::Infrastructure::FCallerContext>(
+			ParseCallerContext(Request));
+	FString CallerError;
+	if (!ClientActivityService.BeginRequest(
+			*Pending->Caller,
+			CallerError))
 	{
-		const FUTF8ToTCHAR Converter(
-			reinterpret_cast<const ANSICHAR*>(Request.Body.GetData()),
-			Request.Body.Num());
-		Pending->Body = FString(Converter.Length(), Converter.Get());
+		SendError(
+			OnComplete,
+			401,
+			TEXT("client_session_expired"),
+			CallerError);
+		return true;
+	}
+
+	if (!Request.Body.IsEmpty())
+	{
+		Pending->Body = RequestBodyToString(Request);
+	}
+
+	if (Kind == EUEAIIntegrationRequestKind::LegacyExecute
+		|| Kind == EUEAIIntegrationRequestKind::WorkflowAction)
+	{
+		Pending->ActivityId = ClientActivityService.BeginActivity(
+			*Pending->Caller,
+			Kind == EUEAIIntegrationRequestKind::LegacyExecute
+				? TEXT("capability")
+				: TEXT("workflow"));
+		const FString ActivityId = Pending->ActivityId;
+		const TSharedPtr<
+			UEAIIntegration::Infrastructure::FCallerContext> Caller =
+				Pending->Caller;
+		const FHttpResultCallback Original = OnComplete;
+		Pending->OnComplete =
+			[this, ActivityId, Caller, Original](
+				TUniquePtr<FHttpServerResponse>&& Response) mutable
+			{
+				if (Response.IsValid())
+				{
+					ClientActivityService.CompleteActivityFromHttp(
+						ActivityId,
+						static_cast<int32>(Response->Code),
+						Response->Body);
+				}
+				ClientActivityService.EndRequest(*Caller);
+				Original(MoveTemp(Response));
+			};
+	}
+	else
+	{
+		const TSharedPtr<
+			UEAIIntegration::Infrastructure::FCallerContext> Caller =
+				Pending->Caller;
+		Pending->OnComplete =
+			[this, Caller, OnComplete](
+				TUniquePtr<FHttpServerResponse>&& Response) mutable
+			{
+				ClientActivityService.EndRequest(*Caller);
+				OnComplete(MoveTemp(Response));
+			};
 	}
 
 	RequestQueue.Enqueue(Pending);

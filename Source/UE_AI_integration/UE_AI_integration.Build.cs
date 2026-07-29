@@ -29,7 +29,8 @@ public class UE_AI_integration : ModuleRules
 			"HTTP",
 			"HTTPServer",
 			"Sockets",
-			"Networking"
+			"Networking",
+			"DeveloperSettings"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
@@ -61,6 +62,8 @@ public class UE_AI_integration : ModuleRules
 			"UMG",
 			"UMGEditor",
 			"LevelEditor",
+			"ToolMenus",
+			"Settings",
 
 			// Enhanced Input
 			"EnhancedInput",

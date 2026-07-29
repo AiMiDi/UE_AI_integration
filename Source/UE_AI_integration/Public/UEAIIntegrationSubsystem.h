@@ -12,6 +12,7 @@ class FMCPExecutor;
 namespace UEAIIntegration::Infrastructure
 {
 class FBlueprintDebugService;
+class FClientActivityService;
 class FPIESessionController;
 class FProductionRuntimeController;
 }
@@ -33,11 +34,21 @@ public:
 	virtual TStatId GetStatId() const override;
 	virtual bool IsTickable() const override
 	{
-		return Server.IsValid() && Server->IsRunning();
+		return ClientActivityService.IsValid();
 	}
 
 	FUEAIIntegrationServer* GetServer() const { return Server.Get(); }
 	FMCPToolRegistry* GetRegistry() const { return Registry.Get(); }
+	UEAIIntegration::Infrastructure::FClientActivityService*
+	GetClientActivityService() const
+	{
+		return ClientActivityService.Get();
+	}
+	bool SetServerEnabled(bool bEnabled);
+	bool RestartServer();
+	bool IsServerEnabled() const;
+	bool IsServerEnableRequested() const { return bServerEnableRequested; }
+	int32 GetConfiguredPort() const { return ServerPort; }
 #if WITH_DEV_AUTOMATION_TESTS
 	UEAIIntegration::Infrastructure::FBlueprintDebugService*
 	GetBlueprintDebugServiceForTesting() const
@@ -52,7 +63,11 @@ private:
 		BlueprintDebugService;
 	TSharedPtr<UEAIIntegration::Infrastructure::FProductionRuntimeController>
 		ProductionController;
+	TSharedPtr<UEAIIntegration::Infrastructure::FClientActivityService>
+		ClientActivityService;
 	TUniquePtr<FMCPToolRegistry> Registry;
 	TUniquePtr<FMCPExecutor> Executor;
 	TUniquePtr<FUEAIIntegrationServer> Server;
+	int32 ServerPort = 9847;
+	bool bServerEnableRequested = true;
 };

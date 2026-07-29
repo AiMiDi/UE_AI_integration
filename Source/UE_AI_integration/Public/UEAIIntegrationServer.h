@@ -8,6 +8,7 @@
 #include "HttpServerRequest.h"
 #include "HttpServerResponse.h"
 #include "IHttpRouter.h"
+#include "Templates/Function.h"
 
 class FMCPToolRegistry;
 class FMCPExecutor;
@@ -19,6 +20,8 @@ class FWorkflowRuntime;
 namespace UEAIIntegration::Infrastructure
 {
 class FBlueprintDebugService;
+class FClientActivityService;
+struct FCallerContext;
 }
 
 enum class EUEAIIntegrationRequestKind : uint8
@@ -32,6 +35,8 @@ struct FPendingMCPExecuteRequest
 {
 	EUEAIIntegrationRequestKind Kind = EUEAIIntegrationRequestKind::LegacyExecute;
 	FString Body;
+	FString ActivityId;
+	TSharedPtr<UEAIIntegration::Infrastructure::FCallerContext> Caller;
 	FHttpResultCallback OnComplete;
 };
 
@@ -45,6 +50,8 @@ public:
 	FUEAIIntegrationServer(
 		FMCPToolRegistry& InRegistry,
 		FMCPExecutor& InExecutor,
+		UEAIIntegration::Infrastructure::FClientActivityService&
+			InClientActivityService,
 		UEAIIntegration::Infrastructure::FBlueprintDebugService*
 			InBlueprintDebugService = nullptr);
 	~FUEAIIntegrationServer();
@@ -95,6 +102,19 @@ private:
 	bool HandleWorkflow(
 		const FHttpServerRequest& Request,
 		const FHttpResultCallback& OnComplete);
+	bool HandleClientRegister(
+		const FHttpServerRequest& Request,
+		const FHttpResultCallback& OnComplete);
+	bool HandleClientHeartbeat(
+		const FHttpServerRequest& Request,
+		const FHttpResultCallback& OnComplete);
+	bool HandleClientUnregister(
+		const FHttpServerRequest& Request,
+		const FHttpResultCallback& OnComplete);
+	bool HandleCallerObserved(
+		const FHttpServerRequest& Request,
+		const FHttpResultCallback& OnComplete,
+		TFunctionRef<bool(const FHttpResultCallback&)> Handler);
 
 	void ProcessOneRequest();
 	bool QueueRequest(
@@ -121,6 +141,8 @@ private:
 
 	FMCPToolRegistry& Registry;
 	FMCPExecutor& Executor;
+	UEAIIntegration::Infrastructure::FClientActivityService&
+		ClientActivityService;
 	UEAIIntegration::Infrastructure::FBlueprintDebugService*
 		BlueprintDebugService = nullptr;
 	TUniquePtr<UEAIIntegration::Workflow::FWorkflowRuntime> WorkflowRuntime;
