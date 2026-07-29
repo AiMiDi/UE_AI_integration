@@ -75,14 +75,14 @@ if %ERRORLEVEL% neq 0 (
 
 set CLI_BUILD_DIR=%TEMP%\UE_AI_integration-cli-%RANDOM%-%RANDOM%
 echo.
-echo Building and packaging ue-workflow CLI...
+echo Building and packaging ue and ue-workflow CLIs...
 cmake -S "%PLUGIN_ROOT%" -B "%CLI_BUILD_DIR%" -DUE_WORKFLOW_BUILD_TESTS=OFF -DUE_WORKFLOW_BUILD_CLI=ON
 if %ERRORLEVEL% neq 0 (
     if exist "%CLI_BUILD_DIR%" rmdir /s /q "%CLI_BUILD_DIR%"
     echo CLI CONFIGURE FAILED.
     exit /b 1
 )
-cmake --build "%CLI_BUILD_DIR%" --config Release --target ue-workflow
+cmake --build "%CLI_BUILD_DIR%" --config Release --target ue ue-workflow
 if %ERRORLEVEL% neq 0 (
     if exist "%CLI_BUILD_DIR%" rmdir /s /q "%CLI_BUILD_DIR%"
     echo CLI BUILD FAILED.
@@ -108,5 +108,5 @@ echo   1. Copy %OUTPUT_PATH% into YourProject\Plugins\UE_AI_integration\
 echo   2. Open UE5 -- plugin loads automatically
 echo   3. Run: claude mcp add ue_ai_integration -- node Plugins/UE_AI_integration/MCP/dist/index.js
 echo   4. Start claude in your project folder
-echo   5. Query ue_cli to locate the packaged CLI at CLI\bin\ue-workflow.exe
+echo   5. Query ue_cli to locate CLI\bin\ue.exe and CLI\bin\ue-workflow.exe
 echo.

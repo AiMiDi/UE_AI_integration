@@ -31,6 +31,22 @@ test("loads all six shipped manifests without regressing the shipped baseline", 
     for (const domain of CAPABILITY_DOMAINS) {
         assert.ok(summary.domainCounts[domain] >= baselines[domain]);
     }
+    assert.equal(summary.domainCounts.blueprint, 77);
+    for (const operation of [
+        "blueprint.selection.set",
+        "blueprint.layout.align",
+        "blueprint.layout.straighten",
+        "blueprint.layout.distribute",
+        "blueprint.comment.create_from_selection",
+        "blueprint.comment.bounds.set",
+    ]) {
+        const capability = catalog.get(operation);
+        assert.ok(capability, `missing ${operation}`);
+        assert.equal(capability.domain, "blueprint");
+        assert.equal(capability.kind, "command");
+        assert.deepEqual(capability.inputSchema.additionalProperties, false);
+        assert.equal(capability.dsl, undefined);
+    }
     assert.equal(catalog.manifests.size, CAPABILITY_DOMAINS.length);
     assert.equal(new Set(catalog.capabilities.map((capability) => capability.id)).size, summary.capabilityCount);
     for (const operation of [

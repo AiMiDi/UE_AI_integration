@@ -40,14 +40,14 @@ function pathEntryCount(env) {
 function quoteCommand(path) {
     return /\s/.test(path) ? `"${path}"` : path;
 }
-export function locateWorkflowCli(options = {}) {
+function locateCli(spec, options) {
     const env = options.env ?? process.env;
     const platform = options.platform ?? process.platform;
     const moduleUrl = options.moduleUrl ?? import.meta.url;
     const isFile = options.isFile ?? defaultIsFile;
     const pluginRoot = resolve(dirname(fileURLToPath(moduleUrl)), "..", "..");
-    const executableName = platform === "win32" ? "ue-workflow.exe" : "ue-workflow";
-    const configuredPath = env.UE_WORKFLOW_CLI?.trim() || null;
+    const executableName = platform === "win32" ? `${spec.command}.exe` : spec.command;
+    const configuredPath = environmentValue(env, spec.environmentKey)?.trim() || null;
     const candidates = [];
     const seen = new Set();
     const addCandidate = (source, path) => {
@@ -74,25 +74,50 @@ export function locateWorkflowCli(options = {}) {
     }
     addCandidate("packaged", join(pluginRoot, "CLI", "bin", executableName));
     addCandidate("packaged", join(pluginRoot, "bin", executableName));
-    const pathMatch = pathCandidates("ue-workflow", platform, env).find(isFile);
+    const pathMatch = pathCandidates(spec.command, platform, env).find(isFile);
     if (pathMatch) {
         addCandidate("path", pathMatch);
     }
-    addCandidate("development", join(pluginRoot, "build-eval-workflow", "CLI", "Release", executableName));
-    addCandidate("development", join(pluginRoot, "build-workflow", "CLI", "Release", executableName));
+    for (const buildDirectory of spec.developmentBuilds) {
+        addCandidate("development", join(pluginRoot, buildDirectory, "CLI", "Release", executableName));
+    }
     const match = candidates.find((candidate) => candidate.exists);
     return {
         found: match !== undefined,
         executablePath: match?.path ?? null,
         source: match?.source ?? "not_found",
-        command: match ? quoteCommand(match.path) : "ue-workflow",
+        command: match ? quoteCommand(match.path) : spec.command,
         configuredPath,
         pluginRoot,
         candidates,
         pathEntriesSearched: pathEntryCount(env),
         guidance: match
-            ? `${quoteCommand(match.path)} --json doctor --connect`
-            : "Install ue-workflow or set UE_WORKFLOW_CLI to its absolute executable path.",
+            ? `${quoteCommand(match.path)} ${spec.guidanceCommand}`
+            : `Install ${spec.command} or set ${spec.environmentKey} to its absolute executable path.`,
     };
+}
+export function locateWorkflowCli(options = {}) {
+    return locateCli({
+        command: "ue-workflow",
+        environmentKey: "UE_WORKFLOW_CLI",
+        developmentBuilds: [
+            "build-eval-workflow",
+            "build-workflow",
+            "build-short-cli",
+        ],
+        guidanceCommand: "--json doctor --connect",
+    }, options);
+}
+export function locateShortCli(options = {}) {
+    return locateCli({
+        command: "ue",
+        environmentKey: "UE_CLI",
+        developmentBuilds: [
+            "build-short-cli",
+            "build-workflow",
+            "build-eval-workflow",
+        ],
+        guidanceCommand: "status --json",
+    }, options);
 }
 //# sourceMappingURL=cli-locator.js.map

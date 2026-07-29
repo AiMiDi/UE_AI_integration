@@ -2,13 +2,13 @@ cmake_minimum_required(VERSION 3.24)
 
 project(
     UEWorkflow
-    VERSION 0.5.0
-    DESCRIPTION "Portable UE Workflow DSL core and CLI"
+    VERSION 0.6.0
+    DESCRIPTION "Portable UE Workflow DSL and short-operation CLIs"
     LANGUAGES CXX
 )
 
 option(UE_WORKFLOW_BUILD_TESTS "Build UE Workflow tests" ON)
-option(UE_WORKFLOW_BUILD_CLI "Build the ue-workflow executable" ON)
+option(UE_WORKFLOW_BUILD_CLI "Build the ue and ue-workflow executables" ON)
 
 include(CTest)
 include(GNUInstallDirs)

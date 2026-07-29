@@ -37,6 +37,7 @@ import {
   UE_WORKFLOW_TOOL_SCHEMA,
 } from "./workflow-router.js";
 import {
+  locateShortCli,
   locateWorkflowCli,
   type CliLocationResult,
 } from "./cli-locator.js";
@@ -72,6 +73,7 @@ export interface CreateMcpServerOptions {
   catalog?: CapabilityCatalog;
   client?: UEConnectionClient;
   cliLocator?: () => CliLocationResult;
+  shortCliLocator?: () => CliLocationResult;
 }
 
 export interface UEAIIntegrationMcpServer {
@@ -291,9 +293,10 @@ export function createMcpServer(
   const catalog = options.catalog ?? loadCapabilityCatalog();
   const client = options.client ?? (ueClient as UEClient);
   const cliLocator = options.cliLocator ?? locateWorkflowCli;
+  const shortCliLocator = options.shortCliLocator ?? locateShortCli;
   const server = new McpServer({
     name: "ue-ai-integration",
-    version: "0.5.0",
+    version: "0.6.0",
   });
 
   server.tool(
@@ -411,11 +414,14 @@ export function createMcpServer(
 
   server.tool(
     "ue_cli",
-    "Locate the ue-workflow CLI without requiring Unreal Editor. Returns the resolved executable, discovery source, checked candidates, and a doctor command.",
+    "Locate both the ue-workflow DSL CLI and the ue short-operation CLI without contacting Unreal Editor.",
     {},
     async () => {
       try {
-        return formatJsonResponse(cliLocator());
+        return formatJsonResponse({
+          ...cliLocator(),
+          shortCli: shortCliLocator(),
+        });
       } catch (error) {
         return formatErrorResponse(error);
       }

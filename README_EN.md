@@ -7,13 +7,13 @@ a single Editor Module with a TypeScript stdio bridge so MCP clients such as
 Codex CLI and Claude Code can inspect or modify Blueprints, scenes, content
 assets, animation, AI, and production workflows.
 
-The current plugin version is `0.5.0`. Unreal Engine 5.3 is the verified build
+The current plugin version is `0.6.0`. Unreal Engine 5.3 is the verified build
 baseline. Differences for UE 5.4–5.7 are isolated in the compatibility layer,
 but those versions have not all been compiled locally.
 
 ## Highlights
 
-- The current release snapshot contains 303 manifest-driven Editor and PIE
+- The current release snapshot contains 309 manifest-driven Editor and PIE
   runtime capabilities; the service derives the count from the manifests at
   startup.
 - Eleven stable MCP tools instead of exposing every capability as a tool.
@@ -54,6 +54,10 @@ but those versions have not all been compiled locally.
   snapshots are retrieved as explicit sections.
 - Capability discovery supports search, trait filters, and pagination, with at
   most 25 summaries returned by default.
+- The [short-operation CLI](docs/UE_SHORT_CLI.md) takes a manifest capability ID
+  as its first argument. It uses the local schema for one `/api/execute` call by
+  default, supports forced live validation with `--live-schema`, and reuses the
+  catalog and connection in `ue shell`; `ue-workflow` contains only DSL commands.
 
 ## Architecture
 
@@ -78,7 +82,7 @@ manifests and does not infer categories from operation names.
 
 | Domain | Count | Scope |
 |---|---:|---|
-| Blueprint | 71 | Asset lifecycle, graphs, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
+| Blueprint | 77 | Asset lifecycle, graphs, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
 | Scene | 79 | Actors, PIE runtime, trusted input/waits/capture, World Partition, Data Layers, HLOD, PCG, rendering diagnostics |
 | Content | 70 | Asset query/dependency/audit, safe changes, materials, Niagara, UMG, and event-handler verification |
 | Animation | 19 | Animation Blueprint, state machine, and BlendSpace authoring, inspection, validation, and diff |
@@ -167,12 +171,12 @@ offline:
 - `ue_production`
 - `ue_workflow`
 
-`ue_cli` does not contact the Editor. It locates the CLI in this order:
-`UE_WORKFLOW_CLI`, the packaged `CLI/bin/ue-workflow.exe`, `PATH`, and local
-development build directories. Its response includes the resolved path,
-discovery source, checked candidates, and a ready-to-run `doctor --connect`
-command. `scripts/build_plugin.bat` packages the CLI with its
-Contracts/Capabilities and restores MCP production dependencies.
+`ue_cli` does not contact the Editor. It locates both executables through
+`UE_CLI` / `UE_WORKFLOW_CLI`, packaged `CLI/bin`, `PATH`, and development build
+directories. The existing workflow locator fields remain stable and a new
+`shortCli` result describes `ue`. `scripts/build_plugin.bat` packages both
+executables, the Workflow Contracts/Capabilities, and MCP production
+dependencies.
 
 All six domain tools accept the same input shape:
 
@@ -192,7 +196,26 @@ Use `ue_capabilities` for paged summaries and `ue_context` for full schemas.
 An exact `operation` returns one full descriptor. A domain tool rejects
 operations owned by another domain.
 
-The CLI uses the same catalog query contract:
+The short-operation CLI uses the same capability contract as the six domain MCP
+tools:
+
+```powershell
+ue blueprint.asset.get --name /Game/UI/WBP_Login
+ue scene.actor.spawn --type PointLight --name KeyLight --location '[0,0,300]'
+ue production.job.status --job-id job-123
+ue shell
+```
+
+`ue` does not link WorkflowCore. By default it maps arguments with the packaged
+manifests and sends one `/api/execute` request; the Editor performs final
+validation. `--live-schema` first fetches the exact Editor descriptor to
+diagnose contract drift or force an availability check. `ue shell` loads the
+catalog once and reuses an HTTP keep-alive connection, while ordinary commands
+still exit immediately. Starting a durable job returns its `jobId` immediately;
+the CLI never waits automatically. Deterministic multi-step asset edits remain
+in `ue-workflow`.
+
+The Workflow CLI uses the offline/online catalog query contract:
 
 ```powershell
 ue-workflow capabilities --query debug --domain blueprint --risk interactive --limit 10

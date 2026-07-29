@@ -19,6 +19,7 @@ namespace UEAIIntegrationTools
 {
 	void RegisterBlueprintReadTools(FMCPToolRegistry& Registry);
 	void RegisterBlueprintMutationTools(FMCPToolRegistry& Registry);
+	void RegisterBlueprintEditorLayoutTools(FMCPToolRegistry& Registry);
 	void RegisterBlueprintAssetLifecycleTools(FMCPToolRegistry& Registry);
 	void RegisterBlueprintAssetStateTools(FMCPToolRegistry& Registry);
 	void RegisterBlueprintGraphTools(FMCPToolRegistry& Registry);
@@ -85,6 +86,7 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Registry->BeginDomainRegistration(TEXT("blueprint"));
 	UEAIIntegrationTools::RegisterBlueprintReadTools(*Registry);
 	UEAIIntegrationTools::RegisterBlueprintMutationTools(*Registry);
+	UEAIIntegrationTools::RegisterBlueprintEditorLayoutTools(*Registry);
 	UEAIIntegrationTools::RegisterBlueprintAssetLifecycleTools(*Registry);
 	UEAIIntegrationTools::RegisterBlueprintAssetStateTools(*Registry);
 	UEAIIntegrationTools::RegisterBlueprintGraphTools(*Registry);

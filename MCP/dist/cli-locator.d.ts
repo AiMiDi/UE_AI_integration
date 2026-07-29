@@ -22,3 +22,4 @@ export interface CliLocatorOptions {
     isFile?: (path: string) => boolean;
 }
 export declare function locateWorkflowCli(options?: CliLocatorOptions): CliLocationResult;
+export declare function locateShortCli(options?: CliLocatorOptions): CliLocationResult;

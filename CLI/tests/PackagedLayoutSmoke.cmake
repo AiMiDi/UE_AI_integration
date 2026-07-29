@@ -1,5 +1,6 @@
 if(
     NOT DEFINED UE_WORKFLOW_EXECUTABLE
+    OR NOT DEFINED UE_SHORT_CLI_EXECUTABLE
     OR NOT DEFINED UE_WORKFLOW_SOURCE_ROOT
     OR NOT DEFINED UE_WORKFLOW_PACKAGE_ROOT
 )
@@ -14,6 +15,7 @@ endif()
 file(REMOVE_RECURSE "${UE_WORKFLOW_PACKAGE_ROOT}")
 file(MAKE_DIRECTORY "${UE_WORKFLOW_PACKAGE_ROOT}/CLI/bin")
 file(COPY "${UE_WORKFLOW_EXECUTABLE}" DESTINATION "${UE_WORKFLOW_PACKAGE_ROOT}/CLI/bin")
+file(COPY "${UE_SHORT_CLI_EXECUTABLE}" DESTINATION "${UE_WORKFLOW_PACKAGE_ROOT}/CLI/bin")
 file(
     COPY "${UE_WORKFLOW_SOURCE_ROOT}/Workflow/Contracts"
     DESTINATION "${UE_WORKFLOW_PACKAGE_ROOT}/Workflow"
@@ -46,7 +48,41 @@ string(
 if(contract_index EQUAL -1)
     message(FATAL_ERROR "Packaged CLI did not resolve plugin-root contracts: ${output}")
 endif()
-string(FIND "${output}" "\"capabilityCount\":303" capability_index)
-if(capability_index EQUAL -1)
-    message(FATAL_ERROR "Packaged CLI did not load the 303-capability catalog: ${output}")
+get_filename_component(short_executable_name "${UE_SHORT_CLI_EXECUTABLE}" NAME)
+set(packaged_short_executable
+    "${UE_WORKFLOW_PACKAGE_ROOT}/CLI/bin/${short_executable_name}"
+)
+execute_process(
+    COMMAND "${packaged_short_executable}" --json --version
+    RESULT_VARIABLE short_result
+    OUTPUT_VARIABLE short_output
+    ERROR_VARIABLE short_error
+)
+if(NOT short_result EQUAL 0)
+    message(FATAL_ERROR "Packaged ue version failed: ${short_output}${short_error}")
+endif()
+string(FIND "${short_output}" "\"executable\":\"ue\"" short_index)
+if(short_index EQUAL -1)
+    message(FATAL_ERROR "Packaged short-operation CLI is invalid: ${short_output}")
+endif()
+
+execute_process(
+    COMMAND "${packaged_short_executable}" capabilities --json --limit 1
+    WORKING_DIRECTORY "${UE_WORKFLOW_PACKAGE_ROOT}/CLI/bin"
+    RESULT_VARIABLE catalog_result
+    OUTPUT_VARIABLE catalog_output
+    ERROR_VARIABLE catalog_error
+)
+if(NOT catalog_result EQUAL 0)
+    message(FATAL_ERROR "Packaged ue catalog failed: ${catalog_output}${catalog_error}")
+endif()
+string(FIND "${catalog_output}" "\"source\":\"local\"" local_source_index)
+string(FIND "${catalog_output}" "\"total\":" total_index)
+string(FIND "${catalog_output}" "${normalized_package_root}/Resources/Capabilities" root_index)
+if(
+    local_source_index EQUAL -1
+    OR total_index EQUAL -1
+    OR root_index EQUAL -1
+)
+    message(FATAL_ERROR "Packaged ue did not resolve its local catalog: ${catalog_output}")
 endif()

@@ -8,10 +8,10 @@
 ## CLI 与 MCP 的能力关系
 
 - MCP 的十一个稳定工具负责发现、查询、执行和 Workflow 入口。
-- `ue-workflow operation run <capability>` 通过同一 `/api/execute` 合同调用
-  Editor，因此单次 capability 的能力范围与 MCP 相同。
+- `ue <capability>` 在线获取精确 schema 后通过同一 `/api/execute` 合同调用
+  Editor，因此短操作 CLI 的能力范围与领域 MCP 相同；它不经过 Workflow DSL。
 - `ue-workflow validate` 与非执行型 Core plan 可离线运行；用于审批执行的计划
-  必须由 `plan --connect` 绑定 Editor 资产基线。`execute`、单次 capability
+  必须由 `plan --connect` 绑定 Editor 资产基线。`execute`、`ue` 单次 capability
   和 Job 都要求连接 Editor。
 - UE Workflow 只接纳 manifest 中声明为 `editStep` 的确定资产连续编辑；v1
   为单 scope，v2 最多为 16 个具名 scope。

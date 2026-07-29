@@ -210,7 +210,6 @@ ue-workflow execute --file <workflow.json|-> --approve-plan <digest>
 ue-workflow resume|status|rollback --receipt <path>
                     [--detail-level summary|standard|full]
                     [--section <name>]...
-ue-workflow operation run <type> ...
 ue-workflow shell
 ```
 
@@ -219,6 +218,20 @@ help 可离线使用，但可执行审批必须来自 `plan --connect`。`execut
 与 rollback 需要正在运行的 Unreal Editor。`capabilities --available-only`
 同样要求 `--connect`。
 `--section` 可重复使用；`--details` 暂作为 `--detail-level full` 的兼容别名。
+
+`operation run` 已在 0.6.0 移除。单次 capability 迁移到独立短操作 CLI：
+
+```powershell
+# 旧：ue-workflow operation run scene.pie.status --params '{}'
+ue scene.pie.status
+
+# 旧：ue-workflow operation run blueprint.asset.get --params '{"name":"/Game/BP_A"}'
+ue blueprint.asset.get --name /Game/BP_A
+```
+
+`ue` 默认读取随程序分发的 schema，并可用 `--live-schema` 强制读取 Editor
+精确 schema；它不属于 Workflow DSL，详见
+[UE 短操作 CLI](UE_SHORT_CLI.md)。
 
 ### 构建与安装
 
@@ -229,7 +242,7 @@ ctest --test-dir build-workflow -C Release --output-on-failure
 cmake --install build-workflow --config Release --prefix C:\Tools\ue-workflow
 ```
 
-安装后的 `bin/ue-workflow` 会相对定位
+安装同时生成 `bin/ue` 与 `bin/ue-workflow`。后者会相对定位
 `share/ue-workflow/{Contracts,Capabilities}`，不依赖源码工作目录。
 
 ## MCP

@@ -6,12 +6,12 @@
 Editor Module 和 TypeScript stdio bridge，让 Codex CLI、Claude Code 等
 MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与生产流程。
 
-当前插件版本为 `0.5.0`，以 Unreal Engine 5.3 为实际构建基线；UE
+当前插件版本为 `0.6.0`，以 Unreal Engine 5.3 为实际构建基线；UE
 5.4–5.7 的差异集中在兼容层，但尚未全部完成本地编译验证。
 
 ## 核心特性
 
-- 当前发布快照包含 303 项 manifest 驱动的 Editor 与 PIE Runtime 能力；
+- 当前发布快照包含 309 项 manifest 驱动的 Editor 与 PIE Runtime 能力；
   服务启动时从 manifest 动态计算数量。
 - 十一个稳定的 MCP 工具，不把全部能力直接展开成工具列表。
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
@@ -39,6 +39,9 @@ MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与
   Handler、Event Node、调用边和动态绑定，并在编译后验证。
 - Workflow 默认返回压缩摘要；完整 ReadBack、Diff 与结构快照按 section 获取。
 - capability 目录支持搜索、trait 过滤与分页，默认最多返回 25 项摘要。
+- [UE 短操作 CLI](docs/UE_SHORT_CLI.md) 以 manifest capability ID 作为首参数，
+  默认用本地 schema 单次调用 `/api/execute`，`--live-schema` 可强制在线校验，
+  `ue shell` 可复用目录与连接；`ue-workflow` 只保留 DSL。
 
 ## 架构
 
@@ -61,7 +64,7 @@ UE_AI_integration Editor Module
 
 | Domain | 数量 | 能力范围 |
 |---|---:|---|
-| Blueprint | 71 | 资产生命周期、Graph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
+| Blueprint | 77 | 资产生命周期、Graph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
 | Scene | 79 | Actor、PIE Runtime、可信输入/等待/截图、World Partition、Data Layer、HLOD、PCG、渲染诊断 |
 | Content | 70 | 资产查询/依赖/审计、安全变更、Material、Niagara、UMG 与事件 Handler 验证 |
 | Animation | 19 | AnimBlueprint、状态机与 BlendSpace 的创建、读取、校验和 Diff |
@@ -148,9 +151,9 @@ bridge 始终注册以下十一个工具，即使 Unreal Editor 暂时离线：
 - `ue_production`
 - `ue_workflow`
 
-`ue_cli` 不连接 Editor。它按 `UE_WORKFLOW_CLI`、插件包内
-`CLI/bin/ue-workflow.exe`、`PATH` 和开发构建目录的顺序定位 CLI，并返回
-实际路径、发现来源、候选列表和可直接执行的 `doctor --connect` 命令。
+`ue_cli` 不连接 Editor。它分别按 `UE_CLI` / `UE_WORKFLOW_CLI`、插件包内
+`CLI/bin/ue.exe` / `ue-workflow.exe`、`PATH` 和开发构建目录定位两套 CLI。
+原有 Workflow locator 字段保持不变，并新增 `shortCli`。
 `scripts/build_plugin.bat` 会将 CLI 及其 Contracts/Capabilities 安装到插件包
 的 `CLI/` 目录，同时恢复 MCP 的生产依赖。
 
@@ -172,7 +175,23 @@ bridge 始终注册以下十一个工具，即使 Unreal Editor 暂时离线：
 精确指定 `operation` 会返回单项完整描述符。领域工具会拒绝调用其他领域的
 operation。
 
-CLI 使用相同目录查询合同：
+短操作 CLI 与六个领域 MCP 工具使用同一份 capability contract：
+
+```powershell
+ue blueprint.asset.get --name /Game/UI/WBP_Login
+ue scene.actor.spawn --type PointLight --name KeyLight --location '[0,0,300]'
+ue production.job.status --job-id job-123
+ue shell
+```
+
+`ue` 不加载 WorkflowCore。默认从随程序分发的 manifest 做参数映射，只发送
+一次 `/api/execute`，由 Editor 做最终校验；`--live-schema` 会先向当前
+Editor 获取单项完整 schema，适合诊断 contract 漂移或强制校验 availability。
+`ue shell` 启动后加载一次目录并复用 HTTP keep-alive 连接，普通调用仍立即
+退出。长任务只启动 Job 并立即返回 `jobId`，不会自动等待；复杂连续资产编辑
+仍使用 `ue-workflow`。
+
+Workflow CLI 使用离线/在线目录查询合同：
 
 ```powershell
 ue-workflow capabilities --query debug --domain blueprint --risk interactive --limit 10

@@ -1639,6 +1639,258 @@
       }
     },
     {
+      "id": "blueprint.selection.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Open and focus a Blueprint graph, then replace its native Graph Editor selection with the provided node GUIDs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint name or asset path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Graph name"
+          },
+          "nodeIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f-]{32,36}$"
+            },
+            "description": "Node GUIDs that replace the current selection; an empty array clears it"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "nodeIds"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.layout.align",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Run a native Graph Editor alignment command on the current selection.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "alignment": {
+            "type": "string",
+            "enum": [
+              "top",
+              "middle",
+              "bottom",
+              "left",
+              "center",
+              "right"
+            ]
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "alignment"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.layout.straighten",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Run the native Graph Editor Straighten Connections command on connected selected nodes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.layout.distribute",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Run a native horizontal or vertical Graph Editor distribution command on the current selection.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "orientation": {
+            "type": "string",
+            "enum": [
+              "horizontal",
+              "vertical"
+            ]
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "orientation"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.comment.create_from_selection",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Create a native group-movement Comment node around the current Graph Editor selection.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Non-empty Comment title"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.comment.bounds.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Set the graph-space position and size of an existing Blueprint Comment node.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "commentNodeId": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "width": {
+            "type": "number",
+            "minimum": 1
+          },
+          "height": {
+            "type": "number",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "commentNodeId",
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      }
+    },
+    {
       "id": "blueprint.node.refresh_all",
       "domain": "blueprint",
       "kind": "command",

@@ -15,6 +15,7 @@ export interface CreateMcpServerOptions {
     catalog?: CapabilityCatalog;
     client?: UEConnectionClient;
     cliLocator?: () => CliLocationResult;
+    shortCliLocator?: () => CliLocationResult;
 }
 export interface UEAIIntegrationMcpServer {
     server: McpServer;

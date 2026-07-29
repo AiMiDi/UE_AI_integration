@@ -67,9 +67,10 @@ bool FMCPRegistryCatalogTest::RunTest(const FString& Parameters)
 		Registry.Num(),
 		Registry.GetCapabilityCount());
 	TestEqual(TEXT("All six domains are present"), Registry.GetDomainCounts().Num(), 6);
-	TestTrue(
-		TEXT("Blueprint capability baseline"),
-		Registry.GetDomainCounts().FindRef(TEXT("blueprint")) >= 58);
+	TestEqual(
+		TEXT("Blueprint capability count includes editor layout commands"),
+		Registry.GetDomainCounts().FindRef(TEXT("blueprint")),
+		77);
 	TestTrue(
 		TEXT("Scene capability baseline"),
 		Registry.GetDomainCounts().FindRef(TEXT("scene")) >= 54);
@@ -101,6 +102,25 @@ bool FMCPRegistryCatalogTest::RunTest(const FString& Parameters)
 	TestNotNull(
 		TEXT("Widget hierarchy query is declared"),
 		Registry.FindTool(TEXT("content.widget.hierarchy.get")));
+	TestNotNull(
+		TEXT("Blueprint selection command is declared"),
+		Registry.FindTool(TEXT("blueprint.selection.set")));
+	TestNotNull(
+		TEXT("Blueprint align command is declared"),
+		Registry.FindTool(TEXT("blueprint.layout.align")));
+	TestNotNull(
+		TEXT("Blueprint straighten command is declared"),
+		Registry.FindTool(TEXT("blueprint.layout.straighten")));
+	TestNotNull(
+		TEXT("Blueprint distribute command is declared"),
+		Registry.FindTool(TEXT("blueprint.layout.distribute")));
+	TestNotNull(
+		TEXT("Blueprint comment creation command is declared"),
+		Registry.FindTool(
+			TEXT("blueprint.comment.create_from_selection")));
+	TestNotNull(
+		TEXT("Blueprint comment bounds command is declared"),
+		Registry.FindTool(TEXT("blueprint.comment.bounds.set")));
 
 	TArray<FString> ParamErrors;
 	TestFalse(
@@ -110,6 +130,37 @@ bool FMCPRegistryCatalogTest::RunTest(const FString& Parameters)
 			MakeShared<FJsonObject>(),
 			ParamErrors));
 	TestTrue(TEXT("Invalid params include details"), !ParamErrors.IsEmpty());
+
+	TSharedPtr<FJsonObject> SelectionParams = MakeShared<FJsonObject>();
+	SelectionParams->SetStringField(
+		TEXT("blueprint"),
+		TEXT("/Game/BP_Test"));
+	SelectionParams->SetStringField(TEXT("graph"), TEXT("EventGraph"));
+	SelectionParams->SetArrayField(
+		TEXT("nodeIds"),
+		TArray<TSharedPtr<FJsonValue>>());
+	ParamErrors.Reset();
+	TestTrue(
+		TEXT("Blueprint selection accepts an explicit empty replacement set"),
+		Registry.ValidateParams(
+			TEXT("blueprint.selection.set"),
+			SelectionParams,
+			ParamErrors));
+
+	TSharedPtr<FJsonObject> AlignParams = MakeShared<FJsonObject>();
+	AlignParams->SetStringField(
+		TEXT("blueprint"),
+		TEXT("/Game/BP_Test"));
+	AlignParams->SetStringField(TEXT("graph"), TEXT("EventGraph"));
+	AlignParams->SetStringField(TEXT("alignment"), TEXT("left"));
+	AlignParams->SetBoolField(TEXT("unexpected"), true);
+	ParamErrors.Reset();
+	TestFalse(
+		TEXT("Blueprint layout schemas reject additional fields"),
+		Registry.ValidateParams(
+			TEXT("blueprint.layout.align"),
+			AlignParams,
+			ParamErrors));
 
 	TSharedPtr<FJsonObject> BuildWithoutConfirmation = MakeShared<FJsonObject>();
 	BuildWithoutConfirmation->SetStringField(TEXT("mode"), TEXT("ubt"));

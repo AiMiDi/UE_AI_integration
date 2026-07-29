@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { loadCapabilityCatalog } from "../capability-catalog.js";
-import { locateWorkflowCli } from "../cli-locator.js";
+import { locateShortCli, locateWorkflowCli, } from "../cli-locator.js";
 import { runDomainOperation } from "../domain-router.js";
 import { createLocalShutdownHandler } from "../index.js";
 import { createMcpServer, handleCapabilities, handleContext, MCP_TOOL_NAMES, } from "../mcp-server.js";
@@ -126,6 +126,60 @@ test("locates ue-workflow offline with deterministic precedence", () => {
     assert.equal(missingResult.executablePath, null);
     assert.equal(missingResult.source, "not_found");
     assert.match(missingResult.guidance, /UE_WORKFLOW_CLI/);
+});
+test("locates the short-operation ue CLI via UE_CLI and packaged layout", () => {
+    const fixturePluginRoot = resolve("fixture-plugin");
+    const moduleUrl = pathToFileURL(join(fixturePluginRoot, "MCP", "dist", "cli-locator.js")).href;
+    const executableName = process.platform === "win32" ? "ue.exe" : "ue";
+    const configured = resolve("custom-tools", executableName);
+    const packaged = join(fixturePluginRoot, "CLI", "bin", executableName);
+    const configuredResult = locateShortCli({
+        moduleUrl,
+        env: { PATH: "", UE_CLI: configured },
+        isFile: (path) => path === configured || path === packaged,
+    });
+    assert.equal(configuredResult.found, true);
+    assert.equal(configuredResult.executablePath, configured);
+    assert.equal(configuredResult.source, "environment");
+    assert.match(configuredResult.guidance, /status --json$/);
+    const packagedResult = locateShortCli({
+        moduleUrl,
+        env: { PATH: "" },
+        isFile: (path) => path === packaged,
+    });
+    assert.equal(packagedResult.found, true);
+    assert.equal(packagedResult.executablePath, packaged);
+    assert.equal(packagedResult.source, "packaged");
+    const missingResult = locateShortCli({
+        moduleUrl,
+        env: { PATH: "" },
+        isFile: () => false,
+    });
+    assert.equal(missingResult.found, false);
+    assert.match(missingResult.guidance, /UE_CLI/);
+});
+test("ue_cli preserves workflow fields and adds a shortCli locator result", async () => {
+    const base = {
+        found: false,
+        executablePath: null,
+        source: "not_found",
+        configuredPath: null,
+        pluginRoot: resolve("fixture-plugin"),
+        candidates: [],
+        pathEntriesSearched: 0,
+        guidance: "fixture",
+    };
+    const runtime = createMcpServer({
+        cliLocator: () => ({ ...base, command: "ue-workflow" }),
+        shortCliLocator: () => ({ ...base, command: "ue" }),
+    });
+    const registeredToolMap = runtime.server._registeredTools;
+    const response = await registeredToolMap.ue_cli.handler({}, {});
+    const text = response.content[0]?.text;
+    assert.equal(typeof text, "string");
+    const payload = JSON.parse(text ?? "{}");
+    assert.equal(payload.command, "ue-workflow");
+    assert.equal(payload.shortCli.command, "ue");
 });
 test("pages and filters capability summaries without emitting schemas by default", async () => {
     const catalog = loadCapabilityCatalog();

@@ -5,7 +5,7 @@ import { DOMAIN_DESCRIPTIONS, DOMAIN_TOOL_NAMES, runDomainOperation, validateDom
 import { formatErrorResponse, formatJsonResponse, } from "./helpers.js";
 import { UEApiError, ueClient, } from "./ue-bridge.js";
 import { handleWorkflowInput, UE_WORKFLOW_TOOL_SCHEMA, } from "./workflow-router.js";
-import { locateWorkflowCli, } from "./cli-locator.js";
+import { locateShortCli, locateWorkflowCli, } from "./cli-locator.js";
 export const MCP_TOOL_NAMES = [
     "ue_status",
     "ue_capabilities",
@@ -149,9 +149,10 @@ export function createMcpServer(options = {}) {
     const catalog = options.catalog ?? loadCapabilityCatalog();
     const client = options.client ?? ueClient;
     const cliLocator = options.cliLocator ?? locateWorkflowCli;
+    const shortCliLocator = options.shortCliLocator ?? locateShortCli;
     const server = new McpServer({
         name: "ue-ai-integration",
-        version: "0.5.0",
+        version: "0.6.0",
     });
     server.tool("ue_status", "Check the running Unreal Editor's UE_AI_integration health status.", {}, async () => {
         try {
@@ -245,9 +246,12 @@ export function createMcpServer(options = {}) {
         offset: args.offset,
         limit: args.limit,
     }));
-    server.tool("ue_cli", "Locate the ue-workflow CLI without requiring Unreal Editor. Returns the resolved executable, discovery source, checked candidates, and a doctor command.", {}, async () => {
+    server.tool("ue_cli", "Locate both the ue-workflow DSL CLI and the ue short-operation CLI without contacting Unreal Editor.", {}, async () => {
         try {
-            return formatJsonResponse(cliLocator());
+            return formatJsonResponse({
+                ...cliLocator(),
+                shortCli: shortCliLocator(),
+            });
         }
         catch (error) {
             return formatErrorResponse(error);

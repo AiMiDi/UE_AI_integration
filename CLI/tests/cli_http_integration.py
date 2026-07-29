@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -89,6 +88,14 @@ def main() -> int:
         json.loads(unavailable_offline.stdout)["diagnostics"][0]["code"]
         == "capability_availability_requires_connection"
     )
+    removed_operation_run = subprocess.run(
+        common + ["operation", "run", "scene.pie.status"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert removed_operation_run.returncode == 1
+    assert "operation run" not in removed_operation_run.stdout
     planned = subprocess.run(
         common + ["plan", "--file", args.fixture],
         check=True,
@@ -144,38 +151,6 @@ def main() -> int:
             length = int(self.headers.get("Content-Length", "0"))
             request = json.loads(self.rfile.read(length))
             requests.append(request)
-            if self.path == "/api/execute":
-                artifact_content = b"cli artifact\n"
-                offset = int(request.get("params", {}).get("offset", 0))
-                chunk = artifact_content[offset : offset + 5]
-                next_offset = offset + len(chunk)
-                body = json.dumps(
-                    {
-                        "ok": True,
-                        "data": {
-                            "schema": "ue.artifact.v1",
-                            "artifactId": "artifact-cli-integration",
-                            "kind": "file",
-                            "mimeType": "application/octet-stream",
-                            "sizeBytes": len(artifact_content),
-                            "sha256": hashlib.sha256(
-                                artifact_content
-                            ).hexdigest(),
-                            "offset": offset,
-                            "nextOffset": next_offset,
-                            "eof": next_offset >= len(artifact_content),
-                            "contentBase64": base64.b64encode(chunk).decode(
-                                "ascii"
-                            ),
-                        },
-                    }
-                ).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
             action = request["action"]
             if action == "plan":
                 prepared_plan = dict(plan)
@@ -369,29 +344,6 @@ def main() -> int:
             final_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             assert final_receipt["status"] == "rolledBack"
 
-            artifact_path = Path(temporary) / "artifact.bin"
-            exported = run(
-                "operation",
-                "run",
-                "production.job.artifact.get",
-                "--params",
-                '{"jobId":"job-cli-integration","artifactId":"artifact-cli-integration"}',
-                "--request-id",
-                "request-cli-integration",
-                "--output",
-                str(artifact_path),
-            )
-            assert artifact_path.read_bytes() == b"cli artifact\n"
-            assert "contentBase64" not in exported["data"]
-            assert exported["data"]["artifactExport"]["bytes"] == 13
-            assert exported["data"]["artifactExport"]["chunks"] == 3
-            assert exported["data"]["artifactExport"][
-                "verifiedAgainstReceipt"
-            ]
-            assert exported["data"]["artifactExport"]["sha256"] == (
-                "sha256:"
-                + hashlib.sha256(b"cli artifact\n").hexdigest()
-            )
             capabilities = run(
                 *capability_query,
                 "--connect",
@@ -421,9 +373,6 @@ def main() -> int:
     workflow_requests = [
         request for request in requests if "action" in request
     ]
-    operation_requests = [
-        request for request in requests if "capability" in request
-    ]
     assert [request["action"] for request in workflow_requests] == [
         "plan",
         "plan",
@@ -452,17 +401,6 @@ def main() -> int:
         workflow_requests[6]["approvePlanDigest"]
         == bound_plan_digest
     )
-    assert (
-        operation_requests[0]["capability"]
-        == "production.job.artifact.get"
-    )
-    assert (
-        operation_requests[0]["requestId"]
-        == "request-cli-integration"
-    )
-    assert operation_requests[1]["params"]["offset"] == 5
-    assert "requestId" not in operation_requests[1]
-    assert operation_requests[2]["params"]["offset"] == 10
     assert capability_requests == [
         {
             "query": ["widget"],

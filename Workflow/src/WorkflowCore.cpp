@@ -2573,7 +2573,7 @@ private:
                     base_path + "/type",
                     "Only operations with dsl.admission=editStep may appear in UE Workflow v1.",
                     id,
-                    "Use the domain MCP tool or ue-workflow operation run for non-composable capabilities.");
+                    "Use the domain MCP tool or ue <capability> for non-composable capabilities.");
             }
 
             const auto scopes = string_array(
