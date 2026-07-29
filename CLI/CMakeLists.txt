@@ -7,6 +7,8 @@ target_compile_features(UEApiClient PUBLIC cxx_std_20)
 target_include_directories(UEApiClient
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE
+        "${CMAKE_SOURCE_DIR}/Workflow/ThirdParty"
 )
 
 if(WIN32)

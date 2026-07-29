@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -47,6 +48,8 @@ struct Options
     std::string endpoint = "http://127.0.0.1:9847";
     std::uint32_t timeout_ms = 300000;
     std::string request_id;
+    std::optional<std::string> params_json;
+    std::optional<std::filesystem::path> params_file;
     std::filesystem::path output_path;
     std::filesystem::path capability_root;
     bool endpoint_explicit = false;
@@ -248,6 +251,8 @@ bool ParseArguments(
         if (name == "endpoint"
             || name == "timeout-ms"
             || name == "request-id"
+            || name == "params"
+            || name == "params-file"
             || name == "output"
             || name == "capability-root")
         {
@@ -280,6 +285,25 @@ bool ParseArguments(
             else if (name == "request-id")
             {
                 options.request_id = std::move(value);
+            }
+            else if (name == "params" || name == "params-file")
+            {
+                if (options.params_json || options.params_file)
+                {
+                    error =
+                        "--params and --params-file are mutually exclusive "
+                        "and cannot be repeated.";
+                    return false;
+                }
+                if (name == "params")
+                {
+                    options.params_json = std::move(value);
+                }
+                else
+                {
+                    options.params_file =
+                        std::filesystem::path(std::move(value));
+                }
             }
             else if (name == "output")
             {
@@ -333,11 +357,138 @@ void PrintGeneralHelp(std::ostream& output)
         << "  --endpoint <loopback-url>  Editor API endpoint\n"
         << "  --timeout-ms <n>           Socket timeout (default 300000)\n"
         << "  --request-id <id>          Explicit idempotency key\n"
+        << "  --params <json-object>     Supply the complete params object\n"
+        << "  --params-file <path|->     Read params JSON from a file or stdin\n"
         << "  --confirm-write            Set confirmWrite=true when supported\n"
         << "  --output <path>            Export image or artifact payload\n"
         << "  --live-schema              Fetch exact schema from Editor\n"
         << "  --capability-root <path>   Override packaged local manifests\n"
         << "  --json                     Print the full JSON envelope\n";
+}
+
+void PrintCommandHelp(
+    const Options& options,
+    std::ostream& output)
+{
+    if (options.command.empty())
+    {
+        PrintGeneralHelp(output);
+        return;
+    }
+    if (options.command == "status")
+    {
+        output
+            << "Usage: ue status [--json] [connection options]\n"
+            << "Read the running Editor and plugin health envelope.\n";
+        return;
+    }
+    if (options.command == "capabilities")
+    {
+        output
+            << "Usage: ue capabilities [filters] [--live-schema] [--json]\n"
+            << "Filters: --query, --operation, --domain, --kind, "
+               "--read-only, --destructive, --expensive, --output-kind, "
+               "--risk, --offset, --limit, --detail.\n";
+        return;
+    }
+    if (options.command == "shell")
+    {
+        output
+            << "Usage: ue shell [--live-schema] [connection options]\n"
+            << "Run multiple short capability commands over one connection.\n";
+        return;
+    }
+    if (options.command == "help")
+    {
+        output
+            << "Usage: ue help <capability-id> [--live-schema] [--json]\n"
+            << "Load the local or live descriptor and print exact parameters.\n";
+        return;
+    }
+
+    output
+        << "Usage: ue " << options.command
+        << " [--field value ...] [--params <json> | "
+           "--params-file <path|->] [options]\n"
+        << "This syntactic help performs no catalog load or Editor request.\n"
+        << "Run `ue help " << options.command
+        << "` to inspect the schema-derived parameters.\n";
+}
+
+std::optional<std::string> ReadParameterText(
+    const Options& options,
+    std::istream& input,
+    std::string& error_code,
+    std::string& error_message)
+{
+    if (options.params_json)
+    {
+        return *options.params_json;
+    }
+    if (!options.params_file)
+    {
+        return std::nullopt;
+    }
+    if (*options.params_file == std::filesystem::path("-"))
+    {
+        return std::string(
+            std::istreambuf_iterator<char>(input),
+            std::istreambuf_iterator<char>());
+    }
+    std::ifstream stream(*options.params_file, std::ios::binary);
+    if (!stream)
+    {
+        error_code = "params_file_unreadable";
+        error_message =
+            "Could not read params file '"
+            + options.params_file->generic_string() + "'.";
+        return std::nullopt;
+    }
+    return std::string(
+        std::istreambuf_iterator<char>(stream),
+        std::istreambuf_iterator<char>());
+}
+
+ConversionResult ConvertParameterObject(
+    const json& capability_descriptor,
+    const json& params,
+    const bool confirm_write)
+{
+    ConversionResult result;
+    if (!params.is_object())
+    {
+        result.code = "params_invalid";
+        result.message = "Params JSON must contain one object.";
+        return result;
+    }
+
+    std::vector<RawOption> raw_options;
+    raw_options.reserve(params.size());
+    for (auto iterator = params.begin(); iterator != params.end(); ++iterator)
+    {
+        std::string value;
+        if (iterator->is_string())
+        {
+            value = iterator->get<std::string>();
+            if (value.starts_with('@'))
+            {
+                value.insert(value.begin(), '@');
+            }
+        }
+        else
+        {
+            value = iterator->dump();
+        }
+        raw_options.push_back({
+            iterator.key(),
+            std::move(value),
+            false,
+        });
+    }
+    return ConvertParameters(
+        capability_descriptor,
+        raw_options,
+        confirm_write);
 }
 
 ParsedEnvelope ParseEnvelope(const ue::api::HttpResult& response)
@@ -2372,16 +2523,19 @@ int ExecuteOptions(
     const Options& options,
     const CapabilityCatalog* catalog,
     ue::api::Client& client,
+    std::istream& input,
     std::ostream& output,
     std::ostream& error)
 {
+    if (options.help)
+    {
+        PrintCommandHelp(options, output);
+        return 0;
+    }
     if (options.command.empty()
         || options.command == "--help"
         || (options.command == "help"
-            && options.help_capability.empty())
-        || (options.help
-            && (options.command == "status"
-                || options.command == "capabilities")))
+            && options.help_capability.empty()))
     {
         PrintGeneralHelp(output);
         return 0;
@@ -2399,6 +2553,24 @@ int ExecuteOptions(
                 json(),
                 "nested_shell_unsupported",
                 "A shell session is already running.",
+            },
+            options.json_output,
+            kExitUsage,
+            output,
+            error);
+    }
+    if ((options.params_json || options.params_file)
+        && (options.command == "status"
+            || options.command == "capabilities"
+            || options.command == "help"))
+    {
+        return PrintFailure(
+            {
+                false,
+                json(),
+                "params_option_misplaced",
+                "--params and --params-file are only valid for a dotted "
+                "capability command.",
             },
             options.json_output,
             kExitUsage,
@@ -2519,11 +2691,79 @@ int ExecuteOptions(
         return 0;
     }
 
-    const ConversionResult conversion =
-        ConvertParameters(
+    if ((options.params_json || options.params_file)
+        && !options.raw_options.empty())
+    {
+        return PrintFailure(
+            {
+                false,
+                json(),
+                "parameter_sources_conflict",
+                "--params/--params-file cannot be combined with "
+                "schema-derived --field options.",
+            },
+            options.json_output,
+            kExitUsage,
+            output,
+            error);
+    }
+
+    ConversionResult conversion;
+    if (options.params_json || options.params_file)
+    {
+        std::string read_error_code;
+        std::string read_error_message;
+        const auto params_text = ReadParameterText(
+            options,
+            input,
+            read_error_code,
+            read_error_message);
+        if (!params_text)
+        {
+            return PrintFailure(
+                {
+                    false,
+                    json(),
+                    read_error_code.empty()
+                        ? "params_invalid"
+                        : read_error_code,
+                    read_error_message.empty()
+                        ? "Params JSON could not be read."
+                        : read_error_message,
+                },
+                options.json_output,
+                kExitUsage,
+                output,
+                error);
+        }
+        const json params =
+            json::parse(*params_text, nullptr, false, true);
+        if (params.is_discarded() || !params.is_object())
+        {
+            return PrintFailure(
+                {
+                    false,
+                    json(),
+                    "params_invalid",
+                    "--params/--params-file must contain one JSON object.",
+                },
+                options.json_output,
+                kExitUsage,
+                output,
+                error);
+        }
+        conversion = ConvertParameterObject(
+            *descriptor,
+            params,
+            options.confirm_write);
+    }
+    else
+    {
+        conversion = ConvertParameters(
             *descriptor,
             options.raw_options,
             options.confirm_write);
+    }
     if (!conversion.ok)
     {
         return PrintFailure(
@@ -2665,6 +2905,8 @@ int RunShell(
 {
     if (!base.raw_options.empty()
         || !base.request_id.empty()
+        || base.params_json
+        || base.params_file
         || !base.output_path.empty()
         || base.confirm_write)
     {
@@ -2769,6 +3011,7 @@ int RunShell(
             command,
             catalog,
             client,
+            input,
             output,
             error);
     }
@@ -2805,13 +3048,14 @@ int Run(
     if (options.command.empty()
         || options.command == "--help"
         || (options.command == "help"
-            && options.help_capability.empty())
-        || (options.help
-            && (options.command == "status"
-                || options.command == "capabilities"
-                || options.command == "shell")))
+            && options.help_capability.empty()))
     {
         PrintGeneralHelp(output);
+        return 0;
+    }
+    if (options.help)
+    {
+        PrintCommandHelp(options, output);
         return 0;
     }
     if (options.command == "--version"
@@ -2858,6 +3102,15 @@ int Run(
     ue::api::Client client(
         options.endpoint,
         options.timeout_ms);
+    const std::string invocation_id = ue::api::NewInvocationId();
+    client.ConfigureBestEffortCliSession({
+        .name = "ue",
+        .version = UE_CLI_VERSION,
+        .command = options.command,
+        .invocation_id = invocation_id,
+        .instance_id = invocation_id,
+        .process_id = ue::api::CurrentProcessId(),
+    });
     if (options.command == "shell")
     {
         return RunShell(
@@ -2872,6 +3125,7 @@ int Run(
         options,
         catalog ? &*catalog : nullptr,
         client,
+        input,
         output,
         error);
 }

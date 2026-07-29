@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -53,6 +54,7 @@ struct CliOptions
     bool details_alias = false;
     bool detail_level_explicit = false;
     bool endpoint_explicit = false;
+    bool help_requested = false;
     std::filesystem::path contract_root;
     std::vector<std::filesystem::path> capability_roots;
     std::filesystem::path file;
@@ -329,6 +331,192 @@ json binary_help()
     };
 }
 
+json command_help(const CliOptions& options)
+{
+    if (options.positional.empty())
+    {
+        return binary_help();
+    }
+
+    const std::string& command = options.positional.front();
+    std::string usage;
+    std::string description;
+    json command_options = json::array();
+    if (command == "doctor")
+    {
+        usage = "ue-workflow doctor [--connect]";
+        description =
+            "Validate local Workflow contracts and optionally compare both "
+            "DSL 1.0 and 2.0 digests with the running Editor.";
+        command_options = json::array({ "--connect", "--endpoint <loopback-url>" });
+    }
+    else if (command == "capabilities")
+    {
+        usage = "ue-workflow capabilities [filters] [--connect]";
+        description =
+            "Search and page the Workflow capability catalog.";
+        command_options = json::array({
+            "--connect",
+            "--query <text>",
+            "--operation <id>",
+            "--domain <domain>",
+            "--kind <kind>",
+            "--read-only <bool>",
+            "--destructive <bool>",
+            "--expensive <bool>",
+            "--output-kind json|image",
+            "--risk readOnly|safeWrite|confirmWrite|notOpen",
+            "--available-only",
+            "--offset <n>",
+            "--limit <1..100>",
+            "--detail summary|full",
+        });
+    }
+    else if (command == "validate")
+    {
+        usage = "ue-workflow validate --file <workflow.json|->";
+        description = "Validate a Workflow without contacting the Editor.";
+        command_options = json::array({ "--file <workflow.json|->" });
+    }
+    else if (command == "plan")
+    {
+        usage =
+            "ue-workflow plan --file <workflow.json|-> [--connect]";
+        description =
+            "Create an offline plan or bind it to live Editor asset "
+            "preconditions.";
+        command_options = json::array({
+            "--file <workflow.json|->",
+            "--connect",
+            "--detail-level summary|standard|full",
+            "--section <name>",
+        });
+    }
+    else if (command == "execute")
+    {
+        usage =
+            "ue-workflow execute --file <workflow.json|-> "
+            "--approve-plan <digest> --receipt <path>";
+        description =
+            "Execute an approved, Editor-bound Workflow plan.";
+        command_options = json::array({
+            "--file <workflow.json|->",
+            "--approve-plan <digest>",
+            "--receipt <path>",
+            "--save-on-success",
+            "--confirm-write",
+            "--detail-level summary|standard|full",
+            "--section <name>",
+        });
+    }
+    else if (
+        command == "status"
+        || command == "resume"
+        || command == "rollback")
+    {
+        usage = "ue-workflow " + command + " --receipt <path>";
+        description =
+            command == "status"
+            ? "Read a Workflow run by its compact receipt."
+            : command == "resume"
+            ? "Resume a durable Workflow run from its compact receipt."
+            : "Rollback a Workflow run using its approved receipt.";
+        command_options = json::array({
+            "--receipt <path>",
+            "--detail-level summary|standard|full",
+            "--section <name>",
+        });
+    }
+    else if (command == "shell")
+    {
+        usage = "ue-workflow shell";
+        description = "Start the interactive Workflow CLI shell.";
+    }
+    else if (command == "help")
+    {
+        usage =
+            "ue-workflow help composable [scope] | "
+            "ue-workflow help operation <type>";
+        description =
+            "Inspect composable Workflow operations after loading contracts.";
+    }
+    else if (command == "operation")
+    {
+        usage = "ue <capability-id> [--field value ...]";
+        description =
+            "Single capability execution moved to the short `ue` CLI. "
+            "`ue-workflow operation run` is not an execution command.";
+        command_options = json::array({
+            "--params <json-object>",
+            "--params-file <path|->",
+        });
+    }
+    else
+    {
+        usage = "ue-workflow <command> --help";
+        description = "Unknown ue-workflow command.";
+    }
+
+    return {
+        { "ok", true },
+        { "schema", "ue.workflow-cli-help.v1" },
+        { "product", "UE Workflow DSL" },
+        { "executable", "ue-workflow" },
+        { "version", UE_WORKFLOW_VERSION },
+        { "command", command },
+        { "usage", std::move(usage) },
+        { "description", std::move(description) },
+        { "options", std::move(command_options) },
+    };
+}
+
+std::optional<std::string> positional_error(const CliOptions& options)
+{
+    if (options.positional.empty())
+    {
+        return std::nullopt;
+    }
+    const std::string& command = options.positional.front();
+    const std::size_t count = options.positional.size();
+    if (command == "--version" || command == "version")
+    {
+        return count == 1
+            ? std::nullopt
+            : std::optional<std::string>(
+                "version does not accept positional arguments.");
+    }
+    if (
+        command == "doctor"
+        || command == "capabilities"
+        || command == "validate"
+        || command == "plan"
+        || command == "execute"
+        || command == "status"
+        || command == "resume"
+        || command == "rollback"
+        || command == "shell")
+    {
+        return count == 1
+            ? std::nullopt
+            : std::optional<std::string>(
+                command + " does not accept positional arguments.");
+    }
+    if (command == "help")
+    {
+        const bool valid =
+            count == 1
+            || (count == 2 && options.positional[1] == "composable")
+            || (count == 3
+                && (options.positional[1] == "composable"
+                    || options.positional[1] == "operation"));
+        return valid
+            ? std::nullopt
+            : std::optional<std::string>(
+                "help accepts `composable [scope]` or `operation <type>`.");
+    }
+    return "Unknown command '" + command + "'.";
+}
+
 bool parse_arguments(const std::vector<std::string>& arguments, CliOptions& options)
 {
     auto take_value = [&](std::size_t& index, std::string& destination) {
@@ -585,7 +773,11 @@ bool parse_arguments(const std::vector<std::string>& arguments, CliOptions& opti
                 return false;
             }
         }
-        else if (argument == "--help" || argument == "--version")
+        else if (argument == "--help")
+        {
+            options.help_requested = true;
+        }
+        else if (argument == "--version")
         {
             options.positional.push_back(argument);
         }
@@ -715,13 +907,27 @@ std::string capability_query_path(const CliOptions& options)
 
 using HttpResult = ue::api::HttpResult;
 
+void ConfigureWorkflowCaller(
+    ue::api::Client& client,
+    const std::string& command)
+{
+    const std::string invocation_id = ue::api::NewInvocationId();
+    client.ConfigureBestEffortCliSession({
+        .name = "ue-workflow",
+        .version = UE_WORKFLOW_VERSION,
+        .command = command,
+        .invocation_id = invocation_id,
+        .instance_id = invocation_id,
+        .process_id = ue::api::CurrentProcessId(),
+    });
+}
+
 HttpResult http_request(
-    const std::string& endpoint,
+    ue::api::Client& client,
     std::string_view method,
     std::string_view path,
     std::string_view body = {})
 {
-    ue::api::Client client(endpoint);
     return method == "POST"
         ? client.Post(path, body)
         : client.Get(path);
@@ -823,6 +1029,66 @@ std::optional<json> http_data_object(const HttpResult& response)
     return envelope;
 }
 
+std::string contract_digest_from_handshake(
+    const json& handshake,
+    std::string_view version)
+{
+    if (!handshake.is_object())
+    {
+        return {};
+    }
+    const bool is_v2 = version == "2.0";
+    if (const auto direct = handshake.find(
+            is_v2 ? "contractSetDigestV2" : "contractSetDigest");
+        direct != handshake.end() && direct->is_string())
+    {
+        return direct->get<std::string>();
+    }
+
+    const std::array<std::string_view, 3> containers = {
+        "contractSetDigests",
+        "contractSets",
+        "contracts",
+    };
+    const std::array<std::string_view, 3> keys = is_v2
+        ? std::array<std::string_view, 3>{ "2.0", "v2", "2" }
+        : std::array<std::string_view, 3>{ "1.0", "v1", "1" };
+    for (const std::string_view container_name : containers)
+    {
+        const auto container =
+            handshake.find(std::string(container_name));
+        if (container == handshake.end() || !container->is_object())
+        {
+            continue;
+        }
+        for (const std::string_view key : keys)
+        {
+            const auto value = container->find(std::string(key));
+            if (value == container->end())
+            {
+                continue;
+            }
+            if (value->is_string())
+            {
+                return value->get<std::string>();
+            }
+            if (value->is_object())
+            {
+                for (const auto* digest_field :
+                     { "contractSetDigest", "digest" })
+                {
+                    const auto digest = value->find(digest_field);
+                    if (digest != value->end() && digest->is_string())
+                    {
+                        return digest->get<std::string>();
+                    }
+                }
+            }
+        }
+    }
+    return {};
+}
+
 
 std::optional<int> persist_editor_receipt(
     const HttpResult& response,
@@ -918,7 +1184,8 @@ std::optional<ue::workflow::Engine> load_engine(
 
 int run_command(
     CliOptions options,
-    const std::filesystem::path& executable);
+    const std::filesystem::path& executable,
+    ue::api::Client* shared_client = nullptr);
 
 std::vector<std::string> tokenize(std::string_view line)
 {
@@ -971,7 +1238,8 @@ std::vector<std::string> tokenize(std::string_view line)
 
 int run_shell(
     const CliOptions& base_options,
-    const std::filesystem::path& executable)
+    const std::filesystem::path& executable,
+    ue::api::Client& client)
 {
     if (!is_tty())
     {
@@ -1006,19 +1274,42 @@ int run_shell(
             continue;
         }
         resolve_contract_paths(options, executable);
-        (void)run_command(std::move(options), executable);
+        (void)run_command(std::move(options), executable, &client);
     }
 }
 
 int run_command(
     CliOptions options,
-    const std::filesystem::path& executable)
+    const std::filesystem::path& executable,
+    ue::api::Client* shared_client)
 {
+    if (options.help_requested)
+    {
+        const bool removed_operation_help =
+            options.positional.size() == 3
+            && options.positional[0] == "operation"
+            && options.positional[1] == "run";
+        if (!removed_operation_help)
+        {
+            if (const auto invalid = positional_error(options))
+            {
+                return print_error(
+                    kExitUsage,
+                    "invalid_arguments",
+                    *invalid);
+            }
+        }
+        print_json_text(command_help(options).dump(), options.json_output);
+        return 0;
+    }
     if (options.positional.empty())
     {
         if (is_tty())
         {
-            return run_shell(options, executable);
+            resolve_contract_paths(options, executable);
+            ue::api::Client client(options.endpoint);
+            ConfigureWorkflowCaller(client, "shell");
+            return run_shell(options, executable, client);
         }
         print_json_text(binary_help().dump(), options.json_output);
         return 0;
@@ -1029,6 +1320,13 @@ int run_command(
     {
         print_json_text(binary_help().dump(), options.json_output);
         return 0;
+    }
+    if (const auto invalid = positional_error(options))
+    {
+        return print_error(
+            kExitUsage,
+            "invalid_arguments",
+            *invalid);
     }
     if (command == "--version" || command == "version")
     {
@@ -1043,9 +1341,19 @@ int run_command(
         }).dump(), options.json_output);
         return 0;
     }
+    resolve_contract_paths(options, executable);
+
+    std::unique_ptr<ue::api::Client> owned_client;
+    if (!shared_client)
+    {
+        owned_client = std::make_unique<ue::api::Client>(
+            options.endpoint);
+        ConfigureWorkflowCaller(*owned_client, command);
+        shared_client = owned_client.get();
+    }
     if (command == "shell")
     {
-        return run_shell(options, executable);
+        return run_shell(options, executable, *shared_client);
     }
 
     int load_exit = kExitUnavailable;
@@ -1057,13 +1365,25 @@ int run_command(
 
     if (command == "doctor")
     {
+        const std::string& local_v1 = engine->ContractSetDigest();
+        const std::string& local_v2 = engine->ContractSetDigestV2();
         json payload = {
             { "ok", true },
             { "schema", "ue.workflow-doctor.v1" },
             { "contractRoot", options.contract_root.generic_string() },
             { "capabilityCount", engine->CapabilityCount() },
             { "composableOperationCount", engine->ComposableOperationCount() },
-            { "contractSetDigest", engine->ContractSetDigest() },
+            { "contractSetDigest", local_v1 },
+            { "contracts", {
+                { "v1", {
+                    { "dslVersion", "1.0" },
+                    { "contractSetDigest", local_v1 },
+                } },
+                { "v2", {
+                    { "dslVersion", "2.0" },
+                    { "contractSetDigest", local_v2 },
+                } },
+            } },
             { "editor", {
                 { "checked", options.connect },
                 { "endpoint", options.endpoint },
@@ -1073,7 +1393,7 @@ int run_command(
         if (options.connect)
         {
             const auto response = http_request(
-                options.endpoint,
+                *shared_client,
                 "GET",
                 "/api/v1/workflow/handshake");
             payload["editor"]["reachable"] = response.ok;
@@ -1086,30 +1406,38 @@ int run_command(
                     ? response_json["data"]
                     : response_json;
                 payload["editor"]["handshake"] = handshake;
-                std::string remote_digest;
-                if (handshake.is_object())
-                {
-                    remote_digest =
-                        handshake.value("contractSetDigest", std::string{});
-                    if (remote_digest.empty() &&
-                        handshake.contains("contractSet") &&
-                        handshake["contractSet"].is_object())
-                    {
-                        remote_digest =
-                            handshake["contractSet"].value("digest", std::string{});
-                    }
-                }
-                const bool contract_match =
-                    !remote_digest.empty() &&
-                    remote_digest == engine->ContractSetDigest();
-                payload["editor"]["contractSetDigest"] = remote_digest;
-                payload["editor"]["contractMatch"] = contract_match;
-                if (!contract_match)
+                const std::string remote_v1 =
+                    contract_digest_from_handshake(handshake, "1.0");
+                const std::string remote_v2 =
+                    contract_digest_from_handshake(handshake, "2.0");
+                const bool v1_match =
+                    !remote_v1.empty() && remote_v1 == local_v1;
+                const bool v2_match =
+                    !remote_v2.empty() && remote_v2 == local_v2;
+                const bool all_contracts_match = v1_match && v2_match;
+                payload["editor"]["contractSetDigest"] = remote_v1;
+                payload["editor"]["contractMatch"] = all_contracts_match;
+                payload["editor"]["contracts"] = {
+                    { "v1", {
+                        { "dslVersion", "1.0" },
+                        { "contractSetDigest",
+                            remote_v1.empty() ? json(nullptr) : json(remote_v1) },
+                        { "match", v1_match },
+                    } },
+                    { "v2", {
+                        { "dslVersion", "2.0" },
+                        { "contractSetDigest",
+                            remote_v2.empty() ? json(nullptr) : json(remote_v2) },
+                        { "match", v2_match },
+                    } },
+                };
+                if (!all_contracts_match)
                 {
                     payload["ok"] = false;
                     payload["editor"]["error"] =
-                        remote_digest.empty()
-                        ? "Handshake did not provide contractSetDigest."
+                        remote_v1.empty() || remote_v2.empty()
+                        ? "Handshake did not provide both v1 and v2 "
+                          "contract digests."
                         : "Editor and CLI workflow contracts do not match.";
                 }
             }
@@ -1129,7 +1457,7 @@ int run_command(
         if (options.connect)
         {
             const auto response = http_request(
-                options.endpoint,
+                *shared_client,
                 "GET",
                 capability_query_path(options));
             return print_capabilities_http_result(
@@ -1231,7 +1559,7 @@ int run_command(
                 };
                 apply_response_options(request, options);
                 const auto response = http_request(
-                    options.endpoint,
+                    *shared_client,
                     "POST",
                     "/api/v1/workflow",
                     request.dump());
@@ -1263,7 +1591,7 @@ int run_command(
             { "detailLevel", "summary" },
         };
         const auto prepare_response = http_request(
-            options.endpoint,
+            *shared_client,
             "POST",
             "/api/v1/workflow",
             prepare_request.dump());
@@ -1342,7 +1670,7 @@ int run_command(
         };
         apply_response_options(request, options);
         const auto response = http_request(
-            options.endpoint,
+            *shared_client,
             "POST",
             "/api/v1/workflow",
             request.dump());
@@ -1403,7 +1731,7 @@ int run_command(
             request["approvePlanDigest"] = receipt["planDigest"];
         }
         const auto response = http_request(
-            options.endpoint,
+            *shared_client,
             "POST",
             "/api/v1/workflow",
             request.dump());
@@ -1447,6 +1775,5 @@ int main(int argc, char** argv)
 
     std::error_code error;
     const auto executable = std::filesystem::absolute(argv[0], error);
-    resolve_contract_paths(options, error ? std::filesystem::path(argv[0]) : executable);
     return run_command(std::move(options), error ? std::filesystem::path(argv[0]) : executable);
 }

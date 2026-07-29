@@ -28,6 +28,84 @@ def main() -> int:
         "--capability-root",
         args.capability_root,
     ]
+    with tempfile.TemporaryDirectory(prefix="ue-workflow-help-") as help_temp:
+        missing_root = str(Path(help_temp) / "missing")
+        for hierarchy in [
+            ["doctor", "--help"],
+            ["plan", "--help"],
+            ["execute", "--help"],
+            ["operation", "run", "blueprint.scan", "--help"],
+        ]:
+            helped = subprocess.run(
+                [
+                    args.cli,
+                    "--json",
+                    "--contract-root",
+                    missing_root,
+                    "--capability-root",
+                    missing_root,
+                    "--endpoint",
+                    "http://127.0.0.1:1",
+                    *hierarchy,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            help_payload = json.loads(helped.stdout)
+            assert help_payload["ok"] is True
+            assert help_payload["schema"] == "ue.workflow-cli-help.v1"
+        strict_positional = subprocess.run(
+            [
+                args.cli,
+                "--json",
+                "--contract-root",
+                missing_root,
+                "--capability-root",
+                missing_root,
+                "doctor",
+                "unexpected",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert strict_positional.returncode == 1
+        strict_error = json.loads(strict_positional.stdout)
+        assert strict_error["diagnostics"][0]["code"] == "invalid_arguments"
+        strict_version = subprocess.run(
+            [args.cli, "--json", "--version", "unexpected"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert strict_version.returncode == 1
+        strict_version_error = json.loads(strict_version.stdout)
+        assert (
+            strict_version_error["diagnostics"][0]["code"]
+            == "invalid_arguments"
+        )
+
+    local_doctor = json.loads(
+        subprocess.run(
+            common + ["doctor"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    assert local_doctor["contracts"]["v1"]["dslVersion"] == "1.0"
+    assert local_doctor["contracts"]["v2"]["dslVersion"] == "2.0"
+    assert (
+        local_doctor["contracts"]["v1"]["contractSetDigest"]
+        != local_doctor["contracts"]["v2"]["contractSetDigest"]
+    )
+    contract_digest_v1 = local_doctor["contracts"]["v1"][
+        "contractSetDigest"
+    ]
+    contract_digest_v2 = local_doctor["contracts"]["v2"][
+        "contractSetDigest"
+    ]
     capability_query = [
         "capabilities",
         "--query",
@@ -115,14 +193,69 @@ def main() -> int:
         ).hexdigest()
     )
     requests: list[dict] = []
+    request_headers: list[dict[str, str]] = []
+    get_request_headers: list[dict[str, str]] = []
+    registration_attempts: list[dict] = []
+    registrations: list[dict] = []
+    unregistrations: list[str] = []
+    session_protocol_enabled = True
+    issued_sessions: dict[str, dict] = {}
     capability_requests: list[dict[str, list[str]]] = []
 
     class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def caller_headers(self) -> dict[str, str]:
+            return {
+                "callerType": self.headers.get("X-UEAI-Caller-Type", ""),
+                "caller": self.headers.get("X-UEAI-Caller", ""),
+                "callerVersion": self.headers.get(
+                    "X-UEAI-Caller-Version", ""
+                ),
+                "invocationId": self.headers.get(
+                    "X-UEAI-Invocation-Id", ""
+                ),
+                "processId": self.headers.get("X-UEAI-Process-Id", ""),
+                "transport": self.headers.get("X-UEAI-Transport", ""),
+                "instanceId": self.headers.get("X-UEAI-Instance-Id", ""),
+                "command": self.headers.get("X-UEAI-Command", ""),
+                "sessionId": self.headers.get("X-UEAI-Session-Id", ""),
+            }
+
+        def send_json(self, status: int, payload: dict) -> None:
+            body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/api/v1/workflow/handshake":
+                get_request_headers.append(self.caller_headers())
+                body = json.dumps(
+                    {
+                        "ok": True,
+                        "data": {
+                            "dslVersions": ["1.0", "2.0"],
+                            "contractSetDigests": {
+                                "1.0": contract_digest_v1,
+                                "2.0": contract_digest_v2,
+                            },
+                        },
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if parsed.path != "/api/capabilities":
                 self.send_error(404)
                 return
+            get_request_headers.append(self.caller_headers())
             query = parse_qs(parsed.query)
             capability_requests.append(query)
             source = (
@@ -149,8 +282,54 @@ def main() -> int:
 
         def do_POST(self) -> None:
             length = int(self.headers.get("Content-Length", "0"))
-            request = json.loads(self.rfile.read(length))
+            request = json.loads(self.rfile.read(length) or b"{}")
+            if self.path == "/api/v1/clients/register":
+                registration_attempts.append(request)
+                if not session_protocol_enabled:
+                    self.send_json(
+                        404,
+                        {
+                            "ok": False,
+                            "error": {
+                                "code": "not_found",
+                                "message": "Route not found.",
+                            },
+                        },
+                    )
+                    return
+                session_id = (
+                    f"session-workflow-{len(registrations) + 1}"
+                )
+                registrations.append(request)
+                issued_sessions[session_id] = request
+                self.send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "data": {
+                            "sessionId": session_id,
+                            "heartbeatIntervalMs": 5000,
+                            "expiresAfterMs": 15000,
+                        },
+                    },
+                )
+                return
+            if self.path == "/api/v1/clients/unregister":
+                session_id = self.headers.get("X-UEAI-Session-Id", "")
+                unregistrations.append(session_id)
+                self.send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "data": {
+                            "sessionId": session_id,
+                            "status": "offline",
+                        },
+                    },
+                )
+                return
             requests.append(request)
+            request_headers.append(self.caller_headers())
             action = request["action"]
             if action == "plan":
                 prepared_plan = dict(plan)
@@ -257,6 +436,22 @@ def main() -> int:
         assert (
             json.loads(environment_endpoint.stdout)["editor"]["endpoint"]
             == "http://127.0.0.1:65535"
+        )
+        connected_doctor = subprocess.run(
+            common + ["doctor", "--connect", "--endpoint", endpoint],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        connected_doctor_json = json.loads(connected_doctor.stdout)
+        assert connected_doctor_json["editor"]["contractMatch"] is True
+        assert (
+            connected_doctor_json["editor"]["contracts"]["v1"]["match"]
+            is True
+        )
+        assert (
+            connected_doctor_json["editor"]["contracts"]["v2"]["match"]
+            is True
         )
 
         with tempfile.TemporaryDirectory(prefix="ue-workflow-cli-") as temporary:
@@ -365,6 +560,41 @@ def main() -> int:
                 available_capabilities["schema"]
                 == "ue.workflow-capabilities.v1"
             )
+
+        assert sorted(unregistrations) == sorted(issued_sessions)
+        assert registrations
+        assert all(
+            registration["clientKind"] == "cli"
+            and registration["name"] == "ue-workflow"
+            and registration["version"] == "0.6.0"
+            and registration["transport"] == "http"
+            and isinstance(registration["pid"], int)
+            and registration["pid"] > 0
+            and registration["instanceId"]
+            == registration["invocationId"]
+            and registration["invocationId"].startswith("cli-")
+            and registration["command"]
+            for registration in registrations
+        )
+
+        session_protocol_enabled = False
+        fallback_attempt_count = len(registration_attempts)
+        fallback = subprocess.run(
+            common
+            + [
+                "plan",
+                "--file",
+                args.fixture,
+                "--connect",
+                "--endpoint",
+                endpoint,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert json.loads(fallback.stdout)["data"]["executionReady"] is True
+        assert len(registration_attempts) == fallback_attempt_count + 1
     finally:
         server.shutdown()
         server.server_close()
@@ -372,6 +602,11 @@ def main() -> int:
 
     workflow_requests = [
         request for request in requests if "action" in request
+    ]
+    workflow_headers = [
+        header
+        for request, header in zip(requests, request_headers)
+        if "action" in request
     ]
     assert [request["action"] for request in workflow_requests] == [
         "plan",
@@ -381,6 +616,7 @@ def main() -> int:
         "status",
         "resume",
         "rollback",
+        "plan",
     ]
     assert workflow_requests[1]["detailLevel"] == "summary"
     assert workflow_requests[2]["detailLevel"] == "summary"
@@ -401,6 +637,43 @@ def main() -> int:
         workflow_requests[6]["approvePlanDigest"]
         == bound_plan_digest
     )
+    session_request_headers = request_headers[:-1]
+    assert all(
+        header["callerType"] == "cli"
+        and header["caller"] == "ue-workflow"
+        and header["callerVersion"] == "0.6.0"
+        and header["invocationId"].startswith("cli-")
+        and header["processId"].isdigit()
+        and header["transport"] == "http"
+        and header["instanceId"] == header["invocationId"]
+        and header["sessionId"] in issued_sessions
+        and issued_sessions[header["sessionId"]]["invocationId"]
+        == header["invocationId"]
+        and issued_sessions[header["sessionId"]]["command"]
+        == header["command"]
+        for header in session_request_headers
+    )
+    assert (
+        workflow_headers[2]["invocationId"]
+        == workflow_headers[3]["invocationId"]
+    )
+    assert (
+        workflow_headers[2]["sessionId"]
+        == workflow_headers[3]["sessionId"]
+    )
+    assert workflow_headers[2]["command"] == "execute"
+    assert get_request_headers
+    assert all(
+        header["sessionId"] in issued_sessions
+        and issued_sessions[header["sessionId"]]["invocationId"]
+        == header["invocationId"]
+        for header in get_request_headers
+    )
+    fallback_header = request_headers[-1]
+    assert fallback_header["sessionId"] == ""
+    assert fallback_header["callerType"] == "cli"
+    assert fallback_header["caller"] == "ue-workflow"
+    assert fallback_header["invocationId"].startswith("cli-")
     assert capability_requests == [
         {
             "query": ["widget"],

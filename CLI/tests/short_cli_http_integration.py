@@ -20,6 +20,21 @@ def main() -> int:
     args = parser.parse_args()
 
     requests: list[dict] = []
+    request_headers: list[dict[str, str]] = []
+    get_request_headers: list[dict[str, str]] = []
+    registration_attempts: list[dict] = []
+    registrations: list[dict] = []
+    unregistrations: list[str] = []
+    unregistration_connections: list[tuple[str, int]] = []
+    session_control = {
+        "supported": True,
+        "transientFailures": 0,
+        "expireNextBusinessStatus": 0,
+        "slowUnregisterSeconds": 0.0,
+    }
+    issued_sessions: dict[str, dict] = {}
+    expired_requests: list[dict] = []
+    expired_request_headers: list[dict[str, str]] = []
     execute_ports: list[int] = []
     queries: list[dict[str, list[str]]] = []
     artifact = b"standalone ue artifact\n"
@@ -95,6 +110,23 @@ def main() -> int:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
+        def caller_headers(self) -> dict[str, str]:
+            return {
+                "callerType": self.headers.get("X-UEAI-Caller-Type", ""),
+                "caller": self.headers.get("X-UEAI-Caller", ""),
+                "callerVersion": self.headers.get(
+                    "X-UEAI-Caller-Version", ""
+                ),
+                "invocationId": self.headers.get(
+                    "X-UEAI-Invocation-Id", ""
+                ),
+                "processId": self.headers.get("X-UEAI-Process-Id", ""),
+                "transport": self.headers.get("X-UEAI-Transport", ""),
+                "instanceId": self.headers.get("X-UEAI-Instance-Id", ""),
+                "command": self.headers.get("X-UEAI-Command", ""),
+                "sessionId": self.headers.get("X-UEAI-Session-Id", ""),
+            }
+
         def send_json(self, status: int, payload: dict) -> None:
             body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
             self.send_response(status)
@@ -113,6 +145,7 @@ def main() -> int:
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/api/health":
+                get_request_headers.append(self.caller_headers())
                 self.send_json(
                     200,
                     {
@@ -137,6 +170,7 @@ def main() -> int:
                     },
                 )
                 return
+            get_request_headers.append(self.caller_headers())
             query = parse_qs(parsed.query)
             queries.append(query)
             operation = query.get("operation", [None])[0]
@@ -176,6 +210,99 @@ def main() -> int:
             )
 
         def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            request = json.loads(body or b"{}")
+            if self.path == "/api/v1/clients/register":
+                registration_attempts.append(request)
+                if not session_control["supported"]:
+                    self.send_json(
+                        404,
+                        {
+                            "ok": False,
+                            "error": {
+                                "code": "not_found",
+                                "message": "Route not found.",
+                            },
+                        },
+                    )
+                    return
+                if session_control["transientFailures"] > 0:
+                    session_control["transientFailures"] -= 1
+                    self.send_json(
+                        503,
+                        {
+                            "ok": False,
+                            "error": {
+                                "code": "temporarily_unavailable",
+                                "message": "Registration is temporarily unavailable.",
+                            },
+                        },
+                    )
+                    return
+                session_id = f"session-short-{len(registrations) + 1}"
+                registrations.append(request)
+                issued_sessions[session_id] = request
+                self.send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "data": {
+                            "sessionId": session_id,
+                            "heartbeatIntervalMs": 5000,
+                            "expiresAfterMs": 15000,
+                        },
+                    },
+                )
+                return
+            if self.path == "/api/v1/clients/unregister":
+                session_id = self.headers.get("X-UEAI-Session-Id", "")
+                unregistrations.append(session_id)
+                unregistration_connections.append(
+                    (session_id, self.client_address[1])
+                )
+                delay = float(session_control["slowUnregisterSeconds"])
+                if delay > 0.0:
+                    time.sleep(delay)
+                self.send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "data": {
+                            "sessionId": session_id,
+                            "status": "offline",
+                        },
+                    },
+                )
+                return
+            request_header = self.caller_headers()
+            if (
+                self.path == "/api/execute"
+                and session_control["expireNextBusinessStatus"]
+                and request_header["sessionId"]
+            ):
+                expired_status = int(
+                    session_control["expireNextBusinessStatus"]
+                )
+                session_control["expireNextBusinessStatus"] = 0
+                expired_requests.append(request)
+                expired_request_headers.append(request_header)
+                issued_sessions.pop(request_header["sessionId"], None)
+                self.send_json(
+                    expired_status,
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": (
+                                "client_session_expired"
+                                if expired_status == 401
+                                else "client_session_not_found"
+                            ),
+                            "message": "The client session expired.",
+                        },
+                    },
+                )
+                return
             if self.path != "/api/execute":
                 self.send_json(
                     404,
@@ -185,9 +312,8 @@ def main() -> int:
                     },
                 )
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            request = json.loads(self.rfile.read(length))
             requests.append(request)
+            request_headers.append(request_header)
             execute_ports.append(self.client_address[1])
             operation = request["capability"]
 
@@ -319,6 +445,45 @@ def main() -> int:
                 json.loads(invalid_global.stdout)["error"]["code"]
                 == "invalid_arguments"
             )
+            before_help_queries = len(queries)
+            before_help_requests = len(requests)
+            capability_help = subprocess.run(
+                [
+                    args.cli,
+                    "test.typed",
+                    "--help",
+                    "--live-schema",
+                    "--endpoint",
+                    "http://127.0.0.1:1",
+                    "--capability-root",
+                    str(temporary_path / "missing-catalog"),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert "Usage: ue test.typed" in capability_help.stdout
+            assert "performs no catalog load or Editor request" in capability_help.stdout
+            assert len(queries) == before_help_queries
+            assert len(requests) == before_help_requests
+            status_help = run(
+                ["status", "--help", "--endpoint", "http://127.0.0.1:1"],
+                check=True,
+            )
+            assert status_help.stdout.startswith("Usage: ue status")
+            capabilities_help = run(
+                ["capabilities", "--help", "--live-schema"],
+                check=True,
+            )
+            assert capabilities_help.stdout.startswith(
+                "Usage: ue capabilities"
+            )
+            strict_positional = run(["status", "extra", "--json"])
+            assert strict_positional.returncode == 2
+            assert (
+                json.loads(strict_positional.stdout)["error"]["code"]
+                == "invalid_arguments"
+            )
 
             query_count = len(queries)
             help_result = run(
@@ -386,6 +551,112 @@ def main() -> int:
                 "confirmWrite": True,
             }
             assert typed_request["requestId"].startswith("ue-")
+
+            inline_params = run(
+                [
+                    "test.typed",
+                    "--endpoint",
+                    endpoint,
+                    "--params",
+                    json.dumps(
+                        {
+                            "assetPath": "/Game/Inline",
+                            "enabled": False,
+                            "settings": {"source": "inline"},
+                        }
+                    ),
+                    "--json",
+                ],
+                check=True,
+            )
+            assert json.loads(inline_params.stdout)["ok"] is True
+            assert requests[-1]["params"] == {
+                "assetPath": "/Game/Inline",
+                "enabled": False,
+                "settings": {"source": "inline"},
+            }
+
+            params_file = temporary_path / "params.json"
+            params_file.write_text(
+                json.dumps(
+                    {
+                        "assetPath": "/Game/File",
+                        "enabled": True,
+                        "tags": ["from", "file"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            file_params = run(
+                [
+                    "test.typed",
+                    "--endpoint",
+                    endpoint,
+                    "--params-file",
+                    str(params_file),
+                ],
+                check=True,
+            )
+            assert file_params.stdout.startswith("OK test.typed ")
+            assert requests[-1]["params"] == {
+                "assetPath": "/Game/File",
+                "enabled": True,
+                "tags": ["from", "file"],
+            }
+
+            stdin_params = run(
+                [
+                    "test.typed",
+                    "--endpoint",
+                    endpoint,
+                    "--params-file",
+                    "-",
+                ],
+                check=True,
+                shell_input=json.dumps(
+                    {
+                        "assetPath": "/Game/Stdin",
+                        "enabled": False,
+                    }
+                ),
+            )
+            assert stdin_params.stdout.startswith("OK test.typed ")
+            assert requests[-1]["params"] == {
+                "assetPath": "/Game/Stdin",
+                "enabled": False,
+            }
+
+            before_conflicts = len(requests)
+            params_conflict = run(
+                [
+                    "test.typed",
+                    "--params",
+                    '{"assetPath":"/Game/A","enabled":true}',
+                    "--params-file",
+                    str(params_file),
+                    "--json",
+                ]
+            )
+            assert params_conflict.returncode == 2
+            assert (
+                json.loads(params_conflict.stdout)["error"]["code"]
+                == "invalid_arguments"
+            )
+            field_conflict = run(
+                [
+                    "test.typed",
+                    "--params-file",
+                    str(params_file),
+                    "--enabled",
+                    "--json",
+                ]
+            )
+            assert field_conflict.returncode == 2
+            assert (
+                json.loads(field_conflict.stdout)["error"]["code"]
+                == "parameter_sources_conflict"
+            )
+            assert len(requests) == before_conflicts
 
             live_typed = run(
                 [
@@ -579,6 +850,7 @@ def main() -> int:
 
             query_count = len(queries)
             port_count = len(execute_ports)
+            header_count = len(request_headers)
             shell = run(
                 [
                     "shell",
@@ -601,6 +873,16 @@ def main() -> int:
             shell_ports = execute_ports[port_count:]
             assert len(shell_ports) == 2
             assert shell_ports[0] == shell_ports[1]
+            shell_headers = request_headers[header_count:]
+            assert len(shell_headers) == 2
+            assert (
+                shell_headers[0]["invocationId"]
+                == shell_headers[1]["invocationId"]
+            )
+            assert (
+                shell_headers[0]["sessionId"]
+                == shell_headers[1]["sessionId"]
+            )
 
             live_shell = run(
                 [
@@ -620,6 +902,177 @@ def main() -> int:
                 "operation": ["test.typed"],
                 "detail": ["full"],
             }
+            assert request_headers
+            assert all(
+                header["callerType"] == "cli"
+                and header["caller"] == "ue"
+                and header["callerVersion"] == "0.6.0"
+                and header["invocationId"].startswith("cli-")
+                and header["processId"].isdigit()
+                and header["transport"] == "http"
+                and header["instanceId"] == header["invocationId"]
+                and header["sessionId"] in issued_sessions
+                and issued_sessions[header["sessionId"]]["invocationId"]
+                == header["invocationId"]
+                and issued_sessions[header["sessionId"]]["command"]
+                == header["command"]
+                for header in request_headers
+            )
+            assert get_request_headers
+            assert all(
+                header["sessionId"] in issued_sessions
+                and issued_sessions[header["sessionId"]]["invocationId"]
+                == header["invocationId"]
+                for header in get_request_headers
+            )
+            assert registrations
+            assert all(
+                registration["clientKind"] == "cli"
+                and registration["name"] == "ue"
+                and registration["version"] == "0.6.0"
+                and registration["transport"] == "http"
+                and isinstance(registration["pid"], int)
+                and registration["pid"] > 0
+                and registration["instanceId"]
+                == registration["invocationId"]
+                and registration["invocationId"].startswith("cli-")
+                and registration["command"]
+                for registration in registrations
+            )
+            assert sorted(unregistrations) == sorted(issued_sessions)
+
+            transient_attempt_start = len(registration_attempts)
+            transient_registration_start = len(registrations)
+            transient_header_start = len(request_headers)
+            session_control["transientFailures"] = 1
+            transient_shell = run(
+                ["shell", "--endpoint", endpoint],
+                check=True,
+                shell_input=(
+                    "test.typed --asset-path /Game/TransientA --enabled\n"
+                    "test.typed --asset-path /Game/TransientB --enabled\n"
+                    "exit\n"
+                ),
+            )
+            assert len(transient_shell.stdout.splitlines()) == 2
+            transient_headers = request_headers[transient_header_start:]
+            assert len(transient_headers) == 2
+            assert transient_headers[0]["sessionId"] == ""
+            assert transient_headers[1]["sessionId"] in issued_sessions
+            assert (
+                transient_headers[0]["invocationId"]
+                == transient_headers[1]["invocationId"]
+            )
+            assert len(registration_attempts) == transient_attempt_start + 2
+            assert len(registrations) == transient_registration_start + 1
+            transient_attempts = registration_attempts[
+                transient_attempt_start:
+            ]
+            assert (
+                transient_attempts[0]["invocationId"]
+                == transient_attempts[1]["invocationId"]
+                == transient_headers[0]["invocationId"]
+            )
+            assert transient_headers[1]["sessionId"] in unregistrations
+
+            for expiry_status in (404, 401):
+                expiry_attempt_start = len(registration_attempts)
+                expiry_registration_start = len(registrations)
+                expiry_header_start = len(request_headers)
+                expiry_rejection_start = len(expired_requests)
+                session_control["expireNextBusinessStatus"] = expiry_status
+                expiry_recovery = run(
+                    [
+                        "test.typed",
+                        "--endpoint",
+                        endpoint,
+                        "--asset-path",
+                        f"/Game/ExpiredSession{expiry_status}",
+                        "--enabled",
+                    ],
+                    check=True,
+                )
+                assert expiry_recovery.stdout.startswith("OK test.typed ")
+                assert len(expired_requests) == expiry_rejection_start + 1
+                assert len(registration_attempts) == expiry_attempt_start + 2
+                assert len(registrations) == expiry_registration_start + 2
+                expiry_registrations = registrations[
+                    expiry_registration_start:
+                ]
+                assert (
+                    expiry_registrations[0]["invocationId"]
+                    == expiry_registrations[1]["invocationId"]
+                )
+                recovered_headers = request_headers[expiry_header_start:]
+                assert len(recovered_headers) == 1
+                assert (
+                    expired_request_headers[-1]["sessionId"]
+                    != recovered_headers[0]["sessionId"]
+                )
+                assert (
+                    expired_requests[-1]
+                    == requests[expiry_header_start]
+                )
+                assert recovered_headers[0]["sessionId"] in unregistrations
+
+            slow_unregister_header_start = len(request_headers)
+            session_control["slowUnregisterSeconds"] = 2.5
+            slow_started = time.perf_counter()
+            slow_unregister = run(
+                [
+                    "test.typed",
+                    "--endpoint",
+                    endpoint,
+                    "--asset-path",
+                    "/Game/SlowUnregister",
+                    "--enabled",
+                ],
+                check=True,
+            )
+            slow_elapsed = time.perf_counter() - slow_started
+            session_control["slowUnregisterSeconds"] = 0.0
+            assert slow_unregister.stdout.startswith("OK test.typed ")
+            assert len(request_headers) == slow_unregister_header_start + 1
+            assert slow_elapsed < 2.0
+            slow_session_id = request_headers[-1]["sessionId"]
+            slow_unregister_port = next(
+                port
+                for session_id, port in unregistration_connections
+                if session_id == slow_session_id
+            )
+            assert slow_unregister_port != execute_ports[-1]
+
+            session_control["supported"] = False
+            fallback_attempt_count = len(registration_attempts)
+            fallback_header_count = len(request_headers)
+            fallback = run(
+                [
+                    "shell",
+                    "--endpoint",
+                    endpoint,
+                ],
+                check=True,
+                shell_input=(
+                    "test.typed --asset-path /Game/LegacyFallbackA --enabled\n"
+                    "test.typed --asset-path /Game/LegacyFallbackB --enabled\n"
+                    "exit\n"
+                ),
+            )
+            assert len(fallback.stdout.splitlines()) == 2
+            assert len(registration_attempts) == fallback_attempt_count + 1
+            fallback_headers = request_headers[fallback_header_count:]
+            assert len(fallback_headers) == 2
+            assert all(
+                header["sessionId"] == ""
+                and header["callerType"] == "cli"
+                and header["caller"] == "ue"
+                and header["invocationId"].startswith("cli-")
+                for header in fallback_headers
+            )
+            assert (
+                fallback_headers[0]["invocationId"]
+                == fallback_headers[1]["invocationId"]
+            )
         finally:
             server.shutdown()
             server.server_close()

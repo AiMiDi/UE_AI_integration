@@ -1,5 +1,7 @@
 #include "UEApiClient/UEApiClient.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -7,8 +9,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
 #include <map>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -20,6 +24,7 @@
 #endif
 #include <WinSock2.h>
 #include <WS2tcpip.h>
+#include <process.h>
 #else
 #include <arpa/inet.h>
 #include <cerrno>
@@ -35,6 +40,7 @@ namespace ue::api
 {
 namespace
 {
+using json = nlohmann::json;
 
 #if defined(_WIN32)
 using Socket = SOCKET;
@@ -156,6 +162,58 @@ std::string Trim(std::string value)
     return std::string(begin, end);
 }
 
+bool IsHeaderName(const std::string_view name)
+{
+    if (name.empty())
+    {
+        return false;
+    }
+    for (const unsigned char character : name)
+    {
+        if (!std::isalnum(character)
+            && character != '-'
+            && character != '_')
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool IsHeaderValue(const std::string_view value)
+{
+    return std::none_of(
+        value.begin(),
+        value.end(),
+        [](const unsigned char character)
+        {
+            return character == '\r'
+                || character == '\n'
+                || character == 0x7f
+                || character < 0x20;
+        });
+}
+
+bool IsExpiredClientSessionResponse(const HttpResult& response)
+{
+    if (response.status != 401 && response.status != 404)
+    {
+        return false;
+    }
+    const json envelope =
+        json::parse(response.body, nullptr, false, true);
+    if (!envelope.is_object()
+        || !envelope.contains("error")
+        || !envelope["error"].is_object())
+    {
+        return false;
+    }
+    const std::string code =
+        envelope["error"].value("code", std::string{});
+    return code == "client_session_expired"
+        || code == "client_session_not_found";
+}
+
 std::optional<std::size_t> HeaderEnd(const std::string& response)
 {
     const auto position = response.find("\r\n\r\n");
@@ -209,6 +267,7 @@ struct Client::Impl
 
     ~Impl()
     {
+        UnregisterBestEffortSession();
         Disconnect();
 #if defined(_WIN32)
         if (runtime_available)
@@ -216,6 +275,111 @@ struct Client::Impl
             WSACleanup();
         }
 #endif
+    }
+
+    void ConfigureBestEffortCliSession(CliSessionOptions options)
+    {
+        if (options.invocation_id.empty())
+        {
+            options.invocation_id = NewInvocationId();
+        }
+        if (options.instance_id.empty())
+        {
+            options.instance_id = options.invocation_id;
+        }
+        if (options.process_id == 0)
+        {
+            options.process_id = CurrentProcessId();
+        }
+
+        session = CliSessionState{ std::move(options) };
+        const auto& identity = session->options;
+        request_headers["X-UEAI-Caller-Type"] = "cli";
+        request_headers["X-UEAI-Caller"] = identity.name;
+        request_headers["X-UEAI-Caller-Version"] = identity.version;
+        request_headers["X-UEAI-Invocation-Id"] =
+            identity.invocation_id;
+        request_headers["X-UEAI-Instance-Id"] = identity.instance_id;
+        request_headers["X-UEAI-Process-Id"] =
+            std::to_string(identity.process_id);
+        request_headers["X-UEAI-Transport"] = "http";
+        request_headers["X-UEAI-Command"] = identity.command;
+        request_headers.erase("X-UEAI-Session-Id");
+    }
+
+    void EnsureBestEffortSession()
+    {
+        if (!session
+            || session->protocol_unsupported
+            || !session->session_id.empty())
+        {
+            return;
+        }
+        const auto& identity = session->options;
+        const json request = {
+            { "clientKind", "cli" },
+            { "name", identity.name },
+            { "version", identity.version },
+            { "transport", "http" },
+            { "pid", identity.process_id },
+            { "instanceId", identity.instance_id },
+            { "invocationId", identity.invocation_id },
+            { "command", identity.command },
+        };
+        const HttpResult response = PerformRaw(
+            "POST",
+            "/api/v1/clients/register",
+            request.dump());
+        if (!response.ok)
+        {
+            if (response.status == 404)
+            {
+                session->protocol_unsupported = true;
+            }
+            // A legacy endpoint may reject the route without consuming its
+            // request body. Reconnect before the real request so fallback
+            // cannot inherit a desynchronized keep-alive stream.
+            Disconnect();
+            return;
+        }
+        const json envelope =
+            json::parse(response.body, nullptr, false, true);
+        if (!envelope.is_object()
+            || !envelope.value("ok", false)
+            || !envelope.contains("data")
+            || !envelope["data"].is_object())
+        {
+            Disconnect();
+            return;
+        }
+        const auto& data = envelope["data"];
+        const std::string session_id =
+            data.value("sessionId", std::string{});
+        if (session_id.empty())
+        {
+            Disconnect();
+            return;
+        }
+        session->session_id = session_id;
+        request_headers["X-UEAI-Session-Id"] = session_id;
+    }
+
+    void UnregisterBestEffortSession()
+    {
+        if (!session || session->session_id.empty())
+        {
+            return;
+        }
+        Impl control_connection(
+            endpoint,
+            std::min<std::uint32_t>(timeout_ms, 1000U));
+        control_connection.request_headers = request_headers;
+        (void)control_connection.PerformRaw(
+            "POST",
+            "/api/v1/clients/unregister",
+            "{}");
+        request_headers.erase("X-UEAI-Session-Id");
+        session->session_id.clear();
     }
 
     void Disconnect()
@@ -445,7 +609,7 @@ struct Client::Impl
         }
     }
 
-    HttpResult Perform(
+    HttpResult PerformRaw(
         const std::string_view method,
         const std::string_view path,
         const std::string_view body)
@@ -461,6 +625,10 @@ struct Client::Impl
                 << "Host: " << parsed->host << ":" << parsed->port << "\r\n"
                 << "Accept: application/json\r\n"
                 << "Connection: keep-alive\r\n";
+        for (const auto& [name, value] : request_headers)
+        {
+            request << name << ": " << value << "\r\n";
+        }
         if (method == "POST")
         {
             request << "Content-Type: application/json\r\n"
@@ -648,9 +816,39 @@ struct Client::Impl
         };
     }
 
+    HttpResult Perform(
+        const std::string_view method,
+        const std::string_view path,
+        const std::string_view body)
+    {
+        EnsureBestEffortSession();
+        const bool had_session =
+            session && !session->session_id.empty();
+        HttpResult response = PerformRaw(method, path, body);
+        if (!had_session || !IsExpiredClientSessionResponse(response))
+        {
+            return response;
+        }
+
+        session->session_id.clear();
+        request_headers.erase("X-UEAI-Session-Id");
+        Disconnect();
+        EnsureBestEffortSession();
+        return PerformRaw(method, path, body);
+    }
+
+    struct CliSessionState
+    {
+        CliSessionOptions options;
+        bool protocol_unsupported = false;
+        std::string session_id;
+    };
+
     std::string endpoint;
     std::uint32_t timeout_ms = 300000;
     std::optional<ParsedEndpoint> parsed;
+    std::map<std::string, std::string> request_headers;
+    std::optional<CliSessionState> session;
     Socket socket = kInvalidSocket;
 #if defined(_WIN32)
     WSADATA winsock_data{};
@@ -681,6 +879,26 @@ HttpResult Client::Post(
     const std::string_view body)
 {
     return impl_->Perform("POST", path, body);
+}
+
+bool Client::SetHeader(std::string name, std::string value)
+{
+    if (!IsHeaderName(name) || !IsHeaderValue(value))
+    {
+        return false;
+    }
+    impl_->request_headers[std::move(name)] = std::move(value);
+    return true;
+}
+
+void Client::RemoveHeader(const std::string_view name)
+{
+    impl_->request_headers.erase(std::string(name));
+}
+
+void Client::ConfigureBestEffortCliSession(CliSessionOptions options)
+{
+    impl_->ConfigureBestEffortCliSession(std::move(options));
 }
 
 const std::string& Client::Endpoint() const
@@ -715,6 +933,29 @@ std::string UrlEncode(const std::string_view value)
         encoded.push_back(hex[character & 0x0fU]);
     }
     return encoded;
+}
+
+std::string NewInvocationId()
+{
+    std::random_device seed;
+    std::mt19937_64 generator(seed());
+    std::uniform_int_distribution<std::uint64_t> distribution;
+    const std::uint64_t high = distribution(generator);
+    const std::uint64_t low = distribution(generator);
+    std::ostringstream stream;
+    stream << "cli-" << std::hex << std::setfill('0')
+           << std::setw(16) << high
+           << std::setw(16) << low;
+    return stream.str();
+}
+
+std::uint32_t CurrentProcessId()
+{
+#if defined(_WIN32)
+    return static_cast<std::uint32_t>(_getpid());
+#else
+    return static_cast<std::uint32_t>(getpid());
+#endif
 }
 
 } // namespace ue::api

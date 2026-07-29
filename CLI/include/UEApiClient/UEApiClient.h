@@ -16,6 +16,16 @@ struct HttpResult
     std::string error;
 };
 
+struct CliSessionOptions
+{
+    std::string name;
+    std::string version;
+    std::string command;
+    std::string invocation_id;
+    std::string instance_id;
+    std::uint32_t process_id = 0;
+};
+
 class Client
 {
 public:
@@ -32,6 +42,9 @@ public:
 
     HttpResult Get(std::string_view path);
     HttpResult Post(std::string_view path, std::string_view body);
+    bool SetHeader(std::string name, std::string value);
+    void RemoveHeader(std::string_view name);
+    void ConfigureBestEffortCliSession(CliSessionOptions options);
 
     const std::string& Endpoint() const;
     std::uint32_t TimeoutMs() const;
@@ -42,5 +55,7 @@ private:
 };
 
 std::string UrlEncode(std::string_view value);
+std::string NewInvocationId();
+std::uint32_t CurrentProcessId();
 
 } // namespace ue::api
