@@ -1021,6 +1021,244 @@ test("uses only HTTP endpoints and maps operations and workflows canonically", a
   assert.equal(calls.some((call) => call.url.includes("shutdown")), false);
 });
 
+test("registers one MCP caller session and attributes subsequent requests", async () => {
+  const calls: Array<{
+    url: string;
+    headers: Headers;
+  }> = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    calls.push({
+      url,
+      headers: new Headers(init?.headers),
+    });
+    let data: Record<string, unknown> = {};
+    if (url.endsWith("/api/v1/clients/register")) {
+      data = {
+        sessionId: "client-session-1",
+        heartbeatIntervalMs: 5_000,
+        expiresAfterMs: 15_000,
+      };
+    } else if (url.endsWith("/api/health")) {
+      data = {
+        status: "ready",
+        pluginVersion: "0.6.0",
+        engineVersion: "5.3",
+        projectName: "Test",
+        mode: "editor",
+        capabilityCount: 317,
+        domainCounts: {},
+        validationErrors: [],
+      };
+    }
+    return new Response(JSON.stringify({ ok: true, data }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  const client = new UEClient({
+    baseUrl: "http://127.0.0.1:19847",
+    fetchImpl,
+  });
+
+  await client.startSession({ name: "Codex", version: "2026.7" });
+  await client.getHealth();
+  await client.stopSession();
+
+  assert.equal(calls.length, 3);
+  assert.equal(
+    calls[0]?.url.endsWith("/api/v1/clients/register"),
+    true,
+  );
+  assert.equal(calls[0]?.headers.get("x-ueai-caller-type"), "mcp");
+  assert.equal(calls[0]?.headers.get("x-ueai-caller"), "Codex");
+  assert.equal(calls[0]?.headers.get("x-ueai-session-id"), null);
+  assert.equal(calls[1]?.headers.get("x-ueai-session-id"), "client-session-1");
+  assert.equal(
+    calls[2]?.url.endsWith("/api/v1/clients/unregister"),
+    true,
+  );
+  assert.equal(calls[2]?.headers.get("x-ueai-session-id"), "client-session-1");
+});
+
+test("uses the v1 client registration body and falls back to Legacy HTTP", async () => {
+  const calls: Array<{
+    url: string;
+    headers: Headers;
+    body?: string;
+  }> = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    calls.push({
+      url,
+      headers: new Headers(init?.headers),
+      body: typeof init?.body === "string" ? init.body : undefined,
+    });
+    if (url.endsWith("/api/v1/clients/register")) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: {
+            code: "route_not_found",
+            message: "Old Editor does not expose client sessions.",
+          },
+        }),
+        {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        data: {
+          status: "ready",
+          pluginVersion: "0.5.0",
+          engineVersion: "5.3",
+          projectName: "Legacy",
+          mode: "editor",
+          capabilityCount: 303,
+          domainCounts: {},
+          validationErrors: [],
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  };
+  const client = new UEClient({
+    baseUrl: "http://127.0.0.1:19848",
+    fetchImpl,
+  });
+
+  await client.startSession({ name: "Codex", version: "2026.7" });
+  const health = await client.getHealth();
+  await client.stopSession();
+
+  assert.equal(health.projectName, "Legacy");
+  const registrations = calls.filter((call) =>
+    call.url.endsWith("/api/v1/clients/register"),
+  );
+  assert.equal(registrations.length, 2);
+  const registrationBody = JSON.parse(registrations[0]?.body ?? "{}");
+  assert.deepEqual(
+    Object.keys(registrationBody).sort(),
+    [
+      "clientKind",
+      "instanceId",
+      "name",
+      "pid",
+      "transport",
+      "version",
+    ].sort(),
+  );
+  assert.equal(registrationBody.clientKind, "mcp");
+  assert.equal(registrationBody.name, "Codex");
+  assert.equal(registrationBody.transport, "stdio");
+  const healthCall = calls.find((call) => call.url.endsWith("/api/health"));
+  assert.equal(healthCall?.headers.get("x-ueai-session-id"), null);
+  assert.equal(healthCall?.headers.get("x-ueai-caller-type"), "mcp");
+  assert.equal(
+    calls.some((call) =>
+      call.url.endsWith("/api/v1/clients/unregister"),
+    ),
+    false,
+  );
+});
+
+test("re-registers after a heartbeat rejects an expired session", async () => {
+  const calls: Array<{
+    url: string;
+    headers: Headers;
+  }> = [];
+  let registrations = 0;
+  let heartbeatRejected = false;
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    calls.push({
+      url,
+      headers: new Headers(init?.headers),
+    });
+    if (url.endsWith("/api/v1/clients/register")) {
+      registrations += 1;
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          data: {
+            sessionId: `client-session-${registrations}`,
+            heartbeatIntervalMs: 5,
+            expiresAfterMs: 15_000,
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+    if (
+      url.endsWith("/api/v1/clients/heartbeat") &&
+      !heartbeatRejected
+    ) {
+      heartbeatRejected = true;
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: {
+            code: "client_session_not_found",
+            message: "expired",
+          },
+        }),
+        {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        data: url.endsWith("/api/health")
+          ? {
+              status: "ready",
+              pluginVersion: "0.6.0",
+              engineVersion: "5.3",
+              projectName: "Test",
+              mode: "editor",
+              capabilityCount: 317,
+              domainCounts: {},
+              validationErrors: [],
+            }
+          : {},
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  };
+  const client = new UEClient({
+    baseUrl: "http://127.0.0.1:19849",
+    fetchImpl,
+  });
+
+  await client.startSession({ name: "Codex" });
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  await client.getHealth();
+  await client.stopSession();
+
+  assert.equal(heartbeatRejected, true);
+  assert.equal(registrations, 2);
+  const healthCall = calls.find((call) => call.url.endsWith("/api/health"));
+  assert.equal(
+    healthCall?.headers.get("x-ueai-session-id"),
+    "client-session-2",
+  );
+});
+
 test("process shutdown closes only the local MCP transport", async () => {
   const events: string[] = [];
   const shutdown = createLocalShutdownHandler(

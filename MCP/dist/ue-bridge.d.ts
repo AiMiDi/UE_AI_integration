@@ -94,16 +94,45 @@ export interface UEClientOptions {
     timeoutMs?: number;
     fetchImpl?: typeof fetch;
 }
+export interface UECallerMetadata {
+    clientKind: "mcp" | "cli";
+    name: string;
+    version?: string;
+    transport: string;
+    pid: number;
+    instanceId: string;
+    invocationId?: string;
+    command?: string;
+}
+export declare const MCP_BRIDGE_NAME = "ue-ai-integration";
+export declare const MCP_BRIDGE_VERSION = "0.6.0";
 export declare class UEClient {
     readonly baseUrl: string;
     readonly timeoutMs: number;
     private readonly fetchImpl;
+    private caller?;
+    private sessionId?;
+    private heartbeatTimer?;
+    private registrationInFlight?;
+    private sessionRequested;
+    private heartbeatIntervalMs;
+    private registrationBackoffIndex;
     constructor(options?: UEClientOptions);
+    startSession(clientInfo?: {
+        name?: string;
+        version?: string;
+    }): Promise<void>;
+    stopSession(): Promise<void>;
     getHealth(): Promise<UEHealthData>;
     getCapabilities(query?: UECapabilityQuery): Promise<UECapabilitiesData>;
     execute(id: string, params?: Record<string, unknown>, requestId?: string): Promise<UEExecuteData>;
     getWorkflowHandshake(): Promise<UEWorkflowHandshakeData>;
     workflow(request: UEWorkflowRequest): Promise<UEWorkflowData>;
     private request;
+    private requestOnce;
+    private tryRegister;
+    private maintainSession;
+    private scheduleMaintenance;
+    private nextRegistrationBackoffMs;
 }
 export declare const ueClient: UEClient;

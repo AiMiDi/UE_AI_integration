@@ -12,6 +12,7 @@ import type {
   CapabilityKind,
   CapabilityOutputKind,
 } from "./capability-catalog.js";
+import { randomUUID } from "node:crypto";
 
 function parsePositiveInteger(
   value: string | undefined,
@@ -173,6 +174,26 @@ export interface UEClientOptions {
   fetchImpl?: typeof fetch;
 }
 
+export interface UECallerMetadata {
+  clientKind: "mcp" | "cli";
+  name: string;
+  version?: string;
+  transport: string;
+  pid: number;
+  instanceId: string;
+  invocationId?: string;
+  command?: string;
+}
+
+interface UEClientRegistrationData {
+  sessionId: string;
+  heartbeatIntervalMs: number;
+  expiresAfterMs: number;
+}
+
+export const MCP_BRIDGE_NAME = "ue-ai-integration";
+export const MCP_BRIDGE_VERSION = "0.6.0";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -203,11 +224,63 @@ export class UEClient {
   readonly baseUrl: string;
   readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private caller?: UECallerMetadata;
+  private sessionId?: string;
+  private heartbeatTimer?: ReturnType<typeof setTimeout>;
+  private registrationInFlight?: Promise<boolean>;
+  private sessionRequested = false;
+  private heartbeatIntervalMs = 5_000;
+  private registrationBackoffIndex = 0;
 
   constructor(options: UEClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? UE_BASE_URL).replace(/\/+$/, "");
     this.timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
     this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+
+  async startSession(
+    clientInfo?: { name?: string; version?: string },
+  ): Promise<void> {
+    this.sessionRequested = true;
+    this.caller = {
+      clientKind: "mcp",
+      name: clientInfo?.name?.trim() || "Unknown MCP Client",
+      version: clientInfo?.version,
+      transport: "stdio",
+      pid: process.pid,
+      instanceId: randomUUID(),
+    };
+    const registered = await this.tryRegister();
+    this.scheduleMaintenance(
+      registered
+        ? this.heartbeatIntervalMs
+        : this.nextRegistrationBackoffMs(),
+    );
+  }
+
+  async stopSession(): Promise<void> {
+    this.sessionRequested = false;
+    if (this.heartbeatTimer !== undefined) {
+      clearTimeout(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
+    await this.registrationInFlight;
+    const sessionId = this.sessionId;
+    this.sessionId = undefined;
+    if (sessionId === undefined) {
+      return;
+    }
+    try {
+      await this.requestOnce<Record<string, unknown>>(
+        "POST",
+        "/api/v1/clients/unregister",
+        {},
+        sessionId,
+        Math.min(this.timeoutMs, 1_000),
+      );
+    } catch {
+      // Editor shutdown or a previously expired session needs no retry.
+    }
   }
 
   async getHealth(): Promise<UEHealthData> {
@@ -263,14 +336,89 @@ export class UEClient {
     endpoint: string,
     body?: object,
   ): Promise<T> {
+    if (
+      this.sessionRequested &&
+      this.caller?.clientKind === "mcp" &&
+      this.sessionId === undefined
+    ) {
+      const registered = await this.tryRegister();
+      this.scheduleMaintenance(
+        registered
+          ? this.heartbeatIntervalMs
+          : this.nextRegistrationBackoffMs(),
+      );
+    }
+    try {
+      return await this.requestOnce<T>(
+        method,
+        endpoint,
+        body,
+        this.sessionId,
+      );
+    } catch (error) {
+      if (
+        error instanceof UEApiError &&
+        (error.code === "client_session_expired" ||
+          error.code === "client_session_not_found") &&
+        this.caller?.clientKind === "mcp"
+      ) {
+        this.sessionId = undefined;
+        const registered = await this.tryRegister();
+        this.scheduleMaintenance(
+          registered
+            ? this.heartbeatIntervalMs
+            : this.nextRegistrationBackoffMs(),
+        );
+        return this.requestOnce<T>(
+          method,
+          endpoint,
+          body,
+          this.sessionId,
+        );
+      }
+      throw error;
+    }
+  }
+
+  private async requestOnce<T>(
+    method: "GET" | "POST",
+    endpoint: string,
+    body?: object,
+    sessionId?: string,
+    requestTimeoutMs: number = this.timeoutMs,
+  ): Promise<T> {
     let response: Response;
     try {
+      const headers: Record<string, string> = {};
+      if (method === "POST") {
+        headers["Content-Type"] = "application/json";
+      }
+      if (this.caller !== undefined) {
+        // These compatibility headers are ignored when a session resolves,
+        // but retain useful attribution in Legacy HTTP mode.
+        headers["X-UEAI-Caller-Type"] = this.caller.clientKind;
+        headers["X-UEAI-Caller"] = this.caller.name;
+        if (this.caller.version !== undefined) {
+          headers["X-UEAI-Caller-Version"] = this.caller.version;
+        }
+        headers["X-UEAI-Instance-Id"] = this.caller.instanceId;
+        if (this.caller.invocationId !== undefined) {
+          headers["X-UEAI-Invocation-Id"] = this.caller.invocationId;
+        }
+        headers["X-UEAI-Process-Id"] = String(this.caller.pid);
+        headers["X-UEAI-Transport"] = this.caller.transport;
+        if (this.caller.command !== undefined) {
+          headers["X-UEAI-Command"] = this.caller.command;
+        }
+      }
+      if (sessionId !== undefined) {
+        headers["X-UEAI-Session-Id"] = sessionId;
+      }
       response = await this.fetchImpl(`${this.baseUrl}${endpoint}`, {
         method,
-        headers:
-          method === "POST" ? { "Content-Type": "application/json" } : undefined,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(requestTimeoutMs),
       });
     } catch (error) {
       throw new UEApiError({
@@ -324,6 +472,125 @@ export class UEClient {
     }
 
     return payload.data as T;
+  }
+
+  private async tryRegister(): Promise<boolean> {
+    if (
+      !this.sessionRequested ||
+      this.caller === undefined ||
+      this.sessionId !== undefined
+    ) {
+      return this.sessionId !== undefined;
+    }
+    if (this.registrationInFlight !== undefined) {
+      return this.registrationInFlight;
+    }
+    this.registrationInFlight = (async () => {
+      try {
+        const registration =
+          await this.requestOnce<UEClientRegistrationData>(
+            "POST",
+            "/api/v1/clients/register",
+            {
+              clientKind: this.caller?.clientKind,
+              name: this.caller?.name,
+              version: this.caller?.version,
+              transport: this.caller?.transport,
+              pid: this.caller?.pid,
+              instanceId: this.caller?.instanceId,
+              invocationId: this.caller?.invocationId,
+              command: this.caller?.command,
+            },
+            undefined,
+            Math.min(this.timeoutMs, 2_000),
+          );
+        if (
+          typeof registration.sessionId !== "string" ||
+          registration.sessionId.length === 0 ||
+          !Number.isFinite(registration.heartbeatIntervalMs) ||
+          registration.heartbeatIntervalMs <= 0 ||
+          !Number.isFinite(registration.expiresAfterMs) ||
+          registration.expiresAfterMs <= 0
+        ) {
+          throw new UEApiError({
+            code: "invalid_client_registration_response",
+            message:
+              "UE client registration returned an invalid session contract.",
+            details: registration,
+          });
+        }
+        this.sessionId = registration.sessionId;
+        this.heartbeatIntervalMs = registration.heartbeatIntervalMs;
+        this.registrationBackoffIndex = 0;
+        return true;
+      } catch (error) {
+        log.debug("Editor client registration deferred", {
+          error: (error as Error).message,
+        });
+        return false;
+      }
+    })();
+    try {
+      return await this.registrationInFlight;
+    } finally {
+      this.registrationInFlight = undefined;
+    }
+  }
+
+  private async maintainSession(): Promise<void> {
+    if (!this.sessionRequested) {
+      return;
+    }
+    if (this.sessionId === undefined) {
+      const registered = await this.tryRegister();
+      this.scheduleMaintenance(
+        registered
+          ? this.heartbeatIntervalMs
+          : this.nextRegistrationBackoffMs(),
+      );
+      return;
+    }
+    try {
+      await this.requestOnce<Record<string, unknown>>(
+        "POST",
+        "/api/v1/clients/heartbeat",
+        {},
+        this.sessionId,
+        Math.min(this.timeoutMs, 2_000),
+      );
+      this.registrationBackoffIndex = 0;
+      this.scheduleMaintenance(this.heartbeatIntervalMs);
+    } catch {
+      this.sessionId = undefined;
+      this.scheduleMaintenance(this.nextRegistrationBackoffMs());
+    }
+  }
+
+  private scheduleMaintenance(delayMs: number): void {
+    if (!this.sessionRequested) {
+      return;
+    }
+    if (this.heartbeatTimer !== undefined) {
+      clearTimeout(this.heartbeatTimer);
+    }
+    this.heartbeatTimer = setTimeout(() => {
+      this.heartbeatTimer = undefined;
+      void this.maintainSession();
+    }, delayMs);
+    this.heartbeatTimer.unref?.();
+  }
+
+  private nextRegistrationBackoffMs(): number {
+    const delays = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
+    const index = Math.min(
+      this.registrationBackoffIndex,
+      delays.length - 1,
+    );
+    this.registrationBackoffIndex = Math.min(
+      index + 1,
+      delays.length - 1,
+    );
+    return delays[index] ?? 30_000;
   }
 }
 

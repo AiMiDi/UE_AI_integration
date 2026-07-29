@@ -15,7 +15,7 @@ import { pathToFileURL } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { createMcpServer } from "./mcp-server.js";
-import { log, UE_PORT } from "./ue-bridge.js";
+import { log, UE_PORT, ueClient } from "./ue-bridge.js";
 
 export type LocalClose = () => Promise<void>;
 export type LocalExit = (code: number) => void;
@@ -41,6 +41,10 @@ export function createLocalShutdownHandler(
 export async function main(): Promise<void> {
   const runtime = createMcpServer();
   const transport = new StdioServerTransport();
+  runtime.server.server.oninitialized = () => {
+    const clientInfo = runtime.server.server.getClientVersion();
+    void ueClient.startSession(clientInfo);
+  };
   await runtime.server.connect(transport);
 
   const summary = runtime.catalog.summary();
@@ -52,13 +56,22 @@ export async function main(): Promise<void> {
   });
 
   const shutdown = createLocalShutdownHandler(
-    () => runtime.server.close(),
+    async () => {
+      await ueClient.stopSession();
+      await runtime.server.close();
+    },
     (code) => process.exit(code),
   );
   process.once("SIGINT", () => {
     void shutdown();
   });
   process.once("SIGTERM", () => {
+    void shutdown();
+  });
+  process.stdin.once("end", () => {
+    void shutdown();
+  });
+  process.stdin.once("close", () => {
     void shutdown();
   });
 }

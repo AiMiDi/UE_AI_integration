@@ -11,7 +11,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createMcpServer } from "./mcp-server.js";
-import { log, UE_PORT } from "./ue-bridge.js";
+import { log, UE_PORT, ueClient } from "./ue-bridge.js";
 export function createLocalShutdownHandler(close, exit) {
     let closing = false;
     return async () => {
@@ -30,6 +30,10 @@ export function createLocalShutdownHandler(close, exit) {
 export async function main() {
     const runtime = createMcpServer();
     const transport = new StdioServerTransport();
+    runtime.server.server.oninitialized = () => {
+        const clientInfo = runtime.server.server.getClientVersion();
+        void ueClient.startSession(clientInfo);
+    };
     await runtime.server.connect(transport);
     const summary = runtime.catalog.summary();
     log.info("UE_AI_integration ready", {
@@ -38,11 +42,20 @@ export async function main() {
         capabilityCount: summary.capabilityCount,
         domainCounts: summary.domainCounts,
     });
-    const shutdown = createLocalShutdownHandler(() => runtime.server.close(), (code) => process.exit(code));
+    const shutdown = createLocalShutdownHandler(async () => {
+        await ueClient.stopSession();
+        await runtime.server.close();
+    }, (code) => process.exit(code));
     process.once("SIGINT", () => {
         void shutdown();
     });
     process.once("SIGTERM", () => {
+        void shutdown();
+    });
+    process.stdin.once("end", () => {
+        void shutdown();
+    });
+    process.stdin.once("close", () => {
         void shutdown();
     });
 }
