@@ -13,7 +13,7 @@ but those versions have not all been compiled locally.
 
 ## Highlights
 
-- The current release snapshot contains 309 manifest-driven Editor and PIE
+- The current release snapshot contains 317 manifest-driven Editor and PIE
   runtime capabilities; the service derives the count from the manifests at
   startup.
 - Eleven stable MCP tools instead of exposing every capability as a tool.
@@ -84,7 +84,7 @@ manifests and does not infer categories from operation names.
 |---|---:|---|
 | Blueprint | 77 | Asset lifecycle, graphs, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
 | Scene | 79 | Actors, PIE runtime, trusted input/waits/capture, World Partition, Data Layers, HLOD, PCG, rendering diagnostics |
-| Content | 70 | Asset query/dependency/audit, safe changes, materials, Niagara, UMG, and event-handler verification |
+| Content | 78 | Asset query/dependency/audit, safe import/reimport, Static Mesh and Texture settings, materials, Niagara, UMG, and event-handler verification |
 | Animation | 19 | Animation Blueprint, state machine, and BlendSpace authoring, inspection, validation, and diff |
 | AI | 17 | Behavior Tree and Blackboard authoring, inspection, references, validation, and diff |
 | Production | 47 | Durable jobs, trace, performance, tests, cook/package, source control, DDC, and BuildGraph |
@@ -125,6 +125,25 @@ service is running, check its health:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:9847/api/health
 ```
+
+The bottom-right Level Editor status entry shows `UE AI · N`. Green means the
+service is ready, yellow means manifest/handler registration is degraded, red
+means the listener failed, and `Off` means the local HTTP service was disabled
+by the user. Clicking it opens a native UE quick menu that can enable or
+disable the service locally and shows:
+
+- MCP callers registered with a five-second heartbeat and expired after
+  fifteen seconds without one.
+- One-shot `ue` and `ue-workflow` invocations, attributed by `invocationId` but
+  excluded from the online-connection count.
+- Capability, Workflow Run, and Durable Job status, duration, error code, and
+  `requestId/runId/jobId`. Request parameters, response bodies, and image data
+  are never retained.
+
+Enabled state and port use per-project Editor user configuration; `UE_PORT`
+still has highest precedence. Disabling the service clears caller presence
+immediately while retaining metadata-only activity for the current Editor
+session.
 
 Do not overwrite a loaded plugin DLL. When replacing an existing installation,
 close Unreal Editor, replace the plugin directory, and then restart the Editor.
@@ -252,8 +271,9 @@ The result includes `action`, `requested`, `state`, `sessionId`, and
 
 ## HTTP API
 
-The Editor plugin preserves its three original routes and adds two Workflow
-routes:
+The Editor plugin preserves its three original routes, adds two Workflow
+routes, and exposes three diagnostic-session routes for the MCP bridge and
+CLIs:
 
 ```text
 GET  /api/health
@@ -261,7 +281,18 @@ GET  /api/capabilities?query=<text>&domain=<domain>&offset=0&limit=25
 POST /api/execute
 GET  /api/v1/workflow/handshake
 POST /api/v1/workflow
+POST /api/v1/clients/register
+POST /api/v1/clients/heartbeat
+POST /api/v1/clients/unregister
 ```
+
+The MCP bridge registers a random `instanceId` after initialization, sends
+`X-UEAI-Session-Id` on later requests, and maintains a heartbeat. Each CLI
+process generates one `invocationId`, registers a session on a best-effort
+basis, and reuses it for plan/execute pairs or shell requests. It automatically
+falls back to Legacy HTTP when an older Editor does not expose the session
+routes. These values are for status UI attribution and diagnostics only; they
+are not authentication identities.
 
 Execution request:
 

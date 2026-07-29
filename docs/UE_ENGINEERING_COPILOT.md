@@ -24,9 +24,16 @@
 - `production.performance.run/result.get/compare`
 - `performance.run` 支持 `mode=window|scenario`、warmup、采样窗口、
   `repeatCount`、帧预算和可选自动 Trace。
+- `profile=standardScenario` 提供标准回归模板：要求当前 Editor 已打开指定
+  且已保存的 `/Game` 地图，PIE 后定位 Camera Actor 并在 PIE World 写入固定
+  Location/Rotation，按固定顺序执行输入步骤，在
+  `metrics.begin/end` 之间采样并清理 PIE。模板默认至少重复 5 次；普通
+  `window`/自定义 `scenario` 的重复次数和行为保持不变。
 - Scenario 可用 `metrics.begin/metrics.end` 标记测量区间；未标记的准备和清理
   步骤不计入性能统计。
-- 结果包含环境指纹、各次重复采样、p50/p95/p99、峰值、超预算帧，以及
+- 结果包含 Git revision、地图 package/hash、Scalability、关键 CVar、
+  VSync/FPS cap、ScreenPercentage、GPU/驱动版本等环境指纹，以及各次重复
+  采样、p50/p95/p99、峰值、超预算帧与
   Game/Render/RHI/GPU 聚合；Scenario 日志从启动 cursor 起读取，不混入 Editor
   历史日志。
 - Trace 文件作为 `ue.artifact.v1` 分块读取；CLI 可用 `--output` 原子导出。
@@ -37,13 +44,24 @@ provider，返回受约束的 CPU scope、Counter、Game/Render/RHI/GPU 聚合�
 Timing、Memory、Network 或 Asset Loading 分析界面。
 
 `performance.compare` 可同时检查多个指标阈值；环境指纹不兼容时返回
-`inconclusive`，证据兼容时返回结构化 `pass` 或 `regression`。
+`inconclusive`，证据兼容时返回结构化 `pass` 或 `regression`。每次比较生成
+受 `production.job.artifact.get` 分块读取的 JSON 与 JUnit artifact，可直接
+作为 CI 门禁。`autoTraceOnRegression=true` 配合 `traceRerun` 会在阈值失败后
+异步复跑同一受约束 workload、录制 Trace、运行 TraceServices，并把最多 25 个
+Top Scope 和分析 artifact 附到 comparison job；诊断录制失败不会覆盖原始
+回归判定。
 
 ## 2. 自动化测试
 
 - `production.test.list/run/result.get`
 - 统一 Automation、Functional Test 与项目自定义 Gauntlet 入口。
 - 测试执行使用 `ue.job.v1`，结果和日志可在 Editor 重启后查询。
+- 每次 Editor 测试进程使用 Job 目录内独立的 `editor.log`，并固定启用
+  `-stdout -FullStdOutLogOutput -NoSound`；`job.log`、Editor 主日志、
+  Automation 原生 JSON、标准化 JSON 和 JUnit 都登记为 artifact。
+- `headlessProfile=minimal|project|rendering` 是固定枚举，不接受附加命令行。
+  默认 `minimal` 禁用 OpenXR、音频、无关 Engine 插件并使用 NullRHI；
+  需要项目 Engine 插件或渲染验证时显式选择 `project` 或 `rendering`。
 - Gauntlet 只运行项目明确提供的测试；系统不会生成或猜测测试节点。
 
 ## 3. Blueprint 分析
@@ -148,6 +166,16 @@ StateTree、Mass、EQS 或运行时 AI Debugger。
 - 现有 Cook、Package 与 Commandlet 已迁移到 Durable Job。
 - Job journal 位于项目 `Saved/UEAIIntegration/Jobs/`；Editor 重启后未完成任务
   会明确变为 `interrupted`，而不是伪造继续运行。
+- 进程 Job 公开
+  `launching/loading/discovering/running/reporting/exiting/complete` 阶段、
+  阶段历史和各阶段耗时。Automation 的冷启动、测试发现、真实执行与退出
+  不再被压缩成单一 `running` 状态。
+- `startupTimeoutSeconds`、`executionTimeoutSeconds` 和
+  `shutdownTimeoutSeconds` 分别约束启动/发现、执行/报告和退出；另有
+  `hardTimeoutSeconds` 覆盖完整生命周期，运行时硬限制为 86400 秒。
+  超时分别返回 `job_startup_timeout`、`job_execution_timeout`、
+  `job_shutdown_timeout` 或 `job_hard_timeout`。终止会杀死受控子进程树，
+  Runtime 析构也会清理所有仍存活的 Job，避免留下孤儿进程。
 - 日志和 artifact 均为游标/分块读取，避免一次返回淹没 MCP 上下文。
 - Package 输出限制在项目 `Saved/UEAIIntegration/Packages/`；Commandlet 仅允许
   `FixupRedirects`、`ResavePackages` 和 `WorldPartitionBuilderCommandlet`，

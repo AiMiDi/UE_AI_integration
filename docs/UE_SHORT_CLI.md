@@ -31,6 +31,8 @@ ue --version
 --endpoint <http://127.0.0.1:port>
 --timeout-ms <milliseconds>
 --request-id <id>
+--params <json-object>
+--params-file <path|->
 --confirm-write
 --output <path>
 --live-schema
@@ -40,6 +42,11 @@ ue --version
 
 默认 endpoint 是 `http://127.0.0.1:9847`。`UE_PORT` 与 `UE_TIMEOUT_MS`
 可设置默认值，显式 `--endpoint` 和 `--timeout-ms` 优先。
+
+所有层级的 `--help` 都在加载本地 manifest 或创建 Editor 连接前处理。例如
+`ue blueprint.scan --help --live-schema` 只显示语法帮助，不会扫描资产，也不会
+产生 HTTP 请求。需要 schema 生成的精确参数说明时使用
+`ue help blueprint.scan`。
 
 ## 双模式 schema 与连接复用
 
@@ -75,6 +82,19 @@ ue> exit
 普通 `ue <capability>` 仍是一条命令执行后立即退出。CLI 不复制 UE handler，
 也不提供本地 UE 执行；插件始终是 Game Thread 调度与执行结果的唯一权威来源。
 
+## 调用方会话
+
+每个 `ue` 进程生成一个 `invocationId`，并最佳努力调用
+`/api/v1/clients/register`。注册成功后，同一普通命令或 shell 中的所有请求
+携带同一个 `X-UEAI-Session-Id`；正常退出时使用独立、最长一秒的连接注销。
+长请求在服务端会 pin 住会话，不依赖 CLI 心跳。
+
+注册接口返回 404 时，当前进程固定退回 Legacy HTTP；网络错误、503 或无效响应
+会在下一次业务请求重新尝试。已注册请求若收到 `client_session_expired` 或
+`client_session_not_found`，CLI 会重新注册，并且只重放原请求一次。会话与
+invocation 仅用于 Editor 状态菜单的归属和统计，不参与授权，也不会改变
+capability 的执行结果。
+
 ## 参数映射
 
 - schema 的 lowerCamel 字段生成 kebab-case 主 flag，例如
@@ -88,6 +108,18 @@ ue> exit
   UE 业务约束由 Editor 最终验证。
 - schema 声明 `requestId` 时自动生成。`--request-id` 用于可控重试。
 - `--confirm-write` 只在 schema 声明 `confirmWrite` 时注入。
+
+完整参数对象也可以避免 PowerShell 的逐字段转义：
+
+```powershell
+ue blueprint.scan --params-file .\scan-params.json
+Get-Content .\scan-params.json -Raw | ue blueprint.scan --params-file -
+ue blueprint.scan --params '{"roots":["/Game"],"minimumSeverity":"medium"}'
+```
+
+`--params` 与 `--params-file` 互斥，且完整对象模式不能再混用 schema 生成的
+`--field` 参数。CLI 仍依据本地或在线 descriptor 检查字段、required 与基础
+JSON 类型，Editor 负责最终业务校验。
 
 ## 输出和退出码
 

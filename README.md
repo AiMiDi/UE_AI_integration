@@ -11,7 +11,7 @@ MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与
 
 ## 核心特性
 
-- 当前发布快照包含 309 项 manifest 驱动的 Editor 与 PIE Runtime 能力；
+- 当前发布快照包含 317 项 manifest 驱动的 Editor 与 PIE Runtime 能力；
   服务启动时从 manifest 动态计算数量。
 - 十一个稳定的 MCP 工具，不把全部能力直接展开成工具列表。
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
@@ -66,7 +66,7 @@ UE_AI_integration Editor Module
 |---|---:|---|
 | Blueprint | 77 | 资产生命周期、Graph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
 | Scene | 79 | Actor、PIE Runtime、可信输入/等待/截图、World Partition、Data Layer、HLOD、PCG、渲染诊断 |
-| Content | 70 | 资产查询/依赖/审计、安全变更、Material、Niagara、UMG 与事件 Handler 验证 |
+| Content | 78 | 资产查询/依赖/审计、安全导入/重导入、Static Mesh/Texture 配置、Material、Niagara、UMG 与事件 Handler 验证 |
 | Animation | 19 | AnimBlueprint、状态机与 BlendSpace 的创建、读取、校验和 Diff |
 | AI | 17 | Behavior Tree 与 Blackboard 的创建、读取、引用、校验和 Diff |
 | Production | 47 | Durable Job、Trace、性能、测试、Cook/Package、Source Control、DDC、BuildGraph |
@@ -106,6 +106,18 @@ npm test
 ```powershell
 Invoke-RestMethod http://127.0.0.1:9847/api/health
 ```
+
+Level Editor 右下角会显示 `UE AI · N` 状态入口。绿色表示服务可用，
+黄色表示 manifest/Handler 绑定降级，红色表示监听失败，`Off` 表示用户已禁用
+本地 HTTP 服务。点击后打开 UE 原生快捷菜单，可在本地启停服务，并查看：
+
+- 通过 5 秒心跳注册的 MCP 调用方；15 秒无心跳后自动离线。
+- 一次性 `ue` / `ue-workflow` CLI 调用，按 `invocationId` 归属但不计入在线连接数。
+- Capability、Workflow Run 与 Durable Job 的状态、耗时、错误码和
+  `requestId/runId/jobId`；不会保存请求参数、响应正文或图片数据。
+
+启用状态和端口保存在项目用户级 Editor 配置中；`UE_PORT` 仍具有最高优先级。
+禁用服务会立即清空在线调用方，但保留本次 Editor 会话的元数据执行历史。
 
 不要覆盖正在加载的插件 DLL。替换已有安装时，应先关闭 Unreal Editor，
 替换插件目录，再重新启动 Editor。
@@ -225,7 +237,8 @@ PIE 重启后旧 Runtime object handle 会返回 `stale_session_handle`。
 
 ## HTTP API
 
-Editor 插件保留三条原有路由，并新增两条 Workflow 路由：
+Editor 插件保留三条原有路由、两条 Workflow 路由，并提供三条供 MCP bridge
+与 CLI 维护诊断会话的客户端路由：
 
 ```text
 GET  /api/health
@@ -233,7 +246,16 @@ GET  /api/capabilities?query=<text>&domain=<domain>&offset=0&limit=25
 POST /api/execute
 GET  /api/v1/workflow/handshake
 POST /api/v1/workflow
+POST /api/v1/clients/register
+POST /api/v1/clients/heartbeat
+POST /api/v1/clients/unregister
 ```
+
+MCP bridge 在初始化后以随机 `instanceId` 注册，后续请求携带
+`X-UEAI-Session-Id` 并维持心跳。短 CLI 为每个进程生成一个
+`invocationId`，最佳努力注册一次会话，并让同一命令中的 plan/execute 或
+shell 请求复用该会话；旧 Editor 不支持会话路由时自动退回 Legacy HTTP。
+这些字段仅用于状态 UI、执行归属和诊断，不是权限身份，也不替代未来的鉴权。
 
 执行请求：
 

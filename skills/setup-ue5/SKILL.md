@@ -62,7 +62,7 @@ Once the server responds, check the capability catalog:
 curl -s http://localhost:9847/api/capabilities | python -c "import sys,json; d=json.load(sys.stdin); print(f'{d[\"data\"][\"total\"]} capabilities available')"
 ```
 
-Expected for release 0.6.0: 303 capabilities across six domains. The stdio
+Expected for release 0.6.0: 317 capabilities across six domains. The stdio
 bridge exposes eleven stable MCP tools and routes domain operations through
 this catalog. Treat the manifest-derived total as authoritative for later
 releases.

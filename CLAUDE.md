@@ -36,8 +36,10 @@ names, MCP routing and documentation must agree with it.
 - HTTP handlers do not execute Unreal object operations directly.
 - MCP routing uses manifest metadata, never name-pattern classification.
 - The legacy HTTP routes remain `/api/health`, `/api/capabilities` and
-  `/api/execute`; Workflow adds only `/api/v1/workflow/handshake` and
-  `/api/v1/workflow`.
+  `/api/execute`; Workflow adds `/api/v1/workflow/handshake` and
+  `/api/v1/workflow`. The best-effort diagnostic caller protocol uses only
+  `/api/v1/clients/register`, `/heartbeat` and `/unregister`; it is not an
+  authorization boundary and must never block legacy business requests.
 - CMake and UBT compile the same `Workflow/src/WorkflowCore.cpp`; TypeScript
   must not duplicate validation or planning.
 - Workflow v1 preserves deterministic single-asset planning and digest

@@ -218,6 +218,19 @@ help 可离线使用，但可执行审批必须来自 `plan --connect`。`execut
 与 rollback 需要正在运行的 Unreal Editor。`capabilities --available-only`
 同样要求 `--connect`。
 `--section` 可重复使用；`--details` 暂作为 `--detail-level full` 的兼容别名。
+每个子命令都支持无副作用的分级 `--help`；帮助在 contract 加载和 Editor
+连接之前返回。额外 positional 参数会以 `invalid_arguments` 拒绝，不再落入
+默认命令或执行路径。
+
+`doctor` 分别报告 DSL 1.0 与 2.0 的本地 `contractSetDigest`。使用
+`doctor --connect` 时还会分别展示 Editor digest 和 `match`，只有两套合同都
+匹配时 `editor.contractMatch=true`。
+
+每个 `ue-workflow` 进程生成一个 `invocationId` 并最佳努力注册客户端会话。
+同一条 `execute` 命令的在线 plan 与 execute、以及 shell 中的后续请求复用
+同一个 `X-UEAI-Session-Id`，因此 Editor 状态菜单只统计一次 CLI invocation。
+旧 Editor 缺少会话路由时自动退回 Legacy HTTP；会话失效时最多重新注册并
+重放原请求一次。该诊断身份不参与 Workflow 审批、digest 或权限判断。
 
 `operation run` 已在 0.6.0 移除。单次 capability 迁移到独立短操作 CLI：
 
