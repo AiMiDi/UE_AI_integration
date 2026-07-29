@@ -109,6 +109,15 @@ int main()
     require(loaded.ok, "contracts load");
     require(engine.CapabilityCount() > 0, "capabilities discovered dynamically");
     require(engine.ComposableOperationCount() >= 20, "v1 composable admission loaded");
+    require(
+        !engine.ContractSetDigest().empty(),
+        "v1 contract digest is exposed");
+    require(
+        !engine.ContractSetDigestV2().empty(),
+        "v2 contract digest is exposed");
+    require(
+        engine.ContractSetDigestV2() != engine.ContractSetDigest(),
+        "v1 and v2 contract surfaces have distinct digests");
 
     const auto widget_text = read_file(
         root / "Workflow" / "tests" / "fixtures" / "widget.workflow.json");

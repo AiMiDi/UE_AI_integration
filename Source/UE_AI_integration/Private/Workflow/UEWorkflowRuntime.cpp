@@ -1377,11 +1377,17 @@ bool RestoreWorkflowAssetFile(
 			*AssetPath);
 		return false;
 	}
-	if (IFileManager::Get().Copy(
-			*PackageFilename,
-			*SnapshotFilename,
-			true,
-			true) != COPY_OK)
+	FString CurrentPackageDigest;
+	const bool bPackageAlreadyMatchesSnapshot =
+		IFileManager::Get().FileExists(*PackageFilename)
+		&& TryHashFile(PackageFilename, CurrentPackageDigest)
+		&& CurrentPackageDigest == ExpectedSnapshotDigest;
+	if (!bPackageAlreadyMatchesSnapshot
+		&& IFileManager::Get().Copy(
+				*PackageFilename,
+				*SnapshotFilename,
+				true,
+				true) != COPY_OK)
 	{
 		OutError = FString::Printf(
 			TEXT("Could not restore staged package snapshot for '%s'."),
@@ -1441,6 +1447,7 @@ FWorkflowRuntime::FWorkflowRuntime(FMCPToolRegistry& InRegistry)
 	if (CoreLoadResult.ok)
 	{
 		ContractSetDigest = FromUtf8(CoreEngine.ContractSetDigest());
+		ContractSetDigestV2 = FromUtf8(CoreEngine.ContractSetDigestV2());
 	}
 }
 
@@ -1448,6 +1455,92 @@ FWorkflowRuntime::~FWorkflowRuntime()
 {
 	PreparedPlanCache.Empty();
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+void FWorkflowRuntime::SetTestFailAfterOperation(
+	const int32 CompletedOperationCount,
+	const bool bSimulateProcessInterruption)
+{
+	TestFailAfterOperationCount =
+		CompletedOperationCount > 0
+			? CompletedOperationCount
+			: INDEX_NONE;
+	bTestSimulateProcessInterruption =
+		TestFailAfterOperationCount != INDEX_NONE
+		&& bSimulateProcessInterruption;
+}
+
+void FWorkflowRuntime::SetTestSaveFailureScope(
+	const FString& ScopeId)
+{
+	TestSaveFailureScopeId = ScopeId;
+}
+
+bool FWorkflowRuntime::SimulateEditorRestartForTest(
+	const FString& RunId,
+	FString& OutError)
+{
+	FRunRecord Record;
+	if (!LoadRun(RunId, Record)
+		|| !Record.bDurableResume
+		|| Record.Assets.IsEmpty())
+	{
+		OutError = FString::Printf(
+			TEXT("Durable Workflow run '%s' was not found."),
+			*RunId);
+		return false;
+	}
+
+	bool bRestored = true;
+	for (int32 Index = Record.Assets.Num() - 1; Index >= 0; --Index)
+	{
+		const TSharedPtr<FJsonObject> AssetRecord =
+			Record.Assets[Index].IsValid()
+				&& Record.Assets[Index]->Type == EJson::Object
+			? Record.Assets[Index]->AsObject()
+			: nullptr;
+		if (!AssetRecord.IsValid())
+		{
+			bRestored = false;
+			OutError = TEXT("Workflow journal contains an invalid asset record.");
+			continue;
+		}
+
+		FString RestoreError;
+		if (!RestoreWorkflowAssetFile(AssetRecord, RestoreError))
+		{
+			bRestored = false;
+			if (!OutError.IsEmpty())
+			{
+				OutError += TEXT("\n");
+			}
+			OutError += RestoreError;
+			continue;
+		}
+
+		bool bDirtyBefore = false;
+		AssetRecord->TryGetBoolField(
+			TEXT("packageDirtyBefore"),
+			bDirtyBefore);
+		if (UObject* Asset = LoadAssetWithoutLogging(
+				GetStringField(AssetRecord, TEXT("asset"))))
+		{
+			Asset->GetOutermost()->SetDirtyFlag(bDirtyBefore);
+		}
+		MultiAssetRollbackMemorySnapshots.Remove(
+			WorkflowAssetSnapshotKey(
+				RunId,
+				GetStringField(AssetRecord, TEXT("scopeId"))));
+	}
+
+	if (bRestored)
+	{
+		Runs.Remove(RunId);
+		RollbackMemorySnapshots.Remove(RunId);
+	}
+	return bRestored;
+}
+#endif
 
 FMCPResult FWorkflowRuntime::MakeHandshake() const
 {
@@ -1468,6 +1561,11 @@ FMCPResult FWorkflowRuntime::MakeHandshake() const
 	Data->SetStringField(TEXT("engineVersion"), FEngineVersion::Current().ToString());
 	Data->SetStringField(TEXT("projectName"), FApp::GetProjectName());
 	Data->SetStringField(TEXT("contractSetDigest"), ContractSetDigest);
+	Data->SetStringField(TEXT("contractSetDigestV2"), ContractSetDigestV2);
+	TSharedPtr<FJsonObject> ContractSetDigests = MakeShared<FJsonObject>();
+	ContractSetDigests->SetStringField(TEXT("1.0"), ContractSetDigest);
+	ContractSetDigests->SetStringField(TEXT("2.0"), ContractSetDigestV2);
+	Data->SetObjectField(TEXT("contractSetDigests"), ContractSetDigests);
 	Data->SetStringField(
 		TEXT("status"),
 		CoreLoadResult.ok && Registry.IsReady() ? TEXT("ready") : TEXT("degraded"));
@@ -3562,6 +3660,11 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 		return PreconditionFailure;
 	}
 
+	// Durable snapshots now exist for every pre-existing scope, and new scopes
+	// can be removed from their staged baseline. Publish rollback availability
+	// with the first journal so a crash after any later operation boundary can
+	// still be recovered by a new Editor instance.
+	Record.bRollbackAvailable = true;
 	FString JournalError;
 	if (!SaveRun(Record, JournalError))
 	{
@@ -3888,6 +3991,49 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 			Record.NextOperationIndex = Index + 1;
 			UpdateCheckpointHash(ScopeId);
 			bExecutionOk = SaveCheckpoint();
+#if WITH_DEV_AUTOMATION_TESTS
+			if (bExecutionOk
+				&& TestFailAfterOperationCount != INDEX_NONE
+				&& Record.NextOperationIndex
+					>= TestFailAfterOperationCount)
+			{
+				const int32 InjectedAfterOperation =
+					TestFailAfterOperationCount;
+				const bool bSimulateInterruption =
+					bTestSimulateProcessInterruption;
+				TestFailAfterOperationCount = INDEX_NONE;
+				bTestSimulateProcessInterruption = false;
+
+				TSharedPtr<FJsonObject> FaultDetails =
+					Record.ToResultJson(Options);
+				FaultDetails->SetNumberField(
+					TEXT("completedOperationCount"),
+					InjectedAfterOperation);
+				if (bSimulateInterruption)
+				{
+					// SaveCheckpoint has already published a journal with
+					// status=running and the next operation boundary. Returning
+					// here intentionally avoids rollback to model abrupt process
+					// loss at the only boundary durable resume supports.
+					return FMCPResult::Fail(
+						TEXT("workflow_test_interrupted"),
+						TEXT(
+							"Automation test interrupted Workflow v2 "
+							"after a durable operation boundary."),
+						503,
+						FaultDetails);
+				}
+
+				ExecutionFailure = FMCPResult::Fail(
+					TEXT("workflow_test_injected_failure"),
+					TEXT(
+						"Automation test injected a Workflow v2 "
+						"failure after a durable operation boundary."),
+					500,
+					FaultDetails);
+				bExecutionOk = false;
+			}
+#endif
 		}
 
 		Record.CurrentPhase = TEXT("finalizers");
@@ -4165,18 +4311,28 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 					AssetValue->Type == EJson::Object
 				? AssetValue->AsObject()
 				: nullptr;
+			const FString ScopeId =
+				GetStringField(AssetRecord, TEXT("scopeId"));
 			UObject* Asset = LoadAssetWithoutLogging(
 				GetStringField(AssetRecord, TEXT("asset")));
-			if (!Asset ||
+			bool bInjectSaveFailure = false;
+#if WITH_DEV_AUTOMATION_TESTS
+			bInjectSaveFailure =
+				!TestSaveFailureScopeId.IsEmpty()
+				&& TestSaveFailureScopeId == ScopeId;
+			if (bInjectSaveFailure)
+			{
+				TestSaveFailureScopeId.Reset();
+			}
+#endif
+			if (bInjectSaveFailure || !Asset ||
 				!UEditorAssetLibrary::SaveLoadedAsset(Asset, true))
 			{
 				ExecutionFailure = FMCPResult::Fail(
 					TEXT("workflow_save_failed"),
 					FString::Printf(
 						TEXT("Could not save Workflow v2 scope '%s'."),
-						*GetStringField(
-							AssetRecord,
-							TEXT("scopeId"))),
+						*ScopeId),
 					500);
 				Record.Status = TEXT("failed");
 				RollbackV2(Record, Options, true);
@@ -4189,7 +4345,7 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 					Record.ToResultJson(Options));
 			}
 			UpdateCheckpointHash(
-				GetStringField(AssetRecord, TEXT("scopeId")));
+				ScopeId);
 		}
 	}
 
@@ -5438,58 +5594,13 @@ FMCPResult FWorkflowRuntime::RollbackV2(
 			const FString ExpectedHash = GetStringField(
 				AssetRecord,
 				TEXT("currentHash"));
-			if (bSameInstance)
-			{
-				const FString ExpectedMemoryHash =
-					GetStringField(
-						AssetRecord,
-						TEXT("currentMemorySha256"));
-				const FString BeforeMemoryHash =
-					GetStringField(
-						AssetRecord,
-						TEXT("memorySha256Before"));
-				const FString CurrentMemoryHash =
-					ComputeAssetMemorySha256(CurrentAsset);
-				bool bExistedBefore = false;
-				AssetRecord->TryGetBoolField(
-					TEXT("existedBefore"),
-					bExistedBefore);
-				const bool bMatchesRecordedCurrent =
-					!ExpectedMemoryHash.IsEmpty()
-					&& CurrentMemoryHash == ExpectedMemoryHash;
-				const bool bMatchesRecordedBaseline =
-					(!bExistedBefore && !CurrentAsset)
-					|| (!BeforeMemoryHash.IsEmpty()
-						&& CurrentMemoryHash == BeforeMemoryHash);
-				if (!bMatchesRecordedCurrent
-					&& !bMatchesRecordedBaseline)
-				{
-					TSharedPtr<FJsonObject> Details =
-						Record.ToResultJson(Options);
-					Details->SetStringField(
-						TEXT("scopeId"),
-						GetStringField(
-							AssetRecord,
-							TEXT("scopeId")));
-					Details->SetStringField(
-						TEXT("asset"),
-						AssetPath);
-					Details->SetStringField(
-						TEXT("expectedMemorySha256"),
-						ExpectedMemoryHash);
-					Details->SetStringField(
-						TEXT("currentMemorySha256"),
-						CurrentMemoryHash);
-					return FMCPResult::Fail(
-						TEXT("resume_conflict"),
-						TEXT(
-							"Workflow v2 rollback detected an "
-							"in-memory edit outside the recorded "
-							"execution boundary."),
-						409,
-						Details);
-				}
-			}
+			// FObjectWriter-based memory digests include transient Blueprint
+			// compiler, transaction, and object-reference state. They are useful
+			// checkpoint diagnostics but are not a stable external-edit token
+			// after compile/finalizer work. Rollback conflict detection therefore
+			// uses the canonical structure hash below plus the on-disk package
+			// digest; a raw memory digest mismatch alone must not block restoring
+			// the durable snapshot.
 			if (CurrentHash != BeforeHash
 				&& (ExpectedHash.IsEmpty() || CurrentHash != ExpectedHash))
 			{
@@ -5606,7 +5717,29 @@ FMCPResult FWorkflowRuntime::RollbackV2(
 			}
 		}
 
-		if (!bRestored)
+		bool bExistedBefore = false;
+		AssetRecord->TryGetBoolField(
+			TEXT("existedBefore"),
+			bExistedBefore);
+		const FString PackageFilename =
+			GetStringField(AssetRecord, TEXT("packageFilename"));
+		const FString PackageHashBefore =
+			GetStringField(AssetRecord, TEXT("packageSha256Before"));
+		FString CurrentPackageHash;
+		const bool bPackageExists =
+			!PackageFilename.IsEmpty()
+			&& IFileManager::Get().FileExists(*PackageFilename);
+		const bool bPackageHashReadable =
+			bPackageExists
+			&& TryHashFile(PackageFilename, CurrentPackageHash);
+		const bool bPackageNeedsRestore =
+			bExistedBefore
+				? PackageHashBefore.IsEmpty()
+					|| !bPackageHashReadable
+					|| CurrentPackageHash != PackageHashBefore
+				: bPackageExists;
+
+		if (!bRestored || bPackageNeedsRestore)
 		{
 			FString RestoreError;
 			bRestored = RestoreWorkflowAssetFile(AssetRecord, RestoreError);
@@ -5649,8 +5782,6 @@ FMCPResult FWorkflowRuntime::RollbackV2(
 			AssetRecord->Values.Remove(
 				TEXT("currentMemorySha256"));
 		}
-		const FString PackageFilename =
-			GetStringField(AssetRecord, TEXT("packageFilename"));
 		FString RestoredPackageHash;
 		if (!PackageFilename.IsEmpty() &&
 			IFileManager::Get().FileExists(*PackageFilename) &&
@@ -6634,6 +6765,12 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::CaptureAssetStructure(UObject* Asset)
 	if (UBlueprint* Blueprint = Cast<UBlueprint>(Asset))
 	{
 		TSharedPtr<FJsonObject> BlueprintJson = MakeShared<FJsonObject>();
+		BlueprintJson->SetStringField(
+			TEXT("description"),
+			Blueprint->BlueprintDescription);
+		BlueprintJson->SetStringField(
+			TEXT("category"),
+			Blueprint->BlueprintCategory);
 		TArray<TSharedPtr<FJsonValue>> Variables;
 		for (const FBPVariableDescription& Variable : Blueprint->NewVariables)
 		{

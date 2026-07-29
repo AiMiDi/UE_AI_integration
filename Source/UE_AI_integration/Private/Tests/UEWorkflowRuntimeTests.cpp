@@ -483,6 +483,151 @@ bool CreateFixtureAsset(
 	return Registry.ExecuteTool(Capability, Params).bSuccess;
 }
 
+bool CreateSavedBlueprintFixture(
+	FMCPToolRegistry& Registry,
+	const FString& AssetPath)
+{
+	if (!CreateFixtureAsset(
+			Registry,
+			TEXT("blueprint.asset.create"),
+			AssetPath))
+	{
+		return false;
+	}
+	UObject* Asset = UEditorAssetLibrary::LoadAsset(AssetPath);
+	return Asset
+		&& UEditorAssetLibrary::SaveLoadedAsset(Asset, true);
+}
+
+TSharedPtr<FJsonObject> MakeTwoAssetVariableWorkflow(
+	const FString& WorkflowId,
+	const FString& FirstPath,
+	const FString& SecondPath,
+	const FString& VariablePrefix,
+	const bool bIncludeThirdOperation = true)
+{
+	auto MakeVariableOperation = [](
+		const FString& Id,
+		const FString& ScopeId,
+		const FString& VariableName)
+	{
+		TSharedPtr<FJsonObject> Params = MakeShared<FJsonObject>();
+		Params->SetStringField(TEXT("variableName"), VariableName);
+		Params->SetStringField(TEXT("variableType"), TEXT("Boolean"));
+		return MakeShared<FJsonValueObject>(
+			MakeScopedOperation(
+				Id,
+				TEXT("blueprint.variable.add"),
+				ScopeId,
+				Params));
+	};
+
+	TArray<TSharedPtr<FJsonValue>> Operations = {
+		MakeVariableOperation(
+			TEXT("firstVariable"),
+			TEXT("first"),
+			VariablePrefix + TEXT("A")),
+		MakeVariableOperation(
+			TEXT("secondVariable"),
+			TEXT("second"),
+			VariablePrefix + TEXT("B")),
+	};
+	if (bIncludeThirdOperation)
+	{
+		Operations.Add(
+			MakeVariableOperation(
+				TEXT("thirdVariable"),
+				TEXT("first"),
+				VariablePrefix + TEXT("C")));
+	}
+
+	TMap<FString, TSharedPtr<FJsonObject>> Scopes;
+	Scopes.Add(
+		TEXT("first"),
+		MakeScope(TEXT("blueprint"), FirstPath, false));
+	Scopes.Add(
+		TEXT("second"),
+		MakeScope(TEXT("blueprint"), SecondPath, false));
+	return MakeWorkflowV2(WorkflowId, Scopes, Operations);
+}
+
+bool LoadWorkflowJournal(
+	const FString& RunId,
+	TSharedPtr<FJsonObject>& OutJournal)
+{
+	const FString JournalPath = FPaths::Combine(
+		FPaths::ProjectSavedDir(),
+		TEXT("UEWorkflow"),
+		RunId + TEXT(".json"));
+	FString JournalText;
+	if (!FFileHelper::LoadFileToString(JournalText, *JournalPath))
+	{
+		return false;
+	}
+	const TSharedRef<TJsonReader<>> Reader =
+		TJsonReaderFactory<>::Create(JournalText);
+	return FJsonSerializer::Deserialize(Reader, OutJournal)
+		&& OutJournal.IsValid();
+}
+
+bool SaveWorkflowJournal(
+	const FString& RunId,
+	const TSharedPtr<FJsonObject>& Journal)
+{
+	const FString JournalPath = FPaths::Combine(
+		FPaths::ProjectSavedDir(),
+		TEXT("UEWorkflow"),
+		RunId + TEXT(".json"));
+	return Journal.IsValid()
+		&& FFileHelper::SaveStringToFile(
+			SerializeJsonObject(Journal),
+			*JournalPath,
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+}
+
+void CleanupWorkflowRunArtifacts(const FString& RunId)
+{
+	FGuid Parsed;
+	if (!FGuid::Parse(RunId, Parsed))
+	{
+		return;
+	}
+	const FString WorkflowDirectory = FPaths::Combine(
+		FPaths::ProjectSavedDir(),
+		TEXT("UEWorkflow"));
+	const FString SafeRunId =
+		Parsed.ToString(EGuidFormats::DigitsWithHyphensLower);
+	IFileManager::Get().Delete(
+		*FPaths::Combine(
+			WorkflowDirectory,
+			SafeRunId + TEXT(".json")),
+		false,
+		true,
+		true);
+	IFileManager::Get().DeleteDirectory(
+		*FPaths::Combine(WorkflowDirectory, SafeRunId),
+		false,
+		true);
+}
+
+bool HashAssetPackage(
+	const FString& AssetPath,
+	FString& OutHash)
+{
+	const FString PackageName =
+		FPackageName::ObjectPathToPackageName(AssetPath);
+	const FString Filename =
+		FPackageName::LongPackageNameToFilename(
+			PackageName,
+			FPackageName::GetAssetPackageExtension());
+	TArray<uint8> Bytes;
+	return !Filename.IsEmpty()
+		&& FFileHelper::LoadFileToArray(Bytes, *Filename)
+		&& UEAIIntegration::Infrastructure::TrySha256Hex(
+			Bytes,
+			OutHash);
+}
+
 class FScopedBlueprintCompileCounter
 {
 public:
@@ -546,6 +691,26 @@ bool FUEWorkflowActionContractTest::RunTest(const FString& Parameters)
 		TEXT("Workflow handshake DSL"),
 		Handshake.Data->GetStringField(TEXT("dsl")),
 		FString(TEXT("ue.workflow")));
+	TestFalse(
+		TEXT("Workflow handshake v1 contract digest is present"),
+		Handshake.Data->GetStringField(TEXT("contractSetDigest")).IsEmpty());
+	TestFalse(
+		TEXT("Workflow handshake v2 contract digest is present"),
+		Handshake.Data->GetStringField(TEXT("contractSetDigestV2")).IsEmpty());
+	TestNotEqual(
+		TEXT("Workflow v1 and v2 contract digests remain distinct"),
+		Handshake.Data->GetStringField(TEXT("contractSetDigest")),
+		Handshake.Data->GetStringField(TEXT("contractSetDigestV2")));
+	const TSharedPtr<FJsonObject> HandshakeDigests =
+		Handshake.Data->GetObjectField(TEXT("contractSetDigests"));
+	TestEqual(
+		TEXT("Workflow digest map v1 matches legacy field"),
+		HandshakeDigests->GetStringField(TEXT("1.0")),
+		Handshake.Data->GetStringField(TEXT("contractSetDigest")));
+	TestEqual(
+		TEXT("Workflow digest map v2 matches explicit field"),
+		HandshakeDigests->GetStringField(TEXT("2.0")),
+		Handshake.Data->GetStringField(TEXT("contractSetDigestV2")));
 	TestEqual(
 		TEXT("Workflow handshake advertises durable boundary resume"),
 		Handshake.Data->GetObjectField(TEXT("features"))
@@ -2285,6 +2450,579 @@ bool FUEWorkflowV2DurableRollbackAndConflictTest::RunTest(
 	else
 	{
 		AddError(TEXT("Conflict fixture Workflow v2 did not execute."));
+	}
+
+	CleanupAsset(FirstPath);
+	CleanupAsset(SecondPath);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUEWorkflowV2FaultBoundaryResumeTest,
+	"UE_AI_integration.Workflow.V2.FaultBoundaryResumeAndRollback",
+	EAutomationTestFlags::EditorContext |
+		EAutomationTestFlags::EngineFilter)
+
+bool FUEWorkflowV2FaultBoundaryResumeTest::RunTest(
+	const FString& Parameters)
+{
+	UUEAIIntegrationSubsystem* Subsystem =
+		GEditor
+		? GEditor->GetEditorSubsystem<UUEAIIntegrationSubsystem>()
+		: nullptr;
+	if (!Subsystem || !Subsystem->GetRegistry())
+	{
+		AddError(TEXT("UE integration subsystem is not initialized."));
+		return false;
+	}
+	FMCPToolRegistry& Registry = *Subsystem->GetRegistry();
+
+	const FString FirstPath =
+		UniqueAssetPath(TEXT("BP_V2FaultResumeA"));
+	const FString SecondPath =
+		UniqueAssetPath(TEXT("BP_V2FaultResumeB"));
+	CleanupAsset(FirstPath);
+	CleanupAsset(SecondPath);
+	if (!CreateSavedBlueprintFixture(Registry, FirstPath)
+		|| !CreateSavedBlueprintFixture(Registry, SecondPath))
+	{
+		AddError(TEXT("Could not create durable fault-injection fixtures."));
+		CleanupAsset(FirstPath);
+		CleanupAsset(SecondPath);
+		return false;
+	}
+
+	const FString FirstHashBefore =
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(
+				UEditorAssetLibrary::LoadAsset(FirstPath));
+	const FString SecondHashBefore =
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(
+				UEditorAssetLibrary::LoadAsset(SecondPath));
+	const TSharedPtr<FJsonObject> Workflow =
+		MakeTwoAssetVariableWorkflow(
+			TEXT("fault-boundary-resume"),
+			FirstPath,
+			SecondPath,
+			TEXT("FaultResume"));
+
+	UEAIIntegration::Workflow::FWorkflowRuntime Runtime(Registry);
+	const FMCPResult Plan = PlanWorkflow(Runtime, Workflow);
+	FString Digest;
+	if (!GetPlanDigest(Plan, Digest))
+	{
+		AddError(TEXT("Fault-boundary Workflow v2 did not plan."));
+		CleanupAsset(FirstPath);
+		CleanupAsset(SecondPath);
+		return false;
+	}
+
+	Runtime.SetTestFailAfterOperation(1, true);
+	const FMCPResult Interrupted =
+		ExecuteWorkflow(
+			Runtime,
+			Workflow,
+			Digest,
+			false,
+			TEXT("summary"));
+	TestFalse(
+		TEXT("Injected process interruption stops execution"),
+		Interrupted.bOk);
+	TestEqual(
+		TEXT("Injected interruption has an internal-only stable code"),
+		Interrupted.Error.Code,
+		FString(TEXT("workflow_test_interrupted")));
+	const TSharedPtr<FJsonObject> InterruptedDetails =
+		Interrupted.Error.Details;
+	FString RunId;
+	TestTrue(
+		TEXT("Interrupted response identifies the durable run"),
+		InterruptedDetails.IsValid()
+			&& InterruptedDetails->TryGetStringField(
+				TEXT("runId"),
+				RunId)
+			&& !RunId.IsEmpty());
+	if (RunId.IsEmpty())
+	{
+		CleanupAsset(FirstPath);
+		CleanupAsset(SecondPath);
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> Journal;
+	const TArray<TSharedPtr<FJsonValue>>* JournalOperations = nullptr;
+	TestTrue(
+		TEXT("Operation boundary journal is readable"),
+		LoadWorkflowJournal(RunId, Journal));
+	TestTrue(
+		TEXT("Journal remains resumable after simulated interruption"),
+		Journal.IsValid()
+			&& Journal->GetStringField(TEXT("status"))
+				== TEXT("running")
+			&& Journal->GetStringField(TEXT("currentPhase"))
+				== TEXT("operations")
+			&& static_cast<int32>(
+				Journal->GetNumberField(
+					TEXT("nextOperationIndex"))) == 1
+			&& Journal->TryGetArrayField(
+				TEXT("operations"),
+				JournalOperations)
+			&& JournalOperations
+			&& JournalOperations->Num() == 1);
+	const int32 InterruptedBytes =
+		InterruptedDetails.IsValid()
+		? FTCHARToUTF8(
+			*SerializeJsonObject(InterruptedDetails)).Length()
+		: MAX_int32;
+	TestTrue(
+		TEXT("Interrupted summary stays below the 8 KiB receipt gate"),
+		InterruptedBytes <= 8 * 1024);
+
+	// A different runtime must not silently treat the still-loaded Dirty state
+	// as a clean Editor restart.
+	UEAIIntegration::Workflow::FWorkflowRuntime DirtyRuntime(Registry);
+	TSharedPtr<FJsonObject> ResumeRequest = MakeShared<FJsonObject>();
+	ResumeRequest->SetStringField(TEXT("action"), TEXT("resume"));
+	ResumeRequest->SetStringField(TEXT("runId"), RunId);
+	const FMCPResult DirtyResume =
+		DirtyRuntime.HandleRequest(ResumeRequest);
+	TestFalse(
+		TEXT("Cross-runtime resume refuses a still-loaded Dirty scope"),
+		DirtyResume.bOk);
+	TestEqual(
+		TEXT("Dirty cross-runtime resume returns resume_conflict"),
+		DirtyResume.Error.Code,
+		FString(TEXT("resume_conflict")));
+
+	FString RestartError;
+	TestTrue(
+		TEXT("Test restart restores the durable staged baseline"),
+		Runtime.SimulateEditorRestartForTest(RunId, RestartError));
+	if (!RestartError.IsEmpty())
+	{
+		AddError(RestartError);
+	}
+
+	UEAIIntegration::Workflow::FWorkflowRuntime ResumeRuntime(Registry);
+	const FMCPResult Resumed =
+		ResumeRuntime.HandleRequest(ResumeRequest);
+	TestTrue(
+		TEXT("A new runtime completes from the staged baseline"),
+		Resumed.bOk);
+	if (Resumed.bOk)
+	{
+		TestEqual(
+			TEXT("Cross-runtime recovery reports baseline replay"),
+			Resumed.Data->GetStringField(TEXT("resumeMode")),
+			FString(TEXT("restartFromStagedBaseline")));
+		TestTrue(
+			TEXT("Cross-runtime recovery actually resumes execution"),
+			Resumed.Data->GetBoolField(TEXT("resumedExecution")));
+		const int32 ResumeBytes =
+			FTCHARToUTF8(
+				*SerializeJsonObject(Resumed.Data)).Length();
+		TestTrue(
+			TEXT("Resumed summary stays below the 8 KiB receipt gate"),
+			ResumeBytes <= 8 * 1024);
+	}
+
+	TestNotEqual(
+		TEXT("First asset contains the resumed edits"),
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(
+				UEditorAssetLibrary::LoadAsset(FirstPath)),
+		FirstHashBefore);
+	TestNotEqual(
+		TEXT("Second asset contains the resumed edits"),
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(
+				UEditorAssetLibrary::LoadAsset(SecondPath)),
+		SecondHashBefore);
+
+	TSharedPtr<FJsonObject> RollbackRequest =
+		MakeShared<FJsonObject>();
+	RollbackRequest->SetStringField(TEXT("action"), TEXT("rollback"));
+	RollbackRequest->SetStringField(TEXT("runId"), RunId);
+	RollbackRequest->SetStringField(
+		TEXT("approvePlanDigest"),
+		Digest);
+	const FMCPResult Rollback =
+		ResumeRuntime.HandleRequest(RollbackRequest);
+	if (!Rollback.bOk)
+	{
+		AddError(FString::Printf(
+			TEXT("Durable rollback failed: code=%s message=%s details=%s"),
+			*Rollback.Error.Code,
+			*Rollback.Error.Message,
+			Rollback.Error.Details.IsValid()
+				? *SerializeJsonObject(Rollback.Error.Details)
+				: TEXT("{}")));
+	}
+	TestTrue(
+		TEXT("Resumed two-asset run rolls back from durable snapshots"),
+		Rollback.bOk);
+	TestEqual(
+		TEXT("First asset rollback restores its structural hash"),
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(
+				UEditorAssetLibrary::LoadAsset(FirstPath)),
+		FirstHashBefore);
+	TestEqual(
+		TEXT("Second asset rollback restores its structural hash"),
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(
+				UEditorAssetLibrary::LoadAsset(SecondPath)),
+		SecondHashBefore);
+
+	const TSharedPtr<FJsonObject> FailureWorkflow =
+		MakeTwoAssetVariableWorkflow(
+			TEXT("fault-boundary-automatic-rollback"),
+			FirstPath,
+			SecondPath,
+			TEXT("FaultRollback"),
+			false);
+	UEAIIntegration::Workflow::FWorkflowRuntime FailureRuntime(Registry);
+	const FMCPResult FailurePlan =
+		PlanWorkflow(FailureRuntime, FailureWorkflow);
+	FString FailureDigest;
+	if (GetPlanDigest(FailurePlan, FailureDigest))
+	{
+		FailureRuntime.SetTestFailAfterOperation(1, false);
+		const FMCPResult InjectedFailure =
+			ExecuteWorkflow(
+				FailureRuntime,
+				FailureWorkflow,
+				FailureDigest,
+				false,
+				TEXT("summary"));
+		TestFalse(
+			TEXT("Fail-after-operation rejects execution"),
+			InjectedFailure.bOk);
+		TestEqual(
+			TEXT("Fail-after-operation uses the workflow failure envelope"),
+			InjectedFailure.Error.Code,
+			FString(TEXT("workflow_execution_failed")));
+		TestEqual(
+			TEXT("Fail-after-operation exposes its internal cause"),
+			InjectedFailure.Error.Details.IsValid()
+				? InjectedFailure.Error.Details->GetStringField(
+					TEXT("causeCode"))
+				: FString(),
+			FString(TEXT("workflow_test_injected_failure")));
+		TestEqual(
+			TEXT("Fail-after-operation restores the first asset"),
+			UEAIIntegration::Workflow::FWorkflowRuntime::
+				ComputeAssetStructureHash(
+					UEditorAssetLibrary::LoadAsset(FirstPath)),
+			FirstHashBefore);
+		TestEqual(
+			TEXT("Fail-after-operation restores the second asset"),
+			UEAIIntegration::Workflow::FWorkflowRuntime::
+				ComputeAssetStructureHash(
+					UEditorAssetLibrary::LoadAsset(SecondPath)),
+			SecondHashBefore);
+		if (InjectedFailure.Error.Details.IsValid())
+		{
+			FString FailureRunId;
+			if (InjectedFailure.Error.Details->TryGetStringField(
+				TEXT("runId"),
+				FailureRunId))
+			{
+				CleanupWorkflowRunArtifacts(FailureRunId);
+			}
+		}
+	}
+	else
+	{
+		AddError(TEXT("Fail-after-operation Workflow v2 did not plan."));
+	}
+
+	CleanupWorkflowRunArtifacts(RunId);
+	CleanupAsset(FirstPath);
+	CleanupAsset(SecondPath);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUEWorkflowV2FaultConflictAndSaveTest,
+	"UE_AI_integration.Workflow.V2.FaultConflictAndSaveFailure",
+	EAutomationTestFlags::EditorContext |
+		EAutomationTestFlags::EngineFilter)
+
+bool FUEWorkflowV2FaultConflictAndSaveTest::RunTest(
+	const FString& Parameters)
+{
+	UUEAIIntegrationSubsystem* Subsystem =
+		GEditor
+		? GEditor->GetEditorSubsystem<UUEAIIntegrationSubsystem>()
+		: nullptr;
+	if (!Subsystem || !Subsystem->GetRegistry())
+	{
+		AddError(TEXT("UE integration subsystem is not initialized."));
+		return false;
+	}
+	FMCPToolRegistry& Registry = *Subsystem->GetRegistry();
+
+	const FString FirstPath =
+		UniqueAssetPath(TEXT("BP_V2FaultConflictA"));
+	const FString SecondPath =
+		UniqueAssetPath(TEXT("BP_V2FaultConflictB"));
+	CleanupAsset(FirstPath);
+	CleanupAsset(SecondPath);
+	if (!CreateSavedBlueprintFixture(Registry, FirstPath)
+		|| !CreateSavedBlueprintFixture(Registry, SecondPath))
+	{
+		AddError(TEXT("Could not create Workflow v2 conflict fixtures."));
+		CleanupAsset(FirstPath);
+		CleanupAsset(SecondPath);
+		return false;
+	}
+	const FString FirstHashBefore =
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(
+				UEditorAssetLibrary::LoadAsset(FirstPath));
+	const FString SecondHashBefore =
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(
+				UEditorAssetLibrary::LoadAsset(SecondPath));
+	FString FirstPackageHashBefore;
+	FString SecondPackageHashBefore;
+	TestTrue(
+		TEXT("First conflict fixture package is hashable"),
+		HashAssetPackage(FirstPath, FirstPackageHashBefore));
+	TestTrue(
+		TEXT("Second conflict fixture package is hashable"),
+		HashAssetPackage(SecondPath, SecondPackageHashBefore));
+
+	const TSharedPtr<FJsonObject> ConflictWorkflow =
+		MakeTwoAssetVariableWorkflow(
+			TEXT("fault-conflict-guards"),
+			FirstPath,
+			SecondPath,
+			TEXT("FaultConflict"));
+	UEAIIntegration::Workflow::FWorkflowRuntime Runtime(Registry);
+	const FMCPResult ConflictPlan =
+		PlanWorkflow(Runtime, ConflictWorkflow);
+	FString ConflictDigest;
+	if (!GetPlanDigest(ConflictPlan, ConflictDigest))
+	{
+		AddError(TEXT("Workflow v2 conflict fixture did not plan."));
+		CleanupAsset(FirstPath);
+		CleanupAsset(SecondPath);
+		return false;
+	}
+	Runtime.SetTestFailAfterOperation(1, true);
+	const FMCPResult Interrupted =
+		ExecuteWorkflow(
+			Runtime,
+			ConflictWorkflow,
+			ConflictDigest,
+			false,
+			TEXT("summary"));
+	FString ConflictRunId;
+	if (Interrupted.Error.Details.IsValid())
+	{
+		Interrupted.Error.Details->TryGetStringField(
+			TEXT("runId"),
+			ConflictRunId);
+	}
+	if (ConflictRunId.IsEmpty())
+	{
+		AddError(TEXT("Interrupted conflict run did not return runId."));
+		CleanupAsset(FirstPath);
+		CleanupAsset(SecondPath);
+		return false;
+	}
+
+	UBlueprint* ExternallyEdited = Cast<UBlueprint>(
+		UEditorAssetLibrary::LoadAsset(FirstPath));
+	TestNotNull(
+		TEXT("External-edit fixture loads"),
+		ExternallyEdited);
+	if (ExternallyEdited)
+	{
+		ExternallyEdited->Modify();
+		ExternallyEdited->BlueprintDescription =
+			TEXT("External edit after durable checkpoint");
+		ExternallyEdited->MarkPackageDirty();
+	}
+	TSharedPtr<FJsonObject> ResumeRequest =
+		MakeShared<FJsonObject>();
+	ResumeRequest->SetStringField(TEXT("action"), TEXT("resume"));
+	ResumeRequest->SetStringField(
+		TEXT("runId"),
+		ConflictRunId);
+	const FMCPResult ExternalConflict =
+		Runtime.HandleRequest(ResumeRequest);
+	TestFalse(
+		TEXT("External in-memory modification blocks resume"),
+		ExternalConflict.bOk);
+	TestEqual(
+		TEXT("External in-memory modification returns resume_conflict"),
+		ExternalConflict.Error.Code,
+		FString(TEXT("resume_conflict")));
+	TestTrue(
+		TEXT("External modification remains Dirty after refusal"),
+		ExternallyEdited
+			&& ExternallyEdited->GetOutermost()->IsDirty());
+
+	FString RestartError;
+	TestTrue(
+		TEXT("Conflict fixture can restore its staged baseline"),
+		Runtime.SimulateEditorRestartForTest(
+			ConflictRunId,
+			RestartError));
+	if (!RestartError.IsEmpty())
+	{
+		AddError(RestartError);
+	}
+
+	TSharedPtr<FJsonObject> ConflictJournal;
+	TestTrue(
+		TEXT("Conflict journal is readable for digest injection"),
+		LoadWorkflowJournal(
+			ConflictRunId,
+			ConflictJournal));
+	FString OriginalContractDigest;
+	if (ConflictJournal.IsValid())
+	{
+		ConflictJournal->TryGetStringField(
+			TEXT("contractSetDigest"),
+			OriginalContractDigest);
+		ConflictJournal->SetStringField(
+			TEXT("contractSetDigest"),
+			TEXT("sha256:automation-conflict"));
+		TestTrue(
+			TEXT("Digest-conflict journal is persisted"),
+			SaveWorkflowJournal(
+				ConflictRunId,
+				ConflictJournal));
+	}
+	UEAIIntegration::Workflow::FWorkflowRuntime DigestRuntime(Registry);
+	const FMCPResult DigestConflict =
+		DigestRuntime.HandleRequest(ResumeRequest);
+	TestFalse(
+		TEXT("Contract digest mismatch blocks resume"),
+		DigestConflict.bOk);
+	TestEqual(
+		TEXT("Contract digest mismatch returns resume_conflict"),
+		DigestConflict.Error.Code,
+		FString(TEXT("resume_conflict")));
+
+	if (ConflictJournal.IsValid())
+	{
+		ConflictJournal->SetStringField(
+			TEXT("contractSetDigest"),
+			OriginalContractDigest);
+		TestTrue(
+			TEXT("Original digest journal is restored"),
+			SaveWorkflowJournal(
+				ConflictRunId,
+				ConflictJournal));
+	}
+	UEAIIntegration::Workflow::FWorkflowRuntime CleanupRuntime(Registry);
+	TSharedPtr<FJsonObject> ConflictRollback =
+		MakeShared<FJsonObject>();
+	ConflictRollback->SetStringField(TEXT("action"), TEXT("rollback"));
+	ConflictRollback->SetStringField(
+		TEXT("runId"),
+		ConflictRunId);
+	ConflictRollback->SetStringField(
+		TEXT("approvePlanDigest"),
+		ConflictDigest);
+	TestTrue(
+		TEXT("Conflict run can be finalized from its untouched baseline"),
+		CleanupRuntime.HandleRequest(ConflictRollback).bOk);
+	CleanupWorkflowRunArtifacts(ConflictRunId);
+
+	const TSharedPtr<FJsonObject> SaveWorkflow =
+		MakeTwoAssetVariableWorkflow(
+			TEXT("fault-save-rollback"),
+			FirstPath,
+			SecondPath,
+			TEXT("FaultSave"),
+			false);
+	UEAIIntegration::Workflow::FWorkflowRuntime SaveRuntime(Registry);
+	const FMCPResult SavePlan =
+		PlanWorkflow(SaveRuntime, SaveWorkflow);
+	FString SaveDigest;
+	if (!GetPlanDigest(SavePlan, SaveDigest))
+	{
+		AddError(TEXT("Workflow v2 save-failure fixture did not plan."));
+		CleanupAsset(FirstPath);
+		CleanupAsset(SecondPath);
+		return false;
+	}
+	SaveRuntime.SetTestSaveFailureScope(TEXT("second"));
+	const FMCPResult SaveFailure =
+		ExecuteWorkflow(
+			SaveRuntime,
+			SaveWorkflow,
+			SaveDigest,
+			true,
+			TEXT("summary"));
+	TestFalse(
+		TEXT("Injected save failure rejects the atomic asset set"),
+		SaveFailure.bOk);
+	TestEqual(
+		TEXT("Injected save failure has the public save error code"),
+		SaveFailure.Error.Code,
+		FString(TEXT("workflow_save_failed")));
+	TestEqual(
+		TEXT("Save failure restores the first asset hash"),
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(
+				UEditorAssetLibrary::LoadAsset(FirstPath)),
+		FirstHashBefore);
+	TestEqual(
+		TEXT("Save failure restores the second asset hash"),
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(
+				UEditorAssetLibrary::LoadAsset(SecondPath)),
+		SecondHashBefore);
+	TestFalse(
+		TEXT("Save failure does not leave the first package Dirty"),
+		UEditorAssetLibrary::LoadAsset(FirstPath)
+			->GetOutermost()->IsDirty());
+	TestFalse(
+		TEXT("Save failure does not leave the second package Dirty"),
+		UEditorAssetLibrary::LoadAsset(SecondPath)
+			->GetOutermost()->IsDirty());
+	FString FirstPackageHashAfter;
+	FString SecondPackageHashAfter;
+	TestTrue(
+		TEXT("First package remains hashable after save rollback"),
+		HashAssetPackage(FirstPath, FirstPackageHashAfter));
+	TestTrue(
+		TEXT("Second package remains hashable after save rollback"),
+		HashAssetPackage(SecondPath, SecondPackageHashAfter));
+	TestEqual(
+		TEXT("Partial save rollback restores the first package bytes"),
+		FirstPackageHashAfter,
+		FirstPackageHashBefore);
+	TestEqual(
+		TEXT("Partial save rollback preserves the second package bytes"),
+		SecondPackageHashAfter,
+		SecondPackageHashBefore);
+	const int32 FailureBytes =
+		SaveFailure.Error.Details.IsValid()
+		? FTCHARToUTF8(
+			*SerializeJsonObject(
+				SaveFailure.Error.Details)).Length()
+		: MAX_int32;
+	TestTrue(
+		TEXT("Save-failure summary stays below the 8 KiB receipt gate"),
+		FailureBytes <= 8 * 1024);
+	if (SaveFailure.Error.Details.IsValid())
+	{
+		FString SaveRunId;
+		if (SaveFailure.Error.Details->TryGetStringField(
+				TEXT("runId"),
+				SaveRunId))
+		{
+			CleanupWorkflowRunArtifacts(SaveRunId);
+		}
 	}
 
 	CleanupAsset(FirstPath);

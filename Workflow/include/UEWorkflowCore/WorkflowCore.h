@@ -90,7 +90,10 @@ public:
     [[nodiscard]] bool IsLoaded() const noexcept;
     [[nodiscard]] std::size_t CapabilityCount() const noexcept;
     [[nodiscard]] std::size_t ComposableOperationCount() const noexcept;
+    /** Compatibility digest for the UE Workflow DSL 1.0 contract surface. */
     [[nodiscard]] const std::string& ContractSetDigest() const noexcept;
+    /** Digest for the multi-scope UE Workflow DSL 2.0 contract surface. */
+    [[nodiscard]] const std::string& ContractSetDigestV2() const noexcept;
 
 private:
     class Impl;

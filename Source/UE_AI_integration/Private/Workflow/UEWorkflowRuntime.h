@@ -42,6 +42,33 @@ public:
 	/** Stable SHA-256 of the asset structure used by mutation receipts. */
 	static FString ComputeAssetStructureHash(UObject* Asset);
 
+#if WITH_DEV_AUTOMATION_TESTS
+	/**
+	 * Inject a deterministic fault immediately after the requested number of
+	 * authored v2 operations have completed and their checkpoint is durable.
+	 *
+	 * When bSimulateProcessInterruption is true, execution returns without
+	 * rollback and leaves the journal in a resumable running state. This hook is
+	 * compiled only for Automation builds and is never part of the HTTP/MCP
+	 * contract.
+	 */
+	void SetTestFailAfterOperation(
+		int32 CompletedOperationCount,
+		bool bSimulateProcessInterruption);
+
+	/** Fail saveOnSuccess when the named v2 scope reaches the save phase. */
+	void SetTestSaveFailureScope(const FString& ScopeId);
+
+	/**
+	 * Restore the staged package baseline and discard this runtime's in-memory
+	 * run state, matching the asset state seen after an Editor process restart.
+	 * A newly-created FWorkflowRuntime can then exercise durable resume.
+	 */
+	bool SimulateEditorRestartForTest(
+		const FString& RunId,
+		FString& OutError);
+#endif
+
 private:
 	enum class EDetailLevel : uint8
 	{
@@ -214,11 +241,17 @@ private:
 	FString ServerInstanceId;
 	FString JournalDirectory;
 	FString ContractSetDigest;
+	FString ContractSetDigestV2;
 	TMap<FString, FRunRecord> Runs;
 	TMap<FString, TArray<FWorkflowObjectMemorySnapshot>>
 		RollbackMemorySnapshots;
 	TMap<FString, TArray<FWorkflowObjectMemorySnapshot>>
 		MultiAssetRollbackMemorySnapshots;
 	TMap<FString, FPreparedPlanCacheEntry> PreparedPlanCache;
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 TestFailAfterOperationCount = INDEX_NONE;
+	bool bTestSimulateProcessInterruption = false;
+	FString TestSaveFailureScopeId;
+#endif
 };
 }

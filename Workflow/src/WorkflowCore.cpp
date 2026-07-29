@@ -2355,6 +2355,10 @@ public:
             }));
     }
     [[nodiscard]] const std::string& digest() const noexcept { return contract_set_digest_; }
+    [[nodiscard]] const std::string& digest_v2() const noexcept
+    {
+        return v2_contract_set_digest_;
+    }
 
 private:
     json load_contract_file(
@@ -4091,6 +4095,11 @@ std::size_t Engine::ComposableOperationCount() const noexcept
 const std::string& Engine::ContractSetDigest() const noexcept
 {
     return impl_->digest();
+}
+
+const std::string& Engine::ContractSetDigestV2() const noexcept
+{
+    return impl_->digest_v2();
 }
 
 std::string_view PlannerVersion() noexcept
