@@ -191,6 +191,72 @@ bool ReadRequiredString(
 	return true;
 }
 
+bool NormalizeLocalSourceFile(
+	const FString& Input,
+	FString& OutPath,
+	FString& OutError)
+{
+	OutPath.Reset();
+	if (Input.IsEmpty()
+		|| FPaths::IsRelative(Input)
+		|| Input.Contains(TEXT("://"))
+		|| Input.StartsWith(TEXT("\\\\"))
+		|| Input.StartsWith(TEXT("//")))
+	{
+		OutError =
+			TEXT("Import sources must be absolute local files; relative paths, URLs and network shares are not allowed.");
+		return false;
+	}
+#if PLATFORM_WINDOWS
+	if (Input.Len() < 3
+		|| !FChar::IsAlpha(Input[0])
+		|| Input[1] != TEXT(':')
+		|| (Input[2] != TEXT('/') && Input[2] != TEXT('\\')))
+	{
+		OutError =
+			TEXT("Import sources must use an absolute local drive path.");
+		return false;
+	}
+#endif
+
+	OutPath =
+		IFileManager::Get().ConvertToAbsolutePathForExternalAppForRead(*Input);
+	FPaths::NormalizeFilename(OutPath);
+	if (!FPaths::CollapseRelativeDirectories(OutPath)
+		|| OutPath.Contains(TEXT(".."))
+		|| OutPath.StartsWith(TEXT("//")))
+	{
+		OutError =
+			TEXT("Import source path could not be normalized safely.");
+		OutPath.Reset();
+		return false;
+	}
+	if (!IFileManager::Get().FileExists(*OutPath)
+		|| IFileManager::Get().DirectoryExists(*OutPath))
+	{
+		OutError = FString::Printf(
+			TEXT("Import source file '%s' does not exist."),
+			*OutPath);
+		OutPath.Reset();
+		return false;
+	}
+	return true;
+}
+
+TSharedRef<FJsonObject> SourceFileState(const FString& Path)
+{
+	TSharedRef<FJsonObject> State = MakeShared<FJsonObject>();
+	State->SetStringField(TEXT("path"), Path);
+	State->SetNumberField(
+		TEXT("sizeBytes"),
+		static_cast<double>(IFileManager::Get().FileSize(*Path)));
+	State->SetStringField(
+		TEXT("timestamp"),
+		IFileManager::Get().GetTimeStamp(*Path).ToIso8601());
+	State->SetStringField(TEXT("stateHash"), DigestJson(State));
+	return State;
+}
+
 bool NormalizeAction(
 	const TSharedPtr<FJsonObject>& Input,
 	const int32 Index,
@@ -237,12 +303,15 @@ bool NormalizeAction(
 		{
 			return false;
 		}
-		SourceFile = FPaths::ConvertRelativePathToFull(SourceFile);
-		if (!IFileManager::Get().FileExists(*SourceFile))
+		FString NormalizedSourceFile;
+		if (!NormalizeLocalSourceFile(
+			SourceFile,
+			NormalizedSourceFile,
+			OutError))
 		{
-			OutError = FString::Printf(TEXT("Import source file '%s' does not exist."), *SourceFile);
 			return false;
 		}
+		SourceFile = MoveTemp(NormalizedSourceFile);
 		if (!IsGamePackagePath(Destination))
 		{
 			OutError = FString::Printf(
@@ -252,13 +321,9 @@ bool NormalizeAction(
 		}
 		OutAction->SetStringField(TEXT("sourceFile"), SourceFile);
 		OutAction->SetStringField(TEXT("destination"), Destination);
-		OutPrecondition->SetStringField(TEXT("sourceFile"), SourceFile);
-		OutPrecondition->SetNumberField(
-			TEXT("sourceFileSizeBytes"),
-			static_cast<double>(IFileManager::Get().FileSize(*SourceFile)));
-		OutPrecondition->SetStringField(
-			TEXT("sourceFileTimestamp"),
-			IFileManager::Get().GetTimeStamp(*SourceFile).ToIso8601());
+		OutPrecondition->SetObjectField(
+			TEXT("sourceFile"),
+			SourceFileState(SourceFile));
 		OutPrecondition->SetObjectField(
 			TEXT("destination"),
 			AssetState(Registry, Destination));
@@ -392,25 +457,20 @@ bool NormalizeAction(
 			TArray<TSharedPtr<FJsonValue>> SourceFileStates;
 			for (const FString& ReimportSource : SourceFiles)
 			{
-				const FString FullPath =
-					FPaths::ConvertRelativePathToFull(ReimportSource);
-				TSharedRef<FJsonObject> SourceFileState = MakeShared<FJsonObject>();
-				SourceFileState->SetStringField(TEXT("path"), FullPath);
-				SourceFileState->SetBoolField(
-					TEXT("exists"),
-					IFileManager::Get().FileExists(*FullPath));
-				if (IFileManager::Get().FileExists(*FullPath))
+				FString FullPath;
+				if (!NormalizeLocalSourceFile(
+					ReimportSource,
+					FullPath,
+					OutError))
 				{
-					SourceFileState->SetNumberField(
-						TEXT("sizeBytes"),
-						static_cast<double>(
-							IFileManager::Get().FileSize(*FullPath)));
-					SourceFileState->SetStringField(
-						TEXT("timestamp"),
-						IFileManager::Get().GetTimeStamp(*FullPath).ToIso8601());
+					OutError = FString::Printf(
+						TEXT("Reimport source for '%s' is unsafe: %s"),
+						*Source,
+						*OutError);
+					return false;
 				}
 				SourceFileStates.Add(
-					MakeShared<FJsonValueObject>(SourceFileState));
+					MakeShared<FJsonValueObject>(SourceFileState(FullPath)));
 			}
 			OutPrecondition->SetArrayField(TEXT("reimportSources"), SourceFileStates);
 			bOutRollbackAvailable = false;

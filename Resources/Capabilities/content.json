@@ -3346,6 +3346,685 @@
       }
     },
     {
+      "id": "content.static_mesh.settings.get",
+      "domain": "content",
+      "kind": "query",
+      "description": "Read the plan-addressable Nanite, CPU-access and lightmap settings for a Static Mesh, including a stable settings hash and Dirty state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.static_mesh.settings.plan",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Normalize and preflight an allowlisted Static Mesh settings change under /Game and return a current-state-bound change-plan digest.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "properties": {
+              "asset": {
+                "type": "string",
+                "minLength": 1
+              },
+              "settings": {
+                "type": "object",
+                "properties": {
+                  "naniteEnabled": {
+                    "type": "boolean"
+                  },
+                  "allowCpuAccess": {
+                    "type": "boolean"
+                  },
+                  "lightMapCoordinateIndex": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 7
+                  },
+                  "lightMapResolution": {
+                    "type": "integer",
+                    "minimum": 4,
+                    "maximum": 4096
+                  }
+                },
+                "anyOf": [
+                  {
+                    "required": [
+                      "naniteEnabled"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "allowCpuAccess"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "lightMapCoordinateIndex"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "lightMapResolution"
+                    ]
+                  }
+                ],
+                "additionalProperties": false
+              },
+              "persistence": {
+                "type": "string",
+                "enum": [
+                  "dirtyOnly",
+                  "saveOnSuccess"
+                ]
+              }
+            },
+            "required": [
+              "asset",
+              "settings"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "request"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.static_mesh.settings.apply",
+      "domain": "content",
+      "kind": "command",
+      "description": "Re-plan and apply approved Static Mesh settings under /Game, rebuild once, read back the settings and optionally save the package.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "properties": {
+              "asset": {
+                "type": "string",
+                "minLength": 1
+              },
+              "settings": {
+                "type": "object",
+                "properties": {
+                  "naniteEnabled": {
+                    "type": "boolean"
+                  },
+                  "allowCpuAccess": {
+                    "type": "boolean"
+                  },
+                  "lightMapCoordinateIndex": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 7
+                  },
+                  "lightMapResolution": {
+                    "type": "integer",
+                    "minimum": 4,
+                    "maximum": 4096
+                  }
+                },
+                "anyOf": [
+                  {
+                    "required": [
+                      "naniteEnabled"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "allowCpuAccess"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "lightMapCoordinateIndex"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "lightMapResolution"
+                    ]
+                  }
+                ],
+                "additionalProperties": false
+              },
+              "persistence": {
+                "type": "string",
+                "enum": [
+                  "dirtyOnly",
+                  "saveOnSuccess"
+                ]
+              }
+            },
+            "required": [
+              "asset",
+              "settings"
+            ],
+            "additionalProperties": false
+          },
+          "approvePlanDigest": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "request",
+          "approvePlanDigest",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      }
+    },
+    {
+      "id": "content.static_mesh.settings.validate",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Validate Static Mesh lightmap and Nanite settings and optionally compare them with an expected partial settings object.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "naniteEnabled": {
+                "type": "boolean"
+              },
+              "allowCpuAccess": {
+                "type": "boolean"
+              },
+              "lightMapCoordinateIndex": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 7
+              },
+              "lightMapResolution": {
+                "type": "integer",
+                "minimum": 4,
+                "maximum": 4096
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "naniteEnabled"
+                ]
+              },
+              {
+                "required": [
+                  "allowCpuAccess"
+                ]
+              },
+              {
+                "required": [
+                  "lightMapCoordinateIndex"
+                ]
+              },
+              {
+                "required": [
+                  "lightMapResolution"
+                ]
+              }
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.texture.settings.get",
+      "domain": "content",
+      "kind": "query",
+      "description": "Read the plan-addressable compression, color-space, virtual-texture and LOD settings for a Texture2D, including a stable settings hash and Dirty state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.texture.settings.plan",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Normalize and preflight an allowlisted Texture2D settings change under /Game and return a current-state-bound change-plan digest.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "properties": {
+              "asset": {
+                "type": "string",
+                "minLength": 1
+              },
+              "settings": {
+                "type": "object",
+                "properties": {
+                  "compression": {
+                    "type": "string",
+                    "enum": [
+                      "TC_Default",
+                      "TC_Normalmap",
+                      "TC_Masks",
+                      "TC_Grayscale",
+                      "TC_Displacementmap",
+                      "TC_VectorDisplacementmap",
+                      "TC_HDR",
+                      "TC_EditorIcon",
+                      "TC_Alpha",
+                      "TC_DistanceFieldFont",
+                      "TC_HDR_Compressed",
+                      "TC_BC7",
+                      "TC_HalfFloat",
+                      "TC_SingleFloat",
+                      "TC_HDR_F32"
+                    ]
+                  },
+                  "sRGB": {
+                    "type": "boolean"
+                  },
+                  "virtualTextureStreaming": {
+                    "type": "boolean"
+                  },
+                  "lodBias": {
+                    "type": "integer",
+                    "minimum": -16,
+                    "maximum": 16
+                  }
+                },
+                "anyOf": [
+                  {
+                    "required": [
+                      "compression"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "sRGB"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "virtualTextureStreaming"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "lodBias"
+                    ]
+                  }
+                ],
+                "additionalProperties": false
+              },
+              "persistence": {
+                "type": "string",
+                "enum": [
+                  "dirtyOnly",
+                  "saveOnSuccess"
+                ]
+              }
+            },
+            "required": [
+              "asset",
+              "settings"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "request"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.texture.settings.apply",
+      "domain": "content",
+      "kind": "command",
+      "description": "Re-plan and apply approved Texture2D settings under /Game, rebuild once, read back the settings and optionally save the package.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "properties": {
+              "asset": {
+                "type": "string",
+                "minLength": 1
+              },
+              "settings": {
+                "type": "object",
+                "properties": {
+                  "compression": {
+                    "type": "string",
+                    "enum": [
+                      "TC_Default",
+                      "TC_Normalmap",
+                      "TC_Masks",
+                      "TC_Grayscale",
+                      "TC_Displacementmap",
+                      "TC_VectorDisplacementmap",
+                      "TC_HDR",
+                      "TC_EditorIcon",
+                      "TC_Alpha",
+                      "TC_DistanceFieldFont",
+                      "TC_HDR_Compressed",
+                      "TC_BC7",
+                      "TC_HalfFloat",
+                      "TC_SingleFloat",
+                      "TC_HDR_F32"
+                    ]
+                  },
+                  "sRGB": {
+                    "type": "boolean"
+                  },
+                  "virtualTextureStreaming": {
+                    "type": "boolean"
+                  },
+                  "lodBias": {
+                    "type": "integer",
+                    "minimum": -16,
+                    "maximum": 16
+                  }
+                },
+                "anyOf": [
+                  {
+                    "required": [
+                      "compression"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "sRGB"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "virtualTextureStreaming"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "lodBias"
+                    ]
+                  }
+                ],
+                "additionalProperties": false
+              },
+              "persistence": {
+                "type": "string",
+                "enum": [
+                  "dirtyOnly",
+                  "saveOnSuccess"
+                ]
+              }
+            },
+            "required": [
+              "asset",
+              "settings"
+            ],
+            "additionalProperties": false
+          },
+          "approvePlanDigest": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "request",
+          "approvePlanDigest",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      }
+    },
+    {
+      "id": "content.texture.settings.validate",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Validate Texture2D compression, color-space, virtual-texture and LOD settings and optionally compare them with expected values.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "compression": {
+                "type": "string",
+                "enum": [
+                  "TC_Default",
+                  "TC_Normalmap",
+                  "TC_Masks",
+                  "TC_Grayscale",
+                  "TC_Displacementmap",
+                  "TC_VectorDisplacementmap",
+                  "TC_HDR",
+                  "TC_EditorIcon",
+                  "TC_Alpha",
+                  "TC_DistanceFieldFont",
+                  "TC_HDR_Compressed",
+                  "TC_BC7",
+                  "TC_HalfFloat",
+                  "TC_SingleFloat",
+                  "TC_HDR_F32"
+                ]
+              },
+              "sRGB": {
+                "type": "boolean"
+              },
+              "virtualTextureStreaming": {
+                "type": "boolean"
+              },
+              "lodBias": {
+                "type": "integer",
+                "minimum": -16,
+                "maximum": 16
+              }
+            },
+            "anyOf": [
+              {
+                "required": [
+                  "compression"
+                ]
+              },
+              {
+                "required": [
+                  "sRGB"
+                ]
+              },
+              {
+                "required": [
+                  "virtualTextureStreaming"
+                ]
+              },
+              {
+                "required": [
+                  "lodBias"
+                ]
+              }
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
       "id": "content.widget.event.ensure_handler",
       "domain": "content",
       "kind": "command",
