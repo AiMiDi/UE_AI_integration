@@ -2542,7 +2542,7 @@
       "id": "blueprint.scan",
       "domain": "blueprint",
       "kind": "validation",
-      "description": "Run bounded static engineering rules over one Blueprint or a Blueprint path scope and return stable ue.finding.v1 records.",
+      "description": "Run bounded static engineering rules over one Blueprint or a strict Blueprint directory scope. Empty scope defaults to /Game; low-value disconnected outputs are summarized unless that rule is explicitly requested.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2563,6 +2563,152 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 1000
+          },
+          "findingOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                },
+                "minItems": 1,
+                "maxItems": 5,
+                "uniqueItems": true
+              }
+            ]
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^blueprint\\.[a-z0-9_]+(?:\\.[a-z0-9_]+)+$"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^blueprint\\.[a-z0-9_]+(?:\\.[a-z0-9_]+)+$"
+                },
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true
+              }
+            ]
+          },
+          "runtimeStatus": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "hypothesis",
+                  "corroborated",
+                  "notObserved"
+                ]
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "hypothesis",
+                    "corroborated",
+                    "notObserved"
+                  ]
+                },
+                "minItems": 1,
+                "maxItems": 3,
+                "uniqueItems": true
+              }
+            ]
+          },
+          "suppression": {
+            "type": "object",
+            "properties": {
+              "findingIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maxItems": 5000,
+                "uniqueItems": true
+              },
+              "ruleIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^blueprint\\.[a-z0-9_]+(?:\\.[a-z0-9_]+)+$"
+                },
+                "maxItems": 256,
+                "uniqueItems": true
+              },
+              "assetPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maxItems": 1000,
+                "uniqueItems": true
+              },
+              "assetPathPrefixes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^/Game(?:/.*)?$"
+                },
+                "maxItems": 256,
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "baseline": {
+            "type": "object",
+            "properties": {
+              "findingIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maxItems": 10000,
+                "uniqueItems": true
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "excludeKnown",
+                  "onlyKnown"
+                ]
+              }
+            },
+            "required": [
+              "findingIds"
+            ],
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
@@ -2669,6 +2815,14 @@
               }
             },
             "additionalProperties": false
+          },
+          "evidenceCoverage": {
+            "type": "string",
+            "enum": [
+              "partial",
+              "complete"
+            ],
+            "description": "Defaults to partial. complete is honored only for a Kismet trace with explicit cursorStart and cursorEnd."
           },
           "limit": {
             "type": "integer",

@@ -18,6 +18,7 @@
 #include "K2Node_CallFunction.h"
 #include "K2Node_DynamicCast.h"
 #include "K2Node_Event.h"
+#include "K2Node_FunctionEntry.h"
 #include "K2Node_MacroInstance.h"
 
 namespace
@@ -31,9 +32,13 @@ constexpr int32 DefaultAssetLimit = 50;
 constexpr int32 MaxAssetLimit = 200;
 constexpr int32 DefaultFindingLimit = 200;
 constexpr int32 MaxFindingLimit = 1000;
+constexpr int32 MaxRawFindingLimit = 10000;
 constexpr int32 DefaultGraphNodeLimit = 1000;
 constexpr int32 MaxGraphNodeLimit = 5000;
 constexpr int32 MaxStoredScans = 32;
+constexpr const TCHAR* DefaultBlueprintPathPrefix = TEXT("/Game");
+constexpr const TCHAR* DisconnectedOutputRule =
+	TEXT("blueprint.exec.disconnected_output");
 
 struct FScanRecord
 {
@@ -81,22 +86,91 @@ int32 ReadBoundedInteger(
 	return FMath::Clamp(static_cast<int32>(Value), Minimum, Maximum);
 }
 
+FString NormalizeDirectoryPath(FString Path)
+{
+	Path.TrimStartAndEndInline();
+	Path.ReplaceInline(TEXT("\\"), TEXT("/"));
+	while (Path.Len() > 1 && Path.EndsWith(TEXT("/")))
+	{
+		Path.LeftChopInline(1);
+	}
+	return Path;
+}
+
+bool IsPackageInDirectory(
+	const FString& PackagePath,
+	const FString& DirectoryPath)
+{
+	const FString NormalizedPackage = NormalizeDirectoryPath(PackagePath);
+	const FString NormalizedDirectory = NormalizeDirectoryPath(DirectoryPath);
+	if (NormalizedDirectory.IsEmpty())
+	{
+		return true;
+	}
+	return NormalizedPackage.Equals(
+			NormalizedDirectory,
+			ESearchCase::IgnoreCase)
+		|| NormalizedPackage.StartsWith(
+			NormalizedDirectory + TEXT("/"),
+			ESearchCase::IgnoreCase);
+}
+
+void ResolveScopeFields(
+	const TSharedPtr<FJsonObject>& Params,
+	FString& OutRequestedAsset,
+	FString& OutPathPrefix,
+	bool& OutDefaultedToGame)
+{
+	OutRequestedAsset.Reset();
+	OutPathPrefix.Reset();
+	OutDefaultedToGame = false;
+	if (Params.IsValid())
+	{
+		Params->TryGetStringField(TEXT("asset"), OutRequestedAsset);
+		Params->TryGetStringField(TEXT("pathPrefix"), OutPathPrefix);
+	}
+	OutRequestedAsset.TrimStartAndEndInline();
+	OutPathPrefix = NormalizeDirectoryPath(OutPathPrefix);
+
+	// An empty request and a bare asset name are deliberately rooted in /Game.
+	// A fully-qualified non-/Game asset remains an explicit, auditable request.
+	if (OutPathPrefix.IsEmpty()
+		&& (OutRequestedAsset.IsEmpty()
+			|| !OutRequestedAsset.StartsWith(TEXT("/"))))
+	{
+		OutPathPrefix = DefaultBlueprintPathPrefix;
+		OutDefaultedToGame = true;
+	}
+}
+
+bool MatchesScopePaths(
+	const FString& PackagePath,
+	const FString& ObjectPath,
+	const FString& AssetName,
+	const FString& RequestedAsset,
+	const FString& PathPrefix)
+{
+	if (!RequestedAsset.IsEmpty()
+		&& !PackagePath.Equals(RequestedAsset, ESearchCase::IgnoreCase)
+		&& !ObjectPath.Equals(RequestedAsset, ESearchCase::IgnoreCase)
+		&& !AssetName.Equals(RequestedAsset, ESearchCase::IgnoreCase))
+	{
+		return false;
+	}
+	return IsPackageInDirectory(PackagePath, PathPrefix);
+}
+
 bool MatchesScope(
 	const FAssetData& Asset,
 	const FString& RequestedAsset,
 	const FString& PathPrefix)
 {
-	const FString PackagePath = Asset.PackageName.ToString();
-	const FString ObjectPath = Asset.GetObjectPathString();
-	if (!RequestedAsset.IsEmpty()
-		&& !PackagePath.Equals(RequestedAsset, ESearchCase::IgnoreCase)
-		&& !ObjectPath.Equals(RequestedAsset, ESearchCase::IgnoreCase)
-		&& !Asset.AssetName.ToString().Equals(RequestedAsset, ESearchCase::IgnoreCase))
-	{
-		return false;
-	}
-	return PathPrefix.IsEmpty()
-		|| PackagePath.StartsWith(PathPrefix, ESearchCase::IgnoreCase);
+	return MatchesScopePaths(
+		Asset.PackageName.ToString(),
+		Asset.GetObjectPathString(),
+		Asset.AssetName.ToString(),
+		RequestedAsset,
+		PathPrefix);
 }
 
 TArray<FAssetData> ResolveBlueprintAssets(
@@ -106,8 +180,12 @@ TArray<FAssetData> ResolveBlueprintAssets(
 {
 	FString RequestedAsset;
 	FString PathPrefix;
-	Params->TryGetStringField(TEXT("asset"), RequestedAsset);
-	Params->TryGetStringField(TEXT("pathPrefix"), PathPrefix);
+	bool bDefaultedToGame = false;
+	ResolveScopeFields(
+		Params,
+		RequestedAsset,
+		PathPrefix,
+		bDefaultedToGame);
 
 	IAssetRegistry& Registry =
 		FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
@@ -139,33 +217,211 @@ TArray<FAssetData> ResolveBlueprintAssets(
 	return Selected;
 }
 
-bool GraphHasTickEvent(const UEdGraph* Graph)
+bool IsTickEvent(const UEdGraphNode* Node)
 {
-	if (!Graph)
+	const UK2Node_Event* Event = Cast<UK2Node_Event>(Node);
+	if (!Event)
 	{
 		return false;
 	}
-	for (const UEdGraphNode* Node : Graph->Nodes)
+	const FString EventName = Event->EventReference.GetMemberName().ToString();
+	return EventName.Equals(TEXT("ReceiveTick"), ESearchCase::IgnoreCase)
+		|| EventName.Equals(TEXT("Tick"), ESearchCase::IgnoreCase);
+}
+
+FString GraphNameForNode(const UEdGraphNode* Node)
+{
+	const UEdGraph* Graph = Node ? Node->GetGraph() : nullptr;
+	return Graph ? Graph->GetName() : FString();
+}
+
+FString NodeTraversalKey(const UEdGraphNode* Node)
+{
+	return FString::Printf(
+		TEXT("%s|%s|%s|%s"),
+		*GraphNameForNode(Node),
+		*GuidString(Node),
+		Node ? *Node->GetClass()->GetName() : TEXT(""),
+		Node
+			? *Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString()
+			: TEXT(""));
+}
+
+struct FExecutionPath
+{
+	TArray<const UEdGraphNode*> Nodes;
+};
+
+struct FTickReachability
+{
+	TMap<const UEdGraphNode*, FExecutionPath> Paths;
+};
+
+void SortNodes(TArray<const UEdGraphNode*>& Nodes)
+{
+	Nodes.Sort(
+		[](const UEdGraphNode& Left, const UEdGraphNode& Right)
+		{
+			return NodeTraversalKey(&Left) < NodeTraversalKey(&Right);
+		});
+}
+
+UEdGraph* FindLocalFunctionGraph(
+	const UBlueprint* Blueprint,
+	const UK2Node_CallFunction* Call)
+{
+	if (!Blueprint || !Call)
 	{
-		const UK2Node_Event* Event = Cast<UK2Node_Event>(Node);
-		if (!Event)
+		return nullptr;
+	}
+	const FName FunctionName = Call->GetFunctionName();
+	if (FunctionName.IsNone())
+	{
+		return nullptr;
+	}
+	const UFunction* Target = Call->GetTargetFunction();
+	if (Target)
+	{
+		const UClass* OwnerClass = Target->GetOwnerClass();
+		if (!OwnerClass || OwnerClass->ClassGeneratedBy != Blueprint)
+		{
+			return nullptr;
+		}
+	}
+	else if (!Call->FunctionReference.IsSelfContext())
+	{
+		return nullptr;
+	}
+	for (UEdGraph* FunctionGraph : Blueprint->FunctionGraphs)
+	{
+		if (FunctionGraph && FunctionGraph->GetFName() == FunctionName)
+		{
+			return FunctionGraph;
+		}
+	}
+	return nullptr;
+}
+
+FTickReachability BuildTickReachability(UBlueprint* Blueprint)
+{
+	FTickReachability Result;
+	if (!Blueprint)
+	{
+		return Result;
+	}
+
+	TArray<UEdGraph*> Graphs;
+	Blueprint->GetAllGraphs(Graphs);
+	Graphs.Sort(
+		[](const UEdGraph& Left, const UEdGraph& Right)
+		{
+			return Left.GetName() < Right.GetName();
+		});
+
+	TArray<const UEdGraphNode*> Roots;
+	for (const UEdGraph* Graph : Graphs)
+	{
+		if (!Graph)
 		{
 			continue;
 		}
-		const FString EventName = Event->EventReference.GetMemberName().ToString();
-		if (EventName.Equals(TEXT("ReceiveTick"), ESearchCase::IgnoreCase)
-			|| EventName.Equals(TEXT("Tick"), ESearchCase::IgnoreCase))
+		for (const UEdGraphNode* Node : Graph->Nodes)
 		{
-			return true;
+			if (IsTickEvent(Node))
+			{
+				Roots.Add(Node);
+			}
 		}
 	}
-	return false;
+	SortNodes(Roots);
+
+	TArray<const UEdGraphNode*> Queue;
+	auto Enqueue =
+		[&Result, &Queue](
+			const UEdGraphNode* Node,
+			const FExecutionPath& Path)
+		{
+			if (!Node || Result.Paths.Contains(Node))
+			{
+				return;
+			}
+			Result.Paths.Add(Node, Path);
+			Queue.Add(Node);
+		};
+	for (const UEdGraphNode* Root : Roots)
+	{
+		FExecutionPath RootPath;
+		RootPath.Nodes.Add(Root);
+		Enqueue(Root, RootPath);
+	}
+
+	for (int32 QueueIndex = 0; QueueIndex < Queue.Num(); ++QueueIndex)
+	{
+		const UEdGraphNode* Current = Queue[QueueIndex];
+		const FExecutionPath CurrentPath = Result.Paths.FindChecked(Current);
+		TArray<const UEdGraphNode*> NextNodes;
+		TSet<const UEdGraphNode*> UniqueNextNodes;
+		for (const UEdGraphPin* Pin : Current->Pins)
+		{
+			if (!Pin
+				|| Pin->Direction != EGPD_Output
+				|| Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+			{
+				continue;
+			}
+			for (const UEdGraphPin* LinkedPin : Pin->LinkedTo)
+			{
+				const UEdGraphNode* Next =
+					LinkedPin ? LinkedPin->GetOwningNode() : nullptr;
+				if (Next && !UniqueNextNodes.Contains(Next))
+				{
+					UniqueNextNodes.Add(Next);
+					NextNodes.Add(Next);
+				}
+			}
+		}
+		SortNodes(NextNodes);
+		for (const UEdGraphNode* Next : NextNodes)
+		{
+			FExecutionPath NextPath = CurrentPath;
+			NextPath.Nodes.Add(Next);
+			Enqueue(Next, NextPath);
+		}
+
+		const UK2Node_CallFunction* Call =
+			Cast<UK2Node_CallFunction>(Current);
+		const UEdGraph* FunctionGraph =
+			FindLocalFunctionGraph(Blueprint, Call);
+		if (!FunctionGraph)
+		{
+			continue;
+		}
+		TArray<const UEdGraphNode*> Entries;
+		for (const UEdGraphNode* Node : FunctionGraph->Nodes)
+		{
+			if (Cast<UK2Node_FunctionEntry>(Node))
+			{
+				Entries.Add(Node);
+			}
+		}
+		SortNodes(Entries);
+		for (const UEdGraphNode* Entry : Entries)
+		{
+			FExecutionPath EntryPath = CurrentPath;
+			EntryPath.Nodes.Add(Entry);
+			Enqueue(Entry, EntryPath);
+		}
+	}
+	return Result;
 }
 
 TSharedRef<FJsonObject> MakeNodeEvidence(
 	const UEdGraphNode* Node,
 	const FString& NodeId,
-	const FString& Detail)
+	const FString& AssetPath,
+	const FString& Detail,
+	const FExecutionPath* ExecutionPath = nullptr,
+	const FString& PinName = FString())
 {
 	TSharedRef<FJsonObject> Evidence = MakeShared<FJsonObject>();
 	Evidence->SetStringField(TEXT("nodeId"), NodeId);
@@ -179,10 +435,39 @@ TSharedRef<FJsonObject> MakeNodeEvidence(
 	{
 		Evidence->SetStringField(TEXT("detail"), Detail);
 	}
+	if (!PinName.IsEmpty())
+	{
+		Evidence->SetStringField(TEXT("pinName"), PinName);
+	}
+	Evidence->SetStringField(
+		TEXT("reachabilityModel"),
+		TEXT("tickExecAndLocalFunctionCalls"));
+	Evidence->SetBoolField(TEXT("tickReachable"), ExecutionPath != nullptr);
+	if (ExecutionPath)
+	{
+		TArray<TSharedPtr<FJsonValue>> PathValues;
+		PathValues.Reserve(ExecutionPath->Nodes.Num());
+		for (const UEdGraphNode* PathNode : ExecutionPath->Nodes)
+		{
+			const FString PathGraph = GraphNameForNode(PathNode);
+			TSharedRef<FJsonObject> Step = MakeShared<FJsonObject>();
+			Step->SetStringField(TEXT("assetPath"), AssetPath);
+			Step->SetStringField(TEXT("graph"), PathGraph);
+			Step->SetStringField(TEXT("nodeGuid"), GuidString(PathNode));
+			Step->SetStringField(
+				TEXT("nodeId"),
+				NodeStableId(AssetPath, PathGraph, PathNode));
+			PathValues.Add(MakeShared<FJsonValueObject>(Step));
+		}
+		Evidence->SetArrayField(TEXT("executionPath"), PathValues);
+		Evidence->SetNumberField(
+			TEXT("executionPathLength"),
+			PathValues.Num());
+	}
 	return Evidence;
 }
 
-void AppendFinding(
+TSharedPtr<FJsonObject> AppendFinding(
 	TArray<TSharedPtr<FJsonObject>>& Findings,
 	const FString& RuleId,
 	const FString& Severity,
@@ -191,25 +476,34 @@ void AppendFinding(
 	const FString& GraphName,
 	const UEdGraphNode* Node,
 	const FString& Message,
-	const FString& Detail = FString())
+	const FString& Detail = FString(),
+	const FExecutionPath* ExecutionPath = nullptr,
+	const FString& PinName = FString())
 {
 	// Keep analysis memory bounded even if a broad scope contains pathological
 	// graphs. One extra entry lets response projection report truncation.
-	if (Findings.Num() >= MaxFindingLimit + 1)
+	if (Findings.Num() >= MaxRawFindingLimit + 1)
 	{
-		return;
+		return nullptr;
 	}
 	const FString NodeId = NodeStableId(AssetPath, GraphName, Node);
-	Findings.Add(
-		MakeFinding(
-			RuleId,
-			Severity,
-			Confidence,
+	TSharedRef<FJsonObject> Finding = MakeFinding(
+		RuleId,
+		Severity,
+		Confidence,
+		AssetPath,
+		GraphName,
+		GuidString(Node),
+		Message,
+		MakeNodeEvidence(
+			Node,
+			NodeId,
 			AssetPath,
-			GraphName,
-			GuidString(Node),
-			Message,
-			MakeNodeEvidence(Node, NodeId, Detail)));
+			Detail,
+			ExecutionPath,
+			PinName));
+	Findings.Add(Finding);
+	return Finding;
 }
 
 bool IsGlobalTraversal(const FString& FunctionName)
@@ -244,11 +538,13 @@ bool IsLoopMacro(const UK2Node_MacroInstance* Macro)
 		|| Title.Contains(TEXT("WhileLoop"), ESearchCase::IgnoreCase);
 }
 
-bool HasDisconnectedExecOutput(const UEdGraphNode* Node)
+TArray<const UEdGraphPin*> GetDisconnectedExecOutputs(
+	const UEdGraphNode* Node)
 {
+	TArray<const UEdGraphPin*> Result;
 	if (!Node)
 	{
-		return false;
+		return Result;
 	}
 	for (const UEdGraphPin* Pin : Node->Pins)
 	{
@@ -258,10 +554,21 @@ bool HasDisconnectedExecOutput(const UEdGraphNode* Node)
 			&& Pin->LinkedTo.IsEmpty()
 			&& !Pin->bHidden)
 		{
-			return true;
+			Result.Add(Pin);
 		}
 	}
-	return false;
+	Result.Sort(
+		[](const UEdGraphPin& Left, const UEdGraphPin& Right)
+		{
+			const FString LeftKey =
+				Left.PinName.ToString() + TEXT("|")
+				+ Left.PinId.ToString(EGuidFormats::Digits);
+			const FString RightKey =
+				Right.PinName.ToString() + TEXT("|")
+				+ Right.PinId.ToString(EGuidFormats::Digits);
+			return LeftKey < RightKey;
+		});
+	return Result;
 }
 
 void ScanBlueprint(
@@ -281,6 +588,8 @@ void ScanBlueprint(
 		{
 			return Left.GetName() < Right.GetName();
 		});
+	const FTickReachability TickReachability =
+		BuildTickReachability(Blueprint);
 
 	for (UEdGraph* Graph : Graphs)
 	{
@@ -290,21 +599,17 @@ void ScanBlueprint(
 		}
 
 		const FString GraphName = Graph->GetName();
-		const bool bTickGraph = GraphHasTickEvent(Graph);
-		if (bTickGraph)
+		TArray<const UEdGraphNode*> TickNodes;
+		for (const UEdGraphNode* Candidate : Graph->Nodes)
 		{
-			const UEdGraphNode* TickNode = nullptr;
-			for (const UEdGraphNode* Candidate : Graph->Nodes)
+			if (IsTickEvent(Candidate))
 			{
-				const UK2Node_Event* Event = Cast<UK2Node_Event>(Candidate);
-				if (Event
-					&& (Event->EventReference.GetMemberName() == TEXT("ReceiveTick")
-						|| Event->EventReference.GetMemberName() == TEXT("Tick")))
-				{
-					TickNode = Candidate;
-					break;
-				}
+				TickNodes.Add(Candidate);
 			}
+		}
+		SortNodes(TickNodes);
+		for (const UEdGraphNode* TickNode : TickNodes)
+		{
 			AppendFinding(
 				Findings,
 				TEXT("blueprint.tick.present"),
@@ -313,7 +618,9 @@ void ScanBlueprint(
 				AssetPath,
 				GraphName,
 				TickNode,
-				TEXT("Blueprint contains an Event Tick entry point."));
+				TEXT("Blueprint contains an Event Tick entry point."),
+				FString(),
+				TickReachability.Paths.Find(TickNode));
 		}
 
 		TMap<FString, TArray<const UEdGraphNode*>> DelegateBindings;
@@ -323,6 +630,9 @@ void ScanBlueprint(
 			{
 				continue;
 			}
+			const FExecutionPath* ExecutionPath =
+				TickReachability.Paths.Find(Node);
+			const bool bTickReachable = ExecutionPath != nullptr;
 
 			if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
 			{
@@ -332,7 +642,7 @@ void ScanBlueprint(
 					AppendFinding(
 						Findings,
 						TEXT("blueprint.call.global_traversal"),
-						bTickGraph ? TEXT("error") : TEXT("warning"),
+						bTickReachable ? TEXT("error") : TEXT("warning"),
 						0.98,
 						AssetPath,
 						GraphName,
@@ -340,21 +650,28 @@ void ScanBlueprint(
 						FString::Printf(
 							TEXT("Global traversal call '%s' can scale with world size."),
 							*FunctionName),
-						bTickGraph ? TEXT("Call is in a graph containing Event Tick.") : FString());
+						bTickReachable
+							? TEXT("Call is reachable from Event Tick through execution pins.")
+							: TEXT("No Event Tick execution path reaches this call."),
+						ExecutionPath);
 				}
 				if (IsSynchronousLoad(FunctionName))
 				{
 					AppendFinding(
 						Findings,
 						TEXT("blueprint.call.synchronous_load"),
-						bTickGraph ? TEXT("error") : TEXT("warning"),
+						bTickReachable ? TEXT("error") : TEXT("warning"),
 						0.9,
 						AssetPath,
 						GraphName,
 						Node,
 						FString::Printf(
 							TEXT("Synchronous load call '%s' can stall the game thread."),
-							*FunctionName));
+							*FunctionName),
+						bTickReachable
+							? TEXT("Call is reachable from Event Tick through execution pins.")
+							: TEXT("No Event Tick execution path reaches this call."),
+						ExecutionPath);
 				}
 				if (!Call->GetTargetFunction() && !FunctionName.IsEmpty())
 				{
@@ -377,14 +694,16 @@ void ScanBlueprint(
 				AppendFinding(
 					Findings,
 					TEXT("blueprint.cast.dynamic"),
-					bTickGraph ? TEXT("warning") : TEXT("info"),
-					bTickGraph ? 0.9 : 0.65,
+					bTickReachable ? TEXT("warning") : TEXT("info"),
+					bTickReachable ? 0.9 : 0.65,
 					AssetPath,
 					GraphName,
 					Node,
-					bTickGraph
-						? TEXT("Dynamic cast is in a graph containing Event Tick.")
-						: TEXT("Dynamic cast should be reviewed for coupling and call frequency."));
+					bTickReachable
+						? TEXT("Dynamic cast is reachable from Event Tick.")
+						: TEXT("Dynamic cast should be reviewed for coupling and call frequency."),
+					FString(),
+					ExecutionPath);
 			}
 
 			if (const UK2Node_MacroInstance* Macro = Cast<UK2Node_MacroInstance>(Node);
@@ -393,12 +712,14 @@ void ScanBlueprint(
 				AppendFinding(
 					Findings,
 					TEXT("blueprint.loop.review"),
-					bTickGraph ? TEXT("warning") : TEXT("info"),
+					bTickReachable ? TEXT("warning") : TEXT("info"),
 					0.7,
 					AssetPath,
 					GraphName,
 					Node,
-					TEXT("Loop bounds are data-dependent and should be reviewed."));
+					TEXT("Loop bounds are data-dependent and should be reviewed."),
+					FString(),
+					ExecutionPath);
 			}
 
 			if (Cast<UK2Node_AddDelegate>(Node))
@@ -407,18 +728,27 @@ void ScanBlueprint(
 					Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString()).Add(Node);
 			}
 
-			if (HasDisconnectedExecOutput(Node)
-				&& !Cast<UK2Node_Event>(Node))
+			if (!Cast<UK2Node_Event>(Node))
 			{
-				AppendFinding(
-					Findings,
-					TEXT("blueprint.exec.disconnected_output"),
-					TEXT("info"),
-					0.8,
-					AssetPath,
-					GraphName,
-					Node,
-					TEXT("Execution output is not connected."));
+				for (const UEdGraphPin* Pin :
+					GetDisconnectedExecOutputs(Node))
+				{
+					const FString PinName = Pin->PinName.ToString();
+					AppendFinding(
+						Findings,
+						DisconnectedOutputRule,
+						TEXT("info"),
+						0.8,
+						AssetPath,
+						GraphName,
+						Node,
+						FString::Printf(
+							TEXT("Execution output '%s' is not connected."),
+							*PinName),
+						FString(),
+						ExecutionPath,
+						PinName);
+				}
 			}
 		}
 
@@ -508,7 +838,7 @@ void AppendDependencyCycleFindings(
 						*Package.ToString(),
 						*Dependency.ToString()),
 					Evidence));
-			if (Findings.Num() >= MaxFindingLimit + 1)
+			if (Findings.Num() >= MaxRawFindingLimit + 1)
 			{
 				return;
 			}
@@ -546,6 +876,411 @@ FString BlueprintPackageForClass(const UClass* Class)
 	return Class->GetPathName();
 }
 
+void ReadStringFilter(
+	const TSharedPtr<FJsonObject>& Params,
+	const TCHAR* Field,
+	TSet<FString>& OutValues,
+	const bool bLowercase)
+{
+	if (!Params.IsValid())
+	{
+		return;
+	}
+	const TSharedPtr<FJsonValue>* Value = Params->Values.Find(Field);
+	if (!Value || !Value->IsValid())
+	{
+		return;
+	}
+	auto AddValue =
+		[&OutValues, bLowercase](FString Text)
+		{
+			Text.TrimStartAndEndInline();
+			if (bLowercase)
+			{
+				Text.ToLowerInline();
+			}
+			if (!Text.IsEmpty())
+			{
+				OutValues.Add(Text);
+			}
+		};
+	if ((*Value)->Type == EJson::String)
+	{
+		AddValue((*Value)->AsString());
+		return;
+	}
+	if ((*Value)->Type != EJson::Array)
+	{
+		return;
+	}
+	for (const TSharedPtr<FJsonValue>& Item : (*Value)->AsArray())
+	{
+		if (Item.IsValid() && Item->Type == EJson::String)
+		{
+			AddValue(Item->AsString());
+		}
+	}
+}
+
+FString FindingAssetPath(const TSharedPtr<FJsonObject>& Finding)
+{
+	const TSharedPtr<FJsonObject>* Location = nullptr;
+	FString AssetPath;
+	if (Finding.IsValid()
+		&& Finding->TryGetObjectField(TEXT("location"), Location)
+		&& Location
+		&& Location->IsValid())
+	{
+		(*Location)->TryGetStringField(TEXT("assetPath"), AssetPath);
+	}
+	return AssetPath;
+}
+
+FString FindingGraph(const TSharedPtr<FJsonObject>& Finding)
+{
+	const TSharedPtr<FJsonObject>* Location = nullptr;
+	FString Graph;
+	if (Finding.IsValid()
+		&& Finding->TryGetObjectField(TEXT("location"), Location)
+		&& Location
+		&& Location->IsValid())
+	{
+		(*Location)->TryGetStringField(TEXT("graph"), Graph);
+	}
+	return Graph;
+}
+
+FString FindingPinName(const TSharedPtr<FJsonObject>& Finding)
+{
+	const TSharedPtr<FJsonObject>* Evidence = nullptr;
+	FString PinName;
+	if (Finding.IsValid()
+		&& Finding->TryGetObjectField(TEXT("evidence"), Evidence)
+		&& Evidence
+		&& Evidence->IsValid())
+	{
+		(*Evidence)->TryGetStringField(TEXT("pinName"), PinName);
+	}
+	return PinName;
+}
+
+int32 SeverityRank(const FString& Severity)
+{
+	if (Severity == TEXT("critical"))
+	{
+		return 0;
+	}
+	if (Severity == TEXT("high"))
+	{
+		return 1;
+	}
+	if (Severity == TEXT("medium"))
+	{
+		return 2;
+	}
+	if (Severity == TEXT("low"))
+	{
+		return 3;
+	}
+	return 4;
+}
+
+bool FindingLess(
+	const TSharedPtr<FJsonObject>& Left,
+	const TSharedPtr<FJsonObject>& Right)
+{
+	const FString LeftSeverity =
+		Left->GetStringField(TEXT("severity")).ToLower();
+	const FString RightSeverity =
+		Right->GetStringField(TEXT("severity")).ToLower();
+	const int32 LeftRank = SeverityRank(LeftSeverity);
+	const int32 RightRank = SeverityRank(RightSeverity);
+	if (LeftRank != RightRank)
+	{
+		return LeftRank < RightRank;
+	}
+	const FString LeftKey = FString::Printf(
+		TEXT("%s|%s|%s|%s|%s"),
+		*Left->GetStringField(TEXT("ruleId")),
+		*FindingAssetPath(Left),
+		*FindingGraph(Left),
+		*FindingPinName(Left),
+		*Left->GetStringField(TEXT("findingId")));
+	const FString RightKey = FString::Printf(
+		TEXT("%s|%s|%s|%s|%s"),
+		*Right->GetStringField(TEXT("ruleId")),
+		*FindingAssetPath(Right),
+		*FindingGraph(Right),
+		*FindingPinName(Right),
+		*Right->GetStringField(TEXT("findingId")));
+	return LeftKey < RightKey;
+}
+
+struct FFindingSuppression
+{
+	TSet<FString> FindingIds;
+	TSet<FString> RuleIds;
+	TSet<FString> AssetPaths;
+	TSet<FString> AssetPathPrefixes;
+};
+
+void ReadSuppression(
+	const TSharedPtr<FJsonObject>& Params,
+	FFindingSuppression& OutSuppression)
+{
+	const TSharedPtr<FJsonObject>* Suppression = nullptr;
+	if (!Params.IsValid()
+		|| !Params->TryGetObjectField(TEXT("suppression"), Suppression)
+		|| !Suppression
+		|| !Suppression->IsValid())
+	{
+		return;
+	}
+	ReadStringFilter(
+		*Suppression,
+		TEXT("findingIds"),
+		OutSuppression.FindingIds,
+		false);
+	ReadStringFilter(
+		*Suppression,
+		TEXT("ruleIds"),
+		OutSuppression.RuleIds,
+		true);
+	ReadStringFilter(
+		*Suppression,
+		TEXT("assetPaths"),
+		OutSuppression.AssetPaths,
+		false);
+	ReadStringFilter(
+		*Suppression,
+		TEXT("assetPathPrefixes"),
+		OutSuppression.AssetPathPrefixes,
+		false);
+}
+
+bool IsSuppressed(
+	const TSharedPtr<FJsonObject>& Finding,
+	const FFindingSuppression& Suppression)
+{
+	const FString FindingId =
+		Finding->GetStringField(TEXT("findingId"));
+	const FString RuleId =
+		Finding->GetStringField(TEXT("ruleId")).ToLower();
+	const FString AssetPath = FindingAssetPath(Finding);
+	if (Suppression.FindingIds.Contains(FindingId)
+		|| Suppression.RuleIds.Contains(RuleId))
+	{
+		return true;
+	}
+	for (const FString& SuppressedAsset : Suppression.AssetPaths)
+	{
+		if (AssetPath.Equals(SuppressedAsset, ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+	}
+	for (const FString& Prefix : Suppression.AssetPathPrefixes)
+	{
+		if (IsPackageInDirectory(AssetPath, Prefix))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+struct FFindingBaseline
+{
+	TSet<FString> FindingIds;
+	bool bOnlyKnown = false;
+	bool bEnabled = false;
+};
+
+void ReadBaseline(
+	const TSharedPtr<FJsonObject>& Params,
+	FFindingBaseline& OutBaseline)
+{
+	const TSharedPtr<FJsonObject>* Baseline = nullptr;
+	if (!Params.IsValid()
+		|| !Params->TryGetObjectField(TEXT("baseline"), Baseline)
+		|| !Baseline
+		|| !Baseline->IsValid())
+	{
+		return;
+	}
+	OutBaseline.bEnabled = true;
+	ReadStringFilter(
+		*Baseline,
+		TEXT("findingIds"),
+		OutBaseline.FindingIds,
+		false);
+	FString Mode;
+	(*Baseline)->TryGetStringField(TEXT("mode"), Mode);
+	OutBaseline.bOnlyKnown =
+		Mode.Equals(TEXT("onlyKnown"), ESearchCase::IgnoreCase);
+}
+
+bool PassesBaseline(
+	const TSharedPtr<FJsonObject>& Finding,
+	const FFindingBaseline& Baseline)
+{
+	if (!Baseline.bEnabled)
+	{
+		return true;
+	}
+	const bool bKnown = Baseline.FindingIds.Contains(
+		Finding->GetStringField(TEXT("findingId")));
+	return Baseline.bOnlyKnown ? bKnown : !bKnown;
+}
+
+struct FFindingProjection
+{
+	TArray<TSharedPtr<FJsonValue>> Page;
+	TArray<TSharedPtr<FJsonValue>> Summaries;
+	TArray<TSharedPtr<FJsonObject>> EligibleFindings;
+	int32 Raw = 0;
+	int32 Filtered = 0;
+	int32 Suppressed = 0;
+	int32 BaselineExcluded = 0;
+	int32 Summarized = 0;
+	int32 Eligible = 0;
+	int32 Returned = 0;
+	int32 Offset = 0;
+	int32 Limit = DefaultFindingLimit;
+	bool bRawTruncated = false;
+};
+
+FFindingProjection ProjectFindings(
+	const TArray<TSharedPtr<FJsonObject>>& RawFindings,
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FFindingProjection Projection;
+	Projection.Raw = RawFindings.Num();
+	Projection.bRawTruncated = RawFindings.Num() > MaxRawFindingLimit;
+	Projection.Offset = ReadBoundedInteger(
+		Params,
+		TEXT("findingOffset"),
+		0,
+		0,
+		1000000);
+	Projection.Limit = ReadBoundedInteger(
+		Params,
+		TEXT("findingLimit"),
+		DefaultFindingLimit,
+		1,
+		MaxFindingLimit);
+
+	TSet<FString> SeverityFilter;
+	TSet<FString> RuleFilter;
+	TSet<FString> RuntimeStatusFilter;
+	ReadStringFilter(Params, TEXT("severity"), SeverityFilter, true);
+	ReadStringFilter(Params, TEXT("rule"), RuleFilter, true);
+	ReadStringFilter(
+		Params,
+		TEXT("runtimeStatus"),
+		RuntimeStatusFilter,
+		true);
+	const bool bExpandDisconnected =
+		RuleFilter.Contains(DisconnectedOutputRule);
+
+	FFindingSuppression Suppression;
+	ReadSuppression(Params, Suppression);
+	FFindingBaseline Baseline;
+	ReadBaseline(Params, Baseline);
+
+	TArray<TSharedPtr<FJsonObject>> Eligible;
+	int32 DisconnectedSummaryCount = 0;
+	for (const TSharedPtr<FJsonObject>& Finding : RawFindings)
+	{
+		const FString Severity =
+			Finding->GetStringField(TEXT("severity")).ToLower();
+		const FString Rule =
+			Finding->GetStringField(TEXT("ruleId")).ToLower();
+		const FString RuntimeStatus =
+			Finding->GetStringField(TEXT("runtimeStatus")).ToLower();
+		if ((!SeverityFilter.IsEmpty()
+				&& !SeverityFilter.Contains(Severity))
+			|| (!RuleFilter.IsEmpty() && !RuleFilter.Contains(Rule))
+			|| (!RuntimeStatusFilter.IsEmpty()
+				&& !RuntimeStatusFilter.Contains(RuntimeStatus)))
+		{
+			continue;
+		}
+		++Projection.Filtered;
+		if (IsSuppressed(Finding, Suppression))
+		{
+			++Projection.Suppressed;
+			continue;
+		}
+		if (!PassesBaseline(Finding, Baseline))
+		{
+			++Projection.BaselineExcluded;
+			continue;
+		}
+		if (!bExpandDisconnected && Rule == DisconnectedOutputRule)
+		{
+			++Projection.Summarized;
+			++DisconnectedSummaryCount;
+			continue;
+		}
+		Eligible.Add(Finding);
+	}
+	Eligible.Sort(FindingLess);
+	Projection.Eligible = Eligible.Num();
+	Projection.EligibleFindings = Eligible;
+
+	if (DisconnectedSummaryCount > 0)
+	{
+		TSharedRef<FJsonObject> Summary = MakeShared<FJsonObject>();
+		Summary->SetStringField(TEXT("ruleId"), DisconnectedOutputRule);
+		Summary->SetStringField(TEXT("severity"), TEXT("info"));
+		Summary->SetNumberField(TEXT("count"), DisconnectedSummaryCount);
+		Summary->SetBoolField(TEXT("expanded"), false);
+		Summary->SetStringField(
+			TEXT("message"),
+			TEXT("Disconnected execution outputs are summarized by default; request this rule explicitly to expand them."));
+		Projection.Summaries.Add(MakeShared<FJsonValueObject>(Summary));
+	}
+
+	const int32 End = FMath::Min(
+		Eligible.Num(),
+		Projection.Offset + Projection.Limit);
+	for (int32 Index = Projection.Offset; Index < End; ++Index)
+	{
+		Projection.Page.Add(
+			MakeShared<FJsonValueObject>(Eligible[Index]));
+	}
+	Projection.Returned = Projection.Page.Num();
+	return Projection;
+}
+
+bool RuntimeEvidenceIsComplete(
+	const TSharedPtr<FJsonObject>& Params,
+	const bool bHasDebugTrace)
+{
+	FString Coverage;
+	if (!Params.IsValid()
+		|| !Params->TryGetStringField(TEXT("evidenceCoverage"), Coverage)
+		|| !Coverage.Equals(TEXT("complete"), ESearchCase::IgnoreCase)
+		|| !bHasDebugTrace)
+	{
+		return false;
+	}
+	const TSharedPtr<FJsonObject>* Range = nullptr;
+	if (!Params->TryGetObjectField(TEXT("traceRange"), Range)
+		|| !Range
+		|| !Range->IsValid())
+	{
+		return false;
+	}
+	FString Start;
+	FString End;
+	return (*Range)->TryGetStringField(TEXT("cursorStart"), Start)
+		&& !Start.IsEmpty()
+		&& (*Range)->TryGetStringField(TEXT("cursorEnd"), End)
+		&& !End.IsEmpty();
+}
+
 class FTool_BlueprintScan final : public FMCPToolBase
 {
 public:
@@ -558,8 +1293,6 @@ public:
 	{
 		const int32 AssetLimit =
 			ReadBoundedInteger(Params, TEXT("assetLimit"), DefaultAssetLimit, 1, MaxAssetLimit);
-		const int32 FindingLimit =
-			ReadBoundedInteger(Params, TEXT("findingLimit"), DefaultFindingLimit, 1, MaxFindingLimit);
 		int32 MatchedAssets = 0;
 		const TArray<FAssetData> Assets =
 			ResolveBlueprintAssets(Params, MatchedAssets, AssetLimit);
@@ -579,39 +1312,51 @@ public:
 		}
 		AppendDependencyCycleFindings(Assets, FindingObjects);
 
-		FindingObjects.Sort(
-			[](const TSharedPtr<FJsonObject>& Left, const TSharedPtr<FJsonObject>& Right)
-			{
-				return Left->GetStringField(TEXT("findingId"))
-					< Right->GetStringField(TEXT("findingId"));
-			});
-		TArray<TSharedPtr<FJsonValue>> FindingValues;
-		FindingValues.Reserve(FindingObjects.Num());
-		for (const TSharedPtr<FJsonObject>& Finding : FindingObjects)
-		{
-			FindingValues.Add(MakeShared<FJsonValueObject>(Finding));
-		}
+		FindingObjects.Sort(FindingLess);
+		const FFindingProjection Projection =
+			ProjectFindings(FindingObjects, Params);
 
 		TSharedRef<FJsonObject> Scope = MakeShared<FJsonObject>();
 		FString RequestedAsset;
 		FString PathPrefix;
-		Params->TryGetStringField(TEXT("asset"), RequestedAsset);
-		Params->TryGetStringField(TEXT("pathPrefix"), PathPrefix);
+		bool bDefaultedToGame = false;
+		ResolveScopeFields(
+			Params,
+			RequestedAsset,
+			PathPrefix,
+			bDefaultedToGame);
 		Scope->SetStringField(TEXT("asset"), RequestedAsset);
 		Scope->SetStringField(TEXT("pathPrefix"), PathPrefix);
+		Scope->SetBoolField(
+			TEXT("defaultedToGame"),
+			bDefaultedToGame);
 		Scope->SetArrayField(TEXT("resolvedAssets"), AssetValues);
 		const FString ScopeDigest = DigestJson(Scope);
 
 		TSharedRef<FJsonObject> ScanIdentity = MakeShared<FJsonObject>();
 		ScanIdentity->SetStringField(TEXT("scopeDigest"), ScopeDigest);
-		ScanIdentity->SetArrayField(TEXT("findings"), FindingValues);
+		TArray<TSharedPtr<FJsonValue>> EligibleFindingValues;
+		EligibleFindingValues.Reserve(
+			Projection.EligibleFindings.Num());
+		for (const TSharedPtr<FJsonObject>& Finding :
+			Projection.EligibleFindings)
+		{
+			EligibleFindingValues.Add(
+				MakeShared<FJsonValueObject>(Finding));
+		}
+		ScanIdentity->SetArrayField(
+			TEXT("eligibleFindings"),
+			EligibleFindingValues);
+		ScanIdentity->SetArrayField(
+			TEXT("findingSummaries"),
+			Projection.Summaries);
 		const FString ScanId =
 			MakeStableId(TEXT("bpscan"), {ScopeDigest, DigestJson(ScanIdentity)});
 
 		FScanRecord Record;
 		Record.ScanId = ScanId;
 		Record.ScopeDigest = ScopeDigest;
-		Record.Findings = FindingObjects;
+		Record.Findings = Projection.EligibleFindings;
 		Record.CreatedAt = FDateTime::UtcNow();
 		TMap<FString, FScanRecord>& Records = GetScanRecords();
 		if (Records.Num() >= MaxStoredScans && !Records.Contains(ScanId))
@@ -634,14 +1379,42 @@ public:
 		Result->SetStringField(TEXT("schema"), TEXT("ue.blueprint-scan.v1"));
 		Result->SetStringField(TEXT("scanId"), ScanId);
 		Result->SetStringField(TEXT("scopeDigest"), ScopeDigest);
+		Result->SetObjectField(TEXT("scope"), Scope);
 		Result->SetNumberField(TEXT("matchedAssetTotal"), MatchedAssets);
 		SetBoundedArray(Result, TEXT("assets"), AssetValues, MatchedAssets, AssetLimit);
-		SetBoundedArray(
-			Result,
-			TEXT("findings"),
-			FindingValues,
-			FindingValues.Num(),
-			FindingLimit);
+		Result->SetArrayField(TEXT("findings"), Projection.Page);
+		Result->SetNumberField(TEXT("findingsCount"), Projection.Returned);
+		Result->SetNumberField(TEXT("findingsTotal"), Projection.Eligible);
+		Result->SetNumberField(TEXT("findingsOffset"), Projection.Offset);
+		Result->SetNumberField(TEXT("findingsLimit"), Projection.Limit);
+		Result->SetBoolField(
+			TEXT("findingsTruncated"),
+			Projection.Offset > 0
+				|| Projection.Offset + Projection.Returned
+					< Projection.Eligible);
+		Result->SetBoolField(
+			TEXT("findingsHasMore"),
+			Projection.Offset + Projection.Returned
+				< Projection.Eligible);
+		Result->SetArrayField(
+			TEXT("findingSummaries"),
+			Projection.Summaries);
+		TSharedRef<FJsonObject> Stats = MakeShared<FJsonObject>();
+		Stats->SetNumberField(TEXT("raw"), Projection.Raw);
+		Stats->SetNumberField(TEXT("filtered"), Projection.Filtered);
+		Stats->SetNumberField(TEXT("suppressed"), Projection.Suppressed);
+		Stats->SetNumberField(
+			TEXT("baselineExcluded"),
+			Projection.BaselineExcluded);
+		Stats->SetNumberField(TEXT("summarized"), Projection.Summarized);
+		Stats->SetNumberField(TEXT("eligible"), Projection.Eligible);
+		Stats->SetNumberField(TEXT("returned"), Projection.Returned);
+		Stats->SetNumberField(TEXT("offset"), Projection.Offset);
+		Stats->SetNumberField(TEXT("limit"), Projection.Limit);
+		Stats->SetBoolField(
+			TEXT("exact"),
+			!Projection.bRawTruncated);
+		Result->SetObjectField(TEXT("findingStats"), Stats);
 		Result->SetStringField(
 			TEXT("runtimeEvidenceStatus"),
 			TEXT("notEvaluated"));
@@ -887,8 +1660,12 @@ public:
 
 		const int32 Limit =
 			ReadBoundedInteger(Params, TEXT("limit"), DefaultFindingLimit, 1, MaxFindingLimit);
+		const bool bEvidenceComplete =
+			RuntimeEvidenceIsComplete(Params, bHasDebugTrace);
 		TArray<TSharedPtr<FJsonValue>> Correlated;
 		int32 ObservedCount = 0;
+		int32 NotObservedCount = 0;
+		int32 HypothesisCount = 0;
 		for (const TSharedPtr<FJsonObject>& Original : Record->Findings)
 		{
 			TSharedRef<FJsonObject> Finding = MakeShared<FJsonObject>(*Original);
@@ -906,9 +1683,16 @@ public:
 				++ObservedCount;
 				Finding->SetStringField(TEXT("runtimeStatus"), TEXT("corroborated"));
 			}
-			else
+			else if (bEvidenceComplete)
 			{
 				Finding->SetStringField(TEXT("runtimeStatus"), TEXT("notObserved"));
+				++NotObservedCount;
+			}
+			else
+			{
+				// Absence from a partial trace is not negative evidence.
+				Finding->SetStringField(TEXT("runtimeStatus"), TEXT("hypothesis"));
+				++HypothesisCount;
 			}
 			TSharedRef<FJsonObject> RuntimeEvidence = MakeShared<FJsonObject>();
 			RuntimeEvidence->SetStringField(TEXT("runId"), RunId);
@@ -922,6 +1706,9 @@ public:
 							? TEXT("observedNodeIds")
 							: TEXT("runtimeProviderUnavailable"))));
 			RuntimeEvidence->SetBoolField(TEXT("observed"), bObserved);
+			RuntimeEvidence->SetStringField(
+				TEXT("coverage"),
+				bEvidenceComplete ? TEXT("complete") : TEXT("partial"));
 			if (bHasDebugTrace)
 			{
 				RuntimeEvidence->SetStringField(
@@ -947,6 +1734,11 @@ public:
 		Result->SetStringField(TEXT("scanId"), ScanId);
 		Result->SetStringField(TEXT("runId"), RunId);
 		Result->SetNumberField(TEXT("observedCount"), ObservedCount);
+		Result->SetNumberField(TEXT("notObservedCount"), NotObservedCount);
+		Result->SetNumberField(TEXT("hypothesisCount"), HypothesisCount);
+		Result->SetStringField(
+			TEXT("evidenceCoverage"),
+			bEvidenceComplete ? TEXT("complete") : TEXT("partial"));
 		Result->SetStringField(
 			TEXT("status"),
 			!bHasDebugTrace && !bHasManualEvidence
@@ -965,6 +1757,89 @@ private:
 	UEAIIntegration::Infrastructure::FBlueprintDebugService* DebugService;
 };
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+namespace UEAIIntegrationTools::BlueprintAnalysisTesting
+{
+bool MatchesScopePathsForTesting(
+	const FString& PackagePath,
+	const FString& ObjectPath,
+	const FString& AssetName,
+	const FString& RequestedAsset,
+	const FString& PathPrefix)
+{
+	return ::MatchesScopePaths(
+		PackagePath,
+		ObjectPath,
+		AssetName,
+		RequestedAsset,
+		PathPrefix);
+}
+
+TArray<TSharedPtr<FJsonObject>> ScanBlueprintForTesting(
+	UBlueprint* Blueprint,
+	const FString& AssetPath)
+{
+	TArray<TSharedPtr<FJsonObject>> Findings;
+	::ScanBlueprint(Blueprint, AssetPath, Findings);
+	Findings.Sort(FindingLess);
+	return Findings;
+}
+
+TSharedRef<FJsonObject> ProjectFindingsForTesting(
+	const TArray<TSharedPtr<FJsonObject>>& Findings,
+	const TSharedPtr<FJsonObject>& Params)
+{
+	TArray<TSharedPtr<FJsonObject>> Sorted = Findings;
+	Sorted.Sort(FindingLess);
+	const FFindingProjection Projection =
+		::ProjectFindings(Sorted, Params);
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetArrayField(TEXT("findings"), Projection.Page);
+	Result->SetArrayField(TEXT("findingSummaries"), Projection.Summaries);
+	TSharedRef<FJsonObject> Stats = MakeShared<FJsonObject>();
+	Stats->SetNumberField(TEXT("raw"), Projection.Raw);
+	Stats->SetNumberField(TEXT("filtered"), Projection.Filtered);
+	Stats->SetNumberField(TEXT("suppressed"), Projection.Suppressed);
+	Stats->SetNumberField(
+		TEXT("baselineExcluded"),
+		Projection.BaselineExcluded);
+	Stats->SetNumberField(TEXT("summarized"), Projection.Summarized);
+	Stats->SetNumberField(TEXT("eligible"), Projection.Eligible);
+	Stats->SetNumberField(TEXT("returned"), Projection.Returned);
+	Stats->SetNumberField(TEXT("offset"), Projection.Offset);
+	Stats->SetNumberField(TEXT("limit"), Projection.Limit);
+	Result->SetObjectField(TEXT("findingStats"), Stats);
+	return Result;
+}
+
+FString RuntimeStatusForTesting(
+	const bool bObserved,
+	const bool bHasDebugTrace,
+	const bool bCompleteCoverage,
+	const bool bBoundedRange)
+{
+	TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+	Params->SetStringField(
+		TEXT("evidenceCoverage"),
+		bCompleteCoverage ? TEXT("complete") : TEXT("partial"));
+	if (bBoundedRange)
+	{
+		TSharedRef<FJsonObject> Range = MakeShared<FJsonObject>();
+		Range->SetStringField(TEXT("cursorStart"), TEXT("1"));
+		Range->SetStringField(TEXT("cursorEnd"), TEXT("2"));
+		Params->SetObjectField(TEXT("traceRange"), Range);
+	}
+	if (bObserved)
+	{
+		return TEXT("corroborated");
+	}
+	return RuntimeEvidenceIsComplete(Params, bHasDebugTrace)
+		? TEXT("notObserved")
+		: TEXT("hypothesis");
+}
+}
+#endif
 
 namespace UEAIIntegrationTools
 {
