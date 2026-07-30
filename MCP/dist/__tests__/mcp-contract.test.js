@@ -241,6 +241,34 @@ test("pages and filters capability summaries without emitting schemas by default
     assert.ok(filteredPayload.capabilities.every((capability) => capability.id.includes("pie.") &&
         capability.domain === "scene" &&
         capability.kind === "command"));
+    const rankedResponse = await handleCapabilities(catalog, noNetworkClient, {
+        domain: "blueprint",
+        query: "align layout",
+        limit: 5,
+    });
+    assert.equal(rankedResponse.content[0]?.type, "text");
+    if (rankedResponse.content[0]?.type !== "text") {
+        assert.fail("Expected ranked capability catalog as MCP text content");
+    }
+    const rankedPayload = JSON.parse(rankedResponse.content[0].text);
+    assert.equal(rankedPayload.capabilities[0].id, "blueprint.layout.align");
+    assert.deepEqual(rankedPayload.capabilities[0].match, {
+        score: 10000,
+        matchedFields: ["id"],
+        matchedTokens: ["align", "layout"],
+    });
+    const phraseResponse = await handleCapabilities(catalog, noNetworkClient, {
+        domain: "blueprint",
+        query: "comment group",
+        limit: 5,
+    });
+    assert.equal(phraseResponse.content[0]?.type, "text");
+    if (phraseResponse.content[0]?.type !== "text") {
+        assert.fail("Expected phrase capability catalog as MCP text content");
+    }
+    const phrasePayload = JSON.parse(phraseResponse.content[0].text);
+    assert.equal(phrasePayload.capabilities[0].id, "blueprint.comment.create_from_selection");
+    assert.deepEqual(phrasePayload.capabilities[0].match.matchedTokens, ["comment", "group"]);
     const exactResponse = await handleCapabilities(catalog, noNetworkClient, { operation: "scene.pie.start" });
     assert.equal(exactResponse.content[0]?.type, "text");
     if (exactResponse.content[0]?.type !== "text") {
@@ -804,11 +832,11 @@ test("registers one MCP caller session and attributes subsequent requests", asyn
         else if (url.endsWith("/api/health")) {
             data = {
                 status: "ready",
-                pluginVersion: "0.6.0",
+                pluginVersion: "0.7.0",
                 engineVersion: "5.3",
                 projectName: "Test",
                 mode: "editor",
-                capabilityCount: 317,
+                capabilityCount: 338,
                 domainCounts: {},
                 validationErrors: [],
             };
@@ -942,11 +970,11 @@ test("re-registers after a heartbeat rejects an expired session", async () => {
             data: url.endsWith("/api/health")
                 ? {
                     status: "ready",
-                    pluginVersion: "0.6.0",
+                    pluginVersion: "0.7.0",
                     engineVersion: "5.3",
                     projectName: "Test",
                     mode: "editor",
-                    capabilityCount: 317,
+                    capabilityCount: 338,
                     domainCounts: {},
                     validationErrors: [],
                 }

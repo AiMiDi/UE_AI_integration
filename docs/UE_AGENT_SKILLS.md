@@ -25,15 +25,17 @@ recipe 不包含循环、条件、脚本、参数 schema 或数据绑定。精�
 `ue_context` 或 `ue help`，写入仍经过 capability 的 `confirmWrite`、
 Workflow 的 plan digest、事务、readback 和 rollback。
 
-## 首批 Skill
+## 发布 Skill
 
 | Skill ID | 默认用途 | 主要闭环 |
 |---|---|---|
 | `ue-blueprint-diagnose` | 单 Blueprint 诊断 | scoped scan → graph/call/reference evidence → compile validate → optional runtime correlate |
+| `ue-blueprint-graph-organize` | Blueprint Graph 原子排版 | exact geometry → dry-run/digest → Workflow → structural/layout/image evidence |
 | `ue-performance-regression` | Before/After 性能门禁 | context → durable runs → poll/result → fingerprint compare → optional Trace |
 | `ue-umg-authoring` | Widget Blueprint 连续编辑 | hierarchy baseline → short op/Workflow → hierarchy/binding/compile/dirty readback |
 | `ue-asset-migration` | 资产移动与重构 | dependency audit → plan → exact digest execute → graph/diff readback → optional rollback |
 | `ue-world-partition-validate` | 大世界只读验证 | applicability → cells/sources/audit → Data Layer/HLOD/PCG evidence |
+| `ue-landscape-authoring` | Landscape/Water 确定性变更 | applicability → export/snapshot → change plan → execute → validate/diff → rollback |
 
 每个包自包含：
 

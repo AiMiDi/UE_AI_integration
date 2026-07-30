@@ -2,7 +2,7 @@
   "schema": "ue.agent-skill.v1",
   "schemaVersion": 1,
   "id": "ue-performance-regression",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "UE Performance Regression",
   "description": "Run repeatable performance samples, compare compatible results, and escalate failures to trace evidence.",
   "domains": ["scene", "production"],
@@ -26,7 +26,9 @@
       "production.performance.run",
       "production.job.status",
       "production.performance.result.get",
-      "production.performance.compare"
+      "production.performance.compare",
+      "production.performance.diagnose",
+      "production.performance.report.generate"
     ],
     "optionalCapabilities": [
       "production.trace.start",
@@ -135,6 +137,16 @@
           ]
         },
         {
+          "id": "diagnose-and-report",
+          "phase": "execute",
+          "purpose": "Detect explicit or suspected frame limiting before CPU/GPU attribution and generate HTML, JSON, and JUnit evidence with log health, CPU/GPU trace evidence, next steps, and safe artifact references.",
+          "operations": [
+            "production.performance.diagnose",
+            "production.performance.report.generate",
+            "production.job.artifact.get"
+          ]
+        },
+        {
           "id": "trace-escalation",
           "phase": "verify",
           "purpose": "When comparison regresses or the caller requests attribution, start trace, replay the same candidate workload, stop trace even after replay failure, analyze, and poll the analysis job.",
@@ -157,7 +169,9 @@
           "environment fingerprint compatibility",
           "sample counts and p50, p95, p99 metrics",
           "per-check regression and budget status",
-          "trace, analysis job, and artifact IDs when captured"
+          "trace, analysis job, and artifact IDs when captured",
+          "run-bounded log health, Top CPU scopes, GPU intervals, and next steps",
+          "safe opaque artifact references for production.job.artifact.get"
         ],
         "success": [
           "both runs reached a succeeded terminal state",
@@ -165,7 +179,8 @@
           "only the declared intended change differed and measured environment fingerprints matched",
           "the verdict was produced by explicit compare checks",
           "a requested or regression-triggered trace replay was stopped and its analysis reached a terminal state",
-          "incompatible evidence was reported as inconclusive"
+          "incompatible evidence was reported as inconclusive",
+          "stable 60 Hz cadence without an explicit limiter was reported as suspected and inconclusive"
         ]
       }
     }

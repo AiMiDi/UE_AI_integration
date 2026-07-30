@@ -135,7 +135,9 @@ recipe 的 verify readback。完整设计见 [UE Agent Skills](UE_AGENT_SKILLS.m
 - schema 声明 `requestId` 时自动生成。`--request-id` 用于可控重试。
 - `--confirm-write` 只在 schema 声明 `confirmWrite` 时注入。
 
-完整参数对象也可以避免 PowerShell 的逐字段转义：
+复杂 JSON 在 PowerShell 中应优先使用 `--params-file <path>`；需要管道时使用
+`--params-file -`。`--params <json>` 仅保留给简单对象和已经正确处理引号的
+调用方，不再作为 PowerShell 的推荐写法：
 
 ```powershell
 ue blueprint.scan --params-file .\scan-params.json
@@ -146,6 +148,11 @@ ue blueprint.scan --params '{"roots":["/Game"],"minimumSeverity":"medium"}'
 `--params` 与 `--params-file` 互斥，且完整对象模式不能再混用 schema 生成的
 `--field` 参数。CLI 仍依据本地或在线 descriptor 检查字段、required 与基础
 JSON 类型，Editor 负责最终业务校验。
+
+Windows PowerShell 5.1 在进入 CLI 前就可能把管道中的非 ASCII 字符替换为
+`?`；CLI 无法恢复已经丢失的字符。使用管道前必须显式设置
+`$OutputEncoding`，或直接传入 UTF-8/带 BOM UTF-16 文件。完整编码合同和
+示例见 [能力搜索与 Windows Unicode](CAPABILITY_SEARCH_AND_UNICODE.md)。
 
 ## 输出和退出码
 

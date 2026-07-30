@@ -21,7 +21,7 @@
 ## 1. Trace 与窗口性能证据
 
 - `production.trace.start/status/stop/analyze`
-- `production.performance.run/result.get/compare`
+- `production.performance.run/result.get/compare/diagnose/report.generate`
 - `performance.run` 支持 `mode=window|scenario`、warmup、采样窗口、
   `repeatCount`、帧预算和可选自动 Trace。
 - `profile=standardScenario` 提供标准回归模板：要求当前 Editor 已打开指定
@@ -38,10 +38,62 @@
   历史日志。
 - Trace 文件作为 `ue.artifact.v1` 分块读取；CLI 可用 `--output` 原子导出。
 
+`performance.run` 可选择 `executionTarget=pie|standalone`。Standalone 是一个
+受 Durable Job 管理的独立 Editor/Game 进程：为保证真实渲染路径，子进程使用
+可见窗口而不是隐藏窗口。每次 repeat 都由子进程用实际 wall-clock 分别计时
+warmup 和 sample，并生成独立 CSV；命名 Camera 必须在子 World 中解析成功，
+Object Name 会优先精确匹配，使用 Actor Label 时必须唯一；其声明的 Transform
+和 Player ViewTarget 会在整个采样期间持续锁定。`startupTimeoutSeconds`
+经 Durable Job 统一解析并传给子控制器，范围为 1–3600 秒，默认 300 秒。子进程同时
+产出独立日志、可选 Trace、Camera 验证结果和实际 RHI/GPU/驱动/分辨率/CVar
+runtime fingerprint；父 Editor 只补充项目、地图和 Profile 等稳定字段，不用父
+进程渲染环境冒充子进程证据。PIE 保留 Scenario、相机和交互步骤；Standalone
+不接受无法确定重放的输入步骤。
+
+Standalone 的 `standardProfile.gameInstanceMode` 固定为
+`project|minimal`，默认 `project`。`project` 使用工程配置的 GameInstance；
+`minimal` 仅为该子进程覆盖为基础 `Engine.GameInstance`，用于规避依赖外部
+Launcher 或项目服务的启动守卫，覆盖不会写回工程配置。两种模式会写入不同的
+runtime fingerprint；`minimal` 不等价于完整游戏启动，也不能与 `project`
+结果作为同一环境直接比较。
+
+插件仍只有一个模块；其 host type 为 `DeveloperTool`，并通过
+`TargetAllowList=["Editor"]` 限定只编入 Unreal Editor target。这样同一模块中的
+最小 Standalone 控制器可在 `UnrealEditor -game` 子进程加载，同时不会进入项目
+Game target；子进程参数存在时不会创建 Editor Subsystem、HTTP 服务或状态栏 UI。
+
+`performance.diagnose` 将现有 run/compare/Trace 证据投影为
+`cpuBound`、`gpuBound`、`mixed`、`frameLimited` 或 `inconclusive`，并返回最差帧、
+Top CPU scope、GPU 区间、日志健康度与下一步建议。只有帧时间匹配显式 FPS cap，
+或 VSync 已启用且帧时间匹配常见刷新率时，才判为 `frameLimited`；单独观察到稳定
+16.6667 ms 不能作为 limiter 或性能余量证据。若 Fingerprint 明确显示 VSync 和
+FPS cap 均关闭但仍观察到稳定 60Hz cadence，诊断返回 `inconclusive`，并以
+`frameLimiter.suspected=true` 和
+`classification=suspectedExternalLimiter` 记录外部限帧或未上报呈现约束的
+可能性；此时不会输出 CPU/GPU bound 结论。运行没有可用的本次日志窗口时，
+`logHealth.status=unavailable`，不得报告为 `clean`。
+`performance.report.generate` 同时保留 JSON/JUnit artifact，并生成可离线打开的
+自包含 HTML 报告。HTML 呈现 run-bounded 日志健康度、Top CPU scope、GPU
+interval/aggregate 证据和下一步建议；Artifact 只以转义后的不透明 ID、页内安全
+锚点和 `production.job.artifact.get(jobId, artifactId)` 读取合同展示，不嵌入
+本地路径或可执行链接。传入 `comparisonId` 时，该比较的 `candidateRunId` 必须与
+报告的 `runId` 完全相同，否则返回
+`performance_comparison_candidate_mismatch`，避免将无关 Run 的阈值结论写入
+当前报告。
+
+仓库内 `Performance.StandaloneEvidenceContract` 是使用替身 Operation 的合同
+测试，不会启动 `UnrealEditor -game`，也不构成真实 Standalone E2E 证据。发布
+门禁仍需在实际工程中启动子进程并核对 CSV、日志、Trace 与最终 artifact。
+
 `trace.analyze` 使用 UE 5.3 TraceServices 读取 Frame、Timing、Counter 等
 provider，返回受约束的 CPU scope、Counter、Game/Render/RHI/GPU 聚合和 artifact
-引用。它不返回原始事件洪流，也不宣称代替 Unreal Insights 的完整交互式
-Timing、Memory、Network 或 Asset Loading 分析界面。
+引用。`traceId` 可以是成功的独立 Trace Job，也可以是成功的 Standalone
+performance run ID；后一种情况只有在该 run 自己登记了
+`application/x-unreal-trace` 的 `.utrace` artifact 时才会接受。传给
+`performance.diagnose` 的 analysis job 还必须来自同一 performance run 的
+Trace，否则返回 provenance mismatch。它不返回原始事件洪流，也不宣称代替
+Unreal Insights 的完整交互式 Timing、Memory、Network 或 Asset Loading 分析
+界面。
 
 `performance.compare` 可同时检查多个指标阈值；环境指纹不兼容时返回
 `inconclusive`，证据兼容时返回结构化 `pass` 或 `regression`。每次比较生成

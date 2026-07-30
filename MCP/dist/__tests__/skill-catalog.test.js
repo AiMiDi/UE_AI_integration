@@ -15,12 +15,14 @@ function textPayload(response) {
     }
     return JSON.parse(response.content[0].text);
 }
-test("loads five validated skill packages with complete recipe phases", () => {
+test("loads seven validated skill packages with complete recipe phases", () => {
     const capabilities = loadCapabilityCatalog();
     const skills = loadAgentSkillCatalog(capabilities);
     assert.deepEqual(skills.skills.map((skill) => skill.id), [
         "ue-asset-migration",
         "ue-blueprint-diagnose",
+        "ue-blueprint-graph-organize",
+        "ue-landscape-authoring",
         "ue-performance-regression",
         "ue-umg-authoring",
         "ue-world-partition-validate",
@@ -71,8 +73,8 @@ test("lists compact matches, then loads instructions and generated API guides", 
         risk: "readOnly",
         operation: "scene.world_partition.get",
     }));
-    assert.equal(intentMatch.total, 1);
-    assert.equal(intentMatch.skills[0].id, "ue-world-partition-validate");
+    assert.ok(intentMatch.total >= 1);
+    assert.ok(intentMatch.skills.some((skill) => skill.id === "ue-world-partition-validate"));
     const loaded = textPayload(handleAgentSkills(skills, {
         action: "get",
         skill: "ue-blueprint-diagnose",

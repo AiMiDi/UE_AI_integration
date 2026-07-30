@@ -1,0 +1,219 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-landscape-authoring",
+  "version": "1.1.0",
+  "title": "UE Landscape Authoring",
+  "description": "Inspect, validate, snapshot, export, and safely apply deterministic Landscape and managed Water changes, including verified Water deletion recovery.",
+  "domains": ["scene"],
+  "risk": "mixed",
+  "triggers": [
+    "landscape authoring",
+    "heightmap import",
+    "weightmap import",
+    "landscape material",
+    "water body",
+    "water delete",
+    "terrain rollback",
+    "地形导入",
+    "水体编辑",
+    "水体删除"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.3",
+      "maxExclusive": "5.8"
+    },
+    "capabilities": [
+      "scene.landscape.list",
+      "scene.landscape.get",
+      "scene.landscape.layers.get",
+      "scene.landscape.validate",
+      "scene.landscape.snapshot",
+      "scene.landscape.diff",
+      "scene.landscape.heightmap.export",
+      "scene.landscape.weightmap.export",
+      "scene.landscape.change.plan",
+      "scene.landscape.change.execute",
+      "scene.landscape.change.rollback"
+    ],
+    "optionalCapabilities": [
+      "scene.water.list",
+      "scene.water.get",
+      "scene.water.validate",
+      "scene.world_partition.get",
+      "scene.data_layer.list",
+      "scene.hlod.audit",
+      "scene.pcg.inspect"
+    ]
+  },
+  "recipes": [
+    {
+      "id": "audit-and-export",
+      "title": "Audit and export one Landscape",
+      "description": "Resolve one loaded Landscape, validate loaded structure, capture a semantic snapshot, and export deterministic raw recovery inputs.",
+      "risk": "readOnly",
+      "inputs": [
+        {
+          "name": "landscape",
+          "type": "string",
+          "required": true,
+          "description": "Landscape GUID, path, name, or label."
+        },
+        {
+          "name": "weightLayer",
+          "type": "string",
+          "required": false,
+          "description": "Optional weight layer to export as r8."
+        }
+      ],
+      "steps": [
+        {
+          "id": "resolve",
+          "phase": "discover",
+          "purpose": "Resolve the exact Landscape and read material, extent, proxy, and layer evidence.",
+          "operations": [
+            "scene.landscape.list",
+            "scene.landscape.get",
+            "scene.landscape.layers.get"
+          ]
+        },
+        {
+          "id": "validate",
+          "phase": "verify",
+          "purpose": "Check editability, full loaded extent, material, Layer Info assignments, and raw-import eligibility.",
+          "operations": [
+            "scene.landscape.validate",
+            "scene.landscape.snapshot"
+          ]
+        },
+        {
+          "id": "export",
+          "phase": "execute",
+          "purpose": "Export complete r16 height and optional r8 weight artifacts under Saved with sidecar hashes.",
+          "operations": [
+            "scene.landscape.heightmap.export",
+            "scene.landscape.weightmap.export"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "A validated Landscape baseline with deterministic raw artifacts and bounded subsystem impact evidence.",
+        "evidence": [
+          "Landscape identity and complete loaded extent",
+          "material and Layer Info assignments",
+          "semantic snapshot digest",
+          "package evidence digest",
+          "r16 and optional r8 artifact hashes",
+          "World Partition, Data Layer, HLOD, and PCG impact boundary"
+        ],
+        "success": [
+          "the selected Landscape was unambiguous and editable",
+          "the snapshot digest verified",
+          "each requested artifact was written with a sidecar hash",
+          "partial or unloaded coverage was reported rather than hidden"
+        ]
+      }
+    },
+    {
+      "id": "plan-apply-verify",
+      "title": "Plan, apply, verify, and optionally roll back a terrain change",
+      "description": "Use one approved change plan for deterministic raster, material, Layer Info, and managed Water create, update, or delete operations.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "request",
+          "type": "object",
+          "required": true,
+          "description": "One to 32 admitted Landscape or Water operations."
+        },
+        {
+          "name": "requestId",
+          "type": "string",
+          "required": true,
+          "description": "Caller-generated idempotency identifier."
+        },
+        {
+          "name": "rollbackAfterVerification",
+          "type": "boolean",
+          "required": false,
+          "description": "Restore the captured baseline after verification."
+        }
+      ],
+      "steps": [
+        {
+          "id": "baseline",
+          "phase": "discover",
+          "purpose": "Capture Landscape, optional Water, and partition-system evidence before proposing a write.",
+          "operations": [
+            "scene.landscape.validate",
+            "scene.landscape.snapshot",
+            "scene.water.validate"
+          ]
+        },
+        {
+          "id": "approved-change",
+          "phase": "execute",
+          "purpose": "Plan the normalized request, approve its exact digest, and execute with confirmWrite and requestId.",
+          "operations": [
+            "scene.landscape.change.plan",
+            "scene.landscape.change.execute"
+          ]
+        },
+        {
+          "id": "readback",
+          "phase": "verify",
+          "purpose": "Validate and compare the post-change semantic snapshot; inspect optional partition subsystems when available.",
+          "operations": [
+            "scene.landscape.snapshot",
+            "scene.landscape.diff",
+            "scene.landscape.validate",
+            "scene.water.validate",
+            "scene.world_partition.get",
+            "scene.data_layer.list",
+            "scene.hlod.audit",
+            "scene.pcg.inspect"
+          ]
+        },
+        {
+          "id": "rollback",
+          "phase": "verify",
+          "purpose": "When requested, restore recovery artifacts in the same Editor instance and require the original semantic digest.",
+          "operations": [
+            "scene.landscape.change.rollback",
+            "scene.landscape.snapshot",
+            "scene.landscape.diff"
+          ],
+          "optional": true
+        }
+      ],
+      "result": {
+        "summary": "One idempotent approved change with recovery artifacts, before/after evidence, and verified optional rollback.",
+        "evidence": [
+          "normalized operation list and exact plan digest",
+          "source raster hashes and pre-change package hashes",
+          "requestId and runId",
+          "recovery artifact directory",
+          "verified Water actor export and identity evidence for each deletion",
+          "before and after semantic digests",
+          "bounded changed paths",
+          "rollbackVerified when rollback is requested"
+        ],
+        "success": [
+          "the exact current plan digest was approved",
+          "confirmWrite and a non-empty requestId were supplied",
+          "all operations completed in one Editor transaction",
+          "post-change read-back succeeded",
+          "failure or explicit rollback restored the original semantic digest"
+        ]
+      }
+    }
+  ],
+  "resources": [
+    {
+      "path": "references/landscape-recipe.md",
+      "description": "Raw raster format, approval, Water ownership, impact, and rollback boundaries."
+    }
+  ]
+}

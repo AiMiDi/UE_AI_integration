@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE Landscape Authoring"
+  short_description: "Plan and verify recoverable Landscape and Water changes."
+  default_prompt: "Use $ue-landscape-authoring to audit the selected terrain, plan an approved deterministic change, verify the result, and preserve rollback evidence."

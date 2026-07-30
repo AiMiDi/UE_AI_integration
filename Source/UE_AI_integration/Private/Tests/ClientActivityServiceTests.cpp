@@ -37,7 +37,7 @@ FClientRegistration MakeCliRegistration(
 	FClientRegistration Registration;
 	Registration.ClientKind = TEXT("cli");
 	Registration.Name = TEXT("ue-workflow");
-	Registration.Version = TEXT("0.6.0");
+	Registration.Version = TEXT("0.7.0");
 	Registration.Transport = TEXT("terminal");
 	Registration.Command = Command;
 	Registration.InstanceId = InstanceId;
@@ -456,7 +456,7 @@ bool FClientActivityRequestLifetimeTest::RunTest(
 	FCallerContext StatelessCli;
 	StatelessCli.ClientKind = TEXT("cli");
 	StatelessCli.Name = TEXT("ue");
-	StatelessCli.Version = TEXT("0.6.0");
+	StatelessCli.Version = TEXT("0.7.0");
 	StatelessCli.Transport = TEXT("http");
 	StatelessCli.Command = TEXT("blueprint scan");
 	StatelessCli.InstanceId = TEXT("stateless-cli-instance");
@@ -1020,7 +1020,7 @@ bool FClientActivityBoundedSnapshotTest::RunTest(
 	FCallerContext ActiveCli;
 	ActiveCli.ClientKind = TEXT("cli");
 	ActiveCli.Name = TEXT("ue");
-	ActiveCli.Version = TEXT("0.6.0");
+	ActiveCli.Version = TEXT("0.7.0");
 	ActiveCli.Transport = TEXT("http");
 	ActiveCli.Command = TEXT("production test");
 	ActiveCli.InvocationId = TEXT("active-invocation");

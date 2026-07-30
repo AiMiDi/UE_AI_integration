@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CAPABILITY_DOMAINS, loadCapabilityCatalog, } from "./capability-catalog.js";
+import { compareCapabilityIds, matchCapabilitySearch, } from "./capability-search.js";
 import { DOMAIN_DESCRIPTIONS, DOMAIN_TOOL_NAMES, runDomainOperation, validateDomainOperation, } from "./domain-router.js";
 import { formatErrorResponse, formatJsonResponse, } from "./helpers.js";
 import { UEApiError, ueClient, } from "./ue-bridge.js";
@@ -33,15 +34,31 @@ function resolveLocalCapabilities(catalog, args) {
                 message: `Unknown capability "${args.operation}"`,
             });
         }
-        return capabilityMatches(capability, args) ? [capability] : [];
+        const match = capabilityMatch(capability, args);
+        return match === false
+            ? []
+            : [{ capability, ...(match === undefined ? {} : { match }) }];
     }
     return [...catalog.capabilities]
-        .filter((capability) => capabilityMatches(capability, args))
-        .sort((left, right) => left.id.localeCompare(right.id));
+        .map((capability) => {
+        const match = capabilityMatch(capability, args);
+        return match === false
+            ? undefined
+            : { capability, ...(match === undefined ? {} : { match }) };
+    })
+        .filter((value) => value !== undefined)
+        .sort((left, right) => {
+        if (args.query?.trim() &&
+            left.match !== undefined &&
+            right.match !== undefined &&
+            left.match.score !== right.match.score) {
+            return right.match.score - left.match.score;
+        }
+        return compareCapabilityIds(left.capability.id, right.capability.id);
+    });
 }
-function capabilityMatches(capability, args) {
-    const query = args.query?.trim().toLocaleLowerCase();
-    return ((args.domain === undefined || capability.domain === args.domain) &&
+function capabilityMatch(capability, args) {
+    if (!((args.domain === undefined || capability.domain === args.domain) &&
         (args.operation === undefined || capability.id === args.operation) &&
         (args.kind === undefined || capability.kind === args.kind) &&
         (args.readOnly === undefined ||
@@ -52,13 +69,17 @@ function capabilityMatches(capability, args) {
             capability.traits.expensive === args.expensive) &&
         (args.outputKind === undefined ||
             capability.output.kind === args.outputKind) &&
-        (args.risk === undefined || capability.dsl?.risk === args.risk) &&
-        (query === undefined ||
-            query.length === 0 ||
-            capability.id.toLocaleLowerCase().includes(query) ||
-            capability.description.toLocaleLowerCase().includes(query)));
+        (args.risk === undefined || capability.dsl?.risk === args.risk))) {
+        return false;
+    }
+    const query = args.query?.trim();
+    if (!query) {
+        return undefined;
+    }
+    return matchCapabilitySearch(query, capability) ?? false;
 }
-function summarizeCapability(capability) {
+function summarizeCapability(ranked) {
+    const { capability, match } = ranked;
     return {
         id: capability.id,
         domain: capability.domain,
@@ -70,6 +91,13 @@ function summarizeCapability(capability) {
         ...(capability.requires === undefined
             ? {}
             : { requires: capability.requires }),
+        ...(match === undefined ? {} : { match }),
+    };
+}
+function fullCapability(ranked) {
+    return {
+        ...ranked.capability,
+        ...(ranked.match === undefined ? {} : { match: ranked.match }),
     };
 }
 function pageLocalCapabilities(catalog, args, detail, defaultLimit, maxLimit) {
@@ -86,7 +114,7 @@ function pageLocalCapabilities(catalog, args, detail, defaultLimit, maxLimit) {
         hasMore: offset + page.length < filtered.length,
         detail: args.operation ? "full" : detail,
         capabilities: args.operation || detail === "full"
-            ? page
+            ? page.map(fullCapability)
             : page.map(summarizeCapability),
     };
 }
@@ -156,7 +184,7 @@ export function createMcpServer(options = {}) {
     const shortCliLocator = options.shortCliLocator ?? locateShortCli;
     const server = new McpServer({
         name: "ue-ai-integration",
-        version: "0.6.0",
+        version: "0.7.0",
     });
     server.tool("ue_status", "Check the running Unreal Editor's UE_AI_integration health status.", {}, async () => {
         try {

@@ -1,0 +1,142 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-blueprint-graph-organize",
+  "version": "1.0.0",
+  "title": "UE Blueprint Graph Organize",
+  "description": "Plan, apply, and verify an atomic deterministic UE 5.3-compatible Blueprint Graph layout edit with structural and visual evidence.",
+  "domains": ["blueprint"],
+  "risk": "safeWrite",
+  "triggers": [
+    "blueprint graph organize",
+    "align blueprint nodes",
+    "comment group",
+    "graph layout",
+    "蓝图排版",
+    "节点分组"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.3"
+    },
+    "capabilities": [
+      "blueprint.graph.get",
+      "blueprint.graph.snapshot",
+      "blueprint.graph.diff",
+      "blueprint.layout.organize",
+      "blueprint.layout.validate",
+      "blueprint.graph.capture",
+      "blueprint.graph.capture.get",
+      "blueprint.graph.visual.compare",
+      "blueprint.asset.validate",
+      "blueprint.asset.dirty.get"
+    ],
+    "optionalCapabilities": []
+  },
+  "recipes": [
+    {
+      "id": "organize-and-verify",
+      "title": "Organize and verify one Blueprint Graph",
+      "description": "Preview a bounded layout, apply the exact approved plan in one Workflow transaction, and verify structure, geometry, and pixels.",
+      "risk": "safeWrite",
+      "inputs": [
+        {
+          "name": "blueprint",
+          "type": "string",
+          "required": true,
+          "description": "Blueprint asset path containing the target graph."
+        },
+        {
+          "name": "graph",
+          "type": "string",
+          "required": true,
+          "description": "Target Graph name."
+        },
+        {
+          "name": "groups",
+          "type": "array",
+          "required": true,
+          "description": "Disjoint node groups and their ordered layout actions."
+        }
+      ],
+      "steps": [
+        {
+          "id": "exact-baseline",
+          "phase": "discover",
+          "purpose": "Read exact Graph Editor geometry, retain the structural baseline, and capture the unchanged view.",
+          "operations": [
+            "blueprint.graph.get",
+            "blueprint.graph.snapshot",
+            "blueprint.graph.capture"
+          ]
+        },
+        {
+          "id": "preview-layout",
+          "phase": "execute",
+          "purpose": "Run deterministic UE 5.3-compatible layout semantics on an exact transient graph, cross-check all Graph obstacles, and review the prediction-bound digest without changing the asset, selection, dirty state, or Undo stack.",
+          "operations": [
+            "blueprint.layout.organize"
+          ]
+        },
+        {
+          "id": "apply-approved-layout",
+          "phase": "execute",
+          "purpose": "Rebuild the exact transient prediction, verify its approved digest and graph hash, then apply the approved coordinates and native Comment bounds in the existing Workflow transaction.",
+          "operations": [
+            "blueprint.layout.organize"
+          ],
+          "route": "workflow"
+        },
+        {
+          "id": "structural-readback",
+          "phase": "verify",
+          "purpose": "Verify graph identity, connections, exact layout diagnostics, compile validity, and dirty state.",
+          "operations": [
+            "blueprint.graph.get",
+            "blueprint.graph.diff",
+            "blueprint.layout.validate",
+            "blueprint.asset.validate",
+            "blueprint.asset.dirty.get"
+          ]
+        },
+        {
+          "id": "visual-readback",
+          "phase": "verify",
+          "purpose": "Capture the same Graph Editor and compare compatible render fingerprints and changed pixels.",
+          "operations": [
+            "blueprint.graph.capture",
+            "blueprint.graph.capture.get",
+            "blueprint.graph.visual.compare"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Approved atomic Blueprint Graph layout edit with structural, geometry, and image evidence.",
+        "evidence": [
+          "before and after graph hashes and snapshots",
+          "approved layout plan digest",
+          "predicted layout hash and exact geometry fingerprint",
+          "position changes and created Comment GUIDs",
+          "layout and compile diagnostics",
+          "Workflow run and rollback evidence",
+          "compatible before, after, and diff capture IDs"
+        ],
+        "success": [
+          "the preview left asset, selection, dirty state, and Undo stack unchanged",
+          "the applied plan matched the current graph hash and approved digest",
+          "one Workflow transaction contained the full layout edit",
+          "the structural diff contained only intended layout and Comment changes",
+          "compile and layout validation completed without unexpected errors",
+          "visual comparison used compatible render fingerprints or was reported inconclusive"
+        ]
+      }
+    }
+  ],
+  "resources": [
+    {
+      "path": "references/organize-recipe.md",
+      "description": "Geometry truth, dry-run approval, Workflow rollback, and visual comparison boundaries."
+    }
+  ]
+}

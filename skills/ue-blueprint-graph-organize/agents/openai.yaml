@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE Blueprint Graph Organize"
+  short_description: "Plan, apply, and visually verify Blueprint Graph layouts."
+  default_prompt: "Use $ue-blueprint-graph-organize to organize this Blueprint Graph with a dry-run, approved Workflow, structural verification, and visual comparison."

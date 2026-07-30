@@ -13,6 +13,11 @@ export interface CapabilityRequirements {
         maxExclusive?: string;
     };
 }
+export interface CapabilitySearchMetadata {
+    title?: string;
+    keywords?: string[];
+    aliases?: string[];
+}
 export interface CapabilityInputSchema {
     type: "object";
     properties: Record<string, unknown>;
@@ -41,6 +46,7 @@ export interface CapabilityDescriptor {
     output: {
         kind: CapabilityOutputKind;
     };
+    search?: CapabilitySearchMetadata;
     dsl?: CapabilityDslMetadata;
     requires?: CapabilityRequirements;
 }

@@ -5,6 +5,7 @@
  * connects to an editor that is already running the plugin.
  */
 import type { CapabilityDescriptor, CapabilityDomain, CapabilityDslRisk, CapabilityKind, CapabilityOutputKind } from "./capability-catalog.js";
+import type { CapabilitySearchMatch } from "./capability-search.js";
 export declare const UE_PORT: number;
 export declare const UE_BASE_URL: string;
 export declare const REQUEST_TIMEOUT_MS: number;
@@ -37,7 +38,11 @@ export interface UEHealthData {
     [key: string]: unknown;
 }
 export interface UECapabilitiesData {
-    capabilities: Array<CapabilityDescriptor | Omit<CapabilityDescriptor, "inputSchema" | "dsl">>;
+    capabilities: Array<(CapabilityDescriptor & {
+        match?: CapabilitySearchMatch;
+    }) | (Omit<CapabilityDescriptor, "inputSchema" | "dsl"> & {
+        match?: CapabilitySearchMatch;
+    })>;
     total: number;
     offset: number;
     limit: number;
@@ -105,7 +110,7 @@ export interface UECallerMetadata {
     command?: string;
 }
 export declare const MCP_BRIDGE_NAME = "ue-ai-integration";
-export declare const MCP_BRIDGE_VERSION = "0.6.0";
+export declare const MCP_BRIDGE_VERSION = "0.7.0";
 export declare class UEClient {
     readonly baseUrl: string;
     readonly timeoutMs: number;

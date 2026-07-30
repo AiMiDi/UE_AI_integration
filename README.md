@@ -6,12 +6,12 @@
 Editor Module 和 TypeScript stdio bridge，让 Codex CLI、Claude Code 等
 MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与生产流程。
 
-当前插件版本为 `0.6.0`，以 Unreal Engine 5.3 为实际构建基线；UE
+当前插件版本为 `0.7.0`，以 Unreal Engine 5.3 为实际构建基线；UE
 5.4–5.7 的差异集中在兼容层，但尚未全部完成本地编译验证。
 
 ## 核心特性
 
-- 当前发布快照包含 317 项 manifest 驱动的 Editor 与 PIE Runtime 能力；
+- 当前发布快照包含 338 项 manifest 驱动的 Editor 与 PIE Runtime 能力；
   服务启动时从 manifest 动态计算数量。
 - 十二个稳定的 MCP 工具，不把全部能力直接展开成工具列表。
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
@@ -39,10 +39,18 @@ MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与
   Handler、Event Node、调用边和动态绑定，并在编译后验证。
 - Workflow 默认返回压缩摘要；完整 ReadBack、Diff 与结构快照按 section 获取。
 - capability 目录支持搜索、trait 过滤与分页，默认最多返回 25 项摘要。
+- 0.6.1 补齐 Blueprint Graph 的可信排版闭环：跨端模糊搜索与 Windows Unicode、
+  节点/Comment 几何、布局诊断、原子化 dry-run/审批排版，以及可信 Graph
+  截图和视觉 Diff。详见 [Graph 可信闭环](docs/UE_BLUEPRINT_GRAPH.md)。
+- 0.6.2 增加性能诊断和自包含 HTML 证据报告；受 VSync/FPS cap 限制时会返回
+  `frameLimited` 或 `inconclusive`，不会伪造 CPU/GPU 瓶颈结论。
+- 0.7.0 增加确定性的 Landscape/Water Capability Pack：高度/权重导出、
+  有限的导入与结构化变更计划、恢复 artifact 和同一 Editor 会话 rollback；
+  不包含任意笔刷式 Sculpt/Paint。详见 [Landscape / Water](docs/UE_LANDSCAPE_WATER.md)。
 - [UE 短操作 CLI](docs/UE_SHORT_CLI.md) 以 manifest capability ID 作为首参数，
   默认用本地 schema 单次调用 `/api/execute`，`--live-schema` 可强制在线校验，
   `ue shell` 可复用目录与连接；`ue-workflow` 只保留 DSL。
-- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) 提供五个首批领域 Skill 和
+- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) 提供七个已验证领域 Skill 和
   capability recipe，形成 Load → Discover → Execute → See Results 闭环，
   但不新增任意脚本执行器。
 
@@ -67,12 +75,12 @@ UE_AI_integration Editor Module
 
 | Domain | 数量 | 能力范围 |
 |---|---:|---|
-| Blueprint | 77 | 资产生命周期、Graph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
-| Scene | 79 | Actor、PIE Runtime、可信输入/等待/截图、World Partition、Data Layer、HLOD、PCG、渲染诊断 |
+| Blueprint | 82 | 资产生命周期、Graph 几何/排版/截图、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
+| Scene | 93 | Actor、PIE Runtime、可信输入/等待/截图、World Partition、Data Layer、HLOD、PCG、渲染诊断、Landscape/Water |
 | Content | 78 | 资产查询/依赖/审计、安全导入/重导入、Static Mesh/Texture 配置、Material、Niagara、UMG 与事件 Handler 验证 |
 | Animation | 19 | AnimBlueprint、状态机与 BlendSpace 的创建、读取、校验和 Diff |
 | AI | 17 | Behavior Tree 与 Blackboard 的创建、读取、引用、校验和 Diff |
-| Production | 47 | Durable Job、Trace、性能、测试、Cook/Package、Source Control、DDC、BuildGraph |
+| Production | 49 | Durable Job、Trace、性能诊断/HTML 报告、测试、Cook/Package、Source Control、DDC、BuildGraph |
 
 ## 环境要求
 

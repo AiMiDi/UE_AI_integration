@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 7,
-	"VersionName": "0.6.0",
+	"Version": 8,
+	"VersionName": "0.7.0",
 	"FriendlyName": "UE_AI_integration",
 	"Description": "A manifest-driven, domain-layered AI integration for Unreal Engine 5.3-5.7 with Agent Skills, Editor and PIE evidence, debugging, and UE Workflow DSL capabilities.",
 	"Category": "Editor",
@@ -17,8 +17,9 @@
 	"Modules": [
 		{
 			"Name": "UE_AI_integration",
-			"Type": "Editor",
+			"Type": "DeveloperTool",
 			"LoadingPhase": "PostEngineInit",
+			"TargetAllowList": ["Editor"],
 			"PlatformAllowList": ["Win64", "Linux", "Mac"]
 		}
 	],
@@ -26,6 +27,8 @@
 		{ "Name": "EditorScriptingUtilities", "Enabled": true, "Optional": true },
 		{ "Name": "EnhancedInput", "Enabled": true },
 		{ "Name": "Niagara", "Enabled": true },
+		{ "Name": "Water", "Enabled": true },
+		{ "Name": "PCG", "Enabled": true },
 		{ "Name": "LevelSequenceEditor", "Enabled": true, "Optional": true }
 	]
 }
