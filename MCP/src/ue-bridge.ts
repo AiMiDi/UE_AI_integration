@@ -12,6 +12,7 @@ import type {
   CapabilityKind,
   CapabilityOutputKind,
 } from "./capability-catalog.js";
+import type { CapabilitySearchMatch } from "./capability-search.js";
 import { randomUUID } from "node:crypto";
 
 function parsePositiveInteger(
@@ -83,7 +84,10 @@ export interface UEHealthData {
 
 export interface UECapabilitiesData {
   capabilities: Array<
-    CapabilityDescriptor | Omit<CapabilityDescriptor, "inputSchema" | "dsl">
+    | (CapabilityDescriptor & { match?: CapabilitySearchMatch })
+    | (Omit<CapabilityDescriptor, "inputSchema" | "dsl"> & {
+        match?: CapabilitySearchMatch;
+      })
   >;
   total: number;
   offset: number;
@@ -192,7 +196,7 @@ interface UEClientRegistrationData {
 }
 
 export const MCP_BRIDGE_NAME = "ue-ai-integration";
-export const MCP_BRIDGE_VERSION = "0.6.0";
+export const MCP_BRIDGE_VERSION = "0.7.0";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

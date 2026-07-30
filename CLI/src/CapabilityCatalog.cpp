@@ -66,6 +66,133 @@ bool IsCatalogRoot(const std::filesystem::path& root)
     return false;
 }
 
+std::string NormalizeSearchMetadataValue(
+    const std::string_view value)
+{
+    std::size_t begin = 0;
+    while (begin < value.size()
+        && static_cast<unsigned char>(value[begin]) <= 0x20)
+    {
+        ++begin;
+    }
+    std::size_t end = value.size();
+    while (end > begin
+        && static_cast<unsigned char>(value[end - 1]) <= 0x20)
+    {
+        --end;
+    }
+    std::string normalized(value.substr(begin, end - begin));
+    std::transform(
+        normalized.begin(),
+        normalized.end(),
+        normalized.begin(),
+        [](const unsigned char character)
+        {
+            return static_cast<char>(
+                character >= 'A' && character <= 'Z'
+                    ? character - 'A' + 'a'
+                    : character);
+        });
+    return normalized;
+}
+
+bool ValidateSearchMetadata(
+    const json& descriptor,
+    const std::filesystem::path& manifest,
+    std::string& error)
+{
+    const auto search = descriptor.find("search");
+    if (search == descriptor.end())
+    {
+        return true;
+    }
+    if (!search->is_object())
+    {
+        error =
+            "Capability search metadata must be an object in "
+            + manifest.generic_string();
+        return false;
+    }
+    static const std::set<std::string> allowed = {
+        "title",
+        "keywords",
+        "aliases",
+    };
+    for (const auto& [field, ignored] : search->items())
+    {
+        (void)ignored;
+        if (!allowed.contains(field))
+        {
+            error =
+                "Unsupported capability search field '" + field
+                + "' in " + manifest.generic_string();
+            return false;
+        }
+    }
+    const auto title = search->find("title");
+    if (title != search->end()
+        && (!title->is_string()
+            || NormalizeSearchMetadataValue(
+                title->get_ref<const std::string&>()).empty()))
+    {
+        error =
+            "Capability search title must be non-empty in "
+            + manifest.generic_string();
+        return false;
+    }
+    for (const char* field : { "keywords", "aliases" })
+    {
+        const auto values = search->find(field);
+        if (values == search->end())
+        {
+            continue;
+        }
+        if (!values->is_array() || values->empty())
+        {
+            error =
+                "Capability search " + std::string(field)
+                + " must be a non-empty array in "
+                + manifest.generic_string();
+            return false;
+        }
+        std::set<std::string> unique;
+        for (const auto& value : *values)
+        {
+            if (!value.is_string()
+                || NormalizeSearchMetadataValue(
+                    value.get_ref<const std::string&>()).empty())
+            {
+                error =
+                    "Capability search " + std::string(field)
+                    + " must contain non-empty strings in "
+                    + manifest.generic_string();
+                return false;
+            }
+            const std::string normalized =
+                NormalizeSearchMetadataValue(
+                    value.get_ref<const std::string&>());
+            if (!unique.insert(normalized).second)
+            {
+                error =
+                    "Capability search " + std::string(field)
+                    + " must not contain duplicates in "
+                    + manifest.generic_string();
+                return false;
+            }
+        }
+    }
+    if (title == search->end()
+        && search->find("keywords") == search->end()
+        && search->find("aliases") == search->end())
+    {
+        error =
+            "Capability search metadata must declare title, keywords, "
+            "or aliases in " + manifest.generic_string();
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 std::optional<CapabilityCatalog> CapabilityCatalog::Load(
@@ -199,6 +326,10 @@ std::optional<CapabilityCatalog> CapabilityCatalog::LoadFiles(
                 error =
                     "Capability descriptor is invalid in "
                     + manifest.generic_string();
+                return std::nullopt;
+            }
+            if (!ValidateSearchMetadata(descriptor, manifest, error))
+            {
                 return std::nullopt;
             }
             const std::string id = descriptor["id"].get<std::string>();

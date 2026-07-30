@@ -115,6 +115,118 @@ bool ValidateOptionalStringArray(
 	return bValid;
 }
 
+bool ValidateSearchMetadata(
+	const TSharedPtr<FJsonObject>& Descriptor,
+	const FString& Context,
+	TArray<FString>& Errors)
+{
+	if (!Descriptor.IsValid() || !Descriptor->HasField(TEXT("search")))
+	{
+		return true;
+	}
+	if (!Descriptor->HasTypedField<EJson::Object>(TEXT("search")))
+	{
+		AddError(Errors, Context + TEXT(".search must be an object."));
+		return false;
+	}
+	const TSharedPtr<FJsonObject> Search =
+		Descriptor->GetObjectField(TEXT("search"));
+	static const TSet<FString> AllowedFields = {
+		TEXT("title"),
+		TEXT("keywords"),
+		TEXT("aliases"),
+	};
+	bool bValid = true;
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Field :
+		Search->Values)
+	{
+		if (!AllowedFields.Contains(Field.Key))
+		{
+			AddError(
+				Errors,
+				FString::Printf(
+					TEXT("%s.search.%s is not supported."),
+					*Context,
+					*Field.Key));
+			bValid = false;
+		}
+	}
+	if (Search->HasField(TEXT("title")))
+	{
+		FString Title;
+		if (!Search->TryGetStringField(TEXT("title"), Title)
+			|| Title.TrimStartAndEnd().IsEmpty())
+		{
+			AddError(
+				Errors,
+				Context
+					+ TEXT(".search.title must be a non-empty string."));
+			bValid = false;
+		}
+	}
+	for (const TCHAR* FieldName : {TEXT("keywords"), TEXT("aliases")})
+	{
+		if (!Search->HasField(FieldName))
+		{
+			continue;
+		}
+		if (!Search->HasTypedField<EJson::Array>(FieldName)
+			|| Search->GetArrayField(FieldName).IsEmpty())
+		{
+			AddError(
+				Errors,
+				FString::Printf(
+					TEXT("%s.search.%s must be a non-empty array."),
+					*Context,
+					FieldName));
+			bValid = false;
+			continue;
+		}
+		TSet<FString> Unique;
+		for (const TSharedPtr<FJsonValue>& Value :
+			Search->GetArrayField(FieldName))
+		{
+			if (!Value.IsValid()
+				|| Value->Type != EJson::String
+				|| Value->AsString().TrimStartAndEnd().IsEmpty())
+			{
+				AddError(
+					Errors,
+					FString::Printf(
+						TEXT("%s.search.%s must contain non-empty strings."),
+						*Context,
+						FieldName));
+				bValid = false;
+				continue;
+			}
+			const FString Normalized =
+				Value->AsString().TrimStartAndEnd().ToLower();
+			if (Unique.Contains(Normalized))
+			{
+				AddError(
+					Errors,
+					FString::Printf(
+						TEXT("%s.search.%s must not contain duplicates."),
+						*Context,
+						FieldName));
+				bValid = false;
+			}
+			Unique.Add(Normalized);
+		}
+	}
+	if (!Search->HasField(TEXT("title"))
+		&& !Search->HasField(TEXT("keywords"))
+		&& !Search->HasField(TEXT("aliases")))
+	{
+		AddError(
+			Errors,
+			Context
+				+ TEXT(".search must declare title, keywords, or aliases."));
+		bValid = false;
+	}
+	return bValid;
+}
+
 bool JsonValuesEqual(const TSharedPtr<FJsonValue>& Left, const TSharedPtr<FJsonValue>& Right)
 {
 	return Left.IsValid()
@@ -523,6 +635,8 @@ bool ValidateDescriptor(
 			bValid = false;
 		}
 	}
+
+	bValid &= ValidateSearchMetadata(Descriptor, Context, Errors);
 
 	if (Descriptor->HasField(TEXT("requires")))
 	{

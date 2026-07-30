@@ -273,6 +273,23 @@ int main()
                 capability_page["capabilities"][1]["id"],
             "portable capability catalog sorts by id");
     }
+    ue::workflow::CapabilityQuery ranked_query;
+    ranked_query.domain = "blueprint";
+    ranked_query.query = "align layout";
+    ranked_query.limit = 5;
+    const auto ranked_capabilities =
+        parse_result(engine.CapabilitiesJson(ranked_query));
+    require(
+        ranked_capabilities["ok"] == true
+            && ranked_capabilities["total"] >= 1
+            && ranked_capabilities["capabilities"][0]["id"]
+                == "blueprint.layout.align"
+            && ranked_capabilities["capabilities"][0]["match"]["score"]
+                == 10000
+            && ranked_capabilities["capabilities"][0]["match"]
+                    ["matchedTokens"]
+                == json::array({ "align", "layout" }),
+        "portable capability search uses token AND ranking");
     ue::workflow::CapabilityQuery exact_query;
     exact_query.operation = "blueprint.asset.get";
     const auto exact_capability =
@@ -317,6 +334,62 @@ int main()
                     "sha256:" +
                     vector["sha256"].get<std::string>(),
             "canonical JSON digest matches the shared golden vector");
+    }
+
+    const auto search_vectors = json::parse(read_file(
+        root / "Resources" / "Contracts" /
+            "capability-search-v1.json"));
+    for (const auto& vector : search_vectors["vectors"])
+    {
+        json actual = json::array();
+        for (const auto& descriptor : search_vectors["documents"])
+        {
+            ue::workflow::CapabilitySearchDocument document;
+            document.id = descriptor.value("id", std::string{});
+            document.description =
+                descriptor.value("description", std::string{});
+            const auto search =
+                descriptor.value("search", json::object());
+            document.title =
+                search.value("title", std::string{});
+            document.keywords =
+                search.value(
+                    "keywords",
+                    std::vector<std::string>{});
+            document.aliases =
+                search.value(
+                    "aliases",
+                    std::vector<std::string>{});
+            const auto match =
+                ue::workflow::MatchCapabilitySearch(
+                    vector.value("query", std::string{}),
+                    document);
+            if (match)
+            {
+                actual.push_back({
+                    { "id", document.id },
+                    { "score", match->score },
+                    { "matchedFields", match->matched_fields },
+                    { "matchedTokens", match->matched_tokens },
+                });
+            }
+        }
+        std::sort(
+            actual.begin(),
+            actual.end(),
+            [](const json& left, const json& right)
+            {
+                if (left["score"] != right["score"])
+                {
+                    return left["score"].get<int>()
+                        > right["score"].get<int>();
+                }
+                return left["id"].get<std::string>()
+                    < right["id"].get<std::string>();
+            });
+        require(
+            actual == vector["matches"],
+            "capability search matches the shared golden vector");
     }
 
     const json valid_receipt = {
@@ -601,6 +674,87 @@ int main()
     require(
         call_function_graphs == std::vector<std::string>{ "EventGraph" },
         "node.add read-back uses graph and never called functionName");
+
+    auto organize_layout =
+        minimal_workflow("blueprint", "/Game/Blueprints/BP_Test");
+    organize_layout["operations"].push_back({
+        { "id", "organizeEventGraph" },
+        { "type", "blueprint.layout.organize" },
+        { "params", {
+            { "graph", "EventGraph" },
+            { "groups", json::array({
+                {
+                    { "id", "inputFlow" },
+                    { "nodeIds", json::array({
+                        "00000000-0000-0000-0000-000000000001",
+                        "00000000-0000-0000-0000-000000000002",
+                    }) },
+                    { "actions", json::array({
+                        {
+                            { "kind", "align" },
+                            { "alignment", "top" },
+                        },
+                    }) },
+                },
+            }) },
+        } },
+    });
+	organize_layout["verify"] = {
+		{ "compile", true },
+		{ "readBack", json::array({ "graphs" }) },
+	};
+	const auto missing_layout_approval =
+		parse_result(engine.PlanJson(organize_layout.dump()));
+	require(
+		missing_layout_approval["ok"] == false,
+		"layout.organize requires its Graph hash and layout digest in Workflow");
+	require(
+		has_diagnostic(
+			missing_layout_approval,
+			"workflow_required_parameter_missing"),
+		"missing organizer approval has a stable Workflow diagnostic");
+	organize_layout["operations"][0]["params"]["expectedGraphHash"] =
+		"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+	organize_layout["operations"][0]["params"]["approvePlanDigest"] =
+		"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+	const auto organize_layout_plan_result =
+		engine.PlanJson(organize_layout.dump());
+    require(
+        organize_layout_plan_result.ok,
+        "layout.organize is admitted as a Blueprint editStep");
+    if (organize_layout_plan_result.ok)
+    {
+        const auto organize_layout_plan =
+            parse_result(organize_layout_plan_result);
+        require(
+            organize_layout_plan["operations"].size() == 1
+                && organize_layout_plan["operations"][0].value(
+                    "type",
+                    std::string{}) == "blueprint.layout.organize",
+            "layout.organize remains an authored workflow operation");
+        require(
+            !organize_layout_plan["operations"][0]["params"].contains(
+                "dryRun"),
+            "portable planner does not inject a preview-only dryRun");
+        bool found_organize_graph_read_back = false;
+        for (const auto& finalizer :
+             organize_layout_plan["finalizers"])
+        {
+            found_organize_graph_read_back =
+                found_organize_graph_read_back ||
+                (finalizer.value(
+                     "readBackKey",
+                     std::string{}) == "graphs" &&
+                 finalizer.value(
+                     "params",
+                     json::object())
+                     .value("graph", std::string{}) ==
+                     "EventGraph");
+        }
+        require(
+            found_organize_graph_read_back,
+            "layout.organize supplies its deterministic graph read-back target");
+    }
 
     auto custom_event =
         minimal_workflow("blueprint", "/Game/Blueprints/BP_Test");

@@ -21,6 +21,21 @@ else()
     target_compile_options(UEApiClient PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_library(UECliPlatform STATIC
+    src/Utf8Console.cpp
+)
+add_library(UECli::Platform ALIAS UECliPlatform)
+target_compile_features(UECliPlatform PUBLIC cxx_std_20)
+target_include_directories(UECliPlatform
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+if(MSVC)
+    target_compile_options(UECliPlatform PRIVATE /W4 /permissive- /EHsc)
+else()
+    target_compile_options(UECliPlatform PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(ue-workflow
     src/main.cpp
 )
@@ -44,13 +59,25 @@ target_compile_definitions(UECommandCliCore PRIVATE
     UE_CLI_VERSION="${PROJECT_VERSION}"
     UE_CLI_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
 )
-target_link_libraries(UECommandCliCore PUBLIC UEApi::Client)
+target_link_libraries(
+    UECommandCliCore
+    PUBLIC
+        UEApi::Client
+        UEWorkflow::Core
+        UECli::Platform
+)
 
 target_compile_features(ue PRIVATE cxx_std_20)
 target_link_libraries(ue PRIVATE UECommandCliCore)
 
 target_compile_features(ue-workflow PRIVATE cxx_std_20)
-target_link_libraries(ue-workflow PRIVATE UEWorkflow::Core UEApi::Client)
+target_link_libraries(
+    ue-workflow
+    PRIVATE
+        UEWorkflow::Core
+        UEApi::Client
+        UECli::Platform
+)
 target_include_directories(ue-workflow PRIVATE
     "${CMAKE_SOURCE_DIR}/Workflow/ThirdParty"
 )

@@ -36,6 +36,12 @@ export interface CapabilityRequirements {
   };
 }
 
+export interface CapabilitySearchMetadata {
+  title?: string;
+  keywords?: string[];
+  aliases?: string[];
+}
+
 export interface CapabilityInputSchema {
   type: "object";
   properties: Record<string, unknown>;
@@ -66,6 +72,7 @@ export interface CapabilityDescriptor {
   output: {
     kind: CapabilityOutputKind;
   };
+  search?: CapabilitySearchMetadata;
   dsl?: CapabilityDslMetadata;
   requires?: CapabilityRequirements;
 }
@@ -215,6 +222,69 @@ function parseStringArray(
     );
   }
   return [...new Set(value as string[])];
+}
+
+function parseSearchMetadata(
+  value: unknown,
+  location: string,
+): CapabilitySearchMetadata | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const search = requireRecord(value, location);
+  const allowedFields = new Set(["title", "keywords", "aliases"]);
+  for (const field of Object.keys(search)) {
+    if (!allowedFields.has(field)) {
+      throw new CapabilityManifestError(
+        `${location}.${field} is not supported`,
+      );
+    }
+  }
+  const title =
+    search.title === undefined
+      ? undefined
+      : requireString(search, "title", location);
+  const parseUniqueArray = (
+    field: "keywords" | "aliases",
+  ): string[] | undefined => {
+    const values = search[field];
+    if (values === undefined) {
+      return undefined;
+    }
+    if (
+      !Array.isArray(values) ||
+      values.length === 0 ||
+      values.some(
+        (item) =>
+          typeof item !== "string" || item.trim().length === 0,
+      )
+    ) {
+      throw new CapabilityManifestError(
+        `${location}.${field} must be a non-empty array of non-empty strings`,
+      );
+    }
+    const normalized = values.map((item) =>
+      (item as string).trim().toLowerCase()
+    );
+    if (new Set(normalized).size !== normalized.length) {
+      throw new CapabilityManifestError(
+        `${location}.${field} must not contain duplicates`,
+      );
+    }
+    return [...(values as string[])];
+  };
+  const keywords = parseUniqueArray("keywords");
+  const aliases = parseUniqueArray("aliases");
+  if (title === undefined && keywords === undefined && aliases === undefined) {
+    throw new CapabilityManifestError(
+      `${location} must declare title, keywords, or aliases`,
+    );
+  }
+  return {
+    ...(title === undefined ? {} : { title }),
+    ...(keywords === undefined ? {} : { keywords }),
+    ...(aliases === undefined ? {} : { aliases }),
+  };
 }
 
 function parseRequirements(
@@ -388,6 +458,14 @@ function parseCapability(
     output: {
       kind: output.kind,
     },
+    ...(capability.search === undefined
+      ? {}
+      : {
+          search: parseSearchMetadata(
+            capability.search,
+            `${location}.search`,
+          ),
+        }),
     ...(capability.dsl === undefined
       ? {}
       : {

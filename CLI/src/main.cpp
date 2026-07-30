@@ -1,4 +1,5 @@
 #include "UEApiClient/UEApiClient.h"
+#include "UECliPlatform/Utf8Console.h"
 #include "UEWorkflowCore/WorkflowCore.h"
 
 #include <nlohmann/json.hpp>
@@ -13,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -108,22 +110,24 @@ bool is_tty()
 #endif
 }
 
-std::optional<std::string> read_text(const std::filesystem::path& path)
+ue::cli::Utf8TextResult read_text(
+    const std::filesystem::path& path)
 {
     if (path == "-")
     {
-        return std::string(
-            std::istreambuf_iterator<char>(std::cin),
-            std::istreambuf_iterator<char>());
+        return ue::cli::ReadTextToUtf8(std::cin);
     }
     std::ifstream stream(path, std::ios::binary);
     if (!stream)
     {
-        return std::nullopt;
+        return {
+            false,
+            {},
+            "file_unreadable",
+            "The file could not be opened.",
+        };
     }
-    return std::string(
-        std::istreambuf_iterator<char>(stream),
-        std::istreambuf_iterator<char>());
+    return ue::cli::ReadTextToUtf8(stream);
 }
 
 bool write_text(const std::filesystem::path& path, std::string_view text)
@@ -137,7 +141,8 @@ bool write_text(const std::filesystem::path& path, std::string_view text)
             return false;
         }
     }
-    const auto temporary = path.string() + ".tmp";
+    std::filesystem::path temporary = path;
+    temporary += ".tmp";
     {
         std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
         if (!stream)
@@ -631,7 +636,7 @@ bool parse_arguments(const std::vector<std::string>& arguments, CliOptions& opti
             {
                 return false;
             }
-            options.contract_root = value;
+            options.contract_root = ue::cli::Utf8Path(value);
         }
         else if (argument == "--capability-root")
         {
@@ -640,7 +645,8 @@ bool parse_arguments(const std::vector<std::string>& arguments, CliOptions& opti
             {
                 return false;
             }
-            options.capability_roots.emplace_back(value);
+            options.capability_roots.push_back(
+                ue::cli::Utf8Path(value));
         }
         else if (argument == "--file")
         {
@@ -649,7 +655,7 @@ bool parse_arguments(const std::vector<std::string>& arguments, CliOptions& opti
             {
                 return false;
             }
-            options.file = value;
+            options.file = ue::cli::Utf8Path(value);
         }
         else if (argument == "--receipt")
         {
@@ -658,7 +664,7 @@ bool parse_arguments(const std::vector<std::string>& arguments, CliOptions& opti
             {
                 return false;
             }
-            options.receipt = value;
+            options.receipt = ue::cli::Utf8Path(value);
         }
         else if (argument == "--endpoint")
         {
@@ -1518,29 +1524,34 @@ int run_command(
                 "This command requires --file <workflow.json|->.");
         }
         const auto input = read_text(options.file);
-        if (!input)
+        if (!input.ok)
         {
             return print_error(
                 kExitValidation,
-                "workflow_file_unreadable",
-                "Could not read the workflow file.",
+                input.code == "invalid_text_encoding"
+                    ? input.code
+                    : "workflow_file_unreadable",
+                input.code == "invalid_text_encoding"
+                    ? input.message
+                    : "Could not read the workflow file.",
                 options.file.generic_string());
         }
         if (command == "validate")
         {
-            const auto result = engine->ValidateJson(*input);
+            const auto result = engine->ValidateJson(input.text);
             print_json_text(project_planning_response(result.json, options), options.json_output);
             return result.exit_code;
         }
 
-        const auto plan = engine->PlanJson(*input);
+        const auto plan = engine->PlanJson(input.text);
         if (!plan.ok)
         {
             print_json_text(project_planning_response(plan.json, options), options.json_output);
             return plan.exit_code;
         }
 
-        const auto workflow = json::parse(*input, nullptr, false, true);
+        const auto workflow =
+            json::parse(input.text, nullptr, false, true);
         if (!workflow.is_object())
         {
             return print_error(
@@ -1698,21 +1709,27 @@ int run_command(
                 "This command requires --receipt <path>.");
         }
         const auto receipt_text = read_text(options.receipt);
-        if (!receipt_text)
+        if (!receipt_text.ok)
         {
             return print_error(
                 kExitApproval,
-                "invalid_receipt",
-                "Receipt could not be read.",
+                receipt_text.code == "invalid_text_encoding"
+                    ? receipt_text.code
+                    : "invalid_receipt",
+                receipt_text.code == "invalid_text_encoding"
+                    ? receipt_text.message
+                    : "Receipt could not be read.",
                 options.receipt.generic_string());
         }
-        const auto receipt_validation = engine->ValidateReceiptJson(*receipt_text);
+        const auto receipt_validation =
+            engine->ValidateReceiptJson(receipt_text.text);
         if (!receipt_validation.ok)
         {
             print_json_text(receipt_validation.json, options.json_output);
             return kExitApproval;
         }
-        const auto receipt = json::parse(*receipt_text, nullptr, false, true);
+        const auto receipt =
+            json::parse(receipt_text.text, nullptr, false, true);
         json request = {
             {"action", command},
             {"runId", receipt["runId"]},
@@ -1755,13 +1772,16 @@ int run_command(
 
 } // namespace
 
-int main(int argc, char** argv)
+int main_from_utf8_arguments(
+    std::vector<std::string> all_arguments,
+    const std::filesystem::path& argument_zero)
 {
     std::vector<std::string> arguments;
-    arguments.reserve(static_cast<std::size_t>(std::max(argc - 1, 0)));
-    for (int index = 1; index < argc; ++index)
+    if (all_arguments.size() > 1)
     {
-        arguments.emplace_back(argv[index]);
+        arguments.assign(
+            std::make_move_iterator(all_arguments.begin() + 1),
+            std::make_move_iterator(all_arguments.end()));
     }
 
     CliOptions options;
@@ -1774,6 +1794,31 @@ int main(int argc, char** argv)
     }
 
     std::error_code error;
-    const auto executable = std::filesystem::absolute(argv[0], error);
-    return run_command(std::move(options), error ? std::filesystem::path(argv[0]) : executable);
+    const auto executable =
+        std::filesystem::absolute(argument_zero, error);
+    return run_command(
+        std::move(options),
+        error ? argument_zero : executable);
 }
+
+#if defined(_WIN32)
+int wmain(int argc, wchar_t** argv)
+{
+    ue::cli::InitializeUtf8Console();
+    return main_from_utf8_arguments(
+        ue::cli::Utf8Arguments(argc, argv),
+        argc > 0 && argv[0]
+            ? std::filesystem::path(argv[0])
+            : std::filesystem::path{});
+}
+#else
+int main(int argc, char** argv)
+{
+    ue::cli::InitializeUtf8Console();
+    return main_from_utf8_arguments(
+        ue::cli::Utf8Arguments(argc, argv),
+        argc > 0 && argv[0]
+            ? std::filesystem::path(argv[0])
+            : std::filesystem::path{});
+}
+#endif

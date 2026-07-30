@@ -1,0 +1,135 @@
+{
+  "schema": "ue.capability-search-v1",
+  "documents": [
+    {
+      "id": "blueprint.comment.create_from_selection",
+      "description": "Create a native comment around selected graph nodes.",
+      "search": {
+        "title": "Group Nodes in Comment",
+        "keywords": ["comment", "grouping", "注释框"],
+        "aliases": ["comment group"]
+      }
+    },
+    {
+      "id": "blueprint.layout.align",
+      "description": "Align selected graph nodes with native editor commands.",
+      "search": {
+        "title": "Align Blueprint Nodes",
+        "keywords": ["layout", "arrange", "排版"],
+        "aliases": ["graph align"]
+      }
+    },
+    {
+      "id": "production.performance.report.generate",
+      "description": "Generate a bounded performance evidence report.",
+      "search": {
+        "title": "Generate Performance Report",
+        "keywords": ["profiling", "html"],
+        "aliases": ["perf report"]
+      }
+    },
+    {
+      "id": "test.tie.a.b",
+      "description": "Golden-vector document for deterministic ID ordering.",
+      "search": {
+        "title": "Tie Ordering Dot"
+      }
+    },
+    {
+      "id": "test.tie.a_b",
+      "description": "Golden-vector document for deterministic ID ordering.",
+      "search": {
+        "title": "Tie Ordering Underscore"
+      }
+    }
+  ],
+  "vectors": [
+    {
+      "query": "blueprint.layout.align",
+      "matches": [
+        {
+          "id": "blueprint.layout.align",
+          "score": 100000,
+          "matchedFields": ["id"],
+          "matchedTokens": ["blueprint", "layout", "align"]
+        }
+      ]
+    },
+    {
+      "query": "align layout",
+      "matches": [
+        {
+          "id": "blueprint.layout.align",
+          "score": 10000,
+          "matchedFields": ["id"],
+          "matchedTokens": ["align", "layout"]
+        }
+      ]
+    },
+    {
+      "query": "graphAlign",
+      "matches": [
+        {
+          "id": "blueprint.layout.align",
+          "score": 8000,
+          "matchedFields": ["id", "aliases"],
+          "matchedTokens": ["graph", "align"]
+        }
+      ]
+    },
+    {
+      "query": "comment group",
+      "matches": [
+        {
+          "id": "blueprint.comment.create_from_selection",
+          "score": 9000,
+          "matchedFields": ["id", "title"],
+          "matchedTokens": ["comment", "group"]
+        }
+      ]
+    },
+    {
+      "query": "排版",
+      "matches": [
+        {
+          "id": "blueprint.layout.align",
+          "score": 3000,
+          "matchedFields": ["keywords"],
+          "matchedTokens": ["排版"]
+        }
+      ]
+    },
+    {
+      "query": "performance report",
+      "matches": [
+        {
+          "id": "production.performance.report.generate",
+          "score": 10000,
+          "matchedFields": ["id"],
+          "matchedTokens": ["performance", "report"]
+        }
+      ]
+    },
+    {
+      "query": "layout missing",
+      "matches": []
+    },
+    {
+      "query": "test tie a b",
+      "matches": [
+        {
+          "id": "test.tie.a.b",
+          "score": 20000,
+          "matchedFields": ["id"],
+          "matchedTokens": ["test", "tie", "a", "b"]
+        },
+        {
+          "id": "test.tie.a_b",
+          "score": 20000,
+          "matchedFields": ["id"],
+          "matchedTokens": ["test", "tie", "a", "b"]
+        }
+      ]
+    }
+  ]
+}

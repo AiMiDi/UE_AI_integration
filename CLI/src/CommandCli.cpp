@@ -1,8 +1,10 @@
 #include "UECommandCli/CommandCli.h"
 
 #include "UEApiClient/UEApiClient.h"
+#include "UECliPlatform/Utf8Console.h"
 #include "UECommandCli/CapabilityCatalog.h"
 #include "UECommandCli/SkillCatalog.h"
+#include "UEWorkflowCore/WorkflowCore.h"
 
 #include <algorithm>
 #include <array>
@@ -28,7 +30,7 @@
 #include <vector>
 
 #ifndef UE_CLI_VERSION
-#define UE_CLI_VERSION "0.6.0"
+#define UE_CLI_VERSION "0.7.0"
 #endif
 
 namespace ue::command
@@ -305,20 +307,20 @@ bool ParseArguments(
                 else
                 {
                     options.params_file =
-                        std::filesystem::path(std::move(value));
+                        ue::cli::Utf8Path(value);
                 }
             }
             else if (name == "output")
             {
-                options.output_path = std::move(value);
+                options.output_path = ue::cli::Utf8Path(value);
             }
             else if (name == "capability-root")
             {
-                options.capability_root = std::move(value);
+                options.capability_root = ue::cli::Utf8Path(value);
             }
             else
             {
-                options.skill_root = std::move(value);
+                options.skill_root = ue::cli::Utf8Path(value);
             }
             continue;
         }
@@ -472,9 +474,15 @@ std::optional<std::string> ReadParameterText(
     }
     if (*options.params_file == std::filesystem::path("-"))
     {
-        return std::string(
-            std::istreambuf_iterator<char>(input),
-            std::istreambuf_iterator<char>());
+        const ue::cli::Utf8TextResult decoded =
+            ue::cli::ReadTextToUtf8(input);
+        if (!decoded.ok)
+        {
+            error_code = decoded.code;
+            error_message = decoded.message;
+            return std::nullopt;
+        }
+        return decoded.text;
     }
     std::ifstream stream(*options.params_file, std::ios::binary);
     if (!stream)
@@ -485,9 +493,18 @@ std::optional<std::string> ReadParameterText(
             + options.params_file->generic_string() + "'.";
         return std::nullopt;
     }
-    return std::string(
-        std::istreambuf_iterator<char>(stream),
-        std::istreambuf_iterator<char>());
+    const ue::cli::Utf8TextResult decoded =
+        ue::cli::ReadTextToUtf8(stream);
+    if (!decoded.ok)
+    {
+        error_code = decoded.code;
+        error_message =
+            "Could not decode params file '"
+            + options.params_file->generic_string()
+            + "': " + decoded.message;
+        return std::nullopt;
+    }
+    return decoded.text;
 }
 
 ConversionResult ConvertParameterObject(
@@ -664,7 +681,7 @@ std::optional<json> ConvertScalar(
     else if (raw.starts_with("@"))
     {
         const auto from_file =
-            ReadJsonFile(std::filesystem::path(raw.substr(1)), message);
+            ReadJsonFile(ue::cli::Utf8Path(raw.substr(1)), message);
         if (!from_file)
         {
             return std::nullopt;
@@ -776,7 +793,7 @@ std::optional<json> ConvertArrayValue(
     if (raw.starts_with("@") && !raw.starts_with("@@"))
     {
         const auto from_file =
-            ReadJsonFile(std::filesystem::path(raw.substr(1)), message);
+            ReadJsonFile(ue::cli::Utf8Path(raw.substr(1)), message);
         if (!from_file)
         {
             return std::nullopt;
@@ -1295,8 +1312,8 @@ ParsedEnvelope ExportPayload(
             "The artifact output directory could not be created.",
         };
     }
-    const std::filesystem::path temporary =
-        output_path.string() + ".tmp";
+    std::filesystem::path temporary = output_path;
+    temporary += ".tmp";
     std::ofstream output(
         temporary,
         std::ios::binary | std::ios::trunc);
@@ -1845,6 +1862,52 @@ json LocalCapabilitySummary(const json& descriptor)
     return summary;
 }
 
+ue::workflow::CapabilitySearchDocument CapabilitySearchDocument(
+    const json& descriptor)
+{
+    ue::workflow::CapabilitySearchDocument document;
+    document.id = descriptor.value("id", std::string{});
+    document.description =
+        descriptor.value("description", std::string{});
+    const auto search = descriptor.find("search");
+    if (search == descriptor.end() || !search->is_object())
+    {
+        return document;
+    }
+    document.title = search->value("title", std::string{});
+    const auto read_array =
+        [&search](const char* field)
+    {
+        std::vector<std::string> values;
+        const auto iterator = search->find(field);
+        if (iterator == search->end() || !iterator->is_array())
+        {
+            return values;
+        }
+        for (const auto& value : *iterator)
+        {
+            if (value.is_string())
+            {
+                values.push_back(value.get<std::string>());
+            }
+        }
+        return values;
+    };
+    document.keywords = read_array("keywords");
+    document.aliases = read_array("aliases");
+    return document;
+}
+
+json CapabilitySearchMatchJson(
+    const ue::workflow::CapabilitySearchMatch& match)
+{
+    return {
+        { "score", match.score },
+        { "matchedFields", match.matched_fields },
+        { "matchedTokens", match.matched_tokens },
+    };
+}
+
 std::optional<bool> ParseBooleanOption(
     const RawOption& option,
     std::string& error)
@@ -1960,7 +2023,7 @@ int RunLocalCapabilities(
         }
         if (option.name == "query")
         {
-            query = Lower(*value);
+            query = *value;
         }
         else if (option.name == "operation")
         {
@@ -2027,15 +2090,18 @@ int RunLocalCapabilities(
         }
     }
 
-    std::vector<const json*> matches;
+    struct RankedCapability
+    {
+        const json* descriptor = nullptr;
+        std::optional<ue::workflow::CapabilitySearchMatch> match;
+    };
+    std::vector<RankedCapability> matches;
     for (const auto& [id, descriptor] : catalog.Descriptors())
     {
         const json traits =
             descriptor.value("traits", json::object());
         const json output_descriptor =
             descriptor.value("output", json::object());
-        const std::string description =
-            descriptor.value("description", std::string{});
         if ((!operation.empty() && id != operation)
             || (!domain.empty()
                 && descriptor.value("domain", std::string{})
@@ -2054,15 +2120,41 @@ int RunLocalCapabilities(
                 && traits.value("destructive", false) != *destructive)
             || (expensive
                 && traits.value("expensive", false) != *expensive)
-            || (!query.empty()
-                && Lower(id).find(query) == std::string::npos
-                && Lower(description).find(query)
-                    == std::string::npos))
+            )
         {
             continue;
         }
-        matches.push_back(&descriptor);
+        std::optional<ue::workflow::CapabilitySearchMatch> search_match;
+        if (!query.empty())
+        {
+            search_match = ue::workflow::MatchCapabilitySearch(
+                query,
+                CapabilitySearchDocument(descriptor));
+            if (!search_match)
+            {
+                continue;
+            }
+        }
+        matches.push_back({
+            &descriptor,
+            std::move(search_match),
+        });
     }
+    std::sort(
+        matches.begin(),
+        matches.end(),
+        [&query](
+            const RankedCapability& left,
+            const RankedCapability& right)
+        {
+            if (!query.empty()
+                && left.match->score != right.match->score)
+            {
+                return left.match->score > right.match->score;
+            }
+            return left.descriptor->value("id", std::string{})
+                < right.descriptor->value("id", std::string{});
+        });
 
     json capabilities = json::array();
     const std::size_t end = offset < matches.size()
@@ -2072,10 +2164,18 @@ int RunLocalCapabilities(
     {
         for (std::size_t index = offset; index < end; ++index)
         {
-            capabilities.push_back(
+            json projected =
                 detail == "full"
-                    ? *matches[index]
-                    : LocalCapabilitySummary(*matches[index]));
+                    ? *matches[index].descriptor
+                    : LocalCapabilitySummary(
+                        *matches[index].descriptor);
+            if (matches[index].match)
+            {
+                projected["match"] =
+                    CapabilitySearchMatchJson(
+                        *matches[index].match);
+            }
+            capabilities.push_back(std::move(projected));
         }
     }
     ParsedEnvelope response{

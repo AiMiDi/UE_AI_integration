@@ -1,9 +1,11 @@
 #include "UECommandCli/CommandCli.h"
+#include "UECliPlatform/Utf8Console.h"
 
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -35,7 +37,8 @@ std::filesystem::path NormalizeExecutablePath(
     return error ? candidate : normalized;
 }
 
-std::filesystem::path CurrentExecutablePath(const char* argument_zero)
+std::filesystem::path CurrentExecutablePath(
+    const std::filesystem::path& argument_zero)
 {
 #if defined(_WIN32)
     std::vector<wchar_t> buffer(1024);
@@ -96,26 +99,48 @@ std::filesystem::path CurrentExecutablePath(const char* argument_zero)
     }
 #endif
     return NormalizeExecutablePath(
-        argument_zero
-            ? std::filesystem::path(argument_zero)
-            : std::filesystem::path{});
+        argument_zero);
 }
 
-} // namespace
-
-int main(int argc, char** argv)
+int RunMain(
+    std::vector<std::string> all_arguments,
+    const std::filesystem::path& argument_zero)
 {
     std::vector<std::string> arguments;
-    arguments.reserve(
-        static_cast<std::size_t>(argc > 1 ? argc - 1 : 0));
-    for (int index = 1; index < argc; ++index)
+    if (all_arguments.size() > 1)
     {
-        arguments.emplace_back(argv[index]);
+        arguments.assign(
+            std::make_move_iterator(all_arguments.begin() + 1),
+            std::make_move_iterator(all_arguments.end()));
     }
     return ue::command::Run(
         arguments,
-        CurrentExecutablePath(argc > 0 ? argv[0] : nullptr),
+        CurrentExecutablePath(argument_zero),
         std::cin,
         std::cout,
         std::cerr);
 }
+
+} // namespace
+
+#if defined(_WIN32)
+int wmain(int argc, wchar_t** argv)
+{
+    ue::cli::InitializeUtf8Console();
+    return RunMain(
+        ue::cli::Utf8Arguments(argc, argv),
+        argc > 0 && argv[0]
+            ? std::filesystem::path(argv[0])
+            : std::filesystem::path{});
+}
+#else
+int main(int argc, char** argv)
+{
+    ue::cli::InitializeUtf8Console();
+    return RunMain(
+        ue::cli::Utf8Arguments(argc, argv),
+        argc > 0 && argv[0]
+            ? std::filesystem::path(argv[0])
+            : std::filesystem::path{});
+}
+#endif

@@ -582,7 +582,8 @@ std::optional<std::string> graph_read_back_target(const json& operation)
         }
         field = "graphName";
     }
-    else if (type == "blueprint.node.add")
+    else if (type == "blueprint.node.add" ||
+             type == "blueprint.layout.organize")
     {
         field = "graph";
     }
@@ -1118,6 +1119,187 @@ struct Capability
     json dsl = json::object();
 };
 
+bool ascii_upper(const unsigned char character)
+{
+    return character >= 'A' && character <= 'Z';
+}
+
+bool ascii_lower(const unsigned char character)
+{
+    return character >= 'a' && character <= 'z';
+}
+
+bool ascii_digit(const unsigned char character)
+{
+    return character >= '0' && character <= '9';
+}
+
+unsigned char ascii_lowercase(const unsigned char character)
+{
+    return ascii_upper(character)
+        ? static_cast<unsigned char>(character - 'A' + 'a')
+        : character;
+}
+
+std::string trim_ascii_whitespace(std::string_view value)
+{
+    std::size_t begin = 0;
+    while (begin < value.size()
+        && static_cast<unsigned char>(value[begin]) <= 0x20)
+    {
+        ++begin;
+    }
+    std::size_t end = value.size();
+    while (end > begin
+        && static_cast<unsigned char>(value[end - 1]) <= 0x20)
+    {
+        --end;
+    }
+    return std::string(value.substr(begin, end - begin));
+}
+
+std::string lowercase_ascii(std::string_view value)
+{
+    std::string result(value);
+    std::transform(
+        result.begin(),
+        result.end(),
+        result.begin(),
+        [](const unsigned char character)
+        {
+            return static_cast<char>(ascii_lowercase(character));
+        });
+    return result;
+}
+
+std::vector<std::string> capability_search_tokens(std::string_view value)
+{
+    std::vector<std::string> tokens;
+    std::string current;
+    const auto flush = [&tokens, &current]()
+    {
+        if (!current.empty())
+        {
+            if (std::find(tokens.begin(), tokens.end(), current)
+                == tokens.end())
+            {
+                tokens.push_back(current);
+            }
+            current.clear();
+        }
+    };
+
+    for (std::size_t index = 0; index < value.size(); ++index)
+    {
+        const auto character =
+            static_cast<unsigned char>(value[index]);
+        if (character >= 0x80)
+        {
+            current.push_back(static_cast<char>(character));
+            continue;
+        }
+
+        const bool alphanumeric =
+            ascii_upper(character)
+            || ascii_lower(character)
+            || ascii_digit(character);
+        if (!alphanumeric)
+        {
+            flush();
+            continue;
+        }
+
+        if (ascii_upper(character) && !current.empty())
+        {
+            const auto previous =
+                static_cast<unsigned char>(value[index - 1]);
+            const auto next =
+                index + 1 < value.size()
+                ? static_cast<unsigned char>(value[index + 1])
+                : static_cast<unsigned char>(0);
+            if (ascii_lower(previous)
+                || ascii_digit(previous)
+                || (ascii_upper(previous) && ascii_lower(next)))
+            {
+                flush();
+            }
+        }
+        current.push_back(
+            static_cast<char>(ascii_lowercase(character)));
+    }
+    flush();
+    return tokens;
+}
+
+int capability_field_score(
+    std::string_view token,
+    std::string_view value,
+    const int exact_score,
+    const int substring_score)
+{
+    const std::vector<std::string> tokens =
+        capability_search_tokens(value);
+    if (std::find(tokens.begin(), tokens.end(), token) != tokens.end())
+    {
+        return exact_score;
+    }
+    return std::any_of(
+        tokens.begin(),
+        tokens.end(),
+        [token](const std::string& candidate)
+        {
+            return candidate.find(token) != std::string::npos;
+        })
+        ? substring_score
+        : 0;
+}
+
+CapabilitySearchDocument capability_search_document(
+    const Capability& capability)
+{
+    CapabilitySearchDocument document;
+    document.id = capability.id;
+    document.description = capability.description;
+    const auto search =
+        capability.raw.find("search");
+    if (search == capability.raw.end() || !search->is_object())
+    {
+        return document;
+    }
+    document.title = search->value("title", std::string{});
+    const auto read_array =
+        [&search](const char* field)
+    {
+        std::vector<std::string> values;
+        const auto iterator = search->find(field);
+        if (iterator == search->end() || !iterator->is_array())
+        {
+            return values;
+        }
+        for (const auto& value : *iterator)
+        {
+            if (value.is_string())
+            {
+                values.push_back(value.get<std::string>());
+            }
+        }
+        return values;
+    };
+    document.keywords = read_array("keywords");
+    document.aliases = read_array("aliases");
+    return document;
+}
+
+json capability_search_match_json(
+    const CapabilitySearchMatch& match)
+{
+    return {
+        { "score", match.score },
+        { "matchedFields", match.matched_fields },
+        { "matchedTokens", match.matched_tokens },
+    };
+}
+
 struct NormalizedOperation
 {
     json operation = json::object();
@@ -1146,8 +1328,8 @@ std::string capability_alias(const Capability& capability, std::string_view name
 }
 
 json normalize_params(
-    const json& params,
-    const Capability& capability,
+	const json& params,
+	const Capability& capability,
     const std::string& path,
     const std::string& operation_id,
     std::vector<Diagnostic>& diagnostics)
@@ -1179,10 +1361,142 @@ json normalize_params(
         normalized[canonical] = normalized[alias];
         normalized.erase(alias);
     }
-    return normalized;
+	return normalized;
+}
+
+void validate_workflow_required_parameters(
+	const json& params,
+	const std::set<std::string>& satisfied_parameters,
+	const Capability& capability,
+	const std::string& base_path,
+	const std::string& operation_id,
+	std::vector<Diagnostic>& diagnostics)
+{
+	const auto required = capability.dsl.find(
+		"workflowRequiredParameters");
+	if (required == capability.dsl.end() || !required->is_array())
+	{
+		return;
+	}
+	for (const auto& item : *required)
+	{
+		if (!item.is_string())
+		{
+			continue;
+		}
+		const auto parameter = item.get<std::string>();
+		if (!params.contains(parameter)
+			&& !satisfied_parameters.contains(parameter))
+		{
+			add_diagnostic(
+				diagnostics,
+				"workflow",
+				"workflow_required_parameter_missing",
+				base_path + "/" + pointer_escape(parameter),
+				"This capability parameter is required when the operation "
+				"is executed through UE Workflow.",
+				operation_id);
+		}
+	}
 }
 
 } // namespace
+
+std::optional<CapabilitySearchMatch> MatchCapabilitySearch(
+    const std::string_view query,
+    const CapabilitySearchDocument& document)
+{
+    const std::string trimmed_query =
+        trim_ascii_whitespace(query);
+    const std::vector<std::string> query_tokens =
+        capability_search_tokens(trimmed_query);
+    if (query_tokens.empty())
+    {
+        return CapabilitySearchMatch{};
+    }
+
+    CapabilitySearchMatch match;
+    match.matched_tokens = query_tokens;
+    if (lowercase_ascii(trimmed_query) == lowercase_ascii(document.id))
+    {
+        match.score = 100000;
+        match.matched_fields.push_back("id");
+        return match;
+    }
+
+    enum class Field
+    {
+        Id = 0,
+        Title = 1,
+        Keywords = 2,
+        Aliases = 3,
+        Description = 4,
+    };
+    std::array<bool, 5> matched_fields{};
+    for (const std::string& token : query_tokens)
+    {
+        int best_score = 0;
+        Field best_field = Field::Description;
+        const auto consider =
+            [&best_score, &best_field](
+                const int score,
+                const Field field)
+        {
+            if (score > best_score)
+            {
+                best_score = score;
+                best_field = field;
+            }
+        };
+        consider(
+            capability_field_score(token, document.id, 5000, 4500),
+            Field::Id);
+        consider(
+            capability_field_score(token, document.title, 4000, 3500),
+            Field::Title);
+        for (const std::string& keyword : document.keywords)
+        {
+            consider(
+                capability_field_score(token, keyword, 3000, 2500),
+                Field::Keywords);
+        }
+        for (const std::string& alias : document.aliases)
+        {
+            consider(
+                capability_field_score(token, alias, 3000, 2500),
+                Field::Aliases);
+        }
+        consider(
+            capability_field_score(
+                token,
+                document.description,
+                1000,
+                500),
+            Field::Description);
+        if (best_score == 0)
+        {
+            return std::nullopt;
+        }
+        match.score += best_score;
+        matched_fields[static_cast<std::size_t>(best_field)] = true;
+    }
+
+    constexpr std::array<std::string_view, 5> field_names = {
+        "id",
+        "title",
+        "keywords",
+        "aliases",
+        "description",
+    };
+    for (std::size_t index = 0; index < matched_fields.size(); ++index)
+    {
+        if (matched_fields[index])
+        {
+            match.matched_fields.emplace_back(field_names[index]);
+        }
+    }
+    return match;
+}
 
 class Engine::Impl
 {
@@ -2111,18 +2425,12 @@ public:
             }, std::move(diagnostics), 2);
         }
 
-        auto lowercase = [](std::string value) {
-            std::transform(
-                value.begin(),
-                value.end(),
-                value.begin(),
-                [](const unsigned char character) {
-                    return static_cast<char>(std::tolower(character));
-                });
-            return value;
+        struct RankedCapability
+        {
+            const Capability* capability = nullptr;
+            std::optional<CapabilitySearchMatch> match;
         };
-        const auto search = lowercase(query.query);
-        std::vector<const Capability*> matches;
+        std::vector<RankedCapability> matches;
         for (const auto& [id, capability] : capabilities_)
         {
             if (!query.operation.empty() && id != query.operation)
@@ -2167,17 +2475,33 @@ public:
             {
                 continue;
             }
-            if (!search.empty())
+            std::optional<CapabilitySearchMatch> search_match;
+            if (!query.query.empty())
             {
-                const auto haystack =
-                    lowercase(id + "\n" + capability.description);
-                if (haystack.find(search) == std::string::npos)
+                search_match = MatchCapabilitySearch(
+                    query.query,
+                    capability_search_document(capability));
+                if (!search_match)
                 {
                     continue;
                 }
             }
-            matches.push_back(&capability);
+            matches.push_back({ &capability, std::move(search_match) });
         }
+        std::sort(
+            matches.begin(),
+            matches.end(),
+            [&query](
+                const RankedCapability& left,
+                const RankedCapability& right)
+            {
+                if (!query.query.empty()
+                    && left.match->score != right.match->score)
+                {
+                    return left.match->score > right.match->score;
+                }
+                return left.capability->id < right.capability->id;
+            });
 
         if (!query.operation.empty() && matches.empty())
         {
@@ -2205,7 +2529,8 @@ public:
              index < page_end;
              ++index)
         {
-            const Capability& capability = *matches[index];
+            const RankedCapability& ranked = matches[index];
+            const Capability& capability = *ranked.capability;
             if (full)
             {
                 json descriptor = capability.raw;
@@ -2213,6 +2538,11 @@ public:
                 descriptor["available"] = nullptr;
                 descriptor["availabilityReasons"] =
                     json::array({ "editor_connection_required" });
+                if (ranked.match)
+                {
+                    descriptor["match"] =
+                        capability_search_match_json(*ranked.match);
+                }
                 page.push_back(std::move(descriptor));
                 continue;
             }
@@ -2240,6 +2570,11 @@ public:
             if (!descriptor_risk.empty())
             {
                 summary["risk"] = descriptor_risk;
+            }
+            if (ranked.match)
+            {
+                summary["match"] =
+                    capability_search_match_json(*ranked.match);
             }
             page.push_back(std::move(summary));
         }
@@ -2872,10 +3207,17 @@ private:
             else
             {
                 normalized_operation.erase("bindings");
-            }
-            normalized_operation["dependsOn"] = dependencies;
-            validate_schema(
-                normalized_operation["params"],
+			}
+			normalized_operation["dependsOn"] = dependencies;
+			validate_workflow_required_parameters(
+				normalized_operation["params"],
+				satisfied_parameters,
+				capability->second,
+				base_path + "/params",
+				id,
+				result.diagnostics);
+			validate_schema(
+				normalized_operation["params"],
                 capability->second.input_schema,
                 capability->second.input_schema,
                 base_path + "/params",
@@ -3448,9 +3790,16 @@ private:
             {
                 normalized_operation["bindings"] =
                     std::move(normalized_bindings);
-            }
-            normalized_operation["dependsOn"] = dependencies;
-            validate_schema(
+			}
+			normalized_operation["dependsOn"] = dependencies;
+			validate_workflow_required_parameters(
+				normalized_operation["params"],
+				satisfied_parameters,
+				*capability,
+				base_path + "/params",
+				id,
+				result.diagnostics);
+			validate_schema(
                 normalized_operation["params"],
                 capability->input_schema,
                 capability->input_schema,

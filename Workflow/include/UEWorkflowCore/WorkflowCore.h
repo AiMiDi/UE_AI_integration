@@ -66,6 +66,22 @@ struct CapabilityQuery
     CapabilityDetail detail = CapabilityDetail::Summary;
 };
 
+struct CapabilitySearchDocument
+{
+    std::string id;
+    std::string title;
+    std::string description;
+    std::vector<std::string> keywords;
+    std::vector<std::string> aliases;
+};
+
+struct CapabilitySearchMatch
+{
+    int score = 0;
+    std::vector<std::string> matched_fields;
+    std::vector<std::string> matched_tokens;
+};
+
 class Engine
 {
 public:
@@ -109,5 +125,15 @@ private:
     std::string_view json_text);
 [[nodiscard]] std::optional<std::string> CanonicalJsonSha256(
     std::string_view json_text);
+/**
+ * Match a capability using the shared v1 discovery contract.
+ *
+ * Query and document text are split on ASCII punctuation/whitespace and
+ * camelCase boundaries. Query tokens use AND semantics. Non-ASCII UTF-8 text
+ * is preserved byte-for-byte so Chinese titles and aliases remain searchable.
+ */
+[[nodiscard]] std::optional<CapabilitySearchMatch> MatchCapabilitySearch(
+    std::string_view query,
+    const CapabilitySearchDocument& document);
 
 } // namespace ue::workflow

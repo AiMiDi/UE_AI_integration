@@ -1,6 +1,7 @@
 #include "UECommandCli/CommandCli.h"
 #include "UECommandCli/CapabilityCatalog.h"
 #include "UECommandCli/SkillCatalog.h"
+#include "UECliPlatform/Utf8Console.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -54,6 +55,65 @@ json Descriptor()
 
 int main()
 {
+    const std::string utf8_text = "{\"title\":\"输入处理\"}";
+    const auto plain_utf8 = ue::cli::DecodeTextToUtf8(utf8_text);
+    Require(
+        plain_utf8.ok && plain_utf8.text == utf8_text,
+        "plain UTF-8 input must round-trip");
+
+    const auto bom_utf8 = ue::cli::DecodeTextToUtf8(
+        std::string("\xef\xbb\xbf") + utf8_text);
+    Require(
+        bom_utf8.ok && bom_utf8.text == utf8_text,
+        "UTF-8 BOM must be stripped");
+
+    const std::string utf16_le(
+        "\xff\xfe\x7b\x00\x22\x00\x74\x00\x22\x00\x3a\x00"
+        "\x22\x00\x2d\x4e\x87\x65\x22\x00\x7d\x00",
+        22);
+    const auto decoded_le = ue::cli::DecodeTextToUtf8(utf16_le);
+    Require(
+        decoded_le.ok && decoded_le.text == "{\"t\":\"中文\"}",
+        "UTF-16LE BOM input must decode to UTF-8");
+
+    const std::string utf16_be(
+        "\xfe\xff\x00\x7b\x00\x22\x00\x74\x00\x22\x00\x3a"
+        "\x00\x22\x4e\x2d\x65\x87\x00\x22\x00\x7d",
+        22);
+    const auto decoded_be = ue::cli::DecodeTextToUtf8(utf16_be);
+    Require(
+        decoded_be.ok && decoded_be.text == "{\"t\":\"中文\"}",
+        "UTF-16BE BOM input must decode to UTF-8");
+
+    const auto invalid_utf8 =
+        ue::cli::DecodeTextToUtf8(std::string("\xc3\x28", 2));
+    Require(
+        !invalid_utf8.ok
+            && invalid_utf8.code == "invalid_text_encoding",
+        "invalid input must return invalid_text_encoding");
+    const auto unsupported_utf32_le =
+        ue::cli::DecodeTextToUtf8(
+            std::string("\xff\xfe\x00\x00\x2d\x63\x00\x00", 8));
+    Require(
+        !unsupported_utf32_le.ok
+            && unsupported_utf32_le.code == "invalid_text_encoding",
+        "UTF-32LE must not be misdetected as UTF-16LE");
+    const auto unsupported_utf32_be =
+        ue::cli::DecodeTextToUtf8(
+            std::string("\x00\x00\xfe\xff\x00\x00\x63\x2d", 8));
+    Require(
+        !unsupported_utf32_be.ok
+            && unsupported_utf32_be.code == "invalid_text_encoding",
+        "UTF-32BE must return invalid_text_encoding");
+
+    std::istringstream unicode_stdin(
+        std::string("\xef\xbb\xbf") + utf8_text);
+    const auto decoded_stdin =
+        ue::cli::ReadTextToUtf8(unicode_stdin);
+    Require(
+        decoded_stdin.ok && decoded_stdin.text == utf8_text,
+        "stdin decoder must use the same text contract");
+
     const auto catalog_root =
         std::filesystem::temp_directory_path()
         / ("ue-command-cli-catalog-"
@@ -75,6 +135,16 @@ int main()
                     { "domain", "blueprint" },
                     { "kind", "query" },
                     { "description", "Catalog load test." },
+                    { "search", {
+                        { "title", "Test Blueprint Operation" },
+                        { "keywords", json::array({
+                            "diagnostics",
+                            "蓝图",
+                        }) },
+                        { "aliases", json::array({
+                            "catalog lookup",
+                        }) },
+                    } },
                     { "inputSchema", {
                         { "type", "object" },
                         { "properties", json::object() },
@@ -111,6 +181,42 @@ int main()
     Require(
         single_catalog->Size() == 1,
         "single-domain catalog load failed");
+
+    std::istringstream capability_input;
+    std::ostringstream capability_output;
+    std::ostringstream capability_error;
+    const int capability_result = ue::command::Run(
+        {
+            "capabilities",
+            "--capability-root",
+            catalog_root.string(),
+            "--query",
+            "catalogLookup",
+            "--json",
+        },
+        catalog_root / "bin" / "ue",
+        capability_input,
+        capability_output,
+        capability_error);
+    Require(
+        capability_result == 0,
+        "ranked capability query failed: "
+            + capability_error.str());
+    const json capability_envelope =
+        json::parse(capability_output.str());
+    Require(
+        capability_envelope["data"]["capabilities"][0]["id"]
+            == "blueprint.test_operation",
+        "capability aliases must be searchable");
+    Require(
+        capability_envelope["data"]["capabilities"][0]["match"]["score"]
+            == 6000,
+        "capability search score must follow the shared contract");
+    Require(
+        capability_envelope["data"]["capabilities"][0]["match"]
+                ["matchedTokens"]
+            == json::array({ "catalog", "lookup" }),
+        "capability search must expose normalized matched tokens");
 
     const auto skill_root =
         catalog_root.parent_path()

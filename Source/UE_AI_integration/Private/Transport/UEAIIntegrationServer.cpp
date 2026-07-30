@@ -14,6 +14,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Tools/MCPToolRegistry.h"
 #include "Transport/MCPHttpContract.h"
+#include "UEWorkflowCore/WorkflowCore.h"
 #include "Workflow/UEWorkflowRuntime.h"
 
 #ifndef UE_AI_INTEGRATION_VERSION
@@ -216,7 +217,7 @@ TSharedPtr<FJsonObject> MakeCapabilitySummary(const TSharedPtr<FJsonObject>& Des
 	static const TArray<FString> SummaryFields = {
 	    TEXT("id"),          TEXT("domain"), TEXT("kind"),
 	    TEXT("description"), TEXT("traits"), TEXT("output"), TEXT("requires"),
-	    TEXT("available"), TEXT("availabilityReasons"),
+	    TEXT("available"), TEXT("availabilityReasons"), TEXT("match"),
 	};
 	for (const FString& FieldName : SummaryFields)
 	{
@@ -235,6 +236,86 @@ TSharedPtr<FJsonObject> MakeCapabilitySummary(const TSharedPtr<FJsonObject>& Des
 		Summary->SetStringField(TEXT("risk"), Risk);
 	}
 	return Summary;
+}
+
+std::string ToUtf8String(const FString& Value)
+{
+	const FTCHARToUTF8 Converted(*Value);
+	return std::string(Converted.Get(), Converted.Length());
+}
+
+ue::workflow::CapabilitySearchDocument MakeCapabilitySearchDocument(
+	const TSharedPtr<FJsonObject>& Descriptor)
+{
+	ue::workflow::CapabilitySearchDocument Document;
+	if (!Descriptor.IsValid())
+	{
+		return Document;
+	}
+	FString Value;
+	if (Descriptor->TryGetStringField(TEXT("id"), Value))
+	{
+		Document.id = ToUtf8String(Value);
+	}
+	if (Descriptor->TryGetStringField(TEXT("description"), Value))
+	{
+		Document.description = ToUtf8String(Value);
+	}
+
+	const TSharedPtr<FJsonObject>* Search = nullptr;
+	if (!Descriptor->TryGetObjectField(TEXT("search"), Search)
+		|| !Search
+		|| !Search->IsValid())
+	{
+		return Document;
+	}
+	if ((*Search)->TryGetStringField(TEXT("title"), Value))
+	{
+		Document.title = ToUtf8String(Value);
+	}
+	const auto ReadArray =
+		[Search](const TCHAR* FieldName)
+	{
+		std::vector<std::string> Values;
+		if (!(*Search)->HasTypedField<EJson::Array>(FieldName))
+		{
+			return Values;
+		}
+		for (const TSharedPtr<FJsonValue>& Item :
+			(*Search)->GetArrayField(FieldName))
+		{
+			if (Item.IsValid() && Item->Type == EJson::String)
+			{
+				Values.push_back(ToUtf8String(Item->AsString()));
+			}
+		}
+		return Values;
+	};
+	Document.keywords = ReadArray(TEXT("keywords"));
+	Document.aliases = ReadArray(TEXT("aliases"));
+	return Document;
+}
+
+TSharedPtr<FJsonObject> MakeCapabilitySearchMatch(
+	const ue::workflow::CapabilitySearchMatch& Match)
+{
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetNumberField(TEXT("score"), Match.score);
+	TArray<TSharedPtr<FJsonValue>> MatchedFields;
+	for (const std::string& Field : Match.matched_fields)
+	{
+		MatchedFields.Add(MakeShared<FJsonValueString>(
+			UTF8_TO_TCHAR(Field.c_str())));
+	}
+	TArray<TSharedPtr<FJsonValue>> MatchedTokens;
+	for (const std::string& Token : Match.matched_tokens)
+	{
+		MatchedTokens.Add(MakeShared<FJsonValueString>(
+			UTF8_TO_TCHAR(Token.c_str())));
+	}
+	Result->SetArrayField(TEXT("matchedFields"), MatchedFields);
+	Result->SetArrayField(TEXT("matchedTokens"), MatchedTokens);
+	return Result;
 }
 
 bool IsBlueprintDebugCapability(const FString& Capability)
@@ -966,7 +1047,12 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		return true;
 	}
 
-	TArray<TSharedPtr<FJsonObject>> FilteredDescriptors;
+	struct FRankedCapability
+	{
+		TSharedPtr<FJsonObject> Descriptor;
+		TOptional<ue::workflow::CapabilitySearchMatch> Match;
+	};
+	TArray<FRankedCapability> FilteredDescriptors;
 	FilteredDescriptors.Reserve(Registry.GetCapabilityDescriptors().Num());
 	for (const TSharedPtr<FJsonObject>& Descriptor : Registry.GetCapabilityDescriptors())
 	{
@@ -979,8 +1065,6 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		const FString Id = DecoratedDescriptor->GetStringField(TEXT("id"));
 		const FString Domain = DecoratedDescriptor->GetStringField(TEXT("domain"));
 		const FString Kind = DecoratedDescriptor->GetStringField(TEXT("kind"));
-		const FString Description =
-			DecoratedDescriptor->GetStringField(TEXT("description"));
 
 		FString DescriptorRisk;
 		const TSharedPtr<FJsonObject>* Dsl = nullptr;
@@ -998,8 +1082,6 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		    (!KindFilter.IsEmpty() && Kind != KindFilter) ||
 		    (!RiskFilter.IsEmpty() && DescriptorRisk != RiskFilter) ||
 		    (AvailableOnlyFilter.Get(false) && !bAvailable) ||
-		    (!SearchQuery.IsEmpty() && !Id.Contains(SearchQuery, ESearchCase::IgnoreCase) &&
-		     !Description.Contains(SearchQuery, ESearchCase::IgnoreCase)) ||
 		    !DescriptorMatchesTrait(
 			    DecoratedDescriptor, TEXT("readOnly"), ReadOnlyFilter) ||
 		    !DescriptorMatchesTrait(
@@ -1018,11 +1100,42 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 				continue;
 			}
 		}
-		FilteredDescriptors.Add(DecoratedDescriptor);
+		TOptional<ue::workflow::CapabilitySearchMatch> SearchMatch;
+		if (!SearchQuery.IsEmpty())
+		{
+			const std::optional<ue::workflow::CapabilitySearchMatch> Match =
+				ue::workflow::MatchCapabilitySearch(
+					ToUtf8String(SearchQuery),
+					MakeCapabilitySearchDocument(DecoratedDescriptor));
+			if (!Match)
+			{
+				continue;
+			}
+			SearchMatch = *Match;
+			DecoratedDescriptor->SetObjectField(
+				TEXT("match"),
+				MakeCapabilitySearchMatch(*Match));
+		}
+		FilteredDescriptors.Add({
+			DecoratedDescriptor,
+			MoveTemp(SearchMatch),
+		});
 	}
 	FilteredDescriptors.Sort(
-	    [](const TSharedPtr<FJsonObject>& Left, const TSharedPtr<FJsonObject>& Right)
-	    { return Left->GetStringField(TEXT("id")) < Right->GetStringField(TEXT("id")); });
+	    [&SearchQuery](
+		    const FRankedCapability& Left,
+		    const FRankedCapability& Right)
+	    {
+		    if (!SearchQuery.IsEmpty()
+			    && Left.Match.GetValue().score
+				    != Right.Match.GetValue().score)
+		    {
+			    return Left.Match.GetValue().score
+				    > Right.Match.GetValue().score;
+		    }
+		    return Left.Descriptor->GetStringField(TEXT("id"))
+			    < Right.Descriptor->GetStringField(TEXT("id"));
+	    });
 
 	if (!ExactOperation.IsEmpty() && FilteredDescriptors.IsEmpty())
 	{
@@ -1043,7 +1156,8 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 	CapabilityValues.Reserve(FMath::Max(0, PageEnd - Offset));
 	for (int32 Index = Offset; Index < PageEnd; ++Index)
 	{
-		const TSharedPtr<FJsonObject> Descriptor = FilteredDescriptors[Index];
+		const TSharedPtr<FJsonObject> Descriptor =
+			FilteredDescriptors[Index].Descriptor;
 		CapabilityValues.Add(MakeShared<FJsonValueObject>(
 		    Detail == TEXT("full") ? Descriptor : MakeCapabilitySummary(Descriptor)));
 	}

@@ -31,13 +31,58 @@ class UEAIIntegrationClient:
         return self._request("GET", "/health")
 
     def capabilities(self, domain: str | None = None) -> list[dict[str, Any]]:
-        query = ""
-        if domain:
-            query = "?" + urllib.parse.urlencode({"domain": domain})
-        data = self._request("GET", f"/capabilities{query}")
-        capabilities = data.get("capabilities")
-        if not isinstance(capabilities, list):
-            raise MCPApiError("invalid_response", "Missing capabilities array")
+        capabilities: list[dict[str, Any]] = []
+        offset = 0
+        expected_total: int | None = None
+        while True:
+            params: dict[str, Any] = {
+                "offset": offset,
+                "limit": 100,
+            }
+            if domain:
+                params["domain"] = domain
+            data = self._request(
+                "GET",
+                "/capabilities?" + urllib.parse.urlencode(params),
+            )
+            page = data.get("capabilities")
+            if not isinstance(page, list) or not all(
+                isinstance(item, dict) for item in page
+            ):
+                raise MCPApiError(
+                    "invalid_response", "Missing or invalid capabilities array"
+                )
+            total = data.get("total")
+            if not isinstance(total, int) or total < 0:
+                raise MCPApiError(
+                    "invalid_response", "Missing or invalid capability total"
+                )
+            if expected_total is None:
+                expected_total = total
+            elif total != expected_total:
+                raise MCPApiError(
+                    "invalid_response", "Capability total changed during pagination"
+                )
+            capabilities.extend(page)
+            has_more = data.get("hasMore")
+            if not isinstance(has_more, bool):
+                raise MCPApiError(
+                    "invalid_response", "Missing or invalid hasMore flag"
+                )
+            if not has_more:
+                break
+            if not page:
+                raise MCPApiError(
+                    "invalid_response", "Capability pagination made no progress"
+                )
+            offset += len(page)
+
+        if expected_total != len(capabilities):
+            raise MCPApiError(
+                "invalid_response",
+                f"Capability pagination returned {len(capabilities)} of "
+                f"{expected_total} descriptors",
+            )
         return capabilities
 
     def execute(

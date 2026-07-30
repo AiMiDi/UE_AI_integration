@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import codecs
 import hashlib
 import json
 import os
@@ -186,6 +187,75 @@ def main() -> int:
     assert plan["corePlanDigest"] == plan_digest
     assert plan["executionReady"] is False
     assert plan["preconditions"]["prepared"] is False
+
+    unicode_workflow = json.loads(
+        Path(args.fixture).read_text(encoding="utf-8")
+    )
+    unicode_workflow["workflowId"] = "blueprint-layout-unicode"
+    unicode_workflow["operations"][0]["params"]["name"] = "输入处理"
+    unicode_workflow_text = json.dumps(
+        unicode_workflow,
+        ensure_ascii=False,
+    )
+    with tempfile.TemporaryDirectory(
+        prefix="ue-workflow-unicode-"
+    ) as unicode_temp:
+        unicode_path = Path(unicode_temp) / "中文工作流.json"
+        unicode_path.write_text(
+            unicode_workflow_text,
+            encoding="utf-16",
+        )
+        unicode_file_plan = subprocess.run(
+            common + ["plan", "--file", str(unicode_path)],
+            check=True,
+            capture_output=True,
+        )
+        assert not unicode_file_plan.stdout.startswith(codecs.BOM_UTF8)
+        unicode_file_result = json.loads(
+            unicode_file_plan.stdout.decode("utf-8")
+        )
+        assert (
+            unicode_file_result["normalizedWorkflow"]["workflowId"]
+            == "blueprint-layout-unicode"
+        )
+        assert (
+            unicode_file_result["normalizedWorkflow"]["operations"][0][
+                "params"
+            ]["childName"]
+            == "输入处理"
+        )
+
+        unicode_stdin_plan = subprocess.run(
+            common + ["plan", "--file", "-"],
+            input=(
+                codecs.BOM_UTF16_BE
+                + unicode_workflow_text.encode("utf-16-be")
+            ),
+            check=True,
+            capture_output=True,
+        )
+        assert (
+            json.loads(unicode_stdin_plan.stdout.decode("utf-8"))[
+                "normalizedWorkflow"
+            ]["workflowId"]
+            == "blueprint-layout-unicode"
+        )
+
+        invalid_encoding = subprocess.run(
+            common + ["plan", "--file", "-"],
+            input=b"\xc3\x28",
+            check=False,
+            capture_output=True,
+        )
+        assert invalid_encoding.returncode == 2
+        invalid_encoding_result = json.loads(
+            invalid_encoding.stdout.decode("utf-8")
+        )
+        assert (
+            invalid_encoding_result["diagnostics"][0]["code"]
+            == "invalid_text_encoding"
+        )
+
     bound_plan_digest = (
         "sha256:"
         + hashlib.sha256(
@@ -455,7 +525,7 @@ def main() -> int:
         )
 
         with tempfile.TemporaryDirectory(prefix="ue-workflow-cli-") as temporary:
-            receipt_path = Path(temporary) / "receipt.json"
+            receipt_path = Path(temporary) / "中文收据-📄.json"
 
             def run(*command: str) -> dict:
                 completed = subprocess.run(
@@ -566,7 +636,7 @@ def main() -> int:
         assert all(
             registration["clientKind"] == "cli"
             and registration["name"] == "ue-workflow"
-            and registration["version"] == "0.6.0"
+            and registration["version"] == "0.7.0"
             and registration["transport"] == "http"
             and isinstance(registration["pid"], int)
             and registration["pid"] > 0
@@ -641,7 +711,7 @@ def main() -> int:
     assert all(
         header["callerType"] == "cli"
         and header["caller"] == "ue-workflow"
-        and header["callerVersion"] == "0.6.0"
+        and header["callerVersion"] == "0.7.0"
         and header["invocationId"].startswith("cli-")
         and header["processId"].isdigit()
         and header["transport"] == "http"

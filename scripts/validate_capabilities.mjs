@@ -92,6 +92,51 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function validateSearchMetadata(search, location) {
+  if (!isPlainObject(search)) {
+    fail(`${location} must be an object`);
+    return;
+  }
+  const allowedFields = new Set(["title", "keywords", "aliases"]);
+  for (const field of Object.keys(search)) {
+    if (!allowedFields.has(field)) {
+      fail(`${location}.${field} is not supported`);
+    }
+  }
+  if (
+    search.title !== undefined &&
+    (typeof search.title !== "string" || search.title.trim().length === 0)
+  ) {
+    fail(`${location}.title must be a non-empty string`);
+  }
+  for (const field of ["keywords", "aliases"]) {
+    const values = search[field];
+    if (values === undefined) continue;
+    if (
+      !Array.isArray(values) ||
+      values.length === 0 ||
+      values.some(
+        (value) =>
+          typeof value !== "string" || value.trim().length === 0
+      )
+    ) {
+      fail(`${location}.${field} must be a non-empty array of non-empty strings`);
+      continue;
+    }
+    const normalized = values.map((value) => value.trim().toLowerCase());
+    if (new Set(normalized).size !== normalized.length) {
+      fail(`${location}.${field} must not contain duplicates`);
+    }
+  }
+  if (
+    search.title === undefined &&
+    search.keywords === undefined &&
+    search.aliases === undefined
+  ) {
+    fail(`${location} must declare title, keywords, or aliases`);
+  }
+}
+
 function validateCamelCaseProperties(schema, location) {
   if (!isPlainObject(schema)) return;
   if (isPlainObject(schema.properties)) {
@@ -197,6 +242,9 @@ for (const [domain, baselineCount] of Object.entries(baselineCounts)) {
       capability.description.trim().length === 0
     ) {
       fail(`${location}.description must be non-empty`);
+    }
+    if (capability.search !== undefined) {
+      validateSearchMetadata(capability.search, `${location}.search`);
     }
     if (!isPlainObject(capability.inputSchema)) {
       fail(`${location}.inputSchema must be an object`);

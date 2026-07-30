@@ -1059,6 +1059,20 @@
       "domain": "blueprint",
       "kind": "query",
       "description": "Get the full node graph of a specific graph in a Blueprint, including all nodes and pin connections.",
+      "search": {
+        "title": "Blueprint graph structure and geometry",
+        "keywords": [
+          "graph geometry",
+          "node bounds",
+          "comment containment",
+          "蓝图图表",
+          "节点尺寸"
+        ],
+        "aliases": [
+          "get graph",
+          "graph inspect"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1069,6 +1083,16 @@
           "graph": {
             "type": "string",
             "description": "Graph name (e.g. EventGraph, MyFunction)"
+          },
+          "geometryMode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "stored",
+              "editor"
+            ],
+            "default": "auto",
+            "description": "Use exact live Graph Editor geometry when available, stored node geometry only, or require exact Editor geometry"
           }
         },
         "required": [
@@ -1643,6 +1667,17 @@
       "domain": "blueprint",
       "kind": "command",
       "description": "Open and focus a Blueprint graph, then replace its native Graph Editor selection with the provided node GUIDs.",
+      "search": {
+        "title": "Set native Graph Editor selection",
+        "keywords": [
+          "select nodes",
+          "graph editor",
+          "节点选区"
+        ],
+        "aliases": [
+          "selection set"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1686,6 +1721,18 @@
       "domain": "blueprint",
       "kind": "command",
       "description": "Run a native Graph Editor alignment command on the current selection.",
+      "search": {
+        "title": "Align Blueprint graph nodes",
+        "keywords": [
+          "layout align",
+          "graph organize",
+          "排版",
+          "对齐"
+        ],
+        "aliases": [
+          "align nodes"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1730,6 +1777,17 @@
       "domain": "blueprint",
       "kind": "command",
       "description": "Run the native Graph Editor Straighten Connections command on connected selected nodes.",
+      "search": {
+        "title": "Straighten Blueprint graph connections",
+        "keywords": [
+          "layout wire",
+          "graph organize",
+          "拉直连线"
+        ],
+        "aliases": [
+          "straighten"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1762,6 +1820,18 @@
       "domain": "blueprint",
       "kind": "command",
       "description": "Run a native horizontal or vertical Graph Editor distribution command on the current selection.",
+      "search": {
+        "title": "Distribute Blueprint graph nodes",
+        "keywords": [
+          "layout distribute",
+          "graph spacing",
+          "排版",
+          "均匀分布"
+        ],
+        "aliases": [
+          "distribute nodes"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1802,6 +1872,19 @@
       "domain": "blueprint",
       "kind": "command",
       "description": "Create a native group-movement Comment node around the current Graph Editor selection.",
+      "search": {
+        "title": "Create Comment group from selected nodes",
+        "keywords": [
+          "comment group",
+          "wrap nodes",
+          "graph organize",
+          "注释框",
+          "节点分组"
+        ],
+        "aliases": [
+          "create comment"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1840,6 +1923,18 @@
       "domain": "blueprint",
       "kind": "command",
       "description": "Set the graph-space position and size of an existing Blueprint Comment node.",
+      "search": {
+        "title": "Set Blueprint Comment bounds",
+        "keywords": [
+          "comment size",
+          "comment group",
+          "padding",
+          "注释框大小"
+        ],
+        "aliases": [
+          "comment bounds"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1888,6 +1983,442 @@
       },
       "output": {
         "kind": "json"
+      }
+    },
+    {
+      "id": "blueprint.layout.validate",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Validate Blueprint Graph node overlap, spacing, Comment containment, and padding using bounded stored or exact Graph Editor geometry.",
+      "search": {
+        "title": "Validate Blueprint graph layout",
+        "keywords": [
+          "layout diagnostics",
+          "node overlap",
+          "comment padding",
+          "排版检查",
+          "重叠检查"
+        ],
+        "aliases": [
+          "validate layout"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "geometryMode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "stored",
+              "editor"
+            ],
+            "default": "auto"
+          },
+          "nodeIds": {
+            "type": "array",
+            "maxItems": 256,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f-]{32,36}$"
+            }
+          },
+          "minHorizontalGap": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 4096,
+            "default": 32
+          },
+          "minVerticalGap": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 4096,
+            "default": 24
+          },
+          "commentPadding": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 4096,
+            "default": 32
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "blueprint.layout.organize",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Plan deterministic UE 5.3-compatible Blueprint Graph layout semantics on an exact transient geometry baseline, then atomically apply the approved coordinates and native Comment bounds.",
+      "search": {
+        "title": "Organize Blueprint graph in one transaction",
+        "keywords": [
+          "batch layout",
+          "graph organize",
+          "align distribute straighten comment",
+          "批量排版",
+          "蓝图整理",
+          "排版",
+          "分组",
+          "注释框"
+        ],
+        "aliases": [
+          "organize graph",
+          "layout transaction"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "groups": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "nodeIds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 128,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9A-Fa-f-]{32,36}$"
+                  }
+                },
+                "actions": {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "align",
+                          "distribute",
+                          "straighten"
+                        ]
+                      },
+                      "alignment": {
+                        "type": "string",
+                        "enum": [
+                          "top",
+                          "middle",
+                          "bottom",
+                          "left",
+                          "center",
+                          "right"
+                        ]
+                      },
+                      "orientation": {
+                        "type": "string",
+                        "enum": [
+                          "horizontal",
+                          "vertical"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "comment": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 512
+                    },
+                    "padding": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 512,
+                      "default": 50
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "nodeIds"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": true
+          },
+          "expectedGraphHash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "approvePlanDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "groups"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      }
+    },
+    {
+      "id": "blueprint.graph.capture",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Capture only the specified live Blueprint Graph Editor as a bounded PNG or JPEG artifact with graph and rendering fingerprints.",
+      "search": {
+        "title": "Capture Blueprint Graph Editor image",
+        "keywords": [
+          "graph screenshot",
+          "visual evidence",
+          "before after",
+          "蓝图截图"
+        ],
+        "aliases": [
+          "capture graph"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "currentView",
+              "all",
+              "nodes"
+            ],
+            "default": "currentView"
+          },
+          "nodeIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 256,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f-]{32,36}$"
+            }
+          },
+          "padding": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1024,
+            "default": 64
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 64,
+            "maximum": 4096
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 64,
+            "maximum": 4096
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "png",
+              "jpeg"
+            ],
+            "default": "png"
+          },
+          "quality": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 90
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "image"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "readOnly"
+      }
+    },
+    {
+      "id": "blueprint.graph.capture.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Retrieve a persisted Blueprint Graph capture or visual diff artifact by opaque capture ID.",
+      "search": {
+        "title": "Get Blueprint graph capture artifact",
+        "keywords": [
+          "graph screenshot artifact",
+          "capture image"
+        ],
+        "aliases": [
+          "get capture"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "captureId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          }
+        },
+        "required": [
+          "captureId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "image"
+      }
+    },
+    {
+      "id": "blueprint.graph.visual.compare",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Compare two persisted Blueprint Graph captures, return bounded visual metrics, compatibility, changed bounds, and a diff PNG.",
+      "search": {
+        "title": "Compare Blueprint graph screenshots",
+        "keywords": [
+          "visual diff",
+          "before after",
+          "graph screenshot compare",
+          "视觉对比"
+        ],
+        "aliases": [
+          "compare captures"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "beforeCaptureId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "afterCaptureId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          }
+        },
+        "required": [
+          "beforeCaptureId",
+          "afterCaptureId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "image"
       }
     },
     {

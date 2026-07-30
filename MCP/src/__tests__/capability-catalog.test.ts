@@ -40,7 +40,7 @@ test("loads all six shipped manifests without regressing the shipped baseline", 
   for (const domain of CAPABILITY_DOMAINS) {
     assert.ok(summary.domainCounts[domain] >= baselines[domain]);
   }
-  assert.equal(summary.domainCounts.blueprint, 77);
+  assert.equal(summary.domainCounts.blueprint, 82);
   for (const operation of [
     "blueprint.selection.set",
     "blueprint.layout.align",
@@ -56,6 +56,24 @@ test("loads all six shipped manifests without regressing the shipped baseline", 
     assert.deepEqual(capability.inputSchema.additionalProperties, false);
     assert.equal(capability.dsl, undefined);
   }
+  for (const [operation, kind, outputKind] of [
+    ["blueprint.layout.validate", "validation", "json"],
+    ["blueprint.layout.organize", "command", "json"],
+    ["blueprint.graph.capture", "query", "image"],
+    ["blueprint.graph.capture.get", "query", "image"],
+    ["blueprint.graph.visual.compare", "query", "image"],
+  ] as const) {
+    const capability = catalog.get(operation);
+    assert.ok(capability, `missing ${operation}`);
+    assert.equal(capability.domain, "blueprint");
+    assert.equal(capability.kind, kind);
+    assert.equal(capability.output.kind, outputKind);
+    assert.deepEqual(capability.inputSchema.additionalProperties, false);
+  }
+  assert.equal(
+    catalog.get("blueprint.layout.organize")?.dsl?.admission,
+    "editStep",
+  );
   assert.equal(catalog.manifests.size, CAPABILITY_DOMAINS.length);
   assert.equal(
     new Set(catalog.capabilities.map((capability) => capability.id)).size,
@@ -315,5 +333,47 @@ test("reports a clear error when a manifest is malformed", () => {
     (error: unknown) =>
       error instanceof CapabilityManifestError &&
       error.message.includes("capabilities[0].id"),
+  );
+});
+
+test("rejects malformed optional capability search metadata", () => {
+  const directory = createTemporaryDirectory();
+  writeFileSync(
+    join(directory, "blueprint.json"),
+    JSON.stringify({
+      schemaVersion: 2,
+      domain: "blueprint",
+      capabilities: [
+        {
+          id: "blueprint.test.search",
+          domain: "blueprint",
+          kind: "query",
+          description: "Search metadata fixture.",
+          inputSchema: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
+          traits: {
+            readOnly: true,
+            destructive: false,
+            expensive: false,
+          },
+          output: { kind: "json" },
+          search: {
+            keywords: ["layout", "LAYOUT"],
+          },
+        },
+      ],
+    }),
+    "utf8",
+  );
+
+  assert.throws(
+    () => loadCapabilityCatalog(directory),
+    (error: unknown) =>
+      error instanceof CapabilityManifestError &&
+      error.message.includes("search.keywords") &&
+      error.message.includes("duplicates"),
   );
 });

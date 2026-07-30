@@ -2,9 +2,11 @@
 
 import argparse
 import base64
+import codecs
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -153,7 +155,7 @@ def main() -> int:
                         "data": {
                             "status": "healthy",
                             "apiVersion": "v1",
-                            "pluginVersion": "0.6.0",
+                            "pluginVersion": "0.7.0",
                         },
                     },
                 )
@@ -626,6 +628,190 @@ def main() -> int:
                 "enabled": False,
             }
 
+            unicode_argv = run(
+                [
+                    "test.typed",
+                    "--endpoint",
+                    endpoint,
+                    "--asset-path",
+                    "/Game/蓝图/输入处理",
+                    "--enabled",
+                    "--json",
+                ],
+                check=True,
+            )
+            assert not unicode_argv.stdout.startswith("\ufeff")
+            assert (
+                json.loads(unicode_argv.stdout)["data"]["assetPath"]
+                == "/Game/蓝图/输入处理"
+            )
+            assert (
+                requests[-1]["params"]["assetPath"]
+                == "/Game/蓝图/输入处理"
+            )
+
+            unicode_params_file = temporary_path / "中文参数.json"
+            unicode_params_file.write_text(
+                json.dumps(
+                    {
+                        "assetPath": "/Game/文件/中文",
+                        "enabled": True,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-16",
+            )
+            utf16_file_params = run(
+                [
+                    "test.typed",
+                    "--endpoint",
+                    endpoint,
+                    "--params-file",
+                    str(unicode_params_file),
+                    "--json",
+                ],
+                check=True,
+            )
+            assert (
+                json.loads(utf16_file_params.stdout)["data"]["assetPath"]
+                == "/Game/文件/中文"
+            )
+            assert requests[-1]["params"]["assetPath"] == "/Game/文件/中文"
+
+            def run_binary_params(payload: bytes) -> subprocess.CompletedProcess:
+                return subprocess.run(
+                    [
+                        args.cli,
+                        "test.typed",
+                        "--endpoint",
+                        endpoint,
+                        "--params-file",
+                        "-",
+                        "--json",
+                        "--capability-root",
+                        str(capability_root),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    timeout=5.0,
+                    input=payload,
+                )
+
+            unicode_pipe_text = json.dumps(
+                {
+                    "assetPath": "/Game/管道/输入",
+                    "enabled": False,
+                },
+                ensure_ascii=False,
+            )
+            utf8_pipe = run_binary_params(
+                codecs.BOM_UTF8 + unicode_pipe_text.encode("utf-8")
+            )
+            assert utf8_pipe.returncode == 0
+            assert not utf8_pipe.stdout.startswith(codecs.BOM_UTF8)
+            assert (
+                json.loads(utf8_pipe.stdout.decode("utf-8"))["data"][
+                    "assetPath"
+                ]
+                == "/Game/管道/输入"
+            )
+
+            utf16be_pipe = run_binary_params(
+                codecs.BOM_UTF16_BE
+                + unicode_pipe_text.encode("utf-16-be")
+            )
+            assert utf16be_pipe.returncode == 0
+            assert (
+                json.loads(utf16be_pipe.stdout.decode("utf-8"))["data"][
+                    "assetPath"
+                ]
+                == "/Game/管道/输入"
+            )
+
+            if os.name == "nt":
+                def powershell_quote(value: str) -> str:
+                    return "'" + value.replace("'", "''") + "'"
+
+                def run_powershell_pipeline(
+                    executable: str,
+                    asset_path: str,
+                ) -> None:
+                    payload = json.dumps(
+                        {
+                            "assetPath": asset_path,
+                            "enabled": True,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    script = "\n".join(
+                        [
+                            "$utf8 = New-Object "
+                            "System.Text.UTF8Encoding($false)",
+                            "$OutputEncoding = $utf8",
+                            "[Console]::InputEncoding = $utf8",
+                            "[Console]::OutputEncoding = $utf8",
+                            f"$payload = {powershell_quote(payload)}",
+                            "$payload | & "
+                            f"{powershell_quote(str(Path(args.cli).resolve()))} "
+                            "test.typed "
+                            f"--endpoint {powershell_quote(endpoint)} "
+                            "--params-file - --json "
+                            "--capability-root "
+                            f"{powershell_quote(str(capability_root))}",
+                            "if ($LASTEXITCODE -ne 0) { "
+                            "exit $LASTEXITCODE }",
+                        ]
+                    )
+                    encoded = base64.b64encode(
+                        script.encode("utf-16-le")
+                    ).decode("ascii")
+                    result = subprocess.run(
+                        [
+                            executable,
+                            "-NoLogo",
+                            "-NoProfile",
+                            "-NonInteractive",
+                            "-EncodedCommand",
+                            encoded,
+                        ],
+                        check=False,
+                        capture_output=True,
+                        timeout=15.0,
+                    )
+                    assert result.returncode == 0, (
+                        executable,
+                        result.stdout.decode("utf-8", errors="replace"),
+                        result.stderr.decode("utf-8", errors="replace"),
+                    )
+                    output = result.stdout.decode("utf-8-sig").strip()
+                    assert json.loads(output)["data"]["assetPath"] == asset_path
+                    assert requests[-1]["params"]["assetPath"] == asset_path
+
+                windows_powershell = shutil.which("powershell.exe")
+                assert windows_powershell is not None
+                run_powershell_pipeline(
+                    windows_powershell,
+                    "/Game/WindowsPowerShell51/中文管道",
+                )
+                powershell_seven = shutil.which("pwsh.exe")
+                if powershell_seven is not None:
+                    run_powershell_pipeline(
+                        powershell_seven,
+                        "/Game/PowerShell7/中文管道",
+                    )
+
+            request_count_before_invalid_encoding = len(requests)
+            invalid_encoding = run_binary_params(b"\xc3\x28")
+            assert invalid_encoding.returncode == 2
+            assert (
+                json.loads(invalid_encoding.stdout.decode("utf-8"))["error"][
+                    "code"
+                ]
+                == "invalid_text_encoding"
+            )
+            assert len(requests) == request_count_before_invalid_encoding
+
             before_conflicts = len(requests)
             params_conflict = run(
                 [
@@ -764,7 +950,7 @@ def main() -> int:
                 "ERROR editor_unreachable:"
             )
 
-            output_path = temporary_path / "artifact.bin"
+            output_path = temporary_path / "蓝图截图-📷.bin"
             exported = run(
                 [
                     "test.artifact",
@@ -906,7 +1092,7 @@ def main() -> int:
             assert all(
                 header["callerType"] == "cli"
                 and header["caller"] == "ue"
-                and header["callerVersion"] == "0.6.0"
+                and header["callerVersion"] == "0.7.0"
                 and header["invocationId"].startswith("cli-")
                 and header["processId"].isdigit()
                 and header["transport"] == "http"
@@ -929,7 +1115,7 @@ def main() -> int:
             assert all(
                 registration["clientKind"] == "cli"
                 and registration["name"] == "ue"
-                and registration["version"] == "0.6.0"
+                and registration["version"] == "0.7.0"
                 and registration["transport"] == "http"
                 and isinstance(registration["pid"], int)
                 and registration["pid"] > 0
