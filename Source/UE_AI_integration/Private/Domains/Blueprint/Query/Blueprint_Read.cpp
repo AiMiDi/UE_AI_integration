@@ -1,6 +1,7 @@
 // Blueprint Read Tools — list, get, search, describe blueprints (read-only)
 #include "Tools/MCPToolBase.h"
 #include "Tools/MCPToolRegistry.h"
+#include "Domains/Blueprint/BlueprintGraphEditorSupport.h"
 #include "Infrastructure/MCPToolHelpers.h"
 #include "Engine/Blueprint.h"
 #include "Engine/World.h"
@@ -146,39 +147,211 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		FString Name = Params->GetStringField(TEXT("name"));
-		FString GraphName = Params->GetStringField(TEXT("graph"));
-		if (Name.IsEmpty() || GraphName.IsEmpty())
-			return FMCPToolResult::Error(TEXT("Missing 'name' or 'graph' parameter"));
+		using namespace UEAIIntegration::BlueprintGraph;
 
-		FString DecodedGraphName = MCPHelpers::UrlDecode(GraphName);
-
-		FString LoadError;
-		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(Name, LoadError);
-		if (!BP) return FMCPToolResult::Error(LoadError);
-
-		TArray<UEdGraph*> AllGraphs;
-		BP->GetAllGraphs(AllGraphs);
-
-		for (UEdGraph* Graph : AllGraphs)
+		FString GeometryMode = TEXT("auto");
+		Params->TryGetStringField(TEXT("geometryMode"), GeometryMode);
+		if (GeometryMode != TEXT("auto")
+			&& GeometryMode != TEXT("stored")
+			&& GeometryMode != TEXT("editor"))
 		{
-			if (Graph && Graph->GetName().Equals(DecodedGraphName, ESearchCase::IgnoreCase))
+			return InvalidRequest(
+				FString::Printf(
+					TEXT("Unsupported geometryMode '%s'."),
+					*GeometryMode));
+		}
+
+		FContext Context;
+		FMCPToolResult ContextResult = ResolveBlueprintGraph(Params, Context);
+		if (!ContextResult.bSuccess)
+		{
+			return ContextResult;
+		}
+
+		bool bUseEditorGeometry = false;
+		if (GeometryMode == TEXT("editor"))
+		{
+			ContextResult = ResolveGraphEditor(Context, true);
+			if (!ContextResult.bSuccess)
 			{
-				TSharedPtr<FJsonObject> GraphJson = MCPHelpers::SerializeGraph(Graph);
-				if (GraphJson.IsValid())
-					return FMCPToolResult::Ok(GraphJson);
+				return EditorUnavailable(
+					TEXT("Exact Graph Editor geometry is unavailable."),
+					TEXT("graph_geometry_unavailable"));
 			}
+			bUseEditorGeometry = true;
+		}
+		else if (GeometryMode == TEXT("auto"))
+		{
+			ContextResult = ResolveGraphEditor(Context, false);
+			bUseEditorGeometry = ContextResult.bSuccess;
 		}
 
-		TArray<TSharedPtr<FJsonValue>> GraphNames;
-		for (UEdGraph* Graph : AllGraphs)
+		TSharedPtr<FJsonObject> GraphJson =
+			MCPHelpers::SerializeGraph(Context.Graph);
+		if (!GraphJson.IsValid())
 		{
-			if (Graph) GraphNames.Add(MakeShared<FJsonValueString>(Graph->GetName()));
+			return FMCPToolResult::Error(
+				TEXT("Could not serialize Blueprint graph."));
 		}
-		TSharedRef<FJsonObject> E = MakeShared<FJsonObject>();
-		E->SetStringField(TEXT("error"), FString::Printf(TEXT("Graph '%s' not found"), *DecodedGraphName));
-		E->SetArrayField(TEXT("availableGraphs"), GraphNames);
-		return FMCPToolResult::Error(FString::Printf(TEXT("Graph '%s' not found"), *DecodedGraphName));
+
+		TMap<FGuid, FNodeBounds> BoundsByNode;
+		TArray<FString> UnresolvedEditorNodes;
+		int32 ExactCount = 0;
+		for (UEdGraphNode* Node : Context.Graph->Nodes)
+		{
+			if (!Node)
+			{
+				continue;
+			}
+			FNodeBounds Bounds;
+			TryGetNodeBounds(Context, Node, bUseEditorGeometry, Bounds);
+			if (Bounds.bExact)
+			{
+				++ExactCount;
+			}
+			else if (bUseEditorGeometry
+				&& UnresolvedEditorNodes.Num() < 8)
+			{
+				FSlateRect RawRect;
+				const bool bHasWidget =
+					Context.GraphEditor.IsValid()
+					&& Context.GraphEditor->GetBoundsForNode(
+						Node,
+						RawRect,
+						0.0f);
+				UnresolvedEditorNodes.Add(
+					FString::Printf(
+						TEXT(
+							"%s (%s, %s, widget=%s, rect=%.1f,%.1f,"
+							"%.1f,%.1f, stored=%dx%d)"),
+						*Node->NodeGuid.ToString(),
+						*Node->GetClass()->GetName(),
+						*Node->GetNodeTitle(
+							ENodeTitleType::ListView).ToString(),
+						bHasWidget ? TEXT("true") : TEXT("false"),
+						RawRect.Left,
+						RawRect.Top,
+						RawRect.Right,
+						RawRect.Bottom,
+						Node->NodeWidth,
+						Node->NodeHeight));
+			}
+			BoundsByNode.Add(Node->NodeGuid, Bounds);
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>& NodeValues =
+			GraphJson->GetArrayField(TEXT("nodes"));
+		for (const TSharedPtr<FJsonValue>& NodeValue : NodeValues)
+		{
+			const TSharedPtr<FJsonObject> NodeJson = NodeValue->AsObject();
+			FGuid NodeGuid;
+			if (!NodeJson.IsValid()
+				|| !FGuid::Parse(
+					NodeJson->GetStringField(TEXT("nodeId")),
+					NodeGuid))
+			{
+				continue;
+			}
+			const FNodeBounds* Bounds = BoundsByNode.Find(NodeGuid);
+			if (!Bounds)
+			{
+				continue;
+			}
+			NodeJson->SetObjectField(TEXT("bounds"), BoundsToJson(*Bounds));
+
+			UEdGraphNode_Comment* Comment =
+				Cast<UEdGraphNode_Comment>(FindNode(Context.Graph, NodeGuid));
+			if (!Comment)
+			{
+				continue;
+			}
+			TArray<TSharedPtr<FJsonValue>> Contained;
+			TArray<TSharedPtr<FJsonValue>> Intersecting;
+			TArray<TSharedPtr<FJsonValue>> Unresolved;
+			for (const TPair<FGuid, FNodeBounds>& Pair : BoundsByNode)
+			{
+				if (Pair.Key == NodeGuid)
+				{
+					continue;
+				}
+				if (!Bounds->bExact || !Pair.Value.bExact)
+				{
+					Unresolved.Add(
+						MakeShared<FJsonValueString>(Pair.Key.ToString()));
+				}
+				else if (Contains(*Bounds, Pair.Value))
+				{
+					Contained.Add(
+						MakeShared<FJsonValueString>(Pair.Key.ToString()));
+				}
+				else if (Intersects(*Bounds, Pair.Value))
+				{
+					Intersecting.Add(
+						MakeShared<FJsonValueString>(Pair.Key.ToString()));
+				}
+			}
+			Contained.Sort(
+				[](const TSharedPtr<FJsonValue>& Left,
+					const TSharedPtr<FJsonValue>& Right)
+				{
+					return Left->AsString() < Right->AsString();
+				});
+			Intersecting.Sort(
+				[](const TSharedPtr<FJsonValue>& Left,
+					const TSharedPtr<FJsonValue>& Right)
+				{
+					return Left->AsString() < Right->AsString();
+				});
+			Unresolved.Sort(
+				[](const TSharedPtr<FJsonValue>& Left,
+					const TSharedPtr<FJsonValue>& Right)
+				{
+					return Left->AsString() < Right->AsString();
+				});
+			NodeJson->SetArrayField(TEXT("containedNodeIds"), Contained);
+			NodeJson->SetArrayField(
+				TEXT("intersectingNodeIds"),
+				Intersecting);
+			NodeJson->SetArrayField(
+				TEXT("unresolvedContainmentNodeIds"),
+				Unresolved);
+			NodeJson->SetStringField(
+				TEXT("containmentStatus"),
+				Bounds->bExact && Unresolved.IsEmpty()
+					? TEXT("exact")
+					: TEXT("incomplete"));
+		}
+
+		const int32 NodeCount = BoundsByNode.Num();
+		const FString GeometryStatus =
+			!bUseEditorGeometry
+				? TEXT("storedOnly")
+				: NodeCount == 0
+				? TEXT("exact")
+				: NodeCount > 0 && ExactCount == NodeCount
+				? TEXT("exact")
+				: ExactCount > 0
+					? TEXT("partial")
+					: TEXT("storedOnly");
+		if (GeometryMode == TEXT("editor")
+			&& GeometryStatus != TEXT("exact"))
+		{
+			return EditorUnavailable(
+				FString::Printf(
+					TEXT(
+						"The Graph Editor could not resolve every node "
+						"geometry. Unresolved: %s"),
+					*FString::Join(UnresolvedEditorNodes, TEXT("; "))),
+				TEXT("graph_geometry_unavailable"));
+		}
+		GraphJson->SetStringField(TEXT("geometryMode"), GeometryMode);
+		GraphJson->SetStringField(
+			TEXT("geometryStatus"),
+			GeometryStatus);
+		GraphJson->SetStringField(
+			TEXT("graphHash"),
+			ComputeGraphHash(Context.Graph));
+		return FMCPToolResult::Ok(GraphJson);
 	}
 };
 
