@@ -153,6 +153,64 @@
         }
       }
     },
+    "blueprint.layout.organize": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "workflowRequiredParameters": [
+        "expectedGraphHash",
+        "approvePlanDigest"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "schema": {
+            "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "planDigest": {
+            "type": "string"
+          },
+          "approvalSource": {
+            "type": "string"
+          },
+          "beforeGraphHash": {
+            "type": "string"
+          },
+          "afterGraphHash": {
+            "type": "string"
+          },
+          "changedNodeCount": {
+            "type": "number"
+          },
+          "positionChanges": {
+            "type": "array"
+          },
+          "createdCommentIds": {
+            "type": "array"
+          },
+          "layoutDiagnosticCount": {
+            "type": "number"
+          },
+          "layoutDiagnostics": {
+            "type": "array"
+          },
+          "mutation": {
+            "type": "object"
+          }
+        }
+      }
+    },
     "blueprint.node.add": {
       "admission": "editStep",
       "scopeKinds": [

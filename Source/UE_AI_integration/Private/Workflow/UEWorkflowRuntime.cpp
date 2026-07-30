@@ -4567,6 +4567,11 @@ bool FWorkflowRuntime::ExecuteOperation(
 	TSharedPtr<FJsonObject> ExecutionContext = MakeShared<FJsonObject>();
 	ExecutionContext->SetBoolField(TEXT("deferCompile"), bDeferCompile);
 	ExecutionContext->SetBoolField(TEXT("saveOnSuccess"), bSaveOnSuccess);
+	// This reserved object is injected only after public parameter validation.
+	// ExecuteOperation is reached only after the Editor-prepared plan digest and
+	// its asset preconditions have been verified, so domain handlers may use
+	// this flag as an unspoofable equivalent approval contract.
+	ExecutionContext->SetBoolField(TEXT("approvedPlan"), true);
 	InternalParams->SetObjectField(TEXT("__ueWorkflow"), ExecutionContext);
 
 	const FMCPToolResult ToolResult =

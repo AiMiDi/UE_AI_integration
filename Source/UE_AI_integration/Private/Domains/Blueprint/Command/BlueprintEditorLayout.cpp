@@ -4,6 +4,7 @@
 #include "Tools/MCPToolRegistry.h"
 
 #include "BlueprintEditorModule.h"
+#include "Domains/Blueprint/BlueprintGraphEditorSupport.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
@@ -16,17 +17,8 @@
 #include "ScopedTransaction.h"
 
 namespace {
-TMap<FString, TWeakPtr<SGraphEditor>> GraphEditorCache;
-
-struct FBlueprintGraphEditorContext {
-  UBlueprint *Blueprint = nullptr;
-  UEdGraph *Graph = nullptr;
-  TSharedPtr<IBlueprintEditor> BlueprintEditor;
-  TSharedPtr<SGraphEditor> GraphEditor;
-  FString BlueprintInput;
-  FString GraphName;
-  bool bEditorOpened = false;
-};
+using FBlueprintGraphEditorContext =
+    UEAIIntegration::BlueprintGraph::FContext;
 
 FMCPToolResult InvalidRequest(const FString &Message) {
   return FMCPToolResult::Error(Message, TEXT("invalid_request"), 400);
@@ -41,111 +33,19 @@ FMCPToolResult EditorUnavailable(const FString &Message) {
                                409);
 }
 
-UEdGraph *FindBlueprintGraph(UBlueprint *Blueprint,
-                             const FString &EncodedGraphName) {
-  if (!Blueprint) {
-    return nullptr;
-  }
-
-  const FString GraphName = MCPHelpers::UrlDecode(EncodedGraphName);
-  TArray<UEdGraph *> Graphs;
-  Blueprint->GetAllGraphs(Graphs);
-  for (UEdGraph *Graph : Graphs) {
-    if (Graph && Graph->GetName().Equals(GraphName, ESearchCase::IgnoreCase)) {
-      return Graph;
-    }
-  }
-  return nullptr;
-}
-
 FMCPToolResult ResolveBlueprintGraphContext(
     const TSharedPtr<FJsonObject> &Params,
     FBlueprintGraphEditorContext &OutContext) {
-  if (!Params.IsValid()) {
-    return InvalidRequest(TEXT("Request params are required."));
-  }
-
-  FString BlueprintInput;
-  FString GraphInput;
-  if (!Params->TryGetStringField(TEXT("blueprint"), BlueprintInput) ||
-      BlueprintInput.IsEmpty() ||
-      !Params->TryGetStringField(TEXT("graph"), GraphInput) ||
-      GraphInput.IsEmpty()) {
-    return InvalidRequest(
-        TEXT("Parameters 'blueprint' and 'graph' are required."));
-  }
-
-  FString LoadError;
-  UBlueprint *Blueprint =
-      MCPHelpers::LoadBlueprintByName(BlueprintInput, LoadError);
-  if (!Blueprint) {
-    return NotFound(LoadError);
-  }
-
-  UEdGraph *Graph = FindBlueprintGraph(Blueprint, GraphInput);
-  if (!Graph) {
-    return NotFound(
-        FString::Printf(TEXT("Graph '%s' was not found in Blueprint '%s'."),
-                        *MCPHelpers::UrlDecode(GraphInput), *BlueprintInput));
-  }
-
-  OutContext.Blueprint = Blueprint;
-  OutContext.Graph = Graph;
-  OutContext.BlueprintInput = MoveTemp(BlueprintInput);
-  OutContext.GraphName = Graph->GetName();
-  return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+  return UEAIIntegration::BlueprintGraph::ResolveBlueprintGraph(
+      Params, OutContext);
 }
 
 FMCPToolResult ResolveGraphEditorContext(
     const bool bOpenEditor, FBlueprintGraphEditorContext &OutContext) {
-  TSharedPtr<IBlueprintEditor> BlueprintEditor =
-      FKismetEditorUtilities::GetIBlueprintEditorForObject(
-          OutContext.Blueprint, false);
-  const bool bEditorWasOpen = BlueprintEditor.IsValid();
-  if (!BlueprintEditor.IsValid() && bOpenEditor) {
-    BlueprintEditor = FKismetEditorUtilities::GetIBlueprintEditorForObject(
-        OutContext.Blueprint, true);
-  }
-  if (!BlueprintEditor.IsValid()) {
-    return EditorUnavailable(
-        FString::Printf(TEXT("Blueprint Editor for '%s' is not open. "
-                             "Call blueprint.selection.set first."),
-                        *OutContext.BlueprintInput));
-  }
-
-  TSharedPtr<SGraphEditor> GraphEditor;
-  const FString CacheKey = OutContext.Graph->GetPathName();
-  if (bOpenEditor) {
-    GraphEditor =
-        BlueprintEditor->OpenGraphAndBringToFront(OutContext.Graph, true);
-    if (GraphEditor.IsValid()) {
-      GraphEditorCache.Add(CacheKey, GraphEditor);
-    }
-  } else {
-    if (BlueprintEditor->GetFocusedGraph() != OutContext.Graph) {
-      return EditorUnavailable(FString::Printf(
-          TEXT("Graph '%s' is not the focused Graph in Blueprint '%s'. "
-               "Call blueprint.selection.set first."),
-          *OutContext.GraphName, *OutContext.BlueprintInput));
-    }
-    if (const TWeakPtr<SGraphEditor> *CachedEditor =
-            GraphEditorCache.Find(CacheKey)) {
-      GraphEditor = CachedEditor->Pin();
-    }
-  }
-  if (!GraphEditor.IsValid() ||
-      GraphEditor->GetCurrentGraph() != OutContext.Graph) {
-    GraphEditorCache.Remove(CacheKey);
-    return EditorUnavailable(FString::Printf(
-        TEXT("Graph Editor context for '%s' is unavailable in Blueprint '%s'. "
-             "Call blueprint.selection.set first."),
-        *OutContext.GraphName, *OutContext.BlueprintInput));
-  }
-
-  OutContext.BlueprintEditor = MoveTemp(BlueprintEditor);
-  OutContext.GraphEditor = MoveTemp(GraphEditor);
-  OutContext.bEditorOpened = !bEditorWasOpen;
-  return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+  return UEAIIntegration::BlueprintGraph::ResolveGraphEditor(
+      OutContext,
+      bOpenEditor,
+      !bOpenEditor);
 }
 
 FMCPToolResult ResolveEditorContext(const TSharedPtr<FJsonObject> &Params,
@@ -361,7 +261,19 @@ public:
       return ContextResult;
     }
 
-    // Selection changes only after every requested node has been validated.
+    // Materialize the Graph widgets before changing selection. A deferred
+    // SGraphEditor refresh can rebuild SGraphNode widgets and clear selection;
+    // refreshing after SetNodeSelection would report a successful request with
+    // an empty or incomplete read-back.
+    ContextResult = ResolveGraphEditorContext(true, Context);
+    if (!ContextResult.bSuccess) {
+      return ContextResult;
+    }
+    UEAIIntegration::BlueprintGraph::RefreshGraphEditorLayout(
+        Context.GraphEditor);
+
+    // Selection changes only after every requested node has been validated and
+    // the Graph Editor has completed its pending refresh.
     Context.GraphEditor->ClearSelectionSet();
     for (UEdGraphNode *Node : NodesToSelect) {
       Context.GraphEditor->SetNodeSelection(Node, true);

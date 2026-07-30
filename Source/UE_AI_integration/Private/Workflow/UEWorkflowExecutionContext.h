@@ -44,6 +44,23 @@ inline bool ShouldSaveOnSuccess(const TSharedPtr<FJsonObject>& Params)
 		&& bSaveOnSuccess;
 }
 
+/**
+ * True only for parameters that have passed public schema validation and were
+ * injected by FWorkflowRuntime after an Editor-prepared plan (including its
+ * asset preconditions) was approved.
+ */
+inline bool IsApprovedWorkflowExecution(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	const TSharedPtr<FJsonObject> Context = GetExecutionContext(Params);
+	bool bApprovedPlan = false;
+	return Context.IsValid()
+		&& Context->TryGetBoolField(
+			TEXT("approvedPlan"),
+			bApprovedPlan)
+		&& bApprovedPlan;
+}
+
 inline bool ShouldSaveImmediately(const TSharedPtr<FJsonObject>& Params)
 {
 	return !ShouldDeferCompile(Params);
