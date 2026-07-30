@@ -1,0 +1,226 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-world-partition-validate",
+  "version": "1.0.0",
+  "title": "UE World Partition Validate",
+  "description": "Audit the current world across partition, streaming, Data Layer, HLOD, and PCG evidence, with guarded session fixes.",
+  "domains": ["scene"],
+  "risk": "mixed",
+  "triggers": [
+    "world partition audit",
+    "streaming cells",
+    "data layer state",
+    "hlod validation",
+    "pcg inspect",
+    "open world streaming"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.3"
+    },
+    "capabilities": [
+      "scene.level.info",
+      "scene.world_partition.get",
+      "scene.world_partition.cells.list",
+      "scene.world_partition.streaming_sources.list",
+      "scene.world_partition.streaming.audit",
+      "scene.data_layer.list",
+      "scene.data_layer.get",
+      "scene.hlod.audit"
+    ],
+    "optionalCapabilities": [
+      "scene.pcg.inspect",
+      "scene.world_partition.change.plan",
+      "scene.world_partition.change.execute",
+      "scene.world_partition.change.rollback"
+    ]
+  },
+  "recipes": [
+    {
+      "id": "audit-current-world",
+      "title": "Audit the current partitioned world",
+      "description": "Establish applicability, inspect bounded streaming evidence, and report Data Layer, HLOD, and PCG health.",
+      "risk": "readOnly",
+      "inputs": [
+        {
+          "name": "cellLimit",
+          "type": "integer",
+          "required": false,
+          "description": "Maximum generated runtime cells to return.",
+          "example": 200
+        },
+        {
+          "name": "dataLayer",
+          "type": "string",
+          "required": false,
+          "description": "Specific Data Layer selected for detailed inspection."
+        }
+      ],
+      "steps": [
+        {
+          "id": "applicability",
+          "phase": "discover",
+          "purpose": "Read the current level and determine whether World Partition is active before deeper checks.",
+          "operations": [
+            "scene.level.info",
+            "scene.world_partition.get"
+          ]
+        },
+        {
+          "id": "streaming-audit",
+          "phase": "execute",
+          "purpose": "Inspect bounded runtime cells, active streaming sources, and structured streaming findings.",
+          "operations": [
+            "scene.world_partition.cells.list",
+            "scene.world_partition.streaming_sources.list",
+            "scene.world_partition.streaming.audit"
+          ]
+        },
+        {
+          "id": "subsystem-readback",
+          "phase": "verify",
+          "purpose": "List Data Layer effective states and audit HLOD readiness.",
+          "operations": [
+            "scene.data_layer.list",
+            "scene.hlod.audit"
+          ]
+        },
+        {
+          "id": "targeted-data-layer",
+          "phase": "verify",
+          "purpose": "Read one selected Data Layer when the caller supplied its identity.",
+          "operations": [
+            "scene.data_layer.get"
+          ],
+          "optional": true
+        },
+        {
+          "id": "pcg-readback",
+          "phase": "verify",
+          "purpose": "Inspect PCG components only after live availability confirms the optional PCG module.",
+          "operations": [
+            "scene.pcg.inspect"
+          ],
+          "optional": true
+        }
+      ],
+      "result": {
+        "summary": "Applicability-aware World Partition health report with bounded streaming and subsystem evidence.",
+        "evidence": [
+          "level path and partitioned state",
+          "streaming enabled and completion state",
+          "runtime cell total, returned count, truncation, and states",
+          "streaming source count and identities",
+          "structured streaming findings",
+          "Data Layer runtime and effective states",
+          "HLOD build-required evidence",
+          "PCG availability and component count"
+        ],
+        "success": [
+          "non-partitioned worlds were reported as not applicable",
+          "cell output was explicitly bounded and truncation was preserved",
+          "streaming findings and effective states were reported",
+          "module unavailability was not presented as subsystem health"
+        ]
+      }
+    },
+    {
+      "id": "plan-session-fix",
+      "title": "Plan and verify one session-scoped partition fix",
+      "description": "Plan one supported streaming or runtime Data Layer state change, execute the approved digest, and read back affected state.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "action",
+          "type": "string",
+          "required": true,
+          "description": "setStreamingEnabled or setDataLayerRuntimeState."
+        },
+        {
+          "name": "dataLayer",
+          "type": "string",
+          "required": false,
+          "description": "Runtime Data Layer required by a Data Layer state action."
+        },
+        {
+          "name": "state",
+          "type": "string",
+          "required": false,
+          "description": "unloaded, loaded, or activated for a Data Layer state action."
+        },
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "required": false,
+          "description": "Streaming enabled state for a streaming action."
+        }
+      ],
+      "steps": [
+        {
+          "id": "current-state",
+          "phase": "discover",
+          "purpose": "Read the partition and targeted Data Layer state before planning a change.",
+          "operations": [
+            "scene.world_partition.get",
+            "scene.world_partition.streaming.audit",
+            "scene.data_layer.get"
+          ]
+        },
+        {
+          "id": "approved-session-change",
+          "phase": "execute",
+          "purpose": "Plan one action, approve the exact digest, and execute with explicit confirmation.",
+          "operations": [
+            "scene.world_partition.change.plan",
+            "scene.world_partition.change.execute"
+          ]
+        },
+        {
+          "id": "state-readback",
+          "phase": "verify",
+          "purpose": "Read partition streaming or the targeted Data Layer state again after execution.",
+          "operations": [
+            "scene.world_partition.get",
+            "scene.world_partition.streaming.audit",
+            "scene.data_layer.get"
+          ]
+        },
+        {
+          "id": "session-rollback",
+          "phase": "verify",
+          "purpose": "Roll back only while the same Editor and original world still own the run.",
+          "operations": [
+            "scene.world_partition.change.rollback"
+          ],
+          "optional": true
+        }
+      ],
+      "result": {
+        "summary": "One approved session change with before/after state and explicit rollback ownership.",
+        "evidence": [
+          "original world and affected state",
+          "normalized action and plan digest",
+          "run ID and action-specific persistence",
+          "post-change streaming or Data Layer readback",
+          "rollback result when requested"
+        ],
+        "success": [
+          "the current world was partitioned",
+          "one supported action was planned",
+          "the exact approved digest was executed",
+          "the affected state was read back",
+          "dirtyOnly streaming or sessionOnly Data Layer persistence was reported accurately",
+          "rollback constraints were reported"
+        ]
+      }
+    }
+  ],
+  "resources": [
+    {
+      "path": "references/world-partition-recipe.md",
+      "description": "Applicability, bounded audit, optional fix, and long-job boundaries."
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE UMG Authoring"
+  short_description: "Plan, edit, and verify UMG assets safely."
+  default_prompt: "Use $ue-umg-authoring to build or modify a Widget Blueprint with verified readback."

@@ -3,7 +3,8 @@ import { type CapabilityCatalog, type CapabilityDomain, type CapabilityDslRisk, 
 import { type MCPResponse } from "./helpers.js";
 import { type UECapabilitiesData, type UECapabilityQuery, type UEHealthData, type UEWorkflowData, type UEWorkflowRequest } from "./ue-bridge.js";
 import { type CliLocationResult } from "./cli-locator.js";
-export declare const MCP_TOOL_NAMES: readonly ["ue_status", "ue_capabilities", "ue_context", "ue_cli", "ue_blueprint", "ue_scene", "ue_content", "ue_animation", "ue_ai", "ue_production", "ue_workflow"];
+import { type AgentSkillCatalog } from "./skill-catalog.js";
+export declare const MCP_TOOL_NAMES: readonly ["ue_status", "ue_capabilities", "ue_context", "ue_skills", "ue_cli", "ue_blueprint", "ue_scene", "ue_content", "ue_animation", "ue_ai", "ue_production", "ue_workflow"];
 export type MCPToolName = (typeof MCP_TOOL_NAMES)[number];
 export interface UEConnectionClient {
     getHealth(): Promise<UEHealthData>;
@@ -13,6 +14,7 @@ export interface UEConnectionClient {
 }
 export interface CreateMcpServerOptions {
     catalog?: CapabilityCatalog;
+    skillCatalog?: AgentSkillCatalog;
     client?: UEConnectionClient;
     cliLocator?: () => CliLocationResult;
     shortCliLocator?: () => CliLocationResult;
@@ -20,6 +22,7 @@ export interface CreateMcpServerOptions {
 export interface UEAIIntegrationMcpServer {
     server: McpServer;
     catalog: CapabilityCatalog;
+    skillCatalog: AgentSkillCatalog;
     registeredToolNames: readonly MCPToolName[];
 }
 type CapabilityDetail = "summary" | "full";

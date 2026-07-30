@@ -7,7 +7,7 @@
 
 ## CLI 与 MCP 的能力关系
 
-- MCP 的十一个稳定工具负责发现、查询、执行和 Workflow 入口。
+- MCP 的十二个稳定工具负责 Skill 加载、发现、查询、执行和 Workflow 入口。
 - `ue <capability>` 在线获取精确 schema 后通过同一 `/api/execute` 合同调用
   Editor，因此短操作 CLI 的能力范围与领域 MCP 相同；它不经过 Workflow DSL。
 - `ue-workflow validate` 与非执行型 Core plan 可离线运行；用于审批执行的计划

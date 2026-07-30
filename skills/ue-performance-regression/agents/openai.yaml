@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE Performance Regression"
+  short_description: "Measure and compare repeatable UE performance runs."
+  default_prompt: "Use $ue-performance-regression to measure a UE scenario and compare it with a baseline."

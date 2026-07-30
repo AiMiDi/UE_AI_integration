@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE Asset Migration"
+  short_description: "Audit and migrate UE assets with dependency evidence."
+  default_prompt: "Use $ue-asset-migration to inspect asset dependencies and plan a safe migration."

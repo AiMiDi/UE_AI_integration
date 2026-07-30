@@ -13,7 +13,7 @@ MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与
 
 - 当前发布快照包含 317 项 manifest 驱动的 Editor 与 PIE Runtime 能力；
   服务启动时从 manifest 动态计算数量。
-- 十一个稳定的 MCP 工具，不把全部能力直接展开成工具列表。
+- 十二个稳定的 MCP 工具，不把全部能力直接展开成工具列表。
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
 - 专用 PIE 生命周期、Runtime 对象/Widget/Delegate/真实输入与 Scenario 能力。
 - Blueprint/UMG 写入返回编译、保存、重载和读回验证证据。
@@ -42,6 +42,9 @@ MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与
 - [UE 短操作 CLI](docs/UE_SHORT_CLI.md) 以 manifest capability ID 作为首参数，
   默认用本地 schema 单次调用 `/api/execute`，`--live-schema` 可强制在线校验，
   `ue shell` 可复用目录与连接；`ue-workflow` 只保留 DSL。
+- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) 提供五个首批领域 Skill 和
+  capability recipe，形成 Load → Discover → Execute → See Results 闭环，
+  但不新增任意脚本执行器。
 
 ## 架构
 
@@ -149,11 +152,12 @@ claude mcp add ue_ai_integration -- node Plugins\UE_AI_integration\MCP\dist\inde
 
 ## MCP 工具
 
-bridge 始终注册以下十一个工具，即使 Unreal Editor 暂时离线：
+bridge 始终注册以下十二个工具，即使 Unreal Editor 暂时离线：
 
 - `ue_status`
 - `ue_capabilities`
 - `ue_context`
+- `ue_skills`
 - `ue_cli`
 - `ue_blueprint`
 - `ue_scene`
@@ -187,12 +191,18 @@ bridge 始终注册以下十一个工具，即使 Unreal Editor 暂时离线：
 精确指定 `operation` 会返回单项完整描述符。领域工具会拒绝调用其他领域的
 operation。
 
+`ue_skills` 离线搜索、加载和读取发布包内的 Agent Skill/recipe；它不连接
+Editor，也不执行 operation。加载 recipe 后仍须用 `ue_context` 发现精确
+schema，再由领域工具或 `ue_workflow` 执行，最后调用 recipe 的 verify
+operation 读回结果。
+
 短操作 CLI 与六个领域 MCP 工具使用同一份 capability contract：
 
 ```powershell
 ue blueprint.asset.get --name /Game/UI/WBP_Login
 ue scene.actor.spawn --type PointLight --name KeyLight --location '[0,0,300]'
 ue production.job.status --job-id job-123
+ue skills --query blueprint
 ue shell
 ```
 
@@ -337,6 +347,16 @@ npm audit --omit=dev
 ```powershell
 scripts\build_plugin.bat "D:\code\D5\d5render-ue5_3" "..\UE_AI_integration-BuiltPlugin\UE5.3"
 ```
+
+Linux 或 macOS 在对应宿主机上构建插件和原生 CLI：
+
+```bash
+bash scripts/build_plugin.sh /path/to/UnrealEngine ../UE_AI_integration-BuiltPlugin
+```
+
+`BuildPlugin` 包保留根 `CMakeLists.txt`、`CLI` 与 `Workflow` 源码。
+`CLI/bin` 中的预编译程序只适用于执行打包脚本的宿主平台；把包复制到另一平台后，
+可在包根目录重新执行 `cmake -S .` 构建本机 `ue` 和 `ue-workflow`。
 
 有运行中的 Editor 时，可继续执行只读和可回滚的 smoke test：
 

@@ -1,7 +1,7 @@
 {
   "name": "ue-ai-integration",
-  "description": "Control Unreal Engine 5.3-5.7 through ten MCP tools backed by 212 manifest-driven editor and PIE runtime capabilities. Use /setup-ue5 to install the plugin into your current UE5 project.",
-  "version": "0.3.0",
+  "description": "Control Unreal Engine 5.3-5.7 through twelve MCP tools, 317 manifest-driven capabilities, UE Workflow, and validated Agent Skill recipes. Use /setup-ue5 to install the plugin into your current UE5 project.",
+  "version": "0.6.0",
   "author": {
     "name": "NodeNestor"
   },

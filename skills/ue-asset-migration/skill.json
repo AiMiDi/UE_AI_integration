@@ -1,0 +1,139 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-asset-migration",
+  "version": "1.0.0",
+  "title": "UE Asset Migration",
+  "description": "Inspect asset relationships, approve an exact change plan, execute it once, and verify or roll back the result.",
+  "domains": ["content"],
+  "risk": "confirmWrite",
+  "triggers": [
+    "move unreal assets",
+    "rename asset",
+    "asset migration",
+    "fix redirectors",
+    "delete referenced asset",
+    "import reimport asset"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.3"
+    },
+    "capabilities": [
+      "content.asset.search",
+      "content.asset.get",
+      "content.asset.dependencies",
+      "content.asset.referencers",
+      "content.asset.audit",
+      "content.asset.change.plan",
+      "content.asset.change.execute"
+    ],
+    "optionalCapabilities": [
+      "content.asset.change.rollback"
+    ]
+  },
+  "recipes": [
+    {
+      "id": "plan-execute-verify",
+      "title": "Plan, execute, and verify an asset change batch",
+      "description": "Audit asset sources and references, approve a normalized batch, execute once, and verify graph and receipt evidence.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "actions",
+          "type": "array",
+          "required": true,
+          "description": "One to one hundred explicit import, reimport, copy, move, rename, delete, or fixRedirectors actions."
+        },
+        {
+          "name": "persistence",
+          "type": "string",
+          "required": true,
+          "description": "dirtyOnly or saveOnSuccess.",
+          "example": "dirtyOnly"
+        },
+        {
+          "name": "confirmWrite",
+          "type": "boolean",
+          "required": true,
+          "description": "Explicit approval required by execution.",
+          "example": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "dependency-audit",
+          "phase": "discover",
+          "purpose": "Resolve source assets and inspect their dependency and referencer graph before planning.",
+          "operations": [
+            "content.asset.search",
+            "content.asset.get",
+            "content.asset.dependencies",
+            "content.asset.referencers",
+            "content.asset.audit"
+          ]
+        },
+        {
+          "id": "approved-change",
+          "phase": "execute",
+          "purpose": "Plan the complete batch, review its digest and preconditions, then execute the unchanged request with explicit confirmation.",
+          "operations": [
+            "content.asset.change.plan",
+            "content.asset.change.execute"
+          ]
+        },
+        {
+          "id": "graph-readback",
+          "phase": "verify",
+          "purpose": "Read changed assets and relationships again, and compare them with the execution receipt diff.",
+          "operations": [
+            "content.asset.get",
+            "content.asset.dependencies",
+            "content.asset.referencers",
+            "content.asset.audit"
+          ]
+        },
+        {
+          "id": "receipt-rollback",
+          "phase": "verify",
+          "purpose": "Roll back with a new request ID and explicit confirmation only when the same Editor still owns a rollbackable receipt, then repeat asset and graph readback.",
+          "operations": [
+            "content.asset.change.rollback",
+            "content.asset.get",
+            "content.asset.dependencies",
+            "content.asset.referencers",
+            "content.asset.audit"
+          ],
+          "optional": true
+        }
+      ],
+      "result": {
+        "summary": "Audited asset change with exact approval, receipt diff, dependency readback, and explicit rollback state.",
+        "evidence": [
+          "source and destination asset identities",
+          "dependency and referencer graph before execution",
+          "normalized request, preconditions, and plan digest",
+          "receipt ID, changed paths, and structural diff",
+          "dependency and asset readback after execution",
+          "rollback availability and rollback receipt when used"
+        ],
+        "success": [
+          "all sources and destinations were explicit",
+          "referencers were checked before destructive actions",
+          "the exact approved plan digest was executed",
+          "persistence matched the user's explicit choice",
+          "changed assets and relationships were read back",
+          "rollback, when requested, used explicit confirmation and was followed by the same graph readback",
+          "non-rollbackable actions were identified before execution"
+        ]
+      }
+    }
+  ],
+  "resources": [
+    {
+      "path": "references/asset-change-recipe.md",
+      "description": "Action-specific fields, rollback boundaries, plan approval, and readback rules."
+    }
+  ]
+}

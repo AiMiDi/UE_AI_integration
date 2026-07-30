@@ -24,6 +24,10 @@ file(
     COPY "${UE_WORKFLOW_SOURCE_ROOT}/Resources/Capabilities"
     DESTINATION "${UE_WORKFLOW_PACKAGE_ROOT}/Resources"
 )
+file(
+    COPY "${UE_WORKFLOW_SOURCE_ROOT}/skills"
+    DESTINATION "${UE_WORKFLOW_PACKAGE_ROOT}"
+)
 
 get_filename_component(executable_name "${UE_WORKFLOW_EXECUTABLE}" NAME)
 set(packaged_executable "${UE_WORKFLOW_PACKAGE_ROOT}/CLI/bin/${executable_name}")
@@ -85,4 +89,25 @@ if(
     OR root_index EQUAL -1
 )
     message(FATAL_ERROR "Packaged ue did not resolve its local catalog: ${catalog_output}")
+endif()
+
+execute_process(
+    COMMAND "${packaged_short_executable}" skills --json --limit 1
+    WORKING_DIRECTORY "${UE_WORKFLOW_PACKAGE_ROOT}/CLI/bin"
+    RESULT_VARIABLE skills_result
+    OUTPUT_VARIABLE skills_output
+    ERROR_VARIABLE skills_error
+)
+if(NOT skills_result EQUAL 0)
+    message(FATAL_ERROR "Packaged ue skills failed: ${skills_output}${skills_error}")
+endif()
+string(FIND "${skills_output}" "\"source\":\"local\"" skills_source_index)
+string(FIND "${skills_output}" "\"total\":" skills_total_index)
+string(FIND "${skills_output}" "${normalized_package_root}/skills" skills_root_index)
+if(
+    skills_source_index EQUAL -1
+    OR skills_total_index EQUAL -1
+    OR skills_root_index EQUAL -1
+)
+    message(FATAL_ERROR "Packaged ue did not resolve Agent Skills: ${skills_output}")
 endif()

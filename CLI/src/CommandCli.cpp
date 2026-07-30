@@ -2,6 +2,7 @@
 
 #include "UEApiClient/UEApiClient.h"
 #include "UECommandCli/CapabilityCatalog.h"
+#include "UECommandCli/SkillCatalog.h"
 
 #include <algorithm>
 #include <array>
@@ -52,6 +53,7 @@ struct Options
     std::optional<std::filesystem::path> params_file;
     std::filesystem::path output_path;
     std::filesystem::path capability_root;
+    std::filesystem::path skill_root;
     bool endpoint_explicit = false;
     bool timeout_explicit = false;
     bool json_output = false;
@@ -254,7 +256,8 @@ bool ParseArguments(
             || name == "params"
             || name == "params-file"
             || name == "output"
-            || name == "capability-root")
+            || name == "capability-root"
+            || name == "skill-root")
         {
             std::string value;
             if (!TakeValue(
@@ -309,9 +312,13 @@ bool ParseArguments(
             {
                 options.output_path = std::move(value);
             }
-            else
+            else if (name == "capability-root")
             {
                 options.capability_root = std::move(value);
+            }
+            else
+            {
+                options.skill_root = std::move(value);
             }
             continue;
         }
@@ -350,6 +357,7 @@ void PrintGeneralHelp(std::ostream& output)
         << "  ue <capability-id> [--field value ...] [options]\n"
         << "  ue status [--json]\n"
         << "  ue capabilities [filters] [--json]\n"
+        << "  ue skills [filters] [--json]\n"
         << "  ue help <capability-id>\n"
         << "  ue shell [--live-schema]\n"
         << "  ue --version\n\n"
@@ -363,7 +371,35 @@ void PrintGeneralHelp(std::ostream& output)
         << "  --output <path>            Export image or artifact payload\n"
         << "  --live-schema              Fetch exact schema from Editor\n"
         << "  --capability-root <path>   Override packaged local manifests\n"
+        << "  --skill-root <path>        Override packaged Agent Skills\n"
         << "  --json                     Print the full JSON envelope\n";
+}
+
+void PrintSkillsHelp(std::ostream& output)
+{
+    output
+        << "UE Agent Skill catalog\n"
+        << "Usage:\n"
+        << "  ue skills [filters] [--json]\n\n"
+        << "The command reads packaged skill.json files locally and does "
+           "not connect to Unreal Editor.\n\n"
+        << "Filters:\n"
+        << "  --query <text>             Search id, title, description, "
+           "and triggers\n"
+        << "  --name <skill-id>          Match an exact skill id\n"
+        << "  --recipe <recipe-id>       Require a matching recipe id\n"
+        << "  --domain <domain>          Require a declared domain\n"
+        << "  --operation <id>           Require a recipe step operation\n"
+        << "  --risk <risk>              Match skill or recipe risk\n"
+        << "  --detail summary|full      Projection detail "
+           "(default summary)\n"
+        << "  --offset <n>               Zero-based result offset\n"
+        << "  --limit <1..100>           Maximum results (default 25)\n\n"
+        << "Catalog options:\n"
+        << "  --skill-root <path>        Override packaged Agent Skills\n"
+        << "  --capability-root <path>   Override manifests used to "
+           "validate operations\n"
+        << "  --json                     Print the stable JSON envelope\n";
 }
 
 void PrintCommandHelp(
@@ -373,6 +409,11 @@ void PrintCommandHelp(
     if (options.command.empty())
     {
         PrintGeneralHelp(output);
+        return;
+    }
+    if (options.command == "skills")
+    {
+        PrintSkillsHelp(output);
         return;
     }
     if (options.command == "status")
@@ -2063,6 +2104,348 @@ int RunLocalCapabilities(
         output);
 }
 
+bool ArrayContainsString(
+    const json& values,
+    const std::string& expected)
+{
+    return values.is_array()
+        && std::any_of(
+            values.begin(),
+            values.end(),
+            [&](const json& value)
+            {
+                return value.is_string()
+                    && value.get_ref<const std::string&>() == expected;
+            });
+}
+
+json RecipeOperations(const json& recipe)
+{
+    std::set<std::string> unique;
+    for (const auto& step :
+         recipe.value("steps", json::array()))
+    {
+        for (const auto& operation :
+             step.value("operations", json::array()))
+        {
+            if (operation.is_string())
+            {
+                unique.insert(operation.get<std::string>());
+            }
+        }
+    }
+    return json(unique);
+}
+
+json LocalRecipeSummary(const json& recipe)
+{
+    return {
+        { "id", recipe.value("id", std::string{}) },
+        { "title", recipe.value("title", std::string{}) },
+        { "description",
+            recipe.value("description", std::string{}) },
+        { "risk", recipe.value("risk", std::string{}) },
+        { "operations", RecipeOperations(recipe) },
+        { "result", recipe.value("result", json::object()) },
+    };
+}
+
+json LocalSkillSummary(const json& skill)
+{
+    json recipes = json::array();
+    for (const auto& recipe :
+         skill.value("recipes", json::array()))
+    {
+        recipes.push_back(LocalRecipeSummary(recipe));
+    }
+    return {
+        { "id", skill.value("id", std::string{}) },
+        { "version", skill.value("version", std::string{}) },
+        { "title", skill.value("title", std::string{}) },
+        { "description",
+            skill.value("description", std::string{}) },
+        { "domains", skill.value("domains", json::array()) },
+        { "risk", skill.value("risk", std::string{}) },
+        { "triggers", skill.value("triggers", json::array()) },
+        { "entrypoint",
+            skill.value("entrypoint", std::string{}) },
+        { "requirements",
+            skill.value("requirements", json::object()) },
+        { "recipes", std::move(recipes) },
+    };
+}
+
+bool SkillMatchesQuery(
+    const json& skill,
+    const std::string& query)
+{
+    if (query.empty())
+    {
+        return true;
+    }
+    std::string searchable =
+        skill.value("id", std::string{}) + " "
+        + skill.value("title", std::string{}) + " "
+        + skill.value("description", std::string{});
+    for (const auto& trigger :
+         skill.value("triggers", json::array()))
+    {
+        if (trigger.is_string())
+        {
+            searchable += " " + trigger.get<std::string>();
+        }
+    }
+    for (const auto& recipe :
+         skill.value("recipes", json::array()))
+    {
+        searchable += " "
+            + recipe.value("id", std::string{}) + " "
+            + recipe.value("title", std::string{}) + " "
+            + recipe.value("description", std::string{});
+    }
+    searchable = Lower(searchable);
+
+    std::istringstream tokens(query);
+    std::string token;
+    while (tokens >> token)
+    {
+        while (!token.empty()
+            && static_cast<unsigned char>(token.front()) < 0x80
+            && !std::isalnum(
+                static_cast<unsigned char>(token.front()))
+            && token.front() != '.'
+            && token.front() != '_'
+            && token.front() != '-')
+        {
+            token.erase(token.begin());
+        }
+        while (!token.empty()
+            && static_cast<unsigned char>(token.back()) < 0x80
+            && !std::isalnum(
+                static_cast<unsigned char>(token.back()))
+            && token.back() != '.'
+            && token.back() != '_'
+            && token.back() != '-')
+        {
+            token.pop_back();
+        }
+        if (!token.empty()
+            && searchable.find(token) != std::string::npos)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+int RunLocalSkills(
+    const SkillCatalog& catalog,
+    const CapabilityCatalog& capabilities,
+    const Options& options,
+    std::ostream& output,
+    std::ostream& error)
+{
+    const auto fail = [&](const std::string& message)
+    {
+        return PrintFailure(
+            {
+                false,
+                json(),
+                "invalid_arguments",
+                message,
+            },
+            options.json_output,
+            kExitUsage,
+            output,
+            error);
+    };
+    if (options.live_schema)
+    {
+        return fail(
+            "ue skills is local-only; remove --live-schema.");
+    }
+
+    std::string query;
+    std::string name;
+    std::string recipe;
+    std::string domain;
+    std::string operation;
+    std::string risk;
+    std::string detail = "summary";
+    std::size_t offset = 0;
+    std::size_t limit = 25;
+    std::set<std::string> assigned;
+    for (const RawOption& option : options.raw_options)
+    {
+        if (!assigned.insert(option.name).second)
+        {
+            return fail(
+                "Skills option --" + option.name
+                + " cannot be repeated.");
+        }
+        if (!option.value || option.negated)
+        {
+            return fail(
+                "--" + option.name + " requires a value.");
+        }
+        const std::string& value = *option.value;
+        if (option.name == "query")
+        {
+            query = Lower(value);
+        }
+        else if (option.name == "name")
+        {
+            name = value;
+        }
+        else if (option.name == "recipe")
+        {
+            recipe = value;
+        }
+        else if (option.name == "domain")
+        {
+            domain = value;
+        }
+        else if (option.name == "operation")
+        {
+            operation = value;
+        }
+        else if (option.name == "risk")
+        {
+            risk = value;
+        }
+        else if (option.name == "detail")
+        {
+            if (value != "summary" && value != "full")
+            {
+                return fail("--detail must be summary or full.");
+            }
+            detail = value;
+        }
+        else if (option.name == "offset"
+            || option.name == "limit")
+        {
+            std::uint64_t parsed = 0;
+            const auto result = std::from_chars(
+                value.data(),
+                value.data() + value.size(),
+                parsed);
+            if (result.ec != std::errc{}
+                || result.ptr != value.data() + value.size()
+                || parsed
+                    > std::numeric_limits<std::size_t>::max()
+                || (option.name == "limit"
+                    && (parsed == 0 || parsed > 100)))
+            {
+                return fail(
+                    option.name == "limit"
+                        ? "--limit must be between 1 and 100."
+                        : "--offset must be a non-negative integer.");
+            }
+            if (option.name == "offset")
+            {
+                offset = static_cast<std::size_t>(parsed);
+            }
+            else
+            {
+                limit = static_cast<std::size_t>(parsed);
+            }
+        }
+        else
+        {
+            return fail(
+                "Unknown skills option --" + option.name + ".");
+        }
+    }
+
+    std::vector<const json*> matches;
+    for (const auto& [id, skill] : catalog.Descriptors())
+    {
+        bool recipe_match = recipe.empty();
+        bool operation_match = operation.empty();
+        bool risk_match =
+            risk.empty()
+            || skill.value("risk", std::string{}) == risk;
+        for (const auto& item :
+             skill.value("recipes", json::array()))
+        {
+            recipe_match = recipe_match
+                || item.value("id", std::string{}) == recipe;
+            risk_match = risk_match
+                || item.value("risk", std::string{}) == risk;
+            if (!operation_match)
+            {
+                for (const auto& step :
+                     item.value("steps", json::array()))
+                {
+                    if (ArrayContainsString(
+                            step.value(
+                                "operations",
+                                json::array()),
+                            operation))
+                    {
+                        operation_match = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if ((!name.empty() && id != name)
+            || (!domain.empty()
+                && !ArrayContainsString(
+                    skill.value("domains", json::array()),
+                    domain))
+            || !recipe_match
+            || !operation_match
+            || !risk_match
+            || !SkillMatchesQuery(skill, query))
+        {
+            continue;
+        }
+        matches.push_back(&skill);
+    }
+
+    json skills = json::array();
+    const std::size_t end = offset < matches.size()
+        ? offset + std::min(limit, matches.size() - offset)
+        : matches.size();
+    if (offset < matches.size())
+    {
+        for (std::size_t index = offset; index < end; ++index)
+        {
+            skills.push_back(
+                detail == "full"
+                    ? *matches[index]
+                    : LocalSkillSummary(*matches[index]));
+        }
+    }
+    ParsedEnvelope response{
+        true,
+        {
+            { "ok", true },
+            { "data", {
+                { "skills", std::move(skills) },
+                { "total", matches.size() },
+                { "offset", offset },
+                { "limit", limit },
+                { "hasMore", end < matches.size() },
+                { "detail", detail },
+                { "source", "local" },
+                { "skillRoot",
+                    catalog.Root().generic_string() },
+                { "capabilityRoot",
+                    capabilities.Root().generic_string() },
+            } },
+        },
+        {},
+        {},
+    };
+    return PrintSuccess(
+        "skills",
+        response,
+        options.json_output,
+        output);
+}
+
 } // namespace
 
 std::string CamelToKebab(const std::string_view value)
@@ -2427,6 +2810,59 @@ std::optional<CapabilityCatalog> LoadLocalCatalog(
     return catalog;
 }
 
+std::optional<SkillCatalog> LoadLocalSkillCatalog(
+    const Options& options,
+    const std::filesystem::path& executable,
+    const CapabilityCatalog& capabilities,
+    std::ostream& output,
+    std::ostream& error,
+    int& exit_code)
+{
+    std::string resolution_error;
+    std::vector<std::filesystem::path> checked;
+    const auto root = ResolveSkillRoot(
+        executable,
+        options.skill_root,
+        &checked,
+        resolution_error);
+    if (!root)
+    {
+        exit_code = PrintFailure(
+            {
+                false,
+                json(),
+                "skill_catalog_unavailable",
+                resolution_error,
+            },
+            options.json_output,
+            kExitUnavailable,
+            output,
+            error);
+        return std::nullopt;
+    }
+    std::string load_error;
+    auto catalog = SkillCatalog::Load(
+        *root,
+        capabilities,
+        load_error);
+    if (!catalog)
+    {
+        exit_code = PrintFailure(
+            {
+                false,
+                json(),
+                "skill_catalog_invalid",
+                load_error,
+            },
+            options.json_output,
+            kExitUnavailable,
+            output,
+            error);
+        return std::nullopt;
+    }
+    return catalog;
+}
+
 std::optional<json> ResolveDescriptor(
     const std::string& capability,
     const Options& options,
@@ -2522,6 +2958,7 @@ std::optional<json> ResolveDescriptor(
 int ExecuteOptions(
     const Options& options,
     const CapabilityCatalog* catalog,
+    const SkillCatalog* skill_catalog,
     ue::api::Client& client,
     std::istream& input,
     std::ostream& output,
@@ -2623,6 +3060,29 @@ int ExecuteOptions(
                 error);
         }
         return RunLocalCapabilities(
+            *catalog,
+            options,
+            output,
+            error);
+    }
+    if (options.command == "skills")
+    {
+        if (!skill_catalog || !catalog)
+        {
+            return PrintFailure(
+                {
+                    false,
+                    json(),
+                    "skill_catalog_unavailable",
+                    "The local Agent Skill catalog was not loaded.",
+                },
+                options.json_output,
+                kExitUnavailable,
+                output,
+                error);
+        }
+        return RunLocalSkills(
+            *skill_catalog,
             *catalog,
             options,
             output,
@@ -2898,6 +3358,7 @@ bool Tokenize(
 int RunShell(
     const Options& base,
     const CapabilityCatalog* catalog,
+    const SkillCatalog* skill_catalog,
     ue::api::Client& client,
     std::istream& input,
     std::ostream& output,
@@ -2984,15 +3445,16 @@ int RunShell(
         }
         if (command.endpoint_explicit
             || command.timeout_explicit
-            || !command.capability_root.empty())
+            || !command.capability_root.empty()
+            || !command.skill_root.empty())
         {
             (void)PrintFailure(
                 {
                     false,
                     json(),
                     "shell_session_option_locked",
-                    "Endpoint, timeout, and capability root are fixed "
-                    "for the current shell session.",
+                    "Endpoint, timeout, capability root, and skill root "
+                    "are fixed for the current shell session.",
                 },
                 base.json_output || command.json_output,
                 kExitUsage,
@@ -3003,13 +3465,21 @@ int RunShell(
         command.endpoint = base.endpoint;
         command.timeout_ms = base.timeout_ms;
         command.capability_root = base.capability_root;
+        command.skill_root = base.skill_root;
+        // Agent Skill discovery is intentionally local-only. A shell-wide
+        // live-schema policy applies to API discovery and execution, but must
+        // not disable the local "skills" directory command. An explicit
+        // "skills --live-schema" remains an error in RunLocalSkills.
         command.live_schema =
-            base.live_schema || command.live_schema;
+            command.command == "skills"
+                ? command.live_schema
+                : (base.live_schema || command.live_schema);
         command.json_output =
             base.json_output || command.json_output;
         (void)ExecuteOptions(
             command,
             catalog,
+            skill_catalog,
             client,
             input,
             output,
@@ -3071,6 +3541,7 @@ int Run(
     }
     else if (options.command != "shell"
         && options.command != "capabilities"
+        && options.command != "skills"
         && options.command.find('.') != std::string::npos)
     {
         capability_hint = options.command;
@@ -3078,11 +3549,12 @@ int Run(
 
     std::optional<CapabilityCatalog> catalog;
     const bool requires_local_catalog =
-        !options.live_schema
-        && options.command != "status"
-        && (options.command == "shell"
-            || options.command == "capabilities"
-            || !capability_hint.empty());
+        options.command == "shell"
+        || (!options.live_schema
+            && options.command != "status"
+            && (options.command == "capabilities"
+            || options.command == "skills"
+            || !capability_hint.empty()));
     if (requires_local_catalog)
     {
         int load_exit = kExitUnavailable;
@@ -3096,6 +3568,73 @@ int Run(
         if (!catalog)
         {
             return load_exit;
+        }
+    }
+
+    std::optional<SkillCatalog> skill_catalog;
+    const bool requires_skill_catalog =
+        options.command == "skills"
+        || (options.command == "shell"
+            && !options.skill_root.empty());
+    if (requires_skill_catalog)
+    {
+        if (options.command == "skills" && options.live_schema)
+        {
+            return PrintFailure(
+                {
+                    false,
+                    json(),
+                    "invalid_arguments",
+                    "ue skills is local-only; remove --live-schema.",
+                },
+                options.json_output,
+                kExitUsage,
+                output,
+                error);
+        }
+        if (!catalog)
+        {
+            return PrintFailure(
+                {
+                    false,
+                    json(),
+                    "capability_catalog_unavailable",
+                    "The capability catalog is required to validate "
+                    "Agent Skill operations.",
+                },
+                options.json_output,
+                kExitUnavailable,
+                output,
+                error);
+        }
+        int load_exit = kExitUnavailable;
+        skill_catalog = LoadLocalSkillCatalog(
+            options,
+            executable,
+            *catalog,
+            output,
+            error,
+            load_exit);
+        if (!skill_catalog)
+        {
+            return load_exit;
+        }
+    }
+    else if (options.command == "shell" && catalog)
+    {
+        std::string skill_resolution_error;
+        const auto skill_root = ResolveSkillRoot(
+            executable,
+            {},
+            nullptr,
+            skill_resolution_error);
+        if (skill_root)
+        {
+            std::string skill_load_error;
+            skill_catalog = SkillCatalog::Load(
+                *skill_root,
+                *catalog,
+                skill_load_error);
         }
     }
 
@@ -3116,6 +3655,7 @@ int Run(
         return RunShell(
             options,
             catalog ? &*catalog : nullptr,
+            skill_catalog ? &*skill_catalog : nullptr,
             client,
             input,
             output,
@@ -3124,6 +3664,7 @@ int Run(
     return ExecuteOptions(
         options,
         catalog ? &*catalog : nullptr,
+        skill_catalog ? &*skill_catalog : nullptr,
         client,
         input,
         output,

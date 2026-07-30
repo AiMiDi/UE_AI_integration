@@ -1,0 +1,175 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-umg-authoring",
+  "version": "1.0.0",
+  "title": "UE UMG Authoring",
+  "description": "Create or modify one Widget Blueprint through constrained short operations or UE Workflow, then verify hierarchy, bindings, compile state, and persistence.",
+  "domains": ["content", "blueprint", "scene"],
+  "risk": "safeWrite",
+  "triggers": [
+    "create widget blueprint",
+    "layout umg",
+    "add widget child",
+    "bind widget event",
+    "verify ui hierarchy"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.3"
+    },
+    "capabilities": [
+      "content.widget.blueprint.list",
+      "content.widget.hierarchy.get",
+      "content.widget.binding.list",
+      "blueprint.asset.dirty.get",
+      "content.widget.blueprint.create",
+      "content.widget.child.add",
+      "content.widget.property.set",
+      "content.widget.slot.layout.set",
+      "content.widget.slot.properties.set",
+      "content.widget.event.bind",
+      "blueprint.asset.validate"
+    ],
+    "optionalCapabilities": [
+      "content.widget.event.ensure_handler",
+      "blueprint.asset.compile",
+      "blueprint.asset.save",
+      "scene.pie.status",
+      "scene.runtime.widget.tree.get",
+      "scene.runtime.viewport.capture"
+    ]
+  },
+  "recipes": [
+    {
+      "id": "author-and-read-back",
+      "title": "Author and verify one Widget Blueprint",
+      "description": "Inspect a widget asset, apply bounded hierarchy and layout edits, then read back and compile-validate the result.",
+      "risk": "safeWrite",
+      "inputs": [
+        {
+          "name": "widgetBlueprint",
+          "type": "string",
+          "required": true,
+          "description": "Canonical /Game Widget Blueprint asset path.",
+          "example": "/Game/UI/WBP_Login"
+        },
+        {
+          "name": "edits",
+          "type": "array",
+          "required": true,
+          "description": "Explicit widget names, classes, parents, properties, slot types, and layout values requested by the caller; ask for missing design choices rather than inventing them."
+        },
+        {
+          "name": "createIfMissing",
+          "type": "boolean",
+          "required": false,
+          "description": "Whether a missing Widget Blueprint may be created.",
+          "example": false
+        },
+        {
+          "name": "saveOnSuccess",
+          "type": "boolean",
+          "required": false,
+          "description": "Explicit persistence decision; false keeps the package dirty.",
+          "example": false
+        }
+      ],
+      "steps": [
+        {
+          "id": "inspect-current-ui",
+          "phase": "discover",
+          "purpose": "Read current widget assets, hierarchy, bindings, and dirty state before editing.",
+          "operations": [
+            "content.widget.blueprint.list",
+            "content.widget.hierarchy.get",
+            "content.widget.binding.list",
+            "blueprint.asset.dirty.get"
+          ]
+        },
+        {
+          "id": "author-ui",
+          "phase": "execute",
+          "purpose": "Create and edit the widget tree; route continuous multi-step edits through UE Workflow.",
+          "operations": [
+            "content.widget.blueprint.create",
+            "content.widget.child.add",
+            "content.widget.property.set",
+            "content.widget.slot.layout.set",
+            "content.widget.slot.properties.set",
+            "content.widget.event.bind"
+          ],
+          "route": "workflow"
+        },
+        {
+          "id": "atomic-handler",
+          "phase": "execute",
+          "purpose": "Create and validate one event handler atomically when requested outside Workflow.",
+          "operations": [
+            "content.widget.event.ensure_handler"
+          ],
+          "optional": true
+        },
+        {
+          "id": "read-back",
+          "phase": "verify",
+          "purpose": "Confirm hierarchy, binding signatures, compile validity, and final dirty state.",
+          "operations": [
+            "content.widget.hierarchy.get",
+            "content.widget.binding.list",
+            "blueprint.asset.validate",
+            "blueprint.asset.dirty.get"
+          ]
+        },
+        {
+          "id": "visual-acceptance",
+          "phase": "verify",
+          "purpose": "When the caller provides an existing live PIE session and requests visual acceptance, read the runtime widget tree and inspect a capture from that exact session.",
+          "operations": [
+            "scene.pie.status",
+            "scene.runtime.widget.tree.get",
+            "scene.runtime.viewport.capture"
+          ],
+          "optional": true
+        },
+        {
+          "id": "explicit-persistence",
+          "phase": "verify",
+          "purpose": "Compile or save only when explicitly requested and not already finalized by Workflow.",
+          "operations": [
+            "blueprint.asset.compile",
+            "blueprint.asset.save"
+          ],
+          "optional": true
+        }
+      ],
+      "result": {
+        "summary": "Verified Widget Blueprint edit with hierarchy, binding, compile, diff, and persistence evidence.",
+        "evidence": [
+          "widget asset identity and root hierarchy",
+          "widget count, parent-child order, and slot layout",
+          "binding handler existence and signature match",
+          "compile validation diagnostics",
+          "dirty or saved persistence state",
+          "workflow run ID and structural diff for multi-step edits",
+          "runtime widget identity and inspected image provenance when visual acceptance was requested"
+        ],
+        "success": [
+          "one Widget Blueprint was the primary edit scope",
+          "multi-step edits used one approved Workflow plan",
+          "the final hierarchy and bindings were read back",
+          "compile validation succeeded",
+          "requested visual acceptance used an actual rendered capture rather than serialized offsets",
+          "the asset was saved only when explicitly requested"
+        ]
+      }
+    }
+  ],
+  "resources": [
+    {
+      "path": "references/umg-recipe.md",
+      "description": "Short-operation versus Workflow routing, parameter aliases, persistence, and verification."
+    }
+  ]
+}

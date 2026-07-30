@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE Blueprint Diagnose"
+  short_description: "Diagnose Blueprint issues with structured UE evidence."
+  default_prompt: "Use $ue-blueprint-diagnose to inspect a Blueprint and return evidence-backed findings."

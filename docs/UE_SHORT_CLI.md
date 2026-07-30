@@ -18,6 +18,7 @@ ue production.job.status --job-id job-123
 ```text
 ue status
 ue capabilities [filters]
+ue skills [filters]
 ue help <capability>
 ue <capability> --help
 ue <capability> [capability parameters]
@@ -37,6 +38,7 @@ ue --version
 --output <path>
 --live-schema
 --capability-root <path>
+--skill-root <path>
 --json
 ```
 
@@ -67,17 +69,24 @@ POST /api/execute
 `--live-schema` 一起使用。`--capability-root` 与 `UE_CAPABILITY_ROOT`
 仅用于开发、测试或诊断本地目录。
 
-`ue shell` 是持久模式：启动时加载一次本地目录，并在多条命令间复用同一个
-HTTP keep-alive 连接。shell 内也可只给某一条命令添加 `--live-schema`；若
-shell 启动时带该选项，则所有命令都强制在线校验。session 的 endpoint、
-timeout 和 capability root 在启动后固定：
+`ue shell` 是持久模式：启动时加载一次本地 capability 与 Skill 目录，并在
+多条命令间复用同一个 HTTP keep-alive 连接。shell 内也可先运行 `skills`
+加载 recipe，再运行 `help`、执行和验证命令。也可只给某一条命令添加
+`--live-schema`；若
+shell 启动时带该选项，则所有在线 API 发现与执行命令都强制在线校验。
+session 的 endpoint、
+timeout、capability root 和 skill root 在启动后固定：
 
 ```text
 ue shell
+ue> skills --name ue-blueprint-diagnose --json
 ue> scene.pie.status
 ue> blueprint.asset.get --name /Game/BP_A --live-schema
 ue> exit
 ```
+
+`skills` 始终读取本地包；即使 shell 以 `--live-schema` 启动，它也不会连接
+Editor。显式输入 `skills --live-schema` 仍会作为无效组合拒绝。
 
 普通 `ue <capability>` 仍是一条命令执行后立即退出。CLI 不复制 UE handler，
 也不提供本地 UE 执行；插件始终是 Game Thread 调度与执行结果的唯一权威来源。
@@ -94,6 +103,23 @@ ue> exit
 `client_session_not_found`，CLI 会重新注册，并且只重放原请求一次。会话与
 invocation 仅用于 Editor 状态菜单的归属和统计，不参与授权，也不会改变
 capability 的执行结果。
+
+## Agent Skill recipe
+
+`ue skills` 从本地 `skills/*/skill.json` 搜索机器 recipe，不连接 Editor：
+
+```powershell
+ue skills --query blueprint
+ue skills --name ue-blueprint-diagnose --recipe scan-and-verify --detail full --json
+```
+
+支持 `--query`、`--name`、`--recipe`、`--domain`、`--operation`、`--risk`、
+`--detail`、`--offset` 和 `--limit`。`UE_SKILL_ROOT` / `--skill-root` 仅覆盖
+本地 Skill 包位置。普通 capability 调用不会加载 SkillCatalog。
+
+Skill recipe 不执行命令，也不复制 capability 参数 schema。按 recipe 选定
+operation 后，使用 `ue help <operation>` 发现参数，再执行普通短操作和
+recipe 的 verify readback。完整设计见 [UE Agent Skills](UE_AGENT_SKILLS.md)。
 
 ## 参数映射
 
@@ -154,13 +180,28 @@ cmake --build build-workflow --config Release
 cmake --install build-workflow --config Release --prefix C:\Tools\ue
 ```
 
+Linux/macOS 使用同一 CMake 工程构建本机程序：
+
+```bash
+cmake -S . -B build-workflow -DCMAKE_BUILD_TYPE=Release -DUE_WORKFLOW_BUILD_TESTS=ON
+cmake --build build-workflow
+cmake --install build-workflow --prefix "$HOME/.local"
+```
+
 安装和插件包均包含：
 
 ```text
 CLI/bin/ue(.exe)
 CLI/bin/ue-workflow(.exe)
 Resources/Capabilities/*.json
+skills/*/SKILL.md
+skills/*/skill.json
 ```
+
+通过 `scripts/build_plugin.bat` 或 `scripts/build_plugin.sh` 生成的
+source-capable 插件包还保留根 `CMakeLists.txt`、`CLI` 与 `Workflow` 源码，
+因此可以在 Win64、Linux、Mac 宿主机上重建对应平台的 CLI。`CLI/bin` 下
+已经生成的程序只适用于打包时的宿主平台。
 
 MCP `ue_cli` 结果保留原 Workflow locator 字段，并在 `shortCli` 中按
 `UE_CLI`、packaged、`PATH`、development 的顺序报告短操作 CLI。

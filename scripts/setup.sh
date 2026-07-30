@@ -1,5 +1,5 @@
 #!/bin/bash
-# Quick setup script — run from your UE5 project root
+# Quick setup script for use from your UE5 project root
 # Usage: bash path/to/UE_AI_integration/scripts/setup.sh
 
 set -e
@@ -32,6 +32,7 @@ if [ ! -d "$PLUGIN_DIR/Resources/Capabilities" ]; then
 fi
 
 node "$PLUGIN_DIR/scripts/validate_capabilities.mjs"
+node "$PLUGIN_DIR/scripts/validate_skills.mjs"
 
 echo "[..] Installing locked MCP dependencies..."
 cd "$PLUGIN_DIR/MCP"
@@ -68,5 +69,5 @@ echo ""
 echo " Next steps:"
 echo "   1. Open your project in UE5"
 echo "   2. Run 'claude' in this folder"
-echo "   3. Call ue_status, then inspect ue_capabilities"
+echo "   3. Call ue_skills, then ue_context, then ue_status/ue_capabilities"
 echo ""

@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE World Partition Validate"
+  short_description: "Validate World Partition, Data Layers, HLOD, and PCG."
+  default_prompt: "Use $ue-world-partition-validate to audit an Unreal world and summarize streaming risks."

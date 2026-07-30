@@ -3,7 +3,7 @@
 	"Version": 7,
 	"VersionName": "0.6.0",
 	"FriendlyName": "UE_AI_integration",
-	"Description": "A manifest-driven, domain-layered AI integration for Unreal Engine 5.3-5.7 with Editor, PIE runtime, evidence, debugging, and UE Workflow DSL capabilities.",
+	"Description": "A manifest-driven, domain-layered AI integration for Unreal Engine 5.3-5.7 with Agent Skills, Editor and PIE evidence, debugging, and UE Workflow DSL capabilities.",
 	"Category": "Editor",
 	"CreatedBy": "NodeNestor",
 	"CreatedByURL": "https://github.com/NodeNestor",

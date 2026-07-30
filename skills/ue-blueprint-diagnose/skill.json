@@ -1,0 +1,133 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-blueprint-diagnose",
+  "version": "1.0.0",
+  "title": "UE Blueprint Diagnose",
+  "description": "Diagnose one Blueprint with bounded static, structural, compile, and optional runtime evidence.",
+  "domains": ["blueprint"],
+  "risk": "readOnly",
+  "triggers": [
+    "diagnose blueprint",
+    "blueprint performance",
+    "tick reachability",
+    "blueprint finding",
+    "blueprint call graph"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.3"
+    },
+    "capabilities": [
+      "blueprint.asset.summary",
+      "blueprint.asset.get",
+      "blueprint.scan",
+      "blueprint.call_graph.get",
+      "blueprint.graph.get",
+      "blueprint.asset.references",
+      "blueprint.asset.validate"
+    ],
+    "optionalCapabilities": [
+      "blueprint.findings.correlate"
+    ]
+  },
+  "recipes": [
+    {
+      "id": "scan-and-verify",
+      "title": "Scan and verify one Blueprint",
+      "description": "Read one Blueprint, run a bounded scan, inspect structural evidence, and compile-validate the asset.",
+      "risk": "readOnly",
+      "inputs": [
+        {
+          "name": "asset",
+          "type": "string",
+          "required": true,
+          "description": "Canonical /Game Blueprint asset path.",
+          "example": "/Game/Blueprints/BP_Player"
+        },
+        {
+          "name": "graph",
+          "type": "string",
+          "required": false,
+          "description": "Graph name selected from a finding location."
+        },
+        {
+          "name": "runtimeRunId",
+          "type": "string",
+          "required": false,
+          "description": "Retained Kismet trace run used only for optional correlation."
+        }
+      ],
+      "steps": [
+        {
+          "id": "baseline",
+          "phase": "discover",
+          "purpose": "Read stable Blueprint identity, graphs, variables, and structural summary before analysis.",
+          "operations": [
+            "blueprint.asset.summary",
+            "blueprint.asset.get"
+          ]
+        },
+        {
+          "id": "scoped-scan",
+          "phase": "execute",
+          "purpose": "Produce bounded findings for the explicitly selected asset or /Game prefix.",
+          "operations": [
+            "blueprint.scan"
+          ]
+        },
+        {
+          "id": "location-evidence",
+          "phase": "execute",
+          "purpose": "Inspect the strongest finding at its exact graph location before following cross-asset calls and references.",
+          "operations": [
+            "blueprint.graph.get",
+            "blueprint.call_graph.get",
+            "blueprint.asset.references"
+          ]
+        },
+        {
+          "id": "compile-check",
+          "phase": "verify",
+          "purpose": "Compile-validate the inspected asset without saving it.",
+          "operations": [
+            "blueprint.asset.validate"
+          ]
+        },
+        {
+          "id": "runtime-correlation",
+          "phase": "verify",
+          "purpose": "Correlate retained findings with an existing runtime trace without starting a debug workflow.",
+          "operations": [
+            "blueprint.findings.correlate"
+          ],
+          "optional": true
+        }
+      ],
+      "result": {
+        "summary": "Evidence-backed Blueprint diagnosis with explicit confidence and runtime status.",
+        "evidence": [
+          "asset and graph identity",
+          "findingId, ruleId, severity, confidence, and node location",
+          "call or reference evidence",
+          "compile validation result",
+          "runtimeStatus when correlation was requested"
+        ],
+        "success": [
+          "the scan was explicitly scoped to one asset or /Game prefix",
+          "high-value findings were inspected at their exact graph locations",
+          "Tick reachability was claimed only after tracing execution pins from Event Tick to the candidate node or observing matching runtime evidence",
+          "compile validation completed",
+          "unmeasured runtime reachability was not presented as fact"
+        ]
+      }
+    }
+  ],
+  "resources": [
+    {
+      "path": "references/diagnosis-recipe.md",
+      "description": "Detailed operation order, parameter boundaries, and evidence interpretation."
+    }
+  ]
+}

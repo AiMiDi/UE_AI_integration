@@ -1,0 +1,179 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-performance-regression",
+  "version": "1.0.0",
+  "title": "UE Performance Regression",
+  "description": "Run repeatable performance samples, compare compatible results, and escalate failures to trace evidence.",
+  "domains": ["scene", "production"],
+  "risk": "safeWrite",
+  "triggers": [
+    "performance regression",
+    "frame time comparison",
+    "performance budget",
+    "p95 p99",
+    "trace slow frame"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.3"
+    },
+    "capabilities": [
+      "scene.render.context.get",
+      "scene.render.memory.sample",
+      "scene.pie.status",
+      "production.performance.run",
+      "production.job.status",
+      "production.performance.result.get",
+      "production.performance.compare"
+    ],
+    "optionalCapabilities": [
+      "production.trace.start",
+      "production.trace.status",
+      "production.trace.stop",
+      "production.trace.analyze",
+      "production.job.result.get",
+      "production.job.artifact.get"
+    ]
+  },
+  "recipes": [
+    {
+      "id": "compare-repeatable-runs",
+      "title": "Compare repeatable baseline and candidate runs",
+      "description": "Capture two runs under a fixed environment, compare explicit thresholds, and collect trace evidence only on demand.",
+      "risk": "safeWrite",
+      "inputs": [
+        {
+          "name": "changeDescription",
+          "type": "string",
+          "required": true,
+          "description": "The one intended code, asset, or configuration change allowed to differ between baseline and candidate."
+        },
+        {
+          "name": "baselineRunId",
+          "type": "string",
+          "required": false,
+          "description": "Existing succeeded baseline run. When absent, capture a baseline before the caller performs the intended change."
+        },
+        {
+          "name": "mode",
+          "type": "string",
+          "required": true,
+          "description": "window or scenario performance mode.",
+          "example": "window"
+        },
+        {
+          "name": "warmupSeconds",
+          "type": "number",
+          "required": true,
+          "description": "Warmup time used identically by both runs.",
+          "example": 2
+        },
+        {
+          "name": "sampleSeconds",
+          "type": "number",
+          "required": true,
+          "description": "Measurement window used identically by both runs.",
+          "example": 5
+        },
+        {
+          "name": "repeatCount",
+          "type": "integer",
+          "required": true,
+          "description": "Repeat count used identically by both runs.",
+          "example": 5
+        },
+        {
+          "name": "checks",
+          "type": "array",
+          "required": true,
+          "description": "Explicit metric, statistic, regression, and budget checks."
+        },
+        {
+          "name": "captureTrace",
+          "type": "boolean",
+          "required": false,
+          "description": "Pre-capture a trace during each performance run. Failure escalation still replays the candidate under trace when no useful trace exists.",
+          "example": false
+        }
+      ],
+      "steps": [
+        {
+          "id": "capture-context",
+          "phase": "discover",
+          "purpose": "Record render environment, PIE state, and memory context before sampling.",
+          "operations": [
+            "scene.render.context.get",
+            "scene.render.memory.sample",
+            "scene.pie.status"
+          ]
+        },
+        {
+          "id": "run-and-poll",
+          "phase": "execute",
+          "purpose": "Use an existing baseline or capture it before the caller's intended change, then run the candidate with identical settings and poll every durable job.",
+          "operations": [
+            "production.performance.run",
+            "production.job.status"
+          ]
+        },
+        {
+          "id": "compare",
+          "phase": "execute",
+          "purpose": "Compare explicit thresholds only when both runs succeeded and their fingerprints match.",
+          "operations": [
+            "production.performance.compare"
+          ]
+        },
+        {
+          "id": "read-results",
+          "phase": "verify",
+          "purpose": "Read both terminal performance runs and retain their bounded metric and fingerprint evidence.",
+          "operations": [
+            "production.performance.result.get"
+          ]
+        },
+        {
+          "id": "trace-escalation",
+          "phase": "verify",
+          "purpose": "When comparison regresses or the caller requests attribution, start trace, replay the same candidate workload, stop trace even after replay failure, analyze, and poll the analysis job.",
+          "operations": [
+            "production.trace.start",
+            "production.trace.status",
+            "production.trace.stop",
+            "production.trace.analyze",
+            "production.job.status",
+            "production.job.result.get",
+            "production.job.artifact.get"
+          ],
+          "optional": true
+        }
+      ],
+      "result": {
+        "summary": "Compatible before/after performance verdict with percentile and threshold evidence.",
+        "evidence": [
+          "baseline and candidate run IDs",
+          "environment fingerprint compatibility",
+          "sample counts and p50, p95, p99 metrics",
+          "per-check regression and budget status",
+          "trace, analysis job, and artifact IDs when captured"
+        ],
+        "success": [
+          "both runs reached a succeeded terminal state",
+          "sampling parameters were identical",
+          "only the declared intended change differed and measured environment fingerprints matched",
+          "the verdict was produced by explicit compare checks",
+          "a requested or regression-triggered trace replay was stopped and its analysis reached a terminal state",
+          "incompatible evidence was reported as inconclusive"
+        ]
+      }
+    }
+  ],
+  "resources": [
+    {
+      "path": "references/performance-recipe.md",
+      "description": "Repeatable sampling, polling, comparison, and trace escalation details."
+    }
+  ]
+}

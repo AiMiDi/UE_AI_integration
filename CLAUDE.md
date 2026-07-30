@@ -25,6 +25,11 @@ The UE plugin remains one Editor module with four internal layers:
 `Resources/Capabilities/*.json` is the public capability contract. Handler
 names, MCP routing and documentation must agree with it.
 
+`skills/*/skill.json` is the Agent Skill recipe index. It may reference only
+published capability IDs and must not duplicate parameter schemas or execute
+operations. `ue_skills` loads recipes; `ue_context` discovers exact APIs;
+domain tools and `ue_workflow` remain the only execution paths.
+
 ## Invariants
 
 - The catalog contains six domain manifests. Capability and per-domain counts
@@ -56,13 +61,15 @@ names, MCP routing and documentation must agree with it.
 3. Implement the capability with the exact dotted ID.
 4. Bind it in the domain registrar.
 5. Run `node scripts/validate_capabilities.mjs`.
-6. Run the MCP build and tests.
-7. Compile with `RunUAT BuildPlugin`.
+6. Run `node scripts/validate_skills.mjs` to catch recipe drift.
+7. Run the MCP build and tests.
+8. Compile with `RunUAT BuildPlugin`.
 
 ## Commands
 
 ```bash
 node scripts/validate_capabilities.mjs
+node scripts/validate_skills.mjs
 cd MCP
 npm ci
 npm run build

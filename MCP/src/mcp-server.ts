@@ -41,11 +41,17 @@ import {
   locateWorkflowCli,
   type CliLocationResult,
 } from "./cli-locator.js";
+import {
+  type AgentSkillCatalog,
+  loadAgentSkillCatalog,
+} from "./skill-catalog.js";
+import { handleAgentSkills } from "./skill-router.js";
 
 export const MCP_TOOL_NAMES = [
   "ue_status",
   "ue_capabilities",
   "ue_context",
+  "ue_skills",
   "ue_cli",
   "ue_blueprint",
   "ue_scene",
@@ -71,6 +77,7 @@ export interface UEConnectionClient {
 
 export interface CreateMcpServerOptions {
   catalog?: CapabilityCatalog;
+  skillCatalog?: AgentSkillCatalog;
   client?: UEConnectionClient;
   cliLocator?: () => CliLocationResult;
   shortCliLocator?: () => CliLocationResult;
@@ -79,6 +86,7 @@ export interface CreateMcpServerOptions {
 export interface UEAIIntegrationMcpServer {
   server: McpServer;
   catalog: CapabilityCatalog;
+  skillCatalog: AgentSkillCatalog;
   registeredToolNames: readonly MCPToolName[];
 }
 
@@ -291,6 +299,8 @@ export function createMcpServer(
   options: CreateMcpServerOptions = {},
 ): UEAIIntegrationMcpServer {
   const catalog = options.catalog ?? loadCapabilityCatalog();
+  const skillCatalog =
+    options.skillCatalog ?? loadAgentSkillCatalog(catalog);
   const client = options.client ?? (ueClient as UEClient);
   const cliLocator = options.cliLocator ?? locateWorkflowCli;
   const shortCliLocator = options.shortCliLocator ?? locateShortCli;
@@ -413,6 +423,67 @@ export function createMcpServer(
   );
 
   server.tool(
+    "ue_skills",
+    "Load bounded local UE Agent Skill packages and capability recipes. This tool never contacts Editor or executes operations; discover exact schemas with ue_context, then execute through the domain tools or ue_workflow.",
+    {
+      action: z
+        .enum(["list", "get", "read"])
+        .describe(
+          "list summaries, get one skill with execution guides, or read one declared reference",
+        ),
+      query: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("Search skill IDs, titles, descriptions, and triggers"),
+      domain: z.enum(CAPABILITY_DOMAINS).optional(),
+      operation: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("Find skills whose recipes use this capability"),
+      risk: z
+        .enum(["readOnly", "safeWrite", "confirmWrite", "mixed"])
+        .optional(),
+      skill: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("Stable skill ID for get/read"),
+      recipe: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("Optional recipe ID for get"),
+      reference: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("Declared relative reference path for read"),
+      offset: z.number().int().min(0).optional(),
+      limit: z.number().int().min(1).max(50).optional(),
+    },
+    async (args) =>
+      handleAgentSkills(skillCatalog, {
+        action: args.action,
+        query: args.query,
+        domain: args.domain,
+        operation: args.operation,
+        risk: args.risk,
+        skill: args.skill,
+        recipe: args.recipe,
+        reference: args.reference,
+        offset: args.offset,
+        limit: args.limit,
+      }),
+  );
+
+  server.tool(
     "ue_cli",
     "Locate both the ue-workflow DSL CLI and the ue short-operation CLI without contacting Unreal Editor.",
     {},
@@ -479,6 +550,7 @@ export function createMcpServer(
   return {
     server,
     catalog,
+    skillCatalog,
     registeredToolNames: MCP_TOOL_NAMES,
   };
 }

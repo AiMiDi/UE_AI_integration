@@ -16,7 +16,7 @@ but those versions have not all been compiled locally.
 - The current release snapshot contains 317 manifest-driven Editor and PIE
   runtime capabilities; the service derives the count from the manifests at
   startup.
-- Eleven stable MCP tools instead of exposing every capability as a tool.
+- Twelve stable MCP tools instead of exposing every capability as a tool.
 - Six domain routers: Blueprint, Scene, Content, Animation, AI, and Production.
 - Dedicated PIE lifecycle, runtime object/widget/delegate, real input, and
   scenario operations.
@@ -58,6 +58,9 @@ but those versions have not all been compiled locally.
   as its first argument. It uses the local schema for one `/api/execute` call by
   default, supports forced live validation with `--live-schema`, and reuses the
   catalog and connection in `ue shell`; `ue-workflow` contains only DSL commands.
+- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) ships five validated domain Skills
+  and capability recipes for a Load → Discover → Execute → See Results loop
+  without adding a generic script executor.
 
 ## Architecture
 
@@ -175,12 +178,13 @@ claude mcp add ue_ai_integration -- node Plugins\UE_AI_integration\MCP\dist\inde
 
 ## MCP Tools
 
-The bridge always registers these eleven tools, even while Unreal Editor is
+The bridge always registers these twelve tools, even while Unreal Editor is
 offline:
 
 - `ue_status`
 - `ue_capabilities`
 - `ue_context`
+- `ue_skills`
 - `ue_cli`
 - `ue_blueprint`
 - `ue_scene`
@@ -215,6 +219,11 @@ Use `ue_capabilities` for paged summaries and `ue_context` for full schemas.
 An exact `operation` returns one full descriptor. A domain tool rejects
 operations owned by another domain.
 
+`ue_skills` searches, loads, and reads packaged Agent Skill recipes offline.
+It never contacts Editor or executes an operation. Exact schemas still come
+from `ue_context`; execution stays in a domain tool or `ue_workflow`; recipe
+verify operations provide result readback.
+
 The short-operation CLI uses the same capability contract as the six domain MCP
 tools:
 
@@ -222,6 +231,7 @@ tools:
 ue blueprint.asset.get --name /Game/UI/WBP_Login
 ue scene.actor.spawn --type PointLight --name KeyLight --location '[0,0,300]'
 ue production.job.status --job-id job-123
+ue skills --query blueprint
 ue shell
 ```
 
@@ -378,6 +388,18 @@ Build a standalone plugin against UE 5.3:
 ```powershell
 scripts\build_plugin.bat "D:\code\D5\d5render-ue5_3" "..\UE_AI_integration-BuiltPlugin\UE5.3"
 ```
+
+On Linux or macOS, build the plugin and native CLIs on the corresponding host:
+
+```bash
+bash scripts/build_plugin.sh /path/to/UnrealEngine ../UE_AI_integration-BuiltPlugin
+```
+
+The `BuildPlugin` package retains the root `CMakeLists.txt` plus the `CLI` and
+`Workflow` sources. Prebuilt programs under `CLI/bin` target only the host that
+ran the packaging script; after copying the package to another platform, run
+`cmake -S .` from the package root to build native `ue` and `ue-workflow`
+binaries.
 
 When a compatible Editor is running, continue with read-only and reversible
 smoke tests:

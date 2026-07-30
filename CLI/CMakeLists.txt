@@ -28,6 +28,7 @@ add_executable(ue-workflow
 add_library(UECommandCliCore STATIC
     src/CapabilityCatalog.cpp
     src/CommandCli.cpp
+    src/SkillCatalog.cpp
 )
 add_executable(ue
     src/short_main.cpp
@@ -104,6 +105,10 @@ if(UE_WORKFLOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(
         ue_cli_version
         PROPERTIES PASS_REGULAR_EXPRESSION "\"version\":\"${PROJECT_VERSION}\""
+    )
+    add_test(
+        NAME ue_cli_skills_help
+        COMMAND ue skills --help
     )
     add_test(
         NAME ue_workflow_cli_help

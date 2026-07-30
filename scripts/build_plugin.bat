@@ -57,6 +57,17 @@ echo  Output: %OUTPUT_PATH%
 echo ========================================
 echo.
 
+node "%PLUGIN_ROOT%\scripts\validate_capabilities.mjs"
+if %ERRORLEVEL% neq 0 (
+    echo CAPABILITY VALIDATION FAILED.
+    exit /b 1
+)
+node "%PLUGIN_ROOT%\scripts\validate_skills.mjs"
+if %ERRORLEVEL% neq 0 (
+    echo AGENT SKILL VALIDATION FAILED.
+    exit /b 1
+)
+
 call "%UAT%" BuildPlugin -Plugin="%PLUGIN_PATH%" -Package="%OUTPUT_PATH%" -TargetPlatforms=Win64 -Rocket
 
 if %ERRORLEVEL% neq 0 (
@@ -108,5 +119,6 @@ echo   1. Copy %OUTPUT_PATH% into YourProject\Plugins\UE_AI_integration\
 echo   2. Open UE5 -- plugin loads automatically
 echo   3. Run: claude mcp add ue_ai_integration -- node Plugins/UE_AI_integration/MCP/dist/index.js
 echo   4. Start claude in your project folder
-echo   5. Query ue_cli to locate CLI\bin\ue.exe and CLI\bin\ue-workflow.exe
+echo   5. Query ue_skills, then ue_context, then use the domain tools
+echo   6. Query ue_cli to locate CLI\bin\ue.exe and CLI\bin\ue-workflow.exe
 echo.
