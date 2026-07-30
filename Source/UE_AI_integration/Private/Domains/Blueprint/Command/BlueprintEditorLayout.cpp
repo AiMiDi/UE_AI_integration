@@ -424,7 +424,6 @@ public:
           FString::Printf(TEXT("Unsupported alignment '%s'."), *Alignment));
     }
 
-    Context.GraphEditor->NotifyGraphChanged();
     TSharedRef<FJsonObject> Result =
         BuildLayoutResult(Context, SelectedNodes, Before);
     Result->SetStringField(TEXT("alignment"), Alignment);
@@ -455,7 +454,6 @@ public:
 
     const TMap<FGuid, FIntPoint> Before = CapturePositions(SelectedNodes);
     Context.GraphEditor->OnStraightenConnections();
-    Context.GraphEditor->NotifyGraphChanged();
     return FMCPToolResult::Ok(
         BuildLayoutResult(Context, SelectedNodes, Before));
   }
@@ -496,7 +494,6 @@ public:
           FString::Printf(TEXT("Unsupported orientation '%s'."), *Orientation));
     }
 
-    Context.GraphEditor->NotifyGraphChanged();
     TSharedRef<FJsonObject> Result =
         BuildLayoutResult(Context, SelectedNodes, Before);
     Result->SetStringField(TEXT("orientation"), Orientation);
@@ -529,6 +526,14 @@ public:
                                  "requires at least one selected node."));
     }
 
+    FSlateRect NativeSelectionBounds;
+    if (!Context.GraphEditor->GetBoundsForSelectedNodes(
+            NativeSelectionBounds, 50.0f)) {
+      return EditorUnavailable(
+          TEXT("The focused Graph Editor could not calculate bounds for the "
+               "current selection."));
+    }
+
     FEdGraphSchemaAction_K2AddComment CommentAction;
     UEdGraphNode *NewNode = CommentAction.PerformAction(
         Context.Graph, nullptr, Context.GraphEditor->GetPasteLocation(), true);
@@ -540,9 +545,13 @@ public:
     }
 
     Comment->Modify();
+    // The K2 action asks the Blueprint editor's asynchronously updated focused
+    // widget for the same bounds. Applying the result captured from our exact
+    // SGraphEditor keeps immediate command chains deterministic while retaining
+    // UE's native node-size and 50-unit padding calculation.
+    Comment->SetBounds(NativeSelectionBounds);
     Comment->OnRenameNode(Text.TrimStartAndEnd());
     Comment->MoveMode = ECommentBoxMode::GroupMovement;
-    Context.GraphEditor->NotifyGraphChanged();
     Context.Blueprint->MarkPackageDirty();
 
     TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();

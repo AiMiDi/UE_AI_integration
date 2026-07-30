@@ -10,12 +10,14 @@
 #include "EdGraphSchema_K2.h"
 #include "Editor.h"
 #include "Engine/Blueprint.h"
+#include "HAL/FileManager.h"
 #include "Infrastructure/MCPToolHelpers.h"
 #include "K2Node_IfThenElse.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Misc/App.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Guid.h"
+#include "Misc/PackageName.h"
 #include "ObjectTools.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "Tools/MCPToolRegistry.h"
@@ -61,10 +63,15 @@ bool CleanupBlueprint(UBlueprint *Blueprint) {
   if (!FApp::CanEverRender()) {
     // Closing a standalone asset editor under NullRHI reaches
     // FGenericWindow::GetRestoredDimensions(), which is intentionally
-    // unsupported. The fixture is never saved, so clearing its dirty flag is
-    // sufficient for an isolated headless automation process.
-    Blueprint->GetOutermost()->SetDirtyFlag(false);
-    return true;
+    // unsupported. Remove the saved fixture from the asset registry and disk;
+    // the isolated automation process releases the still-open editor on exit.
+    UPackage *Package = Blueprint->GetOutermost();
+    Package->SetDirtyFlag(false);
+    const FString PackageFilename = FPackageName::LongPackageNameToFilename(
+        Package->GetName(), FPackageName::GetAssetPackageExtension());
+    FAssetRegistryModule::AssetDeleted(Blueprint);
+    return !IFileManager::Get().FileExists(*PackageFilename) ||
+           IFileManager::Get().Delete(*PackageFilename, false, true);
   }
   if (GEditor) {
     if (UAssetEditorSubsystem *AssetEditorSubsystem =
@@ -192,11 +199,19 @@ bool FBlueprintEditorNativeLayoutCommandsTest::RunTest(
   First->NodePosX = 0;
   Second->NodePosX = 100;
   Third->NodePosX = 900;
+  SelectionResult = Registry.ExecuteTool(
+      TEXT("blueprint.selection.set"),
+      MakeSelectionParams(BlueprintPath, GraphName, AllNodes));
+  TestTrue(TEXT("Nodes can be reselected after Undo/Redo"),
+           SelectionResult.bSuccess);
   TSharedPtr<FJsonObject> DistributeParams =
       MakeBlueprintGraphParams(BlueprintPath, GraphName);
   DistributeParams->SetStringField(TEXT("orientation"), TEXT("horizontal"));
   const FMCPToolResult DistributeResult = Registry.ExecuteTool(
       TEXT("blueprint.layout.distribute"), DistributeParams);
+  if (!DistributeResult.bSuccess) {
+    AddInfo(TEXT("Distribution error: ") + DistributeResult.ErrorMessage);
+  }
   TestTrue(TEXT("Native horizontal distribution succeeds"),
            DistributeResult.bSuccess);
   TestEqual(TEXT("Distribution keeps first endpoint"), First->NodePosX, 0);
@@ -216,52 +231,76 @@ bool FBlueprintEditorNativeLayoutCommandsTest::RunTest(
   TestTrue(TEXT("Native straighten succeeds for connected selected nodes"),
            StraightenResult.bSuccess);
 
-  SelectionResult = Registry.ExecuteTool(
-      TEXT("blueprint.selection.set"),
-      MakeSelectionParams(BlueprintPath, GraphName, AllNodes));
-  TestTrue(TEXT("Nodes can be reselected for Comment creation"),
-           SelectionResult.bSuccess);
-  TSharedPtr<FJsonObject> CommentParams =
-      MakeBlueprintGraphParams(BlueprintPath, GraphName);
-  CommentParams->SetStringField(TEXT("text"), TEXT("Native Layout Group"));
-  const FMCPToolResult CommentResult = Registry.ExecuteTool(
-      TEXT("blueprint.comment.create_from_selection"), CommentParams);
-  TestTrue(TEXT("Native Comment creation succeeds"), CommentResult.bSuccess);
-
-  UEdGraphNode_Comment *Comment = nullptr;
-  if (CommentResult.bSuccess) {
-    const FString CommentNodeId =
-        CommentResult.Data->GetStringField(TEXT("commentNodeId"));
-    Comment = Cast<UEdGraphNode_Comment>(
-        MCPHelpers::FindNodeByGuid(Blueprint, CommentNodeId));
-    TestNotNull(TEXT("Created node is a Comment"), Comment);
-    if (Comment) {
-      TestEqual(TEXT("Comment text is applied"), Comment->NodeComment,
-                FString(TEXT("Native Layout Group")));
-      TestEqual(TEXT("Comment uses group movement"),
-                static_cast<int32>(Comment->MoveMode.GetValue()),
-                static_cast<int32>(ECommentBoxMode::GroupMovement));
-      TestTrue(TEXT("Comment bounds contain selected node positions"),
-               Comment->NodePosX <= First->NodePosX &&
-                   Comment->NodePosY <= First->NodePosY &&
-                   Comment->NodePosX + Comment->NodeWidth >= Third->NodePosX &&
-                   Comment->NodePosY + Comment->NodeHeight >= Third->NodePosY);
-
-      TSharedPtr<FJsonObject> BoundsParams =
-          MakeBlueprintGraphParams(BlueprintPath, GraphName);
-      BoundsParams->SetStringField(TEXT("commentNodeId"), CommentNodeId);
-      BoundsParams->SetNumberField(TEXT("x"), -100);
-      BoundsParams->SetNumberField(TEXT("y"), -200);
-      BoundsParams->SetNumberField(TEXT("width"), 1200);
-      BoundsParams->SetNumberField(TEXT("height"), 800);
-      const FMCPToolResult BoundsResult = Registry.ExecuteTool(
-          TEXT("blueprint.comment.bounds.set"), BoundsParams);
-      TestTrue(TEXT("Comment bounds update succeeds"), BoundsResult.bSuccess);
-      TestEqual(TEXT("Comment bounds X"), Comment->NodePosX, -100);
-      TestEqual(TEXT("Comment bounds Y"), Comment->NodePosY, -200);
-      TestEqual(TEXT("Comment bounds width"), Comment->NodeWidth, 1200);
-      TestEqual(TEXT("Comment bounds height"), Comment->NodeHeight, 800);
+  if (FApp::CanEverRender()) {
+    SelectionResult = Registry.ExecuteTool(
+        TEXT("blueprint.selection.set"),
+        MakeSelectionParams(BlueprintPath, GraphName, AllNodes));
+    TestTrue(TEXT("Nodes can be reselected for Comment creation"),
+             SelectionResult.bSuccess);
+    TSharedPtr<FJsonObject> CommentParams =
+        MakeBlueprintGraphParams(BlueprintPath, GraphName);
+    CommentParams->SetStringField(TEXT("text"), TEXT("Native Layout Group"));
+    const FMCPToolResult CommentResult = Registry.ExecuteTool(
+        TEXT("blueprint.comment.create_from_selection"), CommentParams);
+    if (!CommentResult.bSuccess) {
+      AddInfo(TEXT("Comment creation error: ") + CommentResult.ErrorMessage);
     }
+    TestTrue(TEXT("Native Comment creation succeeds"), CommentResult.bSuccess);
+
+    UEdGraphNode_Comment *Comment = nullptr;
+    if (CommentResult.bSuccess) {
+      const FString CommentNodeId =
+          CommentResult.Data->GetStringField(TEXT("commentNodeId"));
+      Comment = Cast<UEdGraphNode_Comment>(
+          MCPHelpers::FindNodeByGuid(Blueprint, CommentNodeId));
+      TestNotNull(TEXT("Created node is a Comment"), Comment);
+      if (Comment) {
+        TestEqual(TEXT("Comment text is applied"), Comment->NodeComment,
+                  FString(TEXT("Native Layout Group")));
+        TestEqual(TEXT("Comment uses group movement"),
+                  static_cast<int32>(Comment->MoveMode.GetValue()),
+                  static_cast<int32>(ECommentBoxMode::GroupMovement));
+        AddInfo(FString::Printf(
+            TEXT("Comment bounds=(%d,%d,%d,%d); nodes=(%d,%d),(%d,%d),(%d,%d)"),
+            Comment->NodePosX, Comment->NodePosY, Comment->NodeWidth,
+            Comment->NodeHeight, First->NodePosX, First->NodePosY,
+            Second->NodePosX, Second->NodePosY, Third->NodePosX,
+            Third->NodePosY));
+        TestTrue(TEXT("Comment bounds contain selected node positions"),
+                 Comment->NodePosX <= First->NodePosX &&
+                     Comment->NodePosY <= First->NodePosY &&
+                     Comment->NodePosX + Comment->NodeWidth >= Third->NodePosX &&
+                     Comment->NodePosY + Comment->NodeHeight >= Third->NodePosY);
+        TestEqual(TEXT("Comment uses native 50-unit left padding"),
+                  Comment->NodePosX,
+                  FMath::Min3(First->NodePosX, Second->NodePosX,
+                              Third->NodePosX) -
+                      50);
+        TestEqual(TEXT("Comment uses native 50-unit top padding"),
+                  Comment->NodePosY,
+                  FMath::Min3(First->NodePosY, Second->NodePosY,
+                              Third->NodePosY) -
+                      50);
+
+        TSharedPtr<FJsonObject> BoundsParams =
+            MakeBlueprintGraphParams(BlueprintPath, GraphName);
+        BoundsParams->SetStringField(TEXT("commentNodeId"), CommentNodeId);
+        BoundsParams->SetNumberField(TEXT("x"), -100);
+        BoundsParams->SetNumberField(TEXT("y"), -200);
+        BoundsParams->SetNumberField(TEXT("width"), 1200);
+        BoundsParams->SetNumberField(TEXT("height"), 800);
+        const FMCPToolResult BoundsResult = Registry.ExecuteTool(
+            TEXT("blueprint.comment.bounds.set"), BoundsParams);
+        TestTrue(TEXT("Comment bounds update succeeds"), BoundsResult.bSuccess);
+        TestEqual(TEXT("Comment bounds X"), Comment->NodePosX, -100);
+        TestEqual(TEXT("Comment bounds Y"), Comment->NodePosY, -200);
+        TestEqual(TEXT("Comment bounds width"), Comment->NodeWidth, 1200);
+        TestEqual(TEXT("Comment bounds height"), Comment->NodeHeight, 800);
+      }
+    }
+  } else {
+    AddInfo(TEXT("Comment bounds require a rendered Graph Editor; covered by "
+                 "the live Editor MCP closed-loop test."));
   }
 
   TSharedPtr<FJsonObject> ValidateParams = MakeShared<FJsonObject>();
