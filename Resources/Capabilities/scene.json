@@ -2976,6 +2976,337 @@
       "traits": { "readOnly": false, "destructive": true, "expensive": true },
       "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "confirmWrite" },
       "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.landscape.list",
+      "domain": "scene",
+      "kind": "query",
+      "description": "List loaded Landscape identities, extents, proxy counts, materials, edit-layer state, and dirty state in the current Editor world.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "requires": { "modules": ["Landscape"] },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.landscape.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Describe one loaded Landscape by GUID, actor path, name, or label, including material, layers, proxies, extent, and loaded bounds.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "required": ["landscape"],
+        "additionalProperties": false
+      },
+      "requires": { "modules": ["Landscape"] },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.landscape.layers.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "List material layers and assigned Landscape Layer Info assets for one loaded Landscape.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "required": ["landscape"],
+        "additionalProperties": false
+      },
+      "requires": { "modules": ["Landscape"] },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.landscape.validate",
+      "domain": "scene",
+      "kind": "validation",
+      "description": "Validate loaded Landscape editing support, extent, component coverage, material, Layer Info assignments, and raw-import eligibility.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "required": ["landscape"],
+        "additionalProperties": false
+      },
+      "requires": { "modules": ["Landscape"] },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "dsl": { "admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.landscape.snapshot",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Capture a bounded semantic and raster-digest snapshot for one loaded Landscape and overlapping Water actors.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "includeWater": { "type": "boolean" }
+        },
+        "required": ["landscape"],
+        "additionalProperties": false
+      },
+      "requires": { "modules": ["Landscape"] },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "dsl": { "admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.landscape.diff",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Compare two verified ue.landscape-snapshot.v1 objects and return a bounded stable path-level structural diff.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "before": { "type": "object" },
+          "after": { "type": "object" }
+        },
+        "required": ["before", "after"],
+        "additionalProperties": false
+      },
+      "requires": { "modules": ["Landscape"] },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.landscape.heightmap.export",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Export the complete loaded Landscape height extent as little-endian r16 plus a verified JSON sidecar under Saved.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "outputName": { "type": "string", "minLength": 1, "maxLength": 96 }
+        },
+        "required": ["landscape"],
+        "additionalProperties": false
+      },
+      "requires": { "modules": ["Landscape"] },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.landscape.weightmap.export",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Export one complete loaded Landscape weight layer as r8 plus a verified JSON sidecar under Saved.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "layer": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "outputName": { "type": "string", "minLength": 1, "maxLength": 96 }
+        },
+        "required": ["landscape", "layer"],
+        "additionalProperties": false
+      },
+      "requires": { "modules": ["Landscape"] },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.landscape.change.plan",
+      "domain": "scene",
+      "kind": "validation",
+      "description": "Normalize and hash a deterministic Landscape/Water change, verify regular project-local sources and targets, require complete recovery evidence for managed Water creation/update/deletion, detect same-layer conflicts, estimate recovery size, and report World Partition, Data Layer, HLOD, and PCG impact.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "properties": {
+              "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "operations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 32,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "action": { "type": "string", "enum": ["importHeightmap", "importWeightmap", "setMaterial", "replaceLayerInfo", "waterCreate", "waterUpdate", "waterDelete"] },
+                    "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "sourcePath": { "type": "string", "minLength": 1, "maxLength": 2048, "description": "A regular file physically contained by the current project; symbolic links and directory junctions are rejected." },
+                    "layer": { "type": "string", "minLength": 1, "maxLength": 256 },
+                    "layerInfo": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "material": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "flipY": { "type": "boolean" },
+                    "type": { "type": "string", "enum": ["lake", "river", "ocean", "custom"] },
+                    "water": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "label": { "type": "string", "maxLength": 256 },
+                    "transform": {
+                      "type": "object",
+                      "properties": {
+                        "location": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                        "rotation": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                        "scale": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["action"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["operations"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["request"],
+        "additionalProperties": false
+      },
+      "requires": { "modules": ["Landscape"] },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.landscape.change.execute",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Re-plan and execute an approved deterministic Landscape/Water change with idempotency, raster and complete managed-Water actor/package recovery evidence, read-back diff, and automatic failure rollback.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": "object",
+            "properties": {
+              "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "operations": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 32,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "action": { "type": "string", "enum": ["importHeightmap", "importWeightmap", "setMaterial", "replaceLayerInfo", "waterCreate", "waterUpdate", "waterDelete"] },
+                    "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "sourcePath": { "type": "string", "minLength": 1, "maxLength": 2048, "description": "A regular file physically contained by the current project; symbolic links and directory junctions are rejected." },
+                    "layer": { "type": "string", "minLength": 1, "maxLength": 256 },
+                    "layerInfo": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "material": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "flipY": { "type": "boolean" },
+                    "type": { "type": "string", "enum": ["lake", "river", "ocean", "custom"] },
+                    "water": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "label": { "type": "string", "maxLength": 256 },
+                    "transform": {
+                      "type": "object",
+                      "properties": {
+                        "location": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                        "rotation": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                        "scale": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["action"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["operations"],
+            "additionalProperties": false
+          },
+          "approvePlanDigest": { "type": "string", "pattern": "^sha256:[0-9a-fA-F]{64}$" },
+          "confirmWrite": { "type": "boolean", "const": true },
+          "requestId": { "type": "string", "minLength": 1, "maxLength": 200 }
+        },
+        "required": ["request", "approvePlanDigest", "confirmWrite", "requestId"],
+        "additionalProperties": false
+      },
+      "requires": { "modules": ["Landscape"] },
+      "traits": { "readOnly": false, "destructive": true, "expensive": true },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.landscape.change.rollback",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Restore all Landscape raster/material/layer and managed Water state, including deleted actor identity and full properties, from verified recovery artifacts in the same Editor instance.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "requestId": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "confirmWrite": { "type": "boolean", "const": true }
+        },
+        "required": ["runId", "requestId", "confirmWrite"],
+        "additionalProperties": false
+      },
+      "requires": { "modules": ["Landscape"] },
+      "traits": { "readOnly": false, "destructive": true, "expensive": true },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.water.list",
+      "domain": "scene",
+      "kind": "query",
+      "description": "List loaded Water Body actors, transforms, bounds, Data Layers, HLOD assignments, managed identities, and dirty state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "requires": { "plugins": ["Water"] },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.water.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Describe one Water Body actor by managed identity, actor GUID, path, name, or label.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "water": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "required": ["water"],
+        "additionalProperties": false
+      },
+      "requires": { "plugins": ["Water"] },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
+    },
+    {
+      "id": "scene.water.validate",
+      "domain": "scene",
+      "kind": "validation",
+      "description": "Validate one or all loaded Water Body actors for root/component presence and usable scale.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "water": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        },
+        "additionalProperties": false
+      },
+      "requires": { "plugins": ["Water"] },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "dsl": { "admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
+      "output": { "kind": "json" }
     }
   ]
 }

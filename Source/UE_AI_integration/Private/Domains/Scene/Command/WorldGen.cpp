@@ -948,6 +948,9 @@ namespace UEAIIntegrationTools
 {
 	void RegisterSceneEngineeringQueryTools(FMCPToolRegistry& Registry);
 	void RegisterSceneEngineeringCommandTools(FMCPToolRegistry& Registry);
+	void RegisterSceneLandscapeWaterQueryTools(FMCPToolRegistry& Registry);
+	void RegisterSceneLandscapeWaterValidationTools(FMCPToolRegistry& Registry);
+	void RegisterSceneLandscapeWaterCommandTools(FMCPToolRegistry& Registry);
 
 	void RegisterWorldGenTools(FMCPToolRegistry& Registry)
 	{
@@ -962,5 +965,8 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_CreateHouse>());
 		RegisterSceneEngineeringQueryTools(Registry);
 		RegisterSceneEngineeringCommandTools(Registry);
+		RegisterSceneLandscapeWaterQueryTools(Registry);
+		RegisterSceneLandscapeWaterValidationTools(Registry);
+		RegisterSceneLandscapeWaterCommandTools(Registry);
 	}
 }

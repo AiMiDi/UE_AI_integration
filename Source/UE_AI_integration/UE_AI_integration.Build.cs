@@ -14,7 +14,7 @@ public class UE_AI_integration : ModuleRules
 		PrivateIncludePaths.Add(
 			Path.Combine(ModuleDirectory, "..", "..", "Workflow", "ThirdParty"));
 
-		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"0.6.0\"");
+		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"0.7.0\"");
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
@@ -94,6 +94,8 @@ public class UE_AI_integration : ModuleRules
 
 			// Landscape
 			"Landscape",
+			"Water",
+			"PCG",
 
 			// Scripting utilities
 			"EditorScriptingUtilities",
