@@ -17,11 +17,22 @@
 UUEAIIntegrationSubsystem::UUEAIIntegrationSubsystem() = default;
 UUEAIIntegrationSubsystem::~UUEAIIntegrationSubsystem() = default;
 
+bool UUEAIIntegrationSubsystem::ShouldCreateSubsystem(UObject* Outer) const
+{
+	return !FParse::Param(
+		FCommandLine::Get(),
+		TEXT("UEAIPerformanceChild"))
+		&& Super::ShouldCreateSubsystem(Outer);
+}
+
 namespace UEAIIntegrationTools
 {
 	void RegisterBlueprintReadTools(FMCPToolRegistry& Registry);
 	void RegisterBlueprintMutationTools(FMCPToolRegistry& Registry);
 	void RegisterBlueprintEditorLayoutTools(FMCPToolRegistry& Registry);
+	void RegisterBlueprintLayoutOrganizeTools(FMCPToolRegistry& Registry);
+	void RegisterBlueprintLayoutValidationTools(FMCPToolRegistry& Registry);
+	void RegisterBlueprintGraphVisualTools(FMCPToolRegistry& Registry);
 	void RegisterBlueprintAssetLifecycleTools(FMCPToolRegistry& Registry);
 	void RegisterBlueprintAssetStateTools(FMCPToolRegistry& Registry);
 	void RegisterBlueprintGraphTools(FMCPToolRegistry& Registry);
@@ -98,6 +109,9 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	UEAIIntegrationTools::RegisterBlueprintReadTools(*Registry);
 	UEAIIntegrationTools::RegisterBlueprintMutationTools(*Registry);
 	UEAIIntegrationTools::RegisterBlueprintEditorLayoutTools(*Registry);
+	UEAIIntegrationTools::RegisterBlueprintLayoutOrganizeTools(*Registry);
+	UEAIIntegrationTools::RegisterBlueprintLayoutValidationTools(*Registry);
+	UEAIIntegrationTools::RegisterBlueprintGraphVisualTools(*Registry);
 	UEAIIntegrationTools::RegisterBlueprintAssetLifecycleTools(*Registry);
 	UEAIIntegrationTools::RegisterBlueprintAssetStateTools(*Registry);
 	UEAIIntegrationTools::RegisterBlueprintGraphTools(*Registry);

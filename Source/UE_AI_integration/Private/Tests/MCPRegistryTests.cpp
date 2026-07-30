@@ -67,10 +67,9 @@ bool FMCPRegistryCatalogTest::RunTest(const FString& Parameters)
 		Registry.Num(),
 		Registry.GetCapabilityCount());
 	TestEqual(TEXT("All six domains are present"), Registry.GetDomainCounts().Num(), 6);
-	TestEqual(
-		TEXT("Blueprint capability count includes editor layout commands"),
-		Registry.GetDomainCounts().FindRef(TEXT("blueprint")),
-		77);
+	TestTrue(
+		TEXT("Blueprint capability count includes Graph geometry and visual evidence"),
+		Registry.GetDomainCounts().FindRef(TEXT("blueprint")) >= 82);
 	TestTrue(
 		TEXT("Scene capability baseline"),
 		Registry.GetDomainCounts().FindRef(TEXT("scene")) >= 54);
@@ -121,6 +120,21 @@ bool FMCPRegistryCatalogTest::RunTest(const FString& Parameters)
 	TestNotNull(
 		TEXT("Blueprint comment bounds command is declared"),
 		Registry.FindTool(TEXT("blueprint.comment.bounds.set")));
+	TestNotNull(
+		TEXT("Blueprint layout validation is declared"),
+		Registry.FindTool(TEXT("blueprint.layout.validate")));
+	TestNotNull(
+		TEXT("Blueprint atomic layout organizer is declared"),
+		Registry.FindTool(TEXT("blueprint.layout.organize")));
+	TestNotNull(
+		TEXT("Blueprint Graph capture is declared"),
+		Registry.FindTool(TEXT("blueprint.graph.capture")));
+	TestNotNull(
+		TEXT("Blueprint Graph capture retrieval is declared"),
+		Registry.FindTool(TEXT("blueprint.graph.capture.get")));
+	TestNotNull(
+		TEXT("Blueprint Graph visual comparison is declared"),
+		Registry.FindTool(TEXT("blueprint.graph.visual.compare")));
 
 	TArray<FString> ParamErrors;
 	TestFalse(
