@@ -47,6 +47,7 @@ public:
 	static TSharedPtr<FJsonObject> SummarizeMetric(
 		const TArray<double>& Samples,
 		double BudgetMs);
+	static bool IsPerformanceSampleValid(double Value);
 	static TSharedPtr<FJsonObject> ComparePerformanceResults(
 		const TSharedPtr<FJsonObject>& BaselineResult,
 		const TSharedPtr<FJsonObject>& CandidateResult,
@@ -54,12 +55,22 @@ public:
 	static TSharedPtr<FJsonObject> ResolveProcessTimeoutPolicy(
 		const TSharedPtr<FJsonObject>& Params,
 		double DefaultExecutionTimeoutSeconds);
+	static FString BuildStandaloneStartupTimeoutArgument(
+		double StartupTimeoutSeconds);
 	static FString BuildHeadlessProfileArguments(
 		const FString& Profile,
 		FString& OutError);
 	static FString InferAutomationPhase(
 		const FString& CurrentPhase,
 		const FString& LogChunk);
+	static bool ValidateStandaloneChildReceipt(
+		const TSharedPtr<FJsonObject>& Receipt,
+		const FString& ExpectedJobId,
+		int32 ExpectedRepeatCount,
+		FString& OutError);
+	static bool CanStandaloneChildReceiptOverrideTerminal(
+		int32 ReturnCode,
+		const FString& ErrorCode);
 
 private:
 	struct FProcessLaunchSpec
@@ -72,6 +83,8 @@ private:
 		double DefaultExecutionTimeoutSeconds = 1800.0;
 		bool bEditorProcess = false;
 		bool bAutomationProcess = false;
+		bool bLaunchHidden = true;
+		bool bLaunchReallyHidden = true;
 		TFunction<FString(
 			const FString& JobId,
 			const FString& JobDirectory,
@@ -154,7 +167,9 @@ private:
 		double SamplingUntilSeconds = 0.0;
 		double BudgetMs = 16.6667;
 		TMap<FString, TArray<double>> MetricSamples;
+		TMap<FString, int32> InvalidMetricSampleCounts;
 		TMap<FString, TArray<double>> AggregateMetricSamples;
+		TMap<FString, int32> AggregateInvalidMetricSampleCounts;
 		TArray<TSharedPtr<FJsonValue>> Repetitions;
 		TSharedPtr<FJsonObject> PendingIterationResult;
 		FString ScenarioRunId;
@@ -176,6 +191,8 @@ private:
 	FMCPToolResult AnalyzeTrace(const TSharedPtr<FJsonObject>& Params);
 
 	FMCPToolResult StartPerformanceRun(const TSharedPtr<FJsonObject>& Params);
+	FMCPToolResult StartStandalonePerformanceRun(
+		const TSharedPtr<FJsonObject>& Params);
 	FMCPToolResult GetPerformanceResult(const TSharedPtr<FJsonObject>& Params) const;
 	FMCPToolResult ComparePerformanceRuns(const TSharedPtr<FJsonObject>& Params) const;
 
@@ -249,6 +266,7 @@ private:
 	void PostProcessJob(FJob& Job);
 	void WriteTestReports(FJob& Job);
 	bool WritePerformanceReport(FJob& Job);
+	bool ParseStandalonePerformanceCsv(FJob& Job);
 	bool WriteTraceAnalysisReport(FJob& Job);
 
 	FArtifact* AddArtifact(

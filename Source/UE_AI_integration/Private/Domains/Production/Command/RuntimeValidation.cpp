@@ -202,6 +202,18 @@ public:
 	using FEngineeringOperationTool::FEngineeringOperationTool;
 	FString GetCapabilityId() const override { return TEXT("production.performance.compare"); }
 };
+class FPerformanceDiagnoseTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.performance.diagnose"); }
+};
+class FPerformanceReportGenerateTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.performance.report.generate"); }
+};
 class FTestListTool final : public FEngineeringOperationTool
 {
 public:
@@ -328,6 +340,8 @@ void RegisterProductionRuntimeTools(
 	Registry.Register(MakeShared<FPerformanceRunTool>(Controller));
 	Registry.Register(MakeShared<FPerformanceResultTool>(Controller));
 	Registry.Register(MakeShared<FPerformanceCompareTool>(Controller));
+	Registry.Register(MakeShared<FPerformanceDiagnoseTool>(Controller));
+	Registry.Register(MakeShared<FPerformanceReportGenerateTool>(Controller));
 	Registry.Register(MakeShared<FTestListTool>(Controller));
 	Registry.Register(MakeShared<FTestRunTool>(Controller));
 	Registry.Register(MakeShared<FTestResultTool>(Controller));

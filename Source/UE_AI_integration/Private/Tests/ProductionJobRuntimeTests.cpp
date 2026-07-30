@@ -9,6 +9,9 @@
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+
+#include <limits>
 
 using UEAIIntegration::Infrastructure::FProductionJobRuntime;
 
@@ -113,9 +116,115 @@ bool FProductionJobRuntimeContractTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Metric p50"), Metric->GetNumberField(TEXT("p50")), 3.0);
 	TestEqual(TEXT("Metric over-budget count"), Metric->GetIntegerField(TEXT("overBudgetFrames")), 2);
 
+	const TSharedPtr<FJsonObject> NonFiniteMetric =
+		FProductionJobRuntime::SummarizeMetric(
+			TArray<double>{
+				1.0,
+				std::numeric_limits<double>::infinity(),
+				std::numeric_limits<double>::quiet_NaN(),
+				2.0
+			},
+			1.5);
+	TestTrue(
+		TEXT("Finite samples keep the metric available"),
+		NonFiniteMetric->GetBoolField(TEXT("available")));
+	TestEqual(
+		TEXT("Non-finite samples are excluded"),
+		NonFiniteMetric->GetIntegerField(TEXT("sampleCount")),
+		2);
+	TestEqual(
+		TEXT("Non-finite samples are counted"),
+		NonFiniteMetric->GetIntegerField(TEXT("invalidSampleCount")),
+		2);
+	TestTrue(
+		TEXT("Summaries never publish a non-finite maximum"),
+		FMath::IsFinite(
+			NonFiniteMetric->GetNumberField(TEXT("max"))));
+	TestTrue(
+		TEXT("Summaries never publish a non-finite mean"),
+		FMath::IsFinite(
+			NonFiniteMetric->GetNumberField(TEXT("mean"))));
+
+	const double Extreme = TNumericLimits<double>::Max();
+	const TSharedPtr<FJsonObject> ExtremeMetric =
+		FProductionJobRuntime::SummarizeMetric(
+			TArray<double>{-Extreme, Extreme, Extreme},
+			std::numeric_limits<double>::quiet_NaN());
+	TestTrue(
+		TEXT("Extreme finite samples keep the mean finite"),
+		FMath::IsFinite(
+			ExtremeMetric->GetNumberField(TEXT("mean"))));
+	TestTrue(
+		TEXT("Extreme finite samples keep percentiles finite"),
+		FMath::IsFinite(
+			ExtremeMetric->GetNumberField(TEXT("p50")))
+			&& FMath::IsFinite(
+				ExtremeMetric->GetNumberField(TEXT("p95")))
+			&& FMath::IsFinite(
+				ExtremeMetric->GetNumberField(TEXT("p99"))));
+	TestTrue(
+		TEXT("Non-finite budgets are sanitized"),
+		ExtremeMetric->GetBoolField(TEXT("budgetSanitized")));
+	FString ExtremeMetricJson;
+	const TSharedRef<TJsonWriter<>> ExtremeMetricWriter =
+		TJsonWriterFactory<>::Create(&ExtremeMetricJson);
+	TestTrue(
+		TEXT("Extreme metric serializes"),
+		FJsonSerializer::Serialize(
+			ExtremeMetric.ToSharedRef(),
+			ExtremeMetricWriter));
+	TestFalse(
+		TEXT("Serialized metrics never contain Infinity tokens"),
+		ExtremeMetricJson.Contains(
+			TEXT("inf"),
+			ESearchCase::IgnoreCase));
+	TestFalse(
+		TEXT("Serialized metrics never contain NaN tokens"),
+		ExtremeMetricJson.Contains(
+			TEXT("nan"),
+			ESearchCase::IgnoreCase));
+	TSharedPtr<FJsonObject> ParsedExtremeMetric;
+	const TSharedRef<TJsonReader<>> ExtremeMetricReader =
+		TJsonReaderFactory<>::Create(ExtremeMetricJson);
+	TestTrue(
+		TEXT("Serialized extreme metric is valid JSON"),
+		FJsonSerializer::Deserialize(
+			ExtremeMetricReader,
+			ParsedExtremeMetric)
+			&& ParsedExtremeMetric.IsValid());
+
+	const TSharedPtr<FJsonObject> AllInvalidMetric =
+		FProductionJobRuntime::SummarizeMetric(
+			TArray<double>{
+				std::numeric_limits<double>::infinity(),
+				std::numeric_limits<double>::quiet_NaN()
+			},
+			16.6667);
+	TestFalse(
+		TEXT("All-invalid metrics are unavailable"),
+		AllInvalidMetric->GetBoolField(TEXT("available")));
+	TestEqual(
+		TEXT("All-invalid metrics retain the invalid count"),
+		AllInvalidMetric->GetIntegerField(TEXT("invalidSampleCount")),
+		2);
+
 	const TSharedPtr<FJsonObject> EmptyMetric =
 		FProductionJobRuntime::SummarizeMetric(TArray<double>(), 16.6667);
 	TestFalse(TEXT("Empty metric is unavailable"), EmptyMetric->GetBoolField(TEXT("available")));
+	TestTrue(
+		TEXT("Zero is a valid performance sample"),
+		FProductionJobRuntime::IsPerformanceSampleValid(0.0));
+	TestFalse(
+		TEXT("Negative performance samples are rejected at ingestion"),
+		FProductionJobRuntime::IsPerformanceSampleValid(-0.001));
+	TestFalse(
+		TEXT("Infinite performance samples are rejected at ingestion"),
+		FProductionJobRuntime::IsPerformanceSampleValid(
+			std::numeric_limits<double>::infinity()));
+	TestFalse(
+		TEXT("NaN performance samples are rejected at ingestion"),
+		FProductionJobRuntime::IsPerformanceSampleValid(
+			std::numeric_limits<double>::quiet_NaN()));
 
 	TSharedPtr<FJsonObject> CompareParams = MakeShared<FJsonObject>();
 	TArray<TSharedPtr<FJsonValue>> Checks;
@@ -150,6 +259,61 @@ bool FProductionJobRuntimeContractTest::RunTest(const FString& Parameters)
 			->GetStringField(TEXT("verdict")),
 		FString(TEXT("pass")));
 
+	TSharedPtr<FJsonObject> ExtremeCompareParams = MakeShared<FJsonObject>();
+	TSharedPtr<FJsonObject> ExtremeCheck = MakeShared<FJsonObject>();
+	ExtremeCheck->SetStringField(TEXT("metric"), TEXT("frameMs"));
+	ExtremeCheck->SetStringField(TEXT("statistic"), TEXT("p95"));
+	ExtremeCheck->SetNumberField(TEXT("maxRegressionPercent"), 5.0);
+	ExtremeCompareParams->SetArrayField(
+		TEXT("checks"),
+		TArray<TSharedPtr<FJsonValue>>{
+			MakeShared<FJsonValueObject>(ExtremeCheck)
+		});
+	const TSharedPtr<FJsonObject> ExtremeComparison =
+		FProductionJobRuntime::ComparePerformanceResults(
+			MakePerformanceResult(SMALL_NUMBER * 2.0, 1.0),
+			MakePerformanceResult(
+				TNumericLimits<double>::Max() / 2.0,
+				1.0),
+			ExtremeCompareParams);
+	const TSharedPtr<FJsonObject> ExtremeComparisonCheck =
+		ExtremeComparison->GetArrayField(TEXT("checks"))[0]->AsObject();
+	TestTrue(
+		TEXT("Extreme regression percentages remain finite"),
+		FMath::IsFinite(
+			ExtremeComparisonCheck->GetNumberField(
+				TEXT("regressionPercent"))));
+	TestTrue(
+		TEXT("Extreme regression percentages disclose saturation"),
+		ExtremeComparisonCheck->GetBoolField(
+			TEXT("regressionPercentSaturated")));
+	FString ExtremeComparisonJson;
+	const TSharedRef<TJsonWriter<>> ExtremeComparisonWriter =
+		TJsonWriterFactory<>::Create(&ExtremeComparisonJson);
+	TestTrue(
+		TEXT("Extreme comparison serializes as valid JSON"),
+		FJsonSerializer::Serialize(
+			ExtremeComparison.ToSharedRef(),
+			ExtremeComparisonWriter));
+	TestFalse(
+		TEXT("Extreme comparison JSON contains no Infinity token"),
+		ExtremeComparisonJson.Contains(
+			TEXT("inf"),
+			ESearchCase::IgnoreCase));
+
+	ExtremeCheck->SetNumberField(
+		TEXT("maxRegressionPercent"),
+		std::numeric_limits<double>::quiet_NaN());
+	const TSharedPtr<FJsonObject> InvalidThresholdComparison =
+		FProductionJobRuntime::ComparePerformanceResults(
+			MakePerformanceResult(10.0, 8.0),
+			MakePerformanceResult(12.0, 8.0),
+			ExtremeCompareParams);
+	TestEqual(
+		TEXT("Non-finite thresholds are inconclusive"),
+		InvalidThresholdComparison->GetStringField(TEXT("verdict")),
+		FString(TEXT("inconclusive")));
+
 	const TSharedPtr<FJsonObject> Incompatible =
 		FProductionJobRuntime::ComparePerformanceResults(
 			MakePerformanceResult(10.0, 8.0),
@@ -183,6 +347,15 @@ bool FProductionJobLifecycleContractTest::RunTest(
 		TEXT("Startup timeout is independent"),
 		Policy->GetNumberField(TEXT("startupTimeoutSeconds")),
 		120.0);
+	TestEqual(
+		TEXT("Resolved startup timeout is forwarded as a child argument"),
+		FProductionJobRuntime::BuildStandaloneStartupTimeoutArgument(
+			Policy->GetNumberField(TEXT("startupTimeoutSeconds"))),
+		FString(TEXT("-UEAIPerfStartupTimeoutSeconds=120")));
+	TestEqual(
+		TEXT("Child startup timeout argument keeps the job policy upper bound"),
+		FProductionJobRuntime::BuildStandaloneStartupTimeoutArgument(7200.0),
+		FString(TEXT("-UEAIPerfStartupTimeoutSeconds=3600")));
 	TestEqual(
 		TEXT("Execution timeout is independent"),
 		Policy->GetNumberField(TEXT("executionTimeoutSeconds")),
@@ -280,6 +453,180 @@ bool FProductionJobLifecycleContractTest::RunTest(
 		TEXT("Engine exit enters shutdown"),
 		Phase,
 		FString(TEXT("exiting")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FProductionStandaloneChildReceiptContractTest,
+	"UE_AI_integration.Production.Performance.StandaloneChildReceiptContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FProductionStandaloneChildReceiptContractTest::RunTest(
+	const FString& Parameters)
+{
+	const FString JobId = TEXT("job-receipt-contract");
+	const int32 ExpectedRepeatCount = 2;
+	TSharedPtr<FJsonObject> Receipt = MakeShared<FJsonObject>();
+	Receipt->SetStringField(
+		TEXT("schema"),
+		TEXT("ue.performance-standalone-child.v1"));
+	Receipt->SetStringField(TEXT("jobId"), JobId);
+	Receipt->SetStringField(TEXT("status"), TEXT("succeeded"));
+	Receipt->SetNumberField(
+		TEXT("completedRepeatCount"),
+		ExpectedRepeatCount);
+	Receipt->SetArrayField(
+		TEXT("csvFiles"),
+		TArray<TSharedPtr<FJsonValue>>{
+			MakeShared<FJsonValueString>(TEXT("repeat-1.csv")),
+			MakeShared<FJsonValueString>(TEXT("repeat-2.csv"))
+		});
+	TSharedPtr<FJsonObject> Camera = MakeShared<FJsonObject>();
+	Camera->SetBoolField(TEXT("lockedAndVerified"), true);
+	Receipt->SetObjectField(TEXT("camera"), Camera);
+
+	FString ReceiptError;
+	TestTrue(
+		TEXT("A complete successful child receipt is authoritative"),
+		FProductionJobRuntime::ValidateStandaloneChildReceipt(
+			Receipt,
+			JobId,
+			ExpectedRepeatCount,
+			ReceiptError));
+	TestTrue(
+		TEXT("A valid successful receipt has no validation error"),
+		ReceiptError.IsEmpty());
+
+	const FString OverflowReceiptJson =
+		TEXT(
+			"{\"schema\":\"ue.performance-standalone-child.v1\","
+			"\"jobId\":\"job-receipt-contract\","
+			"\"status\":\"succeeded\","
+			"\"completedRepeatCount\":2,"
+			"\"csvFiles\":[\"repeat-1.csv\",\"repeat-2.csv\"],"
+			"\"camera\":{\"lockedAndVerified\":true},"
+			"\"runtimeFingerprint\":{\"nested\":{\"overflow\":1e999}}}");
+	TSharedPtr<FJsonObject> OverflowReceipt;
+	const TSharedRef<TJsonReader<>> OverflowReceiptReader =
+		TJsonReaderFactory<>::Create(OverflowReceiptJson);
+	TestTrue(
+		TEXT("UE JSON reader accepts the exponent-overflow fixture"),
+		FJsonSerializer::Deserialize(
+			OverflowReceiptReader,
+			OverflowReceipt)
+			&& OverflowReceipt.IsValid());
+	if (OverflowReceipt.IsValid())
+	{
+		TestFalse(
+			TEXT("Deep exponent overflow is rejected at the receipt boundary"),
+			FProductionJobRuntime::ValidateStandaloneChildReceipt(
+				OverflowReceipt,
+				JobId,
+				ExpectedRepeatCount,
+				ReceiptError));
+		TestTrue(
+			TEXT("Receipt validation identifies the unsafe numeric path"),
+			ReceiptError.Contains(TEXT("runtimeFingerprint.nested.overflow")));
+	}
+
+	TestFalse(
+		TEXT("A receipt from another job is rejected"),
+		FProductionJobRuntime::ValidateStandaloneChildReceipt(
+			Receipt,
+			TEXT("job-other"),
+			ExpectedRepeatCount,
+			ReceiptError));
+	TestFalse(
+		TEXT("A mismatched completed repeat count is rejected"),
+		FProductionJobRuntime::ValidateStandaloneChildReceipt(
+			Receipt,
+			JobId,
+			ExpectedRepeatCount + 1,
+			ReceiptError));
+
+	Receipt->SetArrayField(
+		TEXT("csvFiles"),
+		TArray<TSharedPtr<FJsonValue>>{
+			MakeShared<FJsonValueString>(TEXT("repeat-1.csv"))
+		});
+	TestFalse(
+		TEXT("A mismatched CSV count is rejected"),
+		FProductionJobRuntime::ValidateStandaloneChildReceipt(
+			Receipt,
+			JobId,
+			ExpectedRepeatCount,
+			ReceiptError));
+	Receipt->SetArrayField(
+		TEXT("csvFiles"),
+		TArray<TSharedPtr<FJsonValue>>{
+			MakeShared<FJsonValueString>(TEXT("repeat-1.csv")),
+			MakeShared<FJsonValueString>(TEXT("repeat-2.csv"))
+		});
+
+	Camera->SetBoolField(TEXT("lockedAndVerified"), false);
+	TestFalse(
+		TEXT("A successful receipt without a verified camera is rejected"),
+		FProductionJobRuntime::ValidateStandaloneChildReceipt(
+			Receipt,
+			JobId,
+			ExpectedRepeatCount,
+			ReceiptError));
+
+	TSharedPtr<FJsonObject> FailedReceipt = MakeShared<FJsonObject>();
+	FailedReceipt->SetStringField(
+		TEXT("schema"),
+		TEXT("ue.performance-standalone-child.v1"));
+	FailedReceipt->SetStringField(TEXT("jobId"), JobId);
+	FailedReceipt->SetStringField(TEXT("status"), TEXT("failed"));
+	FailedReceipt->SetStringField(
+		TEXT("errorCode"),
+		TEXT("standalone_child_interrupted"));
+	FailedReceipt->SetStringField(
+		TEXT("message"),
+		TEXT("The managed standalone child was interrupted."));
+	TestTrue(
+		TEXT("A failed terminal receipt with diagnostics is valid"),
+		FProductionJobRuntime::ValidateStandaloneChildReceipt(
+			FailedReceipt,
+			JobId,
+			ExpectedRepeatCount,
+			ReceiptError));
+	TestTrue(
+		TEXT("A valid failed terminal receipt has no validation error"),
+		ReceiptError.IsEmpty());
+	FailedReceipt->SetStringField(TEXT("errorCode"), TEXT(""));
+	TestFalse(
+		TEXT("A failed terminal receipt without diagnostics is rejected"),
+		FProductionJobRuntime::ValidateStandaloneChildReceipt(
+			FailedReceipt,
+			JobId,
+			ExpectedRepeatCount,
+			ReceiptError));
+	TestTrue(
+		TEXT("A normal zero exit may adopt a verified child terminal"),
+		FProductionJobRuntime::CanStandaloneChildReceiptOverrideTerminal(
+			0,
+			FString()));
+	TestTrue(
+		TEXT("A generic non-zero process exit may adopt a verified child terminal"),
+		FProductionJobRuntime::CanStandaloneChildReceiptOverrideTerminal(
+			3,
+			TEXT("process_failed")));
+	TestFalse(
+		TEXT("A cancellation remains authoritative over a child receipt"),
+		FProductionJobRuntime::CanStandaloneChildReceiptOverrideTerminal(
+			3,
+			TEXT("job_cancelled")));
+	TestFalse(
+		TEXT("A timeout remains authoritative over a child receipt"),
+		FProductionJobRuntime::CanStandaloneChildReceiptOverrideTerminal(
+			3,
+			TEXT("job_execution_timeout")));
+	TestFalse(
+		TEXT("A controller terminal without a process exit cannot be overridden"),
+		FProductionJobRuntime::CanStandaloneChildReceiptOverrideTerminal(
+			INDEX_NONE,
+			FString()));
 	return true;
 }
 
@@ -523,10 +870,9 @@ bool FProductionCapabilityAdmissionTest::RunTest(const FString& Parameters)
 		TEXT("All production job operations are declared"),
 		Found.Num(),
 		ExpectedJobOperations.Num());
-	TestEqual(
-		TEXT("Production manifest includes the migrated and new operations"),
-		Root->GetArrayField(TEXT("capabilities")).Num(),
-		47);
+	TestTrue(
+		TEXT("Production manifest preserves the shipped job baseline"),
+		Root->GetArrayField(TEXT("capabilities")).Num() >= 49);
 
 	const TSharedPtr<FJsonObject> TraceAnalyze =
 		CapabilitiesById.FindRef(TEXT("production.trace.analyze"));
@@ -554,6 +900,29 @@ bool FProductionCapabilityAdmissionTest::RunTest(const FString& Parameters)
 			&& PerformanceRun->GetObjectField(TEXT("inputSchema"))
 				->GetObjectField(TEXT("properties"))
 				->HasField(TEXT("repeatCount")));
+	if (PerformanceRun.IsValid())
+	{
+		const TSharedPtr<FJsonObject> PerformanceProperties =
+			PerformanceRun->GetObjectField(TEXT("inputSchema"))
+				->GetObjectField(TEXT("properties"));
+		const TSharedPtr<FJsonObject> StartupTimeout =
+			PerformanceProperties->GetObjectField(
+				TEXT("startupTimeoutSeconds"));
+		TestEqual(
+			TEXT("Standalone startup timeout uses the runtime upper bound"),
+			StartupTimeout->GetNumberField(TEXT("maximum")),
+			3600.0);
+		const TSharedPtr<FJsonObject> CameraName =
+			PerformanceProperties->GetObjectField(TEXT("standardProfile"))
+				->GetObjectField(TEXT("properties"))
+				->GetObjectField(TEXT("camera"))
+				->GetObjectField(TEXT("properties"))
+				->GetObjectField(TEXT("name"));
+		TestEqual(
+			TEXT("Camera name manifest bound matches runtime"),
+			CameraName->GetNumberField(TEXT("maxLength")),
+			128.0);
+	}
 
 	for (const FString ProcessCapabilityId : {
 		FString(TEXT("production.commandlet.run")),

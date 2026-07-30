@@ -1400,13 +1400,14 @@
       "id": "production.trace.analyze",
       "domain": "production",
       "kind": "command",
-      "description": "Start bounded asynchronous TraceServices provider analysis for a completed trace without inlining raw events.",
+      "description": "Start bounded asynchronous TraceServices provider analysis for a succeeded trace job, or for a succeeded standalone performance run that owns a registered .utrace artifact, without inlining raw events.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "traceId": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "A succeeded production.trace job ID, or a succeeded standalone production.performance.run ID whose durable artifacts include a registered application/x-unreal-trace .utrace file."
           },
           "startTimeSeconds": {
             "type": "number",
@@ -1481,10 +1482,19 @@
       "id": "production.performance.run",
       "domain": "production",
       "kind": "command",
-      "description": "Run repeatable window, marker-bounded Scenario, or fixed standard Scenario performance samples with p50/p95/p99 evidence and a regression-grade environment fingerprint.",
+      "description": "Run repeatable PIE window/Scenario samples or a visible standalone child that records wall-clock-bounded CSV windows, with p50/p95/p99 evidence and a regression-grade environment fingerprint.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "executionTarget": {
+            "type": "string",
+            "enum": [
+              "pie",
+              "standalone"
+            ],
+            "default": "pie",
+            "description": "PIE samples in the connected Editor. Standalone launches a visible rendering child through the durable process runner; each repeat uses wall-clock warmup and sampling windows, an independent CSV capture, a child log, and an optional child-owned trace artifact."
+          },
           "profile": {
             "type": "string",
             "enum": [
@@ -1504,7 +1514,7 @@
               "map": {
                 "type": "string",
                 "pattern": "^/Game/",
-                "description": "Exact active map package. The service refuses to silently switch maps."
+                "description": "Exact map package. PIE requires it to be active; standalone launches this package in the isolated process."
               },
               "camera": {
                 "type": "object",
@@ -1512,8 +1522,8 @@
                   "name": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 256,
-                    "description": "Runtime camera/actor name that must exist after PIE starts."
+                    "maxLength": 128,
+                    "description": "Exact runtime Camera Actor object name or unique label. PIE resolves it after start; standalone rejects ambiguous labels, resolves and locks the camera in the child world, and continuously verifies its declared transform and player view target during measurement."
                   },
                   "location": {
                     "type": "array",
@@ -1522,7 +1532,7 @@
                     "items": {
                       "type": "number"
                     },
-                    "description": "Declared fixed camera location included in the profile digest."
+                    "description": "Fixed camera location applied and verified in the runtime world, and included in the profile digest."
                   },
                   "rotation": {
                     "type": "array",
@@ -1531,7 +1541,7 @@
                     "items": {
                       "type": "number"
                     },
-                    "description": "Declared fixed camera rotation included in the profile digest."
+                    "description": "Fixed camera rotation applied and verified in the runtime world, and included in the profile digest."
                   }
                 },
                 "required": [
@@ -1544,7 +1554,7 @@
               "inputSteps": {
                 "type": "array",
                 "maxItems": 64,
-                "description": "Deterministic Scenario input steps executed after PIE/camera verification and before metrics.begin.",
+                "description": "Deterministic Scenario input steps executed by PIE after camera verification and before metrics.begin. Standalone currently requires this array to be empty rather than approximating input.",
                 "items": {
                   "type": "object",
                   "additionalProperties": true
@@ -1552,6 +1562,15 @@
               },
               "captureScreenshot": {
                 "type": "boolean"
+              },
+              "gameInstanceMode": {
+                "type": "string",
+                "enum": [
+                  "project",
+                  "minimal"
+                ],
+                "default": "project",
+                "description": "Standalone-only lifecycle policy. project preserves the configured project GameInstance. minimal applies a process-local Engine.GameInstance override for deterministic profiling when the project GameInstance depends on an external launcher or service. The selected mode is included in the profile digest, launch receipt, and runtime fingerprint."
               }
             },
             "required": [
@@ -1595,6 +1614,13 @@
           "captureTrace": {
             "type": "boolean"
           },
+          "startupTimeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 3600,
+            "default": 300,
+            "description": "Maximum seconds for the standalone child to load its world and uniquely resolve the declared camera. The resolved Durable Job startup budget is forwarded to the child controller; PIE ignores this field."
+          },
           "requestId": {
             "type": "string",
             "minLength": 1,
@@ -1623,7 +1649,7 @@
       "id": "production.performance.result.get",
       "domain": "production",
       "kind": "query",
-      "description": "Return one durable performance run, bounded metric summaries, and its persisted Git/map/scalability/CVar/GPU environment fingerprint.",
+      "description": "Return one durable performance run and bounded metric summaries. Standalone results include per-repeat CSV column provenance, actual child wall-clock windows, verified camera evidence, and an environment fingerprint merged with the child runtime RHI/GPU/driver/resolution/CVar evidence.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1765,6 +1791,93 @@
         "readOnly": false,
         "destructive": false,
         "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.performance.diagnose",
+      "domain": "production",
+      "kind": "validation",
+      "description": "Classify a succeeded performance run as CPU-bound, GPU-bound, mixed, frame-limited, or inconclusive using timing, explicit FPS-cap or VSync evidence, run-bounded logs, and optional provenance-matched TraceServices evidence. Stable 16.67 ms timing alone is not limiter proof, and missing logs are reported as unavailable rather than clean.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "traceAnalysisJobId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional succeeded production.trace.analyze job whose traceId exactly matches this performance run's owned trace; bounded timers and thread groups are attached as evidence."
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.performance.report.generate",
+      "domain": "production",
+      "kind": "command",
+      "description": "Generate self-contained HTML, machine-readable JSON, and JUnit evidence for a succeeded performance run and optional before/after comparison. When comparisonId is supplied, that comparison's candidateRunId must exactly equal runId.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "comparisonId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional performance comparison whose candidateRunId exactly matches runId; mismatched evidence is rejected."
+          },
+          "traceAnalysisJobId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
       },
       "output": {
         "kind": "json"

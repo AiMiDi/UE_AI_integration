@@ -5,6 +5,7 @@
 #include "Editor.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformFileManager.h"
 #include "HAL/PlatformMisc.h"
 #include "HAL/PlatformProperties.h"
@@ -14,8 +15,10 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/Base64.h"
 #include "Misc/EngineVersion.h"
+#include "Misc/DefaultValueHelper.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
+#include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 #include "ProfilingDebugging/TraceAuxiliary.h"
@@ -39,6 +42,7 @@ namespace ProductionJobRuntimePrivate
 {
 	constexpr int32 MaxCapturedLogChars = 1024 * 1024;
 	constexpr int32 MaxArtifactChunkBytes = 1024 * 1024;
+	constexpr int64 MaxStandaloneChildReceiptBytes = 256 * 1024;
 	constexpr int64 MaxSynchronousArtifactHashBytes =
 		64ll * 1024ll * 1024ll;
 	constexpr int32 MaxPackageScanFiles = 4096;
@@ -51,6 +55,50 @@ namespace ProductionJobRuntimePrivate
 	constexpr double MaxExecutionTimeoutSeconds = 43200.0;
 	constexpr double MaxShutdownTimeoutSeconds = 600.0;
 	constexpr double MaxHardTimeoutSeconds = 86400.0;
+	constexpr int32 MaxValidatedJsonDepth = 64;
+
+	FString BuildStandaloneCVarCommands()
+	{
+		static const TCHAR* Names[] = {
+			TEXT("r.VSync"),
+			TEXT("t.MaxFPS"),
+			TEXT("r.ScreenPercentage"),
+			TEXT("r.DynamicRes.OperationMode"),
+			TEXT("sg.ResolutionQuality"),
+			TEXT("sg.ViewDistanceQuality"),
+			TEXT("sg.AntiAliasingQuality"),
+			TEXT("sg.ShadowQuality"),
+			TEXT("sg.GlobalIlluminationQuality"),
+			TEXT("sg.ReflectionQuality"),
+			TEXT("sg.PostProcessQuality"),
+			TEXT("sg.TextureQuality"),
+			TEXT("sg.EffectsQuality"),
+			TEXT("sg.FoliageQuality"),
+			TEXT("sg.ShadingQuality")
+		};
+		FString Commands;
+		for (const TCHAR* Name : Names)
+		{
+			const IConsoleVariable* Variable =
+				IConsoleManager::Get().FindConsoleVariable(Name);
+			if (!Variable)
+			{
+				continue;
+			}
+			const FString Value = Variable->GetString();
+			if (Value.IsEmpty()
+				|| Value.Contains(TEXT(";"))
+				|| Value.Contains(TEXT("\"")))
+			{
+				continue;
+			}
+			Commands += FString::Printf(
+				TEXT("%s %s;"),
+				Name,
+				*Value);
+		}
+		return Commands;
+	}
 
 	bool IsStartupPhase(const FString& Phase)
 	{
@@ -140,6 +188,81 @@ namespace ProductionJobRuntimePrivate
 		return Copy;
 	}
 
+	bool HasOnlyFiniteJsonNumbers(
+		const TSharedPtr<FJsonValue>& Value,
+		const FString& Path,
+		const int32 Depth,
+		FString& OutInvalidPath)
+	{
+		if (!Value.IsValid())
+		{
+			OutInvalidPath = Path;
+			return false;
+		}
+		if (Depth > MaxValidatedJsonDepth)
+		{
+			OutInvalidPath = Path + TEXT(" (depth limit)");
+			return false;
+		}
+		if (Value->Type == EJson::Number)
+		{
+			if (!FMath::IsFinite(Value->AsNumber()))
+			{
+				OutInvalidPath = Path;
+				return false;
+			}
+			return true;
+		}
+		if (Value->Type == EJson::Array)
+		{
+			const TArray<TSharedPtr<FJsonValue>>& Values = Value->AsArray();
+			for (int32 Index = 0; Index < Values.Num(); ++Index)
+			{
+				if (!HasOnlyFiniteJsonNumbers(
+						Values[Index],
+						FString::Printf(TEXT("%s[%d]"), *Path, Index),
+						Depth + 1,
+						OutInvalidPath))
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+		if (Value->Type == EJson::Object)
+		{
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair :
+				Value->AsObject()->Values)
+			{
+				if (!HasOnlyFiniteJsonNumbers(
+						Pair.Value,
+						Path + TEXT(".") + Pair.Key,
+						Depth + 1,
+						OutInvalidPath))
+				{
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	bool HasOnlyFiniteJsonNumbers(
+		const TSharedPtr<FJsonObject>& Object,
+		FString& OutInvalidPath)
+	{
+		if (!Object.IsValid())
+		{
+			OutInvalidPath = TEXT("$");
+			return false;
+		}
+		return HasOnlyFiniteJsonNumbers(
+			MakeShared<FJsonValueObject>(Object),
+			TEXT("$"),
+			0,
+			OutInvalidPath);
+	}
+
 	FString ComputeFileSha256Stream(const FString& Path)
 	{
 		TArray<uint8> Bytes;
@@ -158,6 +281,72 @@ namespace ProductionJobRuntimePrivate
 		Value.ReplaceInline(TEXT("\""), TEXT("&quot;"));
 		Value.ReplaceInline(TEXT("'"), TEXT("&apos;"));
 		return Value;
+	}
+
+	TArray<FString> ParseCsvRow(const FString& Line)
+	{
+		TArray<FString> Values;
+		FString Current;
+		bool bQuoted = false;
+		for (int32 Index = 0; Index < Line.Len(); ++Index)
+		{
+			const TCHAR Character = Line[Index];
+			if (Character == TEXT('"'))
+			{
+				if (bQuoted
+					&& Index + 1 < Line.Len()
+					&& Line[Index + 1] == TEXT('"'))
+				{
+					Current.AppendChar(TEXT('"'));
+					++Index;
+				}
+				else
+				{
+					bQuoted = !bQuoted;
+				}
+			}
+			else if (Character == TEXT(',') && !bQuoted)
+			{
+				Values.Add(Current.TrimStartAndEnd());
+				Current.Reset();
+			}
+			else
+			{
+				Current.AppendChar(Character);
+			}
+		}
+		Values.Add(Current.TrimStartAndEnd());
+		return Values;
+	}
+
+	int32 FindCsvColumn(
+		const TArray<FString>& Header,
+		const TArray<FString>& Candidates)
+	{
+		int32 Match = INDEX_NONE;
+		for (int32 Index = 0; Index < Header.Num(); ++Index)
+		{
+			FString Normalized = Header[Index].ToLower();
+			Normalized.ReplaceInline(TEXT(" "), TEXT(""));
+			Normalized.ReplaceInline(TEXT("_"), TEXT(""));
+			Normalized.ReplaceInline(TEXT("(ms)"), TEXT(""));
+			for (const FString& Candidate : Candidates)
+			{
+				if (Normalized == Candidate
+					|| Normalized.EndsWith(
+						FString(TEXT("/")) + Candidate))
+				{
+					if (Match != INDEX_NONE)
+					{
+						// Ambiguous columns must be rejected rather than
+						// silently selecting Gameplay/GPU-memory counters.
+						return INDEX_NONE;
+					}
+					Match = Index;
+				}
+			}
+		}
+		return Match;
 	}
 
 	bool IsSafeLegacyArgumentString(const FString& Value)
@@ -215,6 +404,21 @@ namespace ProductionJobRuntimePrivate
 				TEXT("Binaries/Mac/UnrealEditor-Cmd")
 #else
 				TEXT("Binaries/Linux/UnrealEditor-Cmd")
+#endif
+			));
+	}
+
+	FString GetEditorStandaloneExecutable()
+	{
+		return FPaths::ConvertRelativePathToFull(
+			FPaths::Combine(
+				FPaths::EngineDir(),
+#if PLATFORM_WINDOWS
+				TEXT("Binaries/Win64/UnrealEditor.exe")
+#elif PLATFORM_MAC
+				TEXT("Binaries/Mac/UnrealEditor")
+#else
+				TEXT("Binaries/Linux/UnrealEditor")
 #endif
 			));
 	}
@@ -325,6 +529,10 @@ namespace ProductionJobRuntimePrivate
 		{
 			Object->TryGetNumberField(Field, Value);
 		}
+		if (!FMath::IsFinite(Value))
+		{
+			Value = DefaultValue;
+		}
 		return FMath::Clamp(Value, Minimum, Maximum);
 	}
 
@@ -332,7 +540,15 @@ namespace ProductionJobRuntimePrivate
 		const TraceServices::IAnalysisSession& Session,
 		const TSharedPtr<FJsonObject>& Params)
 	{
-		const double Duration = FMath::Max(0.0, Session.GetDurationSeconds());
+		// UE 5.3 guards every session/provider read, including the seemingly
+		// trivial duration accessor. Acquire the session read scope before the
+		// first read and keep it alive through all provider aggregation.
+		TraceServices::FAnalysisSessionReadScope ReadScope(Session);
+		const double RawDuration = Session.GetDurationSeconds();
+		const bool bDurationSanitized =
+			!FMath::IsFinite(RawDuration) || RawDuration < 0.0;
+		const double Duration =
+			bDurationSanitized ? 0.0 : RawDuration;
 		const double RequestedEnd = ReadBoundedNumber(
 			Params,
 			TEXT("endTimeSeconds"),
@@ -395,13 +611,14 @@ namespace ProductionJobRuntimePrivate
 		TSharedPtr<FJsonObject> Summary = MakeShared<FJsonObject>();
 		Summary->SetStringField(TEXT("schema"), TEXT("ue.trace-analysis.v1"));
 		Summary->SetNumberField(TEXT("durationSeconds"), Duration);
+		Summary->SetBoolField(
+			TEXT("durationSanitized"),
+			bDurationSanitized);
 		Summary->SetNumberField(TEXT("intervalStartSeconds"), IntervalStart);
 		Summary->SetNumberField(TEXT("intervalEndSeconds"), IntervalEnd);
 		Summary->SetBoolField(
 			TEXT("intervalClamped"),
 			RequestedEnd - RequestedStart > MaxDuration);
-
-		TraceServices::FAnalysisSessionReadScope ReadScope(Session);
 
 		TSharedPtr<FJsonObject> Frames = MakeShared<FJsonObject>();
 		const TraceServices::IFrameProvider* FrameProvider =
@@ -414,23 +631,30 @@ namespace ProductionJobRuntimePrivate
 			{
 				TArray<double> Samples;
 				uint64 Total = 0;
+				uint64 ValidTotal = 0;
+				uint64 InvalidTotal = 0;
 				if (FrameProvider)
 				{
 					FrameProvider->EnumerateFrames(
 						FrameType,
 						IntervalStart,
 						IntervalEnd,
-						[&Samples, &Total, MaxFrames](
+						[&Samples, &Total, &ValidTotal, &InvalidTotal, MaxFrames](
 							const TraceServices::FFrame& Frame)
 						{
 							++Total;
+							const double DurationMs =
+								(Frame.EndTime - Frame.StartTime) * 1000.0;
+							if (!FMath::IsFinite(DurationMs)
+								|| DurationMs < 0.0)
+							{
+								++InvalidTotal;
+								return;
+							}
+							++ValidTotal;
 							if (Samples.Num() < MaxFrames)
 							{
-								Samples.Add(
-									FMath::Max(
-										0.0,
-										(Frame.EndTime - Frame.StartTime)
-											* 1000.0));
+								Samples.Add(DurationMs);
 							}
 						});
 				}
@@ -441,9 +665,15 @@ namespace ProductionJobRuntimePrivate
 				FrameSummary->SetNumberField(
 					TEXT("totalFrameCount"),
 					static_cast<double>(Total));
+				FrameSummary->SetNumberField(
+					TEXT("validFrameCount"),
+					static_cast<double>(ValidTotal));
+				FrameSummary->SetNumberField(
+					TEXT("invalidFrameCount"),
+					static_cast<double>(InvalidTotal));
 				FrameSummary->SetBoolField(
 					TEXT("truncated"),
-					Total > static_cast<uint64>(Samples.Num()));
+					ValidTotal > static_cast<uint64>(Samples.Num()));
 				Frames->SetObjectField(Name, FrameSummary);
 			};
 		AddFrameSummary(TEXT("game"), TraceFrameType_Game);
@@ -464,6 +694,7 @@ namespace ProductionJobRuntimePrivate
 			double TotalExclusiveMs = 0.0;
 		};
 		TArray<FTimerRow> TimerRows;
+		int32 InvalidTimerCount = 0;
 		const TraceServices::ITimingProfilerProvider* TimingProvider =
 			Session.ReadProvider<TraceServices::ITimingProfilerProvider>(
 				TraceServices::GetTimingProfilerProviderName());
@@ -496,6 +727,26 @@ namespace ProductionJobRuntimePrivate
 					{
 						continue;
 					}
+					const double TotalInclusiveMs =
+						Row->TotalInclusiveTime * 1000.0;
+					const double AverageInclusiveMs =
+						Row->AverageInclusiveTime * 1000.0;
+					const double MaxInclusiveMs =
+						Row->MaxInclusiveTime * 1000.0;
+					const double TotalExclusiveMs =
+						Row->TotalExclusiveTime * 1000.0;
+					if (!FMath::IsFinite(TotalInclusiveMs)
+						|| !FMath::IsFinite(AverageInclusiveMs)
+						|| !FMath::IsFinite(MaxInclusiveMs)
+						|| !FMath::IsFinite(TotalExclusiveMs)
+						|| TotalInclusiveMs < 0.0
+						|| AverageInclusiveMs < 0.0
+						|| MaxInclusiveMs < 0.0
+						|| TotalExclusiveMs < 0.0)
+					{
+						++InvalidTimerCount;
+						continue;
+					}
 					FTimerRow& Output = TimerRows.AddDefaulted_GetRef();
 					Output.Name = Row->Timer->Name
 						? Row->Timer->Name
@@ -507,14 +758,10 @@ namespace ProductionJobRuntimePrivate
 					Output.Line = Row->Timer->Line;
 					Output.bGpu = Row->Timer->IsGpuTimer != 0;
 					Output.InstanceCount = Row->InstanceCount;
-					Output.TotalInclusiveMs =
-						Row->TotalInclusiveTime * 1000.0;
-					Output.AverageInclusiveMs =
-						Row->AverageInclusiveTime * 1000.0;
-					Output.MaxInclusiveMs =
-						Row->MaxInclusiveTime * 1000.0;
-					Output.TotalExclusiveMs =
-						Row->TotalExclusiveTime * 1000.0;
+					Output.TotalInclusiveMs = TotalInclusiveMs;
+					Output.AverageInclusiveMs = AverageInclusiveMs;
+					Output.MaxInclusiveMs = MaxInclusiveMs;
+					Output.TotalExclusiveMs = TotalExclusiveMs;
 				}
 			}
 		}
@@ -561,6 +808,9 @@ namespace ProductionJobRuntimePrivate
 		}
 		Summary->SetArrayField(TEXT("timers"), TimerValues);
 		Summary->SetNumberField(TEXT("timerTotal"), TimerRows.Num());
+		Summary->SetNumberField(
+			TEXT("invalidTimerCount"),
+			InvalidTimerCount);
 		Summary->SetBoolField(
 			TEXT("timersTruncated"),
 			TimerRows.Num() > TimerCount);
@@ -690,6 +940,7 @@ namespace ProductionJobRuntimePrivate
 			double TotalExclusiveMs = 0.0;
 			uint64 InstanceCount = 0;
 			int32 AggregatedTimerCount = 0;
+			int32 InvalidAggregatedTimerCount = 0;
 			if (GroupTable.IsValid())
 			{
 				TUniquePtr<
@@ -706,11 +957,20 @@ namespace ProductionJobRuntimePrivate
 					{
 						continue;
 					}
+					const double RowExclusiveMs =
+						Row->TotalExclusiveTime * 1000.0;
+					const double NewTotalExclusiveMs =
+						TotalExclusiveMs + RowExclusiveMs;
+					if (!FMath::IsFinite(RowExclusiveMs)
+						|| RowExclusiveMs < 0.0
+						|| !FMath::IsFinite(NewTotalExclusiveMs))
+					{
+						++InvalidAggregatedTimerCount;
+						continue;
+					}
 					++AggregatedTimerCount;
 					InstanceCount += Row->InstanceCount;
-					TotalExclusiveMs +=
-						FMath::Max(0.0, Row->TotalExclusiveTime)
-						* 1000.0;
+					TotalExclusiveMs = NewTotalExclusiveMs;
 				}
 			}
 			GroupSummary->SetBoolField(
@@ -719,6 +979,9 @@ namespace ProductionJobRuntimePrivate
 			GroupSummary->SetNumberField(
 				TEXT("timerCount"),
 				AggregatedTimerCount);
+			GroupSummary->SetNumberField(
+				TEXT("invalidTimerCount"),
+				InvalidAggregatedTimerCount);
 			GroupSummary->SetNumberField(
 				TEXT("instanceCount"),
 				static_cast<double>(InstanceCount));
@@ -766,6 +1029,8 @@ namespace ProductionJobRuntimePrivate
 
 					TArray<double> Values;
 					int32 ObservedValueCount = 0;
+					int32 ValidValueCount = 0;
+					int32 InvalidValueCount = 0;
 					if (Counter.IsFloatingPoint())
 					{
 						Counter.EnumerateFloatValues(
@@ -775,6 +1040,12 @@ namespace ProductionJobRuntimePrivate
 							[&](const double Time, const double Value)
 							{
 								++ObservedValueCount;
+								if (!FMath::IsFinite(Value))
+								{
+									++InvalidValueCount;
+									return;
+								}
+								++ValidValueCount;
 								if (Values.Num() < MaxCounterValues)
 								{
 									Values.Add(Value);
@@ -790,6 +1061,7 @@ namespace ProductionJobRuntimePrivate
 							[&](const double Time, const int64 Value)
 							{
 								++ObservedValueCount;
+								++ValidValueCount;
 								if (Values.Num() < MaxCounterValues)
 								{
 									Values.Add(static_cast<double>(Value));
@@ -819,9 +1091,15 @@ namespace ProductionJobRuntimePrivate
 					CounterObject->SetNumberField(
 						TEXT("observedValueCount"),
 						ObservedValueCount);
+					CounterObject->SetNumberField(
+						TEXT("validValueCount"),
+						ValidValueCount);
+					CounterObject->SetNumberField(
+						TEXT("invalidValueCount"),
+						InvalidValueCount);
 					CounterObject->SetBoolField(
 						TEXT("valuesTruncated"),
-						ObservedValueCount > Values.Num());
+						ValidValueCount > Values.Num());
 					CounterObject->SetObjectField(
 						TEXT("summary"),
 						ValueSummary);
@@ -1009,26 +1287,65 @@ TSharedPtr<FJsonObject> FProductionJobRuntime::SummarizeMetric(
 	double BudgetMs)
 {
 	TSharedPtr<FJsonObject> Summary = MakeShared<FJsonObject>();
-	Summary->SetNumberField(TEXT("sampleCount"), Samples.Num());
+	const bool bBudgetSanitized = !FMath::IsFinite(BudgetMs);
+	const double SafeBudgetMs = bBudgetSanitized
+		? TNumericLimits<double>::Max()
+		: BudgetMs;
+	TArray<double> Sorted;
+	Sorted.Reserve(Samples.Num());
+	int32 InvalidSampleCount = 0;
+	for (const double Value : Samples)
+	{
+		if (FMath::IsFinite(Value))
+		{
+			Sorted.Add(Value);
+		}
+		else
+		{
+			++InvalidSampleCount;
+		}
+	}
+	Summary->SetNumberField(TEXT("sampleCount"), Sorted.Num());
+	Summary->SetNumberField(TEXT("inputSampleCount"), Samples.Num());
+	Summary->SetNumberField(
+		TEXT("invalidSampleCount"),
+		InvalidSampleCount);
+	Summary->SetBoolField(
+		TEXT("budgetSanitized"),
+		bBudgetSanitized);
 	Summary->SetStringField(TEXT("unit"), TEXT("ms"));
-	if (Samples.IsEmpty())
+	if (Sorted.IsEmpty())
 	{
 		Summary->SetBoolField(TEXT("available"), false);
 		return Summary;
 	}
 
-	TArray<double> Sorted = Samples;
 	Sorted.Sort();
-	double Sum = 0.0;
 	int32 OverBudget = 0;
+	double Scale = 0.0;
 	for (const double Value : Sorted)
 	{
-		Sum += Value;
-		if (Value > BudgetMs)
+		Scale = FMath::Max(Scale, FMath::Abs(Value));
+		if (Value > SafeBudgetMs)
 		{
 			++OverBudget;
 		}
 	}
+	double NormalizedSum = 0.0;
+	if (Scale > 0.0)
+	{
+		for (const double Value : Sorted)
+		{
+			NormalizedSum += Value / Scale;
+		}
+	}
+	const double NormalizedMean = Scale > 0.0
+		? FMath::Clamp(
+			NormalizedSum / static_cast<double>(Sorted.Num()),
+			-1.0,
+			1.0)
+		: 0.0;
+	const double Mean = NormalizedMean * Scale;
 	auto Percentile = [&Sorted](const double Fraction)
 	{
 		const double Position = Fraction * (Sorted.Num() - 1);
@@ -1038,7 +1355,7 @@ TSharedPtr<FJsonObject> FProductionJobRuntime::SummarizeMetric(
 		{
 			return Sorted[Lower];
 		}
-		return FMath::Lerp(
+		return FMath::LerpStable(
 			Sorted[Lower],
 			Sorted[Upper],
 			Position - Lower);
@@ -1046,13 +1363,18 @@ TSharedPtr<FJsonObject> FProductionJobRuntime::SummarizeMetric(
 	Summary->SetBoolField(TEXT("available"), true);
 	Summary->SetNumberField(TEXT("min"), Sorted[0]);
 	Summary->SetNumberField(TEXT("max"), Sorted.Last());
-	Summary->SetNumberField(TEXT("mean"), Sum / Sorted.Num());
+	Summary->SetNumberField(TEXT("mean"), Mean);
 	Summary->SetNumberField(TEXT("p50"), Percentile(0.50));
 	Summary->SetNumberField(TEXT("p95"), Percentile(0.95));
 	Summary->SetNumberField(TEXT("p99"), Percentile(0.99));
-	Summary->SetNumberField(TEXT("budgetMs"), BudgetMs);
+	Summary->SetNumberField(TEXT("budgetMs"), SafeBudgetMs);
 	Summary->SetNumberField(TEXT("overBudgetFrames"), OverBudget);
 	return Summary;
+}
+
+bool FProductionJobRuntime::IsPerformanceSampleValid(const double Value)
+{
+	return FMath::IsFinite(Value) && Value >= 0.0;
 }
 
 FMCPToolResult FProductionJobRuntime::GetJobStatus(
@@ -1545,8 +1867,8 @@ FProductionJobRuntime::StartProcessJob(
 		*Spec.Executable,
 		*Job->Arguments,
 		false,
-		true,
-		true,
+		Spec.bLaunchHidden,
+		Spec.bLaunchReallyHidden,
 		&ProcessId,
 		0,
 		Spec.WorkingDirectory.IsEmpty()
@@ -1560,8 +1882,8 @@ FProductionJobRuntime::StartProcessJob(
 		*Spec.Executable,
 		*Job->Arguments,
 		false,
-		true,
-		true,
+		Spec.bLaunchHidden,
+		Spec.bLaunchReallyHidden,
 		&ProcessId,
 		0,
 		Spec.WorkingDirectory.IsEmpty()
@@ -2064,7 +2386,10 @@ FMCPToolResult FProductionJobRuntime::AnalyzeTrace(
 {
 	const FString TraceId = GetJobIdParam(Params);
 	const TSharedPtr<FJob>* Trace = Jobs.Find(TraceId);
-	if (!Trace || !Trace->IsValid() || (*Trace)->Kind != TEXT("trace"))
+	if (!Trace
+		|| !Trace->IsValid()
+		|| ((*Trace)->Kind != TEXT("trace")
+			&& (*Trace)->Kind != TEXT("performanceStandalone")))
 	{
 		return FMCPToolResult::Error(
 			FString::Printf(TEXT("Trace '%s' was not found."), *TraceId),
@@ -2090,14 +2415,25 @@ FMCPToolResult FProductionJobRuntime::AnalyzeTrace(
 		}
 		ActiveHeavyJobId.Reset();
 	}
-	if ((*Trace)->Artifacts.IsEmpty())
+	const FArtifact* TraceArtifact =
+		(*Trace)->Artifacts.FindByPredicate(
+			[](const FArtifact& Candidate)
+			{
+				return Candidate.MimeType
+						== TEXT("application/x-unreal-trace")
+					&& Candidate.Kind == TEXT("trace")
+					&& Candidate.Name.EndsWith(
+						TEXT(".utrace"),
+						ESearchCase::IgnoreCase);
+			});
+	if (!TraceArtifact)
 	{
 		return FMCPToolResult::Error(
 			TEXT("The completed trace has no registered .utrace artifact."),
 			TEXT("trace_artifact_unavailable"),
 			410);
 	}
-	const FString TracePath = (*Trace)->Artifacts[0].Path;
+	const FString TracePath = TraceArtifact->Path;
 	if (!IFileManager::Get().FileExists(*TracePath))
 	{
 		return FMCPToolResult::Error(
@@ -2142,11 +2478,14 @@ FMCPToolResult FProductionJobRuntime::AnalyzeTrace(
 			600.0);
 	Analysis->Progress = 0.0;
 	Analysis->Result->SetStringField(TEXT("traceId"), TraceId);
+	Analysis->Result->SetStringField(
+		TEXT("traceSourceKind"),
+		(*Trace)->Kind);
 	Analysis->Result->SetStringField(TEXT("analysisLevel"), TEXT("providers"));
 	Analysis->Result->SetBoolField(TEXT("traceServicesAvailable"), true);
 	Analysis->Result->SetObjectField(
 		TEXT("traceArtifact"),
-		MakeArtifactSummary((*Trace)->Artifacts[0]));
+		MakeArtifactSummary(*TraceArtifact));
 	Analysis->TraceAnalysisSession =
 		AnalysisService->StartAnalysis(*TracePath);
 	if (!Analysis->TraceAnalysisSession.IsValid())
@@ -2221,6 +2560,14 @@ void FProductionJobRuntime::TickTraceAnalysisJob(FJob& Job)
 FMCPToolResult FProductionJobRuntime::StartPerformanceRun(
 	const TSharedPtr<FJsonObject>& Params)
 {
+	if (GetStringFieldOr(
+			Params,
+			TEXT("executionTarget"),
+			TEXT("pie"))
+		== TEXT("standalone"))
+	{
+		return StartStandalonePerformanceRun(Params);
+	}
 	bool bIdempotencyConflict = false;
 	if (TSharedPtr<FJob> Existing =
 		FindIdempotentJob(
@@ -2438,11 +2785,376 @@ FMCPToolResult FProductionJobRuntime::StartPerformanceRun(
 	return FMCPToolResult::Ok(Result);
 }
 
+FMCPToolResult FProductionJobRuntime::StartStandalonePerformanceRun(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	bool bIdempotencyConflict = false;
+	if (TSharedPtr<FJob> Existing =
+		FindIdempotentJob(
+			TEXT("performanceStandalone"),
+			Params,
+			bIdempotencyConflict))
+	{
+		TSharedPtr<FJsonObject> Replay = MakeJobSummary(*Existing, false);
+		Replay->SetStringField(TEXT("runId"), Existing->Id);
+		Replay->SetBoolField(TEXT("idempotentReplay"), true);
+		return FMCPToolResult::Ok(Replay);
+	}
+	if (bIdempotencyConflict)
+	{
+		return FMCPToolResult::Error(
+			TEXT(
+				"requestId is already bound to a different durable "
+				"standalone performance request."),
+			TEXT("idempotency_conflict"),
+			409);
+	}
+	if (!ActiveHeavyJobId.IsEmpty())
+	{
+		const TSharedPtr<FJob>* Active = Jobs.Find(ActiveHeavyJobId);
+		if (Active && Active->IsValid()
+			&& (*Active)->Status == TEXT("running"))
+		{
+			return FMCPToolResult::Error(
+				TEXT(
+					"Another production job holds the runtime resource "
+					"lock."),
+				TEXT("job_conflict"),
+				409);
+		}
+		ActiveHeavyJobId.Reset();
+	}
+	if (!Params.IsValid()
+		|| !Params->HasTypedField<EJson::Object>(TEXT("standardProfile")))
+	{
+		return FMCPToolResult::Error(
+			TEXT(
+				"Standalone performance runs require a fixed "
+				"standardProfile."),
+			TEXT("invalid_params"),
+			422);
+	}
+	const TSharedPtr<FJsonObject> Standard =
+		Params->GetObjectField(TEXT("standardProfile"));
+	if (GetStringFieldOr(Params, TEXT("mode"), TEXT("scenario"))
+			!= TEXT("scenario"))
+	{
+		return FMCPToolResult::Error(
+			TEXT(
+				"Standalone performance requires mode='scenario' and a "
+				"fixed standardProfile."),
+			TEXT("invalid_params"),
+			422);
+	}
+	if (Standard->HasTypedField<EJson::Array>(TEXT("inputSteps"))
+		&& !Standard->GetArrayField(TEXT("inputSteps")).IsEmpty())
+	{
+		return FMCPToolResult::Error(
+			TEXT(
+				"Standalone inputSteps are not yet supported; use a "
+				"deterministic map/camera profile without input steps."),
+			TEXT("invalid_params"),
+			422);
+	}
+	const FString Map = GetStringFieldOr(Standard, TEXT("map"));
+	if (!Map.StartsWith(TEXT("/Game/")))
+	{
+		return FMCPToolResult::Error(
+			TEXT("standardProfile.map must be a /Game package path."),
+			TEXT("invalid_params"),
+			422);
+	}
+	FString MapFilename;
+	if (!FPackageName::DoesPackageExist(Map, &MapFilename))
+	{
+		return FMCPToolResult::Error(
+			TEXT("The fixed standalone map package does not exist."),
+			TEXT("asset_not_found"),
+			404);
+	}
+
+	const FString Executable = GetEditorStandaloneExecutable();
+	if (!IFileManager::Get().FileExists(*Executable))
+	{
+		return FMCPToolResult::Error(
+			TEXT("The Unreal Editor standalone executable is unavailable."),
+			TEXT("build_unavailable"),
+			503);
+	}
+	const double WarmupSeconds = FMath::Clamp(
+		GetNumberFieldOr(Params, TEXT("warmupSeconds"), 5.0),
+		0.0,
+		300.0);
+	const double SampleSeconds = FMath::Clamp(
+		GetNumberFieldOr(Params, TEXT("sampleSeconds"), 10.0),
+		0.1,
+		3600.0);
+	const int32 RepeatCount = FMath::Clamp(
+		static_cast<int32>(
+			GetNumberFieldOr(Params, TEXT("repeatCount"), 5.0)),
+		1,
+		20);
+	const double BudgetMs = FMath::Clamp(
+		GetNumberFieldOr(Params, TEXT("budgetMs"), 16.6667),
+		0.01,
+		10000.0);
+	const bool bCaptureTrace =
+		GetBoolFieldOr(Params, TEXT("captureTrace"), true);
+	const FString CVarCommands = BuildStandaloneCVarCommands();
+	const int32 ResolutionX = FMath::Max(1, GSystemResolution.ResX);
+	const int32 ResolutionY = FMath::Max(1, GSystemResolution.ResY);
+	FString RhiArgument;
+	if (GDynamicRHI)
+	{
+		const FString RhiName = FString(GDynamicRHI->GetName());
+		if (RhiName.Contains(TEXT("D3D12"), ESearchCase::IgnoreCase))
+		{
+			RhiArgument = TEXT("-dx12");
+		}
+		else if (RhiName.Contains(TEXT("D3D11"), ESearchCase::IgnoreCase))
+		{
+			RhiArgument = TEXT("-dx11");
+		}
+	}
+
+	if (!Standard->HasTypedField<EJson::Object>(TEXT("camera")))
+	{
+		return FMCPToolResult::Error(
+			TEXT(
+				"Standalone performance requires a named camera with "
+				"declared location and rotation."),
+			TEXT("invalid_params"),
+			422);
+	}
+	const TSharedPtr<FJsonObject> Camera =
+		Standard->GetObjectField(TEXT("camera"));
+	const FString CameraName = GetStringFieldOr(Camera, TEXT("name"));
+	const FString GameInstanceMode =
+		GetStringFieldOr(Standard, TEXT("gameInstanceMode"), TEXT("project"));
+	if (GameInstanceMode != TEXT("project")
+		&& GameInstanceMode != TEXT("minimal"))
+	{
+		return FMCPToolResult::Error(
+			TEXT(
+				"standardProfile.gameInstanceMode must be 'project' or "
+				"'minimal'."),
+			TEXT("invalid_params"),
+			422);
+	}
+	if (CameraName.IsEmpty()
+		|| CameraName.Len() > 128
+		|| !IsSafeLegacyArgumentString(CameraName)
+		|| !Camera->HasTypedField<EJson::Array>(TEXT("location"))
+		|| !Camera->HasTypedField<EJson::Array>(TEXT("rotation"))
+		|| Camera->GetArrayField(TEXT("location")).Num() != 3
+		|| Camera->GetArrayField(TEXT("rotation")).Num() != 3)
+	{
+		return FMCPToolResult::Error(
+			TEXT(
+				"standardProfile.camera must provide a bounded name and "
+				"three-number location/rotation arrays."),
+			TEXT("invalid_params"),
+			422);
+	}
+	const TArray<TSharedPtr<FJsonValue>>& CameraLocation =
+		Camera->GetArrayField(TEXT("location"));
+	const TArray<TSharedPtr<FJsonValue>>& CameraRotation =
+		Camera->GetArrayField(TEXT("rotation"));
+	const TArray<TSharedPtr<FJsonValue>> CameraValues = {
+		CameraLocation[0],
+		CameraLocation[1],
+		CameraLocation[2],
+		CameraRotation[0],
+		CameraRotation[1],
+		CameraRotation[2]
+	};
+	for (const TSharedPtr<FJsonValue>& Value : CameraValues)
+	{
+		if (!Value.IsValid()
+			|| Value->Type != EJson::Number
+			|| !FMath::IsFinite(Value->AsNumber()))
+		{
+			return FMCPToolResult::Error(
+				TEXT(
+					"standardProfile.camera transform values must be "
+					"finite numbers."),
+				TEXT("invalid_params"),
+				422);
+		}
+	}
+
+	TSharedPtr<FJsonObject> Input = CopyObject(Params);
+	Input->SetStringField(TEXT("executionTarget"), TEXT("standalone"));
+	Input->SetStringField(TEXT("headlessProfile"), TEXT("rendering"));
+	Input->SetNumberField(TEXT("warmupSeconds"), WarmupSeconds);
+	Input->SetNumberField(TEXT("sampleSeconds"), SampleSeconds);
+	Input->SetNumberField(TEXT("repeatCount"), RepeatCount);
+	Input->SetNumberField(TEXT("budgetMs"), BudgetMs);
+	Input->SetBoolField(TEXT("captureTrace"), bCaptureTrace);
+	TSharedPtr<FJsonObject> LaunchConfiguration = MakeShared<FJsonObject>();
+	LaunchConfiguration->SetNumberField(TEXT("resolutionX"), ResolutionX);
+	LaunchConfiguration->SetNumberField(TEXT("resolutionY"), ResolutionY);
+	LaunchConfiguration->SetStringField(TEXT("rhiArgument"), RhiArgument);
+	LaunchConfiguration->SetStringField(
+		TEXT("cvarCommands"),
+		CVarCommands);
+	LaunchConfiguration->SetStringField(
+		TEXT("windowMode"),
+		TEXT("visibleWindow"));
+	LaunchConfiguration->SetStringField(
+		TEXT("cameraName"),
+		CameraName);
+	LaunchConfiguration->SetStringField(
+		TEXT("gameInstanceMode"),
+		GameInstanceMode);
+	Input->SetObjectField(
+		TEXT("standaloneLaunchConfiguration"),
+		LaunchConfiguration);
+
+	const FString ProjectFile =
+		FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath());
+	FProcessLaunchSpec Spec;
+	Spec.Kind = TEXT("performanceStandalone");
+	Spec.Executable = Executable;
+	Spec.WorkingDirectory = FPaths::ProjectDir();
+	Spec.PostProcess = TEXT("performanceStandalone");
+	Spec.DefaultExecutionTimeoutSeconds =
+		FMath::Clamp(
+			RepeatCount * (WarmupSeconds + SampleSeconds) + 300.0,
+			60.0,
+			21600.0);
+	const double ChildStartupTimeoutSeconds =
+		ResolveProcessTimeoutPolicy(
+			Input,
+			Spec.DefaultExecutionTimeoutSeconds)
+			->GetNumberField(TEXT("startupTimeoutSeconds"));
+	LaunchConfiguration->SetNumberField(
+		TEXT("startupTimeoutSeconds"),
+		ChildStartupTimeoutSeconds);
+	Spec.bEditorProcess = true;
+	Spec.bLaunchHidden = false;
+	Spec.bLaunchReallyHidden = false;
+	Spec.BuildArguments =
+		[ProjectFile,
+			Map,
+			CameraName,
+			CameraLocation,
+			CameraRotation,
+			CVarCommands,
+			ResolutionX,
+			ResolutionY,
+			RhiArgument,
+			WarmupSeconds,
+			SampleSeconds,
+			RepeatCount,
+			ChildStartupTimeoutSeconds,
+			GameInstanceMode,
+			bCaptureTrace](
+			const FString& JobId,
+			const FString& JobDirectory,
+			const FString&,
+			const FString&)
+		{
+			FString Arguments = FString::Printf(
+				TEXT(
+					"%s %s -game -unattended -nop4 -nosplash "
+					"-NoSound -windowed -ForceRes -ResX=%d -ResY=%d %s "
+					"-csvCompression=0 "
+					"-DisablePlugins=OpenXR,OpenXREyeTracker,"
+					"OpenXRHandTracking,OpenXRMsftHandInteraction "
+					"-UEAIPerformanceChild "
+					"-UEAIPerfJob=%s -UEAIPerfJobDirectory=%s "
+					"-UEAIPerfCameraName=%s "
+					"-UEAIPerfGameInstanceMode=%s "
+					"-UEAIPerfCameraX=%.17g -UEAIPerfCameraY=%.17g "
+					"-UEAIPerfCameraZ=%.17g "
+					"-UEAIPerfCameraPitch=%.17g "
+					"-UEAIPerfCameraYaw=%.17g "
+					"-UEAIPerfCameraRoll=%.17g "
+					"-UEAIPerfWarmupSeconds=%.17g "
+					"-UEAIPerfSampleSeconds=%.17g "
+					"-UEAIPerfRepeatCount=%d"),
+				*QuoteArgument(ProjectFile),
+				*QuoteArgument(Map),
+				ResolutionX,
+				ResolutionY,
+				*RhiArgument,
+				*QuoteArgument(JobId),
+				*QuoteArgument(JobDirectory),
+				*QuoteArgument(CameraName),
+				*QuoteArgument(GameInstanceMode),
+				CameraLocation[0]->AsNumber(),
+				CameraLocation[1]->AsNumber(),
+				CameraLocation[2]->AsNumber(),
+				CameraRotation[0]->AsNumber(),
+				CameraRotation[1]->AsNumber(),
+				CameraRotation[2]->AsNumber(),
+				WarmupSeconds,
+				SampleSeconds,
+				RepeatCount);
+			Arguments += TEXT(" ")
+				+ BuildStandaloneStartupTimeoutArgument(
+					ChildStartupTimeoutSeconds);
+			if (GameInstanceMode == TEXT("minimal"))
+			{
+				Arguments +=
+					TEXT(
+						" -ini:Engine:[/Script/EngineSettings."
+						"GameMapsSettings]:GameInstanceClass="
+						"/Script/Engine.GameInstance");
+			}
+			if (!CVarCommands.IsEmpty())
+			{
+				Arguments +=
+					TEXT(" -ExecCmds=") + QuoteArgument(CVarCommands);
+			}
+			if (bCaptureTrace)
+			{
+				Arguments += TEXT(" -UEAIPerfCaptureTrace");
+			}
+			return Arguments;
+		};
+	FString Error;
+	TSharedPtr<FJob> Job = StartProcessJob(Spec, Input, Error);
+	if (!Job.IsValid())
+	{
+		return MakeJobStartFailure(Error);
+	}
+	Job->Result->SetStringField(
+		TEXT("executionTarget"),
+		TEXT("standalone"));
+	Job->Result->SetStringField(TEXT("mode"), TEXT("scenario"));
+	Job->Result->SetNumberField(TEXT("repeatCount"), RepeatCount);
+	Job->Result->SetNumberField(TEXT("warmupSeconds"), WarmupSeconds);
+	Job->Result->SetNumberField(TEXT("sampleSeconds"), SampleSeconds);
+	Job->Result->SetNumberField(
+		TEXT("budgetMs"),
+		BudgetMs);
+	Job->Result->SetStringField(TEXT("map"), Map);
+	Job->Result->SetStringField(
+		TEXT("samplingBasis"),
+		TEXT("standaloneChildWallClockCsvWindows"));
+	Job->Result->SetStringField(
+		TEXT("renderLaunchPolicy"),
+		TEXT("visibleWindow"));
+	Job->Result->SetStringField(
+		TEXT("gameInstanceMode"),
+		GameInstanceMode);
+	Job->Result->SetBoolField(
+		TEXT("traceRequested"),
+		bCaptureTrace);
+	SaveJournal(*Job);
+	TSharedPtr<FJsonObject> Result = MakeJobSummary(*Job, false);
+	Result->SetStringField(TEXT("runId"), Job->Id);
+	return FMCPToolResult::Ok(Result);
+}
+
 void FProductionJobRuntime::BeginWindowIteration(
 	FJob& Job,
 	const double Now)
 {
 	Job.MetricSamples.Reset();
+	Job.InvalidMetricSampleCounts.Reset();
 	Job.PendingIterationResult.Reset();
 	Job.WarmupUntilSeconds = Now + Job.WarmupSeconds;
 	Job.SamplingUntilSeconds =
@@ -2453,20 +3165,34 @@ void FProductionJobRuntime::BeginWindowIteration(
 
 void FProductionJobRuntime::SamplePerformanceFrame(FJob& Job)
 {
-	const double DeltaMs = FApp::GetDeltaTime() * 1000.0;
-	if (DeltaMs >= 0.0)
-	{
-		Job.MetricSamples.FindOrAdd(TEXT("frameMs")).Add(DeltaMs);
-	}
-	Job.MetricSamples.FindOrAdd(TEXT("gameMs")).Add(
+	auto AddSample =
+		[&Job](const FString& MetricName, const double Value)
+		{
+			if (IsPerformanceSampleValid(Value))
+			{
+				Job.MetricSamples.FindOrAdd(MetricName).Add(Value);
+			}
+			else
+			{
+				++Job.InvalidMetricSampleCounts.FindOrAdd(MetricName);
+			}
+		};
+	AddSample(
+		TEXT("frameMs"),
+		FApp::GetDeltaTime() * 1000.0);
+	AddSample(
+		TEXT("gameMs"),
 		FPlatformTime::ToMilliseconds64(GGameThreadTime));
-	Job.MetricSamples.FindOrAdd(TEXT("renderMs")).Add(
+	AddSample(
+		TEXT("renderMs"),
 		FPlatformTime::ToMilliseconds64(GRenderThreadTime));
-	Job.MetricSamples.FindOrAdd(TEXT("rhiMs")).Add(
+	AddSample(
+		TEXT("rhiMs"),
 		FPlatformTime::ToMilliseconds64(GRHIThreadTime));
 	if (GDynamicRHI)
 	{
-		Job.MetricSamples.FindOrAdd(TEXT("gpuMs")).Add(
+		AddSample(
+			TEXT("gpuMs"),
 			FPlatformTime::ToMilliseconds64(RHIGetGPUFrameCycles()));
 	}
 }
@@ -2488,15 +3214,25 @@ void FProductionJobRuntime::CompletePerformanceIteration(FJob& Job)
 	for (const FString& MetricName : MetricNames)
 	{
 		const TArray<double>* Samples = Job.MetricSamples.Find(MetricName);
-		Metrics->SetObjectField(
-			MetricName,
+		TSharedPtr<FJsonObject> Summary =
 			SummarizeMetric(
 				Samples ? *Samples : TArray<double>(),
-				Job.BudgetMs));
+				Job.BudgetMs);
+		const int32 InvalidCount =
+			Job.InvalidMetricSampleCounts.FindRef(MetricName);
+		Summary->SetNumberField(
+			TEXT("inputSampleCount"),
+			(Samples ? Samples->Num() : 0) + InvalidCount);
+		Summary->SetNumberField(
+			TEXT("invalidSampleCount"),
+			InvalidCount);
+		Metrics->SetObjectField(MetricName, Summary);
 		if (Samples)
 		{
 			Job.AggregateMetricSamples.FindOrAdd(MetricName).Append(*Samples);
 		}
+		Job.AggregateInvalidMetricSampleCounts.FindOrAdd(MetricName) +=
+			InvalidCount;
 	}
 	Job.PendingIterationResult = MakeShared<FJsonObject>();
 	Job.PendingIterationResult->SetNumberField(
@@ -2505,6 +3241,9 @@ void FProductionJobRuntime::CompletePerformanceIteration(FJob& Job)
 	Job.PendingIterationResult->SetNumberField(
 		TEXT("sampleCount"),
 		Job.MetricSamples.FindRef(TEXT("frameMs")).Num());
+	Job.PendingIterationResult->SetNumberField(
+		TEXT("invalidFrameSampleCount"),
+		Job.InvalidMetricSampleCounts.FindRef(TEXT("frameMs")));
 	Job.PendingIterationResult->SetObjectField(TEXT("metrics"), Metrics);
 	if (!Job.ScenarioRunId.IsEmpty())
 	{
@@ -2544,6 +3283,7 @@ bool FProductionJobRuntime::StartScenarioIteration(
 		return false;
 	}
 	Job.MetricSamples.Reset();
+	Job.InvalidMetricSampleCounts.Reset();
 	Job.PendingIterationResult.Reset();
 	Job.bScenarioMetricsWasActive = false;
 	Job.bScenarioMetricsObserved = false;
@@ -2564,11 +3304,19 @@ void FProductionJobRuntime::FinishPerformanceRun(FJob& Job)
 	TSharedPtr<FJsonObject> Metrics = MakeShared<FJsonObject>();
 	for (const FString& MetricName : MetricNames)
 	{
-		Metrics->SetObjectField(
-			MetricName,
-			SummarizeMetric(
-				Job.AggregateMetricSamples.FindRef(MetricName),
-				Job.BudgetMs));
+		const TArray<double>& Samples =
+			Job.AggregateMetricSamples.FindRef(MetricName);
+		const int32 InvalidCount =
+			Job.AggregateInvalidMetricSampleCounts.FindRef(MetricName);
+		TSharedPtr<FJsonObject> Summary =
+			SummarizeMetric(Samples, Job.BudgetMs);
+		Summary->SetNumberField(
+			TEXT("inputSampleCount"),
+			Samples.Num() + InvalidCount);
+		Summary->SetNumberField(
+			TEXT("invalidSampleCount"),
+			InvalidCount);
+		Metrics->SetObjectField(MetricName, Summary);
 	}
 	Job.Result->SetObjectField(TEXT("metrics"), Metrics);
 	Job.Result->SetArrayField(TEXT("repetitions"), Job.Repetitions);
@@ -2609,6 +3357,9 @@ void FProductionJobRuntime::FinishPerformanceRun(FJob& Job)
 	Job.Result->SetNumberField(
 		TEXT("sampleCount"),
 		Job.AggregateMetricSamples.FindRef(TEXT("frameMs")).Num());
+	Job.Result->SetNumberField(
+		TEXT("invalidFrameSampleCount"),
+		Job.AggregateInvalidMetricSampleCounts.FindRef(TEXT("frameMs")));
 	if (Job.bOwnsTrace && !Job.TraceJobId.IsEmpty())
 	{
 		TSharedPtr<FJsonObject> StopParams = MakeShared<FJsonObject>();
@@ -2938,7 +3689,10 @@ FMCPToolResult FProductionJobRuntime::GetPerformanceResult(
 {
 	const FString RunId = GetJobIdParam(Params);
 	const TSharedPtr<FJob>* Job = Jobs.Find(RunId);
-	if (!Job || !Job->IsValid() || (*Job)->Kind != TEXT("performance"))
+	if (!Job
+		|| !Job->IsValid()
+		|| ((*Job)->Kind != TEXT("performance")
+			&& (*Job)->Kind != TEXT("performanceStandalone")))
 	{
 		return FMCPToolResult::Error(
 			FString::Printf(TEXT("Performance run '%s' was not found."), *RunId),
@@ -2961,8 +3715,10 @@ FMCPToolResult FProductionJobRuntime::ComparePerformanceRuns(
 	const TSharedPtr<FJob>* Candidate = Jobs.Find(CandidateId);
 	if (!Baseline || !Baseline->IsValid()
 		|| !Candidate || !Candidate->IsValid()
-		|| (*Baseline)->Kind != TEXT("performance")
-		|| (*Candidate)->Kind != TEXT("performance"))
+		|| ((*Baseline)->Kind != TEXT("performance")
+			&& (*Baseline)->Kind != TEXT("performanceStandalone"))
+		|| ((*Candidate)->Kind != TEXT("performance")
+			&& (*Candidate)->Kind != TEXT("performanceStandalone")))
 	{
 		return FMCPToolResult::Error(
 			TEXT("Both performance run identifiers must exist."),
@@ -3118,6 +3874,26 @@ TSharedPtr<FJsonObject> FProductionJobRuntime::ComparePerformanceResults(
 		TSharedPtr<FJsonObject> CheckResult = MakeShared<FJsonObject>();
 		CheckResult->SetStringField(TEXT("metric"), Metric);
 		CheckResult->SetStringField(TEXT("statistic"), Statistic);
+		const bool bThresholdsValid =
+			FMath::IsFinite(MaxRegressionPercent)
+			&& MaxRegressionPercent >= 0.0
+			&& FMath::IsFinite(AbsoluteBudgetMs)
+			&& AbsoluteBudgetMs >= 0.0;
+		if (!bThresholdsValid)
+		{
+			CheckResult->SetStringField(
+				TEXT("verdict"),
+				TEXT("inconclusive"));
+			CheckResult->SetStringField(
+				TEXT("reason"),
+				TEXT(
+					"Performance thresholds must be finite, non-negative "
+					"numbers."));
+			CheckResults.Add(
+				MakeShared<FJsonValueObject>(CheckResult));
+			bAnyInconclusive = true;
+			continue;
+		}
 		CheckResult->SetNumberField(
 			TEXT("maxRegressionPercent"),
 			MaxRegressionPercent);
@@ -3166,10 +3942,46 @@ TSharedPtr<FJsonObject> FProductionJobRuntime::ComparePerformanceResults(
 			(*BaselineMetricPtr)->GetNumberField(Statistic);
 		const double After =
 			(*CandidateMetricPtr)->GetNumberField(Statistic);
-		const double RegressionPercent =
-			Before > SMALL_NUMBER
-				? ((After - Before) / Before) * 100.0
-				: (After > Before ? 1000000000.0 : 0.0);
+		if (!FMath::IsFinite(Before)
+			|| !FMath::IsFinite(After)
+			|| Before < 0.0
+			|| After < 0.0)
+		{
+			CheckResult->SetStringField(
+				TEXT("verdict"),
+				TEXT("inconclusive"));
+			CheckResult->SetStringField(
+				TEXT("reason"),
+				TEXT(
+					"Performance samples must be finite, non-negative "
+					"numbers."));
+			CheckResults.Add(
+				MakeShared<FJsonValueObject>(CheckResult));
+			bAnyInconclusive = true;
+			continue;
+		}
+		double RegressionPercent = 0.0;
+		bool bRegressionPercentSaturated = false;
+		if (Before > SMALL_NUMBER)
+		{
+			const double Ratio = After / Before;
+			const double MaxPercent = TNumericLimits<double>::Max();
+			const double MaxRatioDelta = MaxPercent / 100.0;
+			if (!FMath::IsFinite(Ratio)
+				|| Ratio - 1.0 > MaxRatioDelta)
+			{
+				RegressionPercent = MaxPercent;
+				bRegressionPercentSaturated = true;
+			}
+			else
+			{
+				RegressionPercent = (Ratio - 1.0) * 100.0;
+			}
+		}
+		else if (After > Before)
+		{
+			RegressionPercent = 1000000000.0;
+		}
 		const bool bRegression =
 			RegressionPercent > MaxRegressionPercent
 			|| (AbsoluteBudgetMs > 0.0 && After > AbsoluteBudgetMs);
@@ -3178,6 +3990,9 @@ TSharedPtr<FJsonObject> FProductionJobRuntime::ComparePerformanceResults(
 		CheckResult->SetNumberField(
 			TEXT("regressionPercent"),
 			RegressionPercent);
+		CheckResult->SetBoolField(
+			TEXT("regressionPercentSaturated"),
+			bRegressionPercentSaturated);
 		CheckResult->SetStringField(
 			TEXT("verdict"),
 			bRegression ? TEXT("regression") : TEXT("pass"));
@@ -3252,6 +4067,117 @@ TSharedPtr<FJsonObject> FProductionJobRuntime::ResolveProcessTimeoutPolicy(
 		TEXT("hardTimeoutIsLimiting"),
 		Hard < Startup + Execution + Shutdown);
 	return Policy;
+}
+
+FString FProductionJobRuntime::BuildStandaloneStartupTimeoutArgument(
+	const double StartupTimeoutSeconds)
+{
+	return FString::Printf(
+		TEXT("-UEAIPerfStartupTimeoutSeconds=%.17g"),
+		FMath::Clamp(
+			StartupTimeoutSeconds,
+			1.0,
+			MaxStartupTimeoutSeconds));
+}
+
+bool FProductionJobRuntime::ValidateStandaloneChildReceipt(
+	const TSharedPtr<FJsonObject>& Receipt,
+	const FString& ExpectedJobId,
+	const int32 ExpectedRepeatCount,
+	FString& OutError)
+{
+	OutError.Reset();
+	if (!Receipt.IsValid())
+	{
+		OutError =
+			TEXT("The standalone child receipt is missing.");
+		return false;
+	}
+	FString InvalidNumberPath;
+	if (!HasOnlyFiniteJsonNumbers(Receipt, InvalidNumberPath))
+	{
+		OutError = FString::Printf(
+			TEXT(
+				"The standalone child receipt contains a non-finite number "
+				"or exceeds the validation depth at '%s'."),
+			*InvalidNumberPath);
+		return false;
+	}
+	if (GetStringFieldOr(Receipt, TEXT("schema"))
+		!= TEXT("ue.performance-standalone-child.v1"))
+	{
+		OutError =
+			TEXT("The standalone child receipt schema is missing or invalid.");
+		return false;
+	}
+	if (GetStringFieldOr(Receipt, TEXT("jobId")) != ExpectedJobId)
+	{
+		OutError =
+			TEXT("The standalone child receipt belongs to another job.");
+		return false;
+	}
+	const FString Status = GetStringFieldOr(Receipt, TEXT("status"));
+	if (Status != TEXT("succeeded") && Status != TEXT("failed"))
+	{
+		OutError =
+			TEXT("The standalone child receipt has no terminal status.");
+		return false;
+	}
+	if (Status == TEXT("succeeded"))
+	{
+		const int32 CompletedRepeatCount = static_cast<int32>(
+			GetNumberFieldOr(
+				Receipt,
+				TEXT("completedRepeatCount"),
+				-1.0));
+		if (CompletedRepeatCount != ExpectedRepeatCount
+			|| !Receipt->HasTypedField<EJson::Array>(TEXT("csvFiles"))
+			|| Receipt->GetArrayField(TEXT("csvFiles")).Num()
+				!= ExpectedRepeatCount)
+		{
+			OutError =
+				TEXT(
+					"The standalone child receipt does not contain the "
+					"declared number of completed CSV measurement windows.");
+			return false;
+		}
+		if (!Receipt->HasTypedField<EJson::Object>(TEXT("camera"))
+			|| !GetBoolFieldOr(
+				Receipt->GetObjectField(TEXT("camera")),
+				TEXT("lockedAndVerified"),
+				false))
+		{
+			OutError =
+				TEXT(
+					"The standalone child receipt does not verify the "
+					"declared camera lock.");
+			return false;
+		}
+	}
+	else
+	{
+		const FString ErrorCode =
+			GetStringFieldOr(Receipt, TEXT("errorCode"));
+		const FString Message = GetStringFieldOr(Receipt, TEXT("message"));
+		if (ErrorCode.IsEmpty() || ErrorCode.Len() > 128
+			|| Message.IsEmpty() || Message.Len() > 2048)
+		{
+			OutError =
+				TEXT(
+					"A failed standalone child receipt must include a "
+					"bounded errorCode and message.");
+			return false;
+		}
+	}
+	return true;
+}
+
+bool FProductionJobRuntime::CanStandaloneChildReceiptOverrideTerminal(
+	const int32 ReturnCode,
+	const FString& ErrorCode)
+{
+	return ReturnCode != INDEX_NONE
+		&& (ErrorCode.IsEmpty() || ErrorCode == TEXT("process_failed"));
 }
 
 FString FProductionJobRuntime::BuildHeadlessProfileArguments(
@@ -4544,6 +5470,267 @@ void FProductionJobRuntime::PostProcessJob(FJob& Job)
 	{
 		WriteTestReports(Job);
 	}
+	else if (Job.PostProcess == TEXT("performanceStandalone"))
+	{
+		// A bounded child receipt is authoritative only for a process that
+		// reached its own terminal exit. Cancellation, timeout, Editor
+		// shutdown, or another controller-owned terminal state must remain
+		// authoritative even if a child happened to flush a receipt while
+		// teardown was in progress.
+		const bool bMayAdoptChildTerminal =
+			CanStandaloneChildReceiptOverrideTerminal(
+				Job.ReturnCode,
+				Job.ErrorCode);
+		const FString ReceiptPath = FPaths::Combine(
+			JobDirectory(Job.Id),
+			TEXT("standalone-child.json"));
+		auto AddStandaloneWarning =
+			[&Job](const FString& Code, const FString& Message)
+			{
+				TArray<TSharedPtr<FJsonValue>> Warnings;
+				if (Job.Result->HasTypedField<EJson::Array>(TEXT("warnings")))
+				{
+					Warnings = Job.Result->GetArrayField(TEXT("warnings"));
+				}
+				TSharedPtr<FJsonObject> Warning = MakeShared<FJsonObject>();
+				Warning->SetStringField(TEXT("code"), Code);
+				Warning->SetStringField(TEXT("message"), Message);
+				Warnings.Add(MakeShared<FJsonValueObject>(Warning));
+				Job.Result->SetArrayField(TEXT("warnings"), Warnings);
+			};
+
+		TSharedPtr<FJsonObject> ChildReceipt;
+		FString ReceiptJson;
+		const int64 ReceiptSize =
+			IFileManager::Get().FileSize(*ReceiptPath);
+		const bool bReceiptSizeValid =
+			ReceiptSize >= 0
+			&& ReceiptSize <= MaxStandaloneChildReceiptBytes;
+		if (bReceiptSizeValid
+			&& FFileHelper::LoadFileToString(ReceiptJson, *ReceiptPath))
+		{
+			const TSharedRef<TJsonReader<>> Reader =
+				TJsonReaderFactory<>::Create(ReceiptJson);
+			FJsonSerializer::Deserialize(Reader, ChildReceipt);
+		}
+		FString ReceiptValidationError;
+		const int32 ExpectedRepeatCount = static_cast<int32>(
+			GetNumberFieldOr(
+				Job.Input,
+				TEXT("repeatCount"),
+				5.0));
+		const bool bReceiptValid =
+			ChildReceipt.IsValid()
+			&& ValidateStandaloneChildReceipt(
+				ChildReceipt,
+				Job.Id,
+				ExpectedRepeatCount,
+				ReceiptValidationError);
+		if (!bReceiptSizeValid)
+		{
+			ReceiptValidationError =
+				ReceiptSize < 0
+					? TEXT("The standalone child receipt is unavailable.")
+					: TEXT(
+						"The standalone child receipt exceeds the 256 KiB "
+						"bounded evidence limit.");
+		}
+		else if (!ChildReceipt.IsValid())
+		{
+			ReceiptValidationError =
+				TEXT("The standalone child receipt is invalid JSON.");
+		}
+
+		Job.Result->SetBoolField(
+			TEXT("childReceiptVerified"),
+			bReceiptValid);
+		Job.Result->SetBoolField(
+			TEXT("standaloneReceiptAuthoritative"),
+			false);
+		if (!bReceiptValid)
+		{
+			if (bMayAdoptChildTerminal)
+			{
+				Job.Status = TEXT("failed");
+				Job.ErrorCode =
+					ChildReceipt.IsValid()
+						? TEXT("performance_child_receipt_invalid")
+						: TEXT("performance_child_receipt_unavailable");
+				Job.Message = ReceiptValidationError;
+			}
+			Job.Result->SetStringField(
+				TEXT("standaloneReceiptValidationError"),
+				ReceiptValidationError);
+		}
+		else
+		{
+			Job.Result->SetObjectField(
+				TEXT("standaloneChildReceipt"),
+				CopyObject(ChildReceipt));
+			if (ChildReceipt->HasTypedField<EJson::Object>(
+				TEXT("runtimeFingerprint")))
+			{
+				Job.Result->SetObjectField(
+					TEXT("runtimeFingerprint"),
+					CopyObject(
+						ChildReceipt->GetObjectField(
+							TEXT("runtimeFingerprint"))));
+			}
+			if (ChildReceipt->HasTypedField<EJson::Object>(TEXT("camera")))
+			{
+				Job.Result->SetObjectField(
+					TEXT("camera"),
+					CopyObject(
+						ChildReceipt->GetObjectField(TEXT("camera"))));
+			}
+			const FString ChildStatus =
+				GetStringFieldOr(ChildReceipt, TEXT("status"));
+			if (bMayAdoptChildTerminal
+				&& ChildStatus != TEXT("succeeded"))
+			{
+				Job.Status = TEXT("failed");
+				Job.ErrorCode =
+					GetStringFieldOr(
+						ChildReceipt,
+						TEXT("errorCode"));
+				Job.Message =
+					GetStringFieldOr(
+						ChildReceipt,
+						TEXT("message"));
+			}
+			else if (bMayAdoptChildTerminal)
+			{
+				// Promote the process into a provisional success so its CSV
+				// and requested Trace evidence can be independently verified.
+				// The authoritative marker is set only after those gates pass.
+				Job.Status = TEXT("succeeded");
+				Job.ErrorCode.Reset();
+				Job.Message.Reset();
+				Job.Result->SetNumberField(
+					TEXT("childProcessExitCode"),
+					Job.ReturnCode);
+			}
+			else
+			{
+				AddStandaloneWarning(
+					TEXT(
+						"standalone_receipt_ignored_after_control_terminal"),
+					TEXT(
+						"The child receipt was retained as evidence but did "
+						"not override cancellation, timeout, or another "
+						"controller-owned terminal state."));
+			}
+		}
+		if (ReceiptSize >= 0)
+		{
+			AddArtifact(
+				Job,
+				ReceiptPath,
+				TEXT("standalone-child.json"),
+				TEXT("application/json"));
+		}
+
+		TArray<FString> CsvPaths;
+		IFileManager::Get().FindFilesRecursive(
+			CsvPaths,
+			*JobDirectory(Job.Id),
+			TEXT("standalone-repeat-*.csv"),
+			true,
+			false);
+		CsvPaths.Sort();
+		for (int32 Index = 0; Index < CsvPaths.Num(); ++Index)
+		{
+			AddArtifact(
+				Job,
+				CsvPaths[Index],
+				FString::Printf(
+					TEXT("standalone-repeat-%02d.csv"),
+					Index + 1),
+				TEXT("text/csv"));
+		}
+		const FString TracePath =
+			FPaths::Combine(JobDirectory(Job.Id), TEXT("standalone.utrace"));
+		bool bTraceArtifactReady = false;
+		if (IFileManager::Get().FileSize(*TracePath) > 0)
+		{
+			if (FArtifact* TraceArtifact = AddArtifact(
+				Job,
+				TracePath,
+				TEXT("standalone.utrace"),
+				TEXT("application/x-unreal-trace")))
+			{
+				bTraceArtifactReady = true;
+				Job.Result->SetStringField(
+					TEXT("traceArtifactId"),
+					TraceArtifact->Id);
+				// A standalone run is itself the durable owner of this trace.
+				// AnalyzeTrace validates the trace artifact before accepting
+				// this source job id.
+				Job.Result->SetStringField(TEXT("traceId"), Job.Id);
+				Job.Result->SetBoolField(TEXT("traceCompleted"), true);
+			}
+		}
+		const bool bVerifiedSuccessfulReceipt =
+			bReceiptValid
+			&& GetStringFieldOr(ChildReceipt, TEXT("status"))
+				== TEXT("succeeded");
+		bool bCsvEvidenceReady = false;
+		if (Job.Status == TEXT("succeeded")
+			&& bVerifiedSuccessfulReceipt)
+		{
+			bCsvEvidenceReady = ParseStandalonePerformanceCsv(Job);
+			if (!bCsvEvidenceReady)
+			{
+				Job.Status = TEXT("failed");
+				Job.ErrorCode = TEXT("performance_parse_failed");
+				Job.Message =
+					TEXT(
+						"The standalone child receipt was verified, but its "
+						"bounded CSV timing evidence could not be parsed.");
+			}
+		}
+		const bool bTraceRequested =
+			GetBoolFieldOr(Job.Input, TEXT("captureTrace"), true);
+		const bool bReceiptReportsTrace =
+			bVerifiedSuccessfulReceipt
+			&& GetBoolFieldOr(
+				ChildReceipt,
+				TEXT("traceAvailable"),
+				false);
+		if (Job.Status == TEXT("succeeded")
+			&& bTraceRequested
+			&& (!bReceiptReportsTrace || !bTraceArtifactReady))
+		{
+			Job.Status = TEXT("failed");
+			Job.ErrorCode = TEXT("performance_trace_unavailable");
+			Job.Message =
+				TEXT(
+					"The standalone child completed its CSV windows, but "
+					"the requested non-empty Trace artifact was not verified.");
+		}
+		if (Job.Status == TEXT("succeeded")
+			&& bMayAdoptChildTerminal
+			&& bVerifiedSuccessfulReceipt
+			&& bCsvEvidenceReady
+			&& (!bTraceRequested || bTraceArtifactReady))
+		{
+			Job.Result->SetBoolField(
+				TEXT("standaloneReceiptAuthoritative"),
+				true);
+			if (Job.ReturnCode != 0)
+			{
+				AddStandaloneWarning(
+					TEXT(
+						"standalone_nonzero_exit_after_verified_receipt"),
+					FString::Printf(
+						TEXT(
+							"The Editor process exited with code %d after "
+							"the managed child flushed a verified receipt, "
+							"CSV windows, and all requested Trace evidence."),
+						Job.ReturnCode));
+			}
+		}
+	}
 	else if (Job.PostProcess == TEXT("cook")
 		&& Job.Status == TEXT("succeeded"))
 	{
@@ -4826,6 +6013,358 @@ void FProductionJobRuntime::WriteTestReports(FJob& Job)
 		TEXT("application/xml"));
 }
 
+bool FProductionJobRuntime::ParseStandalonePerformanceCsv(FJob& Job)
+{
+	struct FCsvSample
+	{
+		double Frame = 0.0;
+		double Game = 0.0;
+		double Render = 0.0;
+		double Rhi = 0.0;
+		double Gpu = 0.0;
+	};
+	struct FParsedCsv
+	{
+		FString Path;
+		TArray<FCsvSample> Samples;
+		TSharedPtr<FJsonObject> ColumnMapping;
+	};
+	const auto ReadNumber =
+		[](const TArray<FString>& Row, const int32 Column, double& Out)
+		{
+			if (Column == INDEX_NONE || !Row.IsValidIndex(Column))
+			{
+				Out = 0.0;
+				return false;
+			}
+			return FDefaultValueHelper::ParseDouble(Row[Column], Out)
+				&& FMath::IsFinite(Out)
+				&& Out >= 0.0;
+		};
+	const auto ParseOne =
+		[&ReadNumber](const FString& CsvPath, FParsedCsv& Out)
+		{
+			FString Csv;
+			if (!FFileHelper::LoadFileToString(Csv, *CsvPath))
+			{
+				return false;
+			}
+			TArray<FString> Lines;
+			Csv.ParseIntoArrayLines(Lines, true);
+			int32 HeaderIndex = INDEX_NONE;
+			TArray<FString> Header;
+			int32 FrameColumn = INDEX_NONE;
+			int32 GameColumn = INDEX_NONE;
+			int32 RenderColumn = INDEX_NONE;
+			int32 RhiColumn = INDEX_NONE;
+			int32 GpuColumn = INDEX_NONE;
+			for (int32 Index = 0; Index < Lines.Num(); ++Index)
+			{
+				TArray<FString> Candidate = ParseCsvRow(Lines[Index]);
+				const int32 CandidateFrame = FindCsvColumn(
+					Candidate,
+					{TEXT("frametime")});
+				if (CandidateFrame == INDEX_NONE)
+				{
+					continue;
+				}
+				const int32 CandidateGame = FindCsvColumn(
+					Candidate,
+					{TEXT("gamethreadtime"), TEXT("gamethread")});
+				const int32 CandidateRender = FindCsvColumn(
+					Candidate,
+					{TEXT("renderthreadtime"), TEXT("renderthread")});
+				const int32 CandidateRhi = FindCsvColumn(
+					Candidate,
+					{TEXT("rhithreadtime"), TEXT("rhithread")});
+				const int32 CandidateGpu = FindCsvColumn(
+					Candidate,
+					{TEXT("gputime")});
+				if (CandidateGame == INDEX_NONE
+					&& CandidateRender == INDEX_NONE
+					&& CandidateRhi == INDEX_NONE
+					&& CandidateGpu == INDEX_NONE)
+				{
+					continue;
+				}
+				HeaderIndex = Index;
+				Header = MoveTemp(Candidate);
+				FrameColumn = CandidateFrame;
+				GameColumn = CandidateGame;
+				RenderColumn = CandidateRender;
+				RhiColumn = CandidateRhi;
+				GpuColumn = CandidateGpu;
+				break;
+			}
+			if (HeaderIndex == INDEX_NONE || FrameColumn == INDEX_NONE)
+			{
+				return false;
+			}
+			for (int32 LineIndex = HeaderIndex + 1;
+				LineIndex < Lines.Num();
+				++LineIndex)
+			{
+				const TArray<FString> Row = ParseCsvRow(Lines[LineIndex]);
+				FCsvSample Sample;
+				if (!ReadNumber(Row, FrameColumn, Sample.Frame))
+				{
+					continue;
+				}
+				ReadNumber(Row, GameColumn, Sample.Game);
+				ReadNumber(Row, RenderColumn, Sample.Render);
+				ReadNumber(Row, RhiColumn, Sample.Rhi);
+				ReadNumber(Row, GpuColumn, Sample.Gpu);
+				Out.Samples.Add(Sample);
+			}
+			if (Out.Samples.IsEmpty())
+			{
+				return false;
+			}
+			Out.Path = CsvPath;
+			Out.ColumnMapping = MakeShared<FJsonObject>();
+			const auto SetColumn =
+				[&Header, &Out](const TCHAR* Name, const int32 Column)
+				{
+					Out.ColumnMapping->SetStringField(
+						Name,
+						Column != INDEX_NONE && Header.IsValidIndex(Column)
+							? Header[Column]
+							: TEXT("unavailable"));
+				};
+			SetColumn(TEXT("frameMs"), FrameColumn);
+			SetColumn(TEXT("gameMs"), GameColumn);
+			SetColumn(TEXT("renderMs"), RenderColumn);
+			SetColumn(TEXT("rhiMs"), RhiColumn);
+			SetColumn(TEXT("gpuMs"), GpuColumn);
+			return true;
+		};
+
+	const int32 RepeatCount = FMath::Clamp(
+		static_cast<int32>(
+			GetNumberFieldOr(Job.Input, TEXT("repeatCount"), 1.0)),
+		1,
+		20);
+	TArray<FString> CsvPaths;
+	IFileManager::Get().FindFilesRecursive(
+		CsvPaths,
+		*JobDirectory(Job.Id),
+		TEXT("standalone-repeat-*.csv"),
+		true,
+		false);
+	CsvPaths.Sort();
+	if (CsvPaths.Num() != RepeatCount)
+	{
+		return false;
+	}
+	TArray<FParsedCsv> ParsedCsvs;
+	ParsedCsvs.Reserve(CsvPaths.Num());
+	for (const FString& CsvPath : CsvPaths)
+	{
+		FParsedCsv Parsed;
+		if (!ParseOne(CsvPath, Parsed))
+		{
+			return false;
+		}
+		ParsedCsvs.Add(MoveTemp(Parsed));
+	}
+	const double BudgetMs = GetNumberFieldOr(
+		Job.Result,
+		TEXT("budgetMs"),
+		16.6667);
+
+	TMap<FString, TArray<double>> Aggregate;
+	TArray<TSharedPtr<FJsonValue>> Repetitions;
+	TArray<TSharedPtr<FJsonValue>> ColumnMappings;
+	auto AppendSample =
+		[&Aggregate](const FCsvSample& Sample)
+		{
+			Aggregate.FindOrAdd(TEXT("frameMs")).Add(Sample.Frame);
+			if (Sample.Game > 0.0)
+			{
+				Aggregate.FindOrAdd(TEXT("gameMs")).Add(Sample.Game);
+			}
+			if (Sample.Render > 0.0)
+			{
+				Aggregate.FindOrAdd(TEXT("renderMs")).Add(Sample.Render);
+			}
+			if (Sample.Rhi > 0.0)
+			{
+				Aggregate.FindOrAdd(TEXT("rhiMs")).Add(Sample.Rhi);
+			}
+			if (Sample.Gpu > 0.0)
+			{
+				Aggregate.FindOrAdd(TEXT("gpuMs")).Add(Sample.Gpu);
+			}
+		};
+	const TSharedPtr<FJsonObject> ChildReceipt =
+		Job.Result->HasTypedField<EJson::Object>(
+			TEXT("standaloneChildReceipt"))
+			? Job.Result->GetObjectField(TEXT("standaloneChildReceipt"))
+			: nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* ChildRepetitions = nullptr;
+	if (ChildReceipt.IsValid()
+		&& ChildReceipt->HasTypedField<EJson::Array>(TEXT("repetitions")))
+	{
+		ChildRepetitions =
+			&ChildReceipt->GetArrayField(TEXT("repetitions"));
+	}
+	int32 CapturedFrameCount = 0;
+	for (int32 Repeat = 0; Repeat < ParsedCsvs.Num(); ++Repeat)
+	{
+		const FParsedCsv& Parsed = ParsedCsvs[Repeat];
+		TMap<FString, TArray<double>> Iteration;
+		for (const FCsvSample& Sample : Parsed.Samples)
+		{
+			AppendSample(Sample);
+			Iteration.FindOrAdd(TEXT("frameMs")).Add(Sample.Frame);
+			if (Sample.Game > 0.0)
+			{
+				Iteration.FindOrAdd(TEXT("gameMs")).Add(Sample.Game);
+			}
+			if (Sample.Render > 0.0)
+			{
+				Iteration.FindOrAdd(TEXT("renderMs")).Add(Sample.Render);
+			}
+			if (Sample.Rhi > 0.0)
+			{
+				Iteration.FindOrAdd(TEXT("rhiMs")).Add(Sample.Rhi);
+			}
+			if (Sample.Gpu > 0.0)
+			{
+				Iteration.FindOrAdd(TEXT("gpuMs")).Add(Sample.Gpu);
+			}
+		}
+		if (Iteration.FindRef(TEXT("frameMs")).IsEmpty())
+		{
+			continue;
+		}
+		TSharedPtr<FJsonObject> Metrics = MakeShared<FJsonObject>();
+		for (const TCHAR* Metric : {
+			TEXT("frameMs"),
+			TEXT("gameMs"),
+			TEXT("renderMs"),
+			TEXT("rhiMs"),
+			TEXT("gpuMs")})
+		{
+			Metrics->SetObjectField(
+				Metric,
+				SummarizeMetric(Iteration.FindRef(Metric), BudgetMs));
+		}
+		TSharedPtr<FJsonObject> IterationResult =
+			MakeShared<FJsonObject>();
+		IterationResult->SetNumberField(TEXT("repeatIndex"), Repeat + 1);
+		IterationResult->SetNumberField(
+			TEXT("sampleCount"),
+			Iteration.FindRef(TEXT("frameMs")).Num());
+		if (ChildRepetitions
+			&& ChildRepetitions->IsValidIndex(Repeat)
+			&& (*ChildRepetitions)[Repeat].IsValid()
+			&& (*ChildRepetitions)[Repeat]->Type == EJson::Object)
+		{
+			const TSharedPtr<FJsonObject> Timing =
+				(*ChildRepetitions)[Repeat]->AsObject();
+			IterationResult->SetNumberField(
+				TEXT("requestedSampleSeconds"),
+				GetNumberFieldOr(
+					Timing,
+					TEXT("requestedSampleSeconds"),
+					0.0));
+			IterationResult->SetNumberField(
+				TEXT("actualSampleSeconds"),
+				GetNumberFieldOr(
+					Timing,
+					TEXT("actualSampleSeconds"),
+					0.0));
+		}
+		IterationResult->SetObjectField(TEXT("metrics"), Metrics);
+		Repetitions.Add(
+			MakeShared<FJsonValueObject>(IterationResult));
+		TSharedPtr<FJsonObject> Mapping =
+			CopyObject(Parsed.ColumnMapping);
+		Mapping->SetNumberField(TEXT("repeatIndex"), Repeat + 1);
+		Mapping->SetStringField(
+			TEXT("file"),
+			FPaths::GetCleanFilename(Parsed.Path));
+		ColumnMappings.Add(MakeShared<FJsonValueObject>(Mapping));
+		CapturedFrameCount += Parsed.Samples.Num();
+	}
+	if (Aggregate.FindRef(TEXT("frameMs")).IsEmpty())
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> Metrics = MakeShared<FJsonObject>();
+	for (const TCHAR* Metric : {
+		TEXT("frameMs"),
+		TEXT("gameMs"),
+		TEXT("renderMs"),
+		TEXT("rhiMs"),
+		TEXT("gpuMs")})
+	{
+		Metrics->SetObjectField(
+			Metric,
+			SummarizeMetric(Aggregate.FindRef(Metric), BudgetMs));
+	}
+	TSharedPtr<FJsonObject> Context = MakeShared<FJsonObject>();
+	Context->SetStringField(
+		TEXT("map"),
+		GetStringFieldOr(Job.Result, TEXT("map")));
+	Context->SetStringField(
+		TEXT("executionTarget"),
+		TEXT("standalone"));
+	Context->SetStringField(
+		TEXT("renderLaunchPolicy"),
+		TEXT("visibleWindow"));
+	if (Job.Result->HasTypedField<EJson::Object>(
+		TEXT("runtimeFingerprint")))
+	{
+		Context->SetObjectField(
+			TEXT("runtimeFingerprint"),
+			CopyObject(
+				Job.Result->GetObjectField(TEXT("runtimeFingerprint"))));
+	}
+	Job.Result->SetObjectField(TEXT("context"), Context);
+	Job.Result->SetObjectField(TEXT("metrics"), Metrics);
+	Job.Result->SetArrayField(TEXT("repetitions"), Repetitions);
+	Job.Result->SetArrayField(TEXT("csvColumnMappings"), ColumnMappings);
+	Job.Result->SetNumberField(
+		TEXT("sampleCount"),
+		Aggregate.FindRef(TEXT("frameMs")).Num());
+	Job.Result->SetNumberField(
+		TEXT("completedRepeatCount"),
+		ParsedCsvs.Num());
+	Job.Result->SetNumberField(
+		TEXT("capturedFrameCount"),
+		CapturedFrameCount);
+
+	TSharedPtr<FJsonObject> LogWindow = MakeShared<FJsonObject>();
+	FString Log;
+	if (!Job.EditorLogPath.IsEmpty()
+		&& FFileHelper::LoadFileToString(Log, *Job.EditorLogPath))
+	{
+		const bool bTruncated = Log.Len() > 262144;
+		if (bTruncated)
+		{
+			Log.RightInline(262144, false);
+		}
+		TArray<FString> LogLines;
+		Log.ParseIntoArrayLines(LogLines, false);
+		LogWindow->SetBoolField(TEXT("available"), true);
+		LogWindow->SetBoolField(TEXT("truncated"), bTruncated);
+		LogWindow->SetNumberField(TEXT("lineCount"), LogLines.Num());
+		LogWindow->SetStringField(TEXT("content"), Log);
+		LogWindow->SetStringField(TEXT("path"), Job.EditorLogPath);
+	}
+	else
+	{
+		LogWindow->SetBoolField(TEXT("available"), false);
+	}
+	Job.Result->SetArrayField(
+		TEXT("logWindows"),
+		{MakeShared<FJsonValueObject>(LogWindow)});
+	return WritePerformanceReport(Job);
+}
+
 bool FProductionJobRuntime::WritePerformanceReport(FJob& Job)
 {
 	TSharedPtr<FJsonObject> Report = MakeShared<FJsonObject>();
@@ -4834,6 +6373,18 @@ bool FProductionJobRuntime::WritePerformanceReport(FJob& Job)
 	Report->SetStringField(
 		TEXT("mode"),
 		GetStringFieldOr(Job.Result, TEXT("mode"), TEXT("window")));
+	Report->SetStringField(
+		TEXT("executionTarget"),
+		GetStringFieldOr(
+			Job.Result,
+			TEXT("executionTarget"),
+			TEXT("pie")));
+	if (Job.Result->HasField(TEXT("samplingBasis")))
+	{
+		Report->SetStringField(
+			TEXT("samplingBasis"),
+			GetStringFieldOr(Job.Result, TEXT("samplingBasis")));
+	}
 	Report->SetObjectField(
 		TEXT("context"),
 		Job.Result->GetObjectField(TEXT("context")));
@@ -4864,6 +6415,27 @@ bool FProductionJobRuntime::WritePerformanceReport(FJob& Job)
 			TEXT("logWindows"),
 			Job.Result->GetArrayField(TEXT("logWindows")));
 	}
+	if (Job.Result->HasTypedField<EJson::Object>(
+		TEXT("runtimeFingerprint")))
+	{
+		Report->SetObjectField(
+			TEXT("runtimeFingerprint"),
+			CopyObject(
+				Job.Result->GetObjectField(TEXT("runtimeFingerprint"))));
+	}
+	if (Job.Result->HasTypedField<EJson::Object>(TEXT("camera")))
+	{
+		Report->SetObjectField(
+			TEXT("camera"),
+			CopyObject(Job.Result->GetObjectField(TEXT("camera"))));
+	}
+	if (Job.Result->HasTypedField<EJson::Array>(
+		TEXT("csvColumnMappings")))
+	{
+		Report->SetArrayField(
+			TEXT("csvColumnMappings"),
+			Job.Result->GetArrayField(TEXT("csvColumnMappings")));
+	}
 	if (Job.Result->HasField(TEXT("traceId")))
 	{
 		Report->SetStringField(
@@ -4879,6 +6451,14 @@ bool FProductionJobRuntime::WritePerformanceReport(FJob& Job)
 				TEXT("traceArtifacts"),
 				Job.Result->GetArrayField(TEXT("traceArtifacts")));
 		}
+	}
+	if (Job.Result->HasField(TEXT("traceArtifactId")))
+	{
+		Report->SetStringField(
+			TEXT("traceArtifactId"),
+			GetStringFieldOr(
+				Job.Result,
+				TEXT("traceArtifactId")));
 	}
 	FString Json;
 	const TSharedRef<TJsonWriter<>> Writer =

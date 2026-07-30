@@ -2,6 +2,8 @@
 
 #include "Modules/ModuleManager.h"
 
+class FStandalonePerformanceController;
+
 class FUEAIIntegrationModule : public IModuleInterface
 {
 public:
@@ -10,4 +12,5 @@ public:
 
 private:
 	void RegisterMenus();
+	TUniquePtr<FStandalonePerformanceController> StandalonePerformanceController;
 };

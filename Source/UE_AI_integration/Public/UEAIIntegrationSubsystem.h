@@ -28,6 +28,7 @@ public:
 
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
+	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 
 	// FTickableEditorObject
 	virtual void Tick(float DeltaTime) override;

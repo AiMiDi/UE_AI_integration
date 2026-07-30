@@ -1,5 +1,6 @@
 #include "UEAIIntegrationModule.h"
 
+#include "Infrastructure/StandalonePerformanceController.h"
 #include "ToolMenus.h"
 #include "UI/SUEAIStatusBar.h"
 
@@ -7,15 +8,24 @@
 
 void FUEAIIntegrationModule::StartupModule()
 {
-	UToolMenus::RegisterStartupCallback(
-		FSimpleMulticastDelegate::FDelegate::CreateRaw(
-			this,
-			&FUEAIIntegrationModule::RegisterMenus));
+	StandalonePerformanceController =
+		MakeUnique<FStandalonePerformanceController>();
+	const bool bPerformanceChild =
+		StandalonePerformanceController->StartFromCommandLine();
+	if (!bPerformanceChild)
+	{
+		StandalonePerformanceController.Reset();
+		UToolMenus::RegisterStartupCallback(
+			FSimpleMulticastDelegate::FDelegate::CreateRaw(
+				this,
+				&FUEAIIntegrationModule::RegisterMenus));
+	}
 	UE_LOG(LogTemp, Log, TEXT("[UE_AI_integration] Module started. Server will initialize via EditorSubsystem."));
 }
 
 void FUEAIIntegrationModule::ShutdownModule()
 {
+	StandalonePerformanceController.Reset();
 	if (UToolMenus::TryGet())
 	{
 		UToolMenus::UnRegisterStartupCallback(this);

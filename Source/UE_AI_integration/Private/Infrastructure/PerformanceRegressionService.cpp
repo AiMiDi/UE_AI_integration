@@ -12,6 +12,7 @@
 #include "Infrastructure/Sha256.h"
 #include "Misc/App.h"
 #include "Misc/Base64.h"
+#include "Misc/DefaultValueHelper.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
 #include "Misc/PackageName.h"
@@ -142,6 +143,117 @@ namespace
 		return Value;
 	}
 
+	FString EscapePerformanceHtml(FString Value)
+	{
+		Value.ReplaceInline(TEXT("&"), TEXT("&amp;"));
+		Value.ReplaceInline(TEXT("<"), TEXT("&lt;"));
+		Value.ReplaceInline(TEXT(">"), TEXT("&gt;"));
+		Value.ReplaceInline(TEXT("\""), TEXT("&quot;"));
+		Value.ReplaceInline(TEXT("'"), TEXT("&#39;"));
+		return Value;
+	}
+
+	FString SanitizePerformanceHtmlFragment(
+		const FString& Value,
+		const int32 FallbackIndex)
+	{
+		FString Safe;
+		Safe.Reserve(Value.Len());
+		for (const TCHAR Character : Value)
+		{
+			if (FChar::IsAlnum(Character)
+				|| Character == TEXT('-')
+				|| Character == TEXT('_'))
+			{
+				Safe.AppendChar(Character);
+			}
+			else
+			{
+				Safe.AppendChar(TEXT('-'));
+			}
+		}
+		if (Safe.IsEmpty())
+		{
+			Safe = FString::Printf(TEXT("item-%d"), FallbackIndex);
+		}
+		return Safe.Left(96);
+	}
+
+	bool TryParseFiniteNumber(const FString& Text, double& OutValue)
+	{
+		if (Text.IsEmpty() || Text == TEXT("unavailable"))
+		{
+			return false;
+		}
+		return FDefaultValueHelper::ParseDouble(Text, OutValue)
+			&& FMath::IsFinite(OutValue);
+	}
+
+	TSharedPtr<FJsonObject> FindMetric(
+		const TSharedPtr<FJsonObject>& PerformanceResult,
+		const TCHAR* Name)
+	{
+		if (!PerformanceResult.IsValid()
+			|| !PerformanceResult->HasTypedField<EJson::Object>(
+				TEXT("metrics")))
+		{
+			return nullptr;
+		}
+		const TSharedPtr<FJsonObject> Metrics =
+			PerformanceResult->GetObjectField(TEXT("metrics"));
+		const TSharedPtr<FJsonObject>* Metric = nullptr;
+		return Metrics->TryGetObjectField(Name, Metric)
+			&& Metric && Metric->IsValid()
+				? *Metric
+				: nullptr;
+	}
+
+	double MetricStatistic(
+		const TSharedPtr<FJsonObject>& PerformanceResult,
+		const TCHAR* Metric,
+		const TCHAR* Statistic,
+		const double DefaultValue = 0.0)
+	{
+		const TSharedPtr<FJsonObject> Summary =
+			FindMetric(PerformanceResult, Metric);
+		return Summary.IsValid()
+			&& BoolField(Summary, TEXT("available"), false)
+				? NumberField(Summary, Statistic, DefaultValue)
+				: DefaultValue;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> FilterTraceTimers(
+		const TSharedPtr<FJsonObject>& Analysis,
+		const bool bGpu,
+		const int32 Limit)
+	{
+		TArray<TSharedPtr<FJsonValue>> Result;
+		if (!Analysis.IsValid()
+			|| !Analysis->HasTypedField<EJson::Array>(TEXT("timers")))
+		{
+			return Result;
+		}
+		for (const TSharedPtr<FJsonValue>& Value :
+			Analysis->GetArrayField(TEXT("timers")))
+		{
+			if (Result.Num() >= Limit)
+			{
+				break;
+			}
+			if (!Value.IsValid() || Value->Type != EJson::Object)
+			{
+				continue;
+			}
+			const TSharedPtr<FJsonObject> Timer = Value->AsObject();
+			if (BoolField(Timer, TEXT("gpu"), false) != bGpu)
+			{
+				continue;
+			}
+			Result.Add(FJsonValue::Duplicate(Value));
+		}
+		return Result;
+	}
+
 	FString ReadConsoleVariable(const TCHAR* Name)
 	{
 		if (const IConsoleVariable* Variable =
@@ -269,6 +381,119 @@ namespace
 		return Scalability;
 	}
 
+	TSharedPtr<FJsonObject> MergeStandaloneRuntimeFingerprint(
+		const TSharedPtr<FJsonObject>& Base,
+		const TSharedPtr<FJsonObject>& Runtime)
+	{
+		if (!Base.IsValid() || !Runtime.IsValid())
+		{
+			return Base;
+		}
+		TSharedPtr<FJsonObject> Merged = CopyPerformanceObject(Base);
+		static const TCHAR* RuntimeFields[] = {
+			TEXT("rhi"),
+			TEXT("gpuAdapter"),
+			TEXT("gpuDriver"),
+			TEXT("gpuDriverInternal"),
+			TEXT("gpuVendorId"),
+			TEXT("gpuDeviceId"),
+			TEXT("resolution"),
+			TEXT("windowMode"),
+			TEXT("vsync"),
+			TEXT("fpsCap"),
+			TEXT("screenPercentage")
+		};
+		for (const TCHAR* Field : RuntimeFields)
+		{
+			if (const TSharedPtr<FJsonValue>* Value =
+				Runtime->Values.Find(Field))
+			{
+				Merged->SetField(
+					Field,
+					FJsonValue::Duplicate(*Value));
+			}
+		}
+		if (Runtime->HasTypedField<EJson::Object>(TEXT("cvars")))
+		{
+			const TSharedPtr<FJsonObject> CVars =
+				CopyPerformanceObject(
+					Runtime->GetObjectField(TEXT("cvars")));
+			Merged->SetObjectField(TEXT("cvars"), CVars);
+			Merged->SetObjectField(
+				TEXT("scalability"),
+				MakeScalabilitySnapshot(CVars));
+			const FString CVarDigest = DigestJson(CVars);
+			const FString ScalabilityDigest = DigestJson(
+				Merged->GetObjectField(TEXT("scalability")));
+			Merged->SetStringField(
+				TEXT("cvarDigest"),
+				CVarDigest.IsEmpty()
+					? FString()
+					: TEXT("sha256:") + CVarDigest);
+			Merged->SetStringField(
+				TEXT("scalabilityDigest"),
+				ScalabilityDigest.IsEmpty()
+					? FString()
+					: TEXT("sha256:") + ScalabilityDigest);
+		}
+		Merged->SetStringField(
+			TEXT("provenance"),
+			TEXT("standaloneChildRuntime"));
+		Merged->SetStringField(
+			TEXT("capturedAtUtc"),
+			FDateTime::UtcNow().ToIso8601());
+
+		TSharedPtr<FJsonObject> Compatibility = MakeShared<FJsonObject>();
+		for (const TCHAR* Field : {
+			TEXT("mapPackage"),
+			TEXT("mapDirty"),
+			TEXT("rhi"),
+			TEXT("gpuAdapter"),
+			TEXT("gpuDriver"),
+			TEXT("resolution"),
+			TEXT("profileDigest"),
+			TEXT("windowMode")})
+		{
+			if (const TSharedPtr<FJsonValue>* Value =
+				Merged->Values.Find(Field))
+			{
+				Compatibility->SetField(
+					Field,
+					FJsonValue::Duplicate(*Value));
+			}
+		}
+		if (Merged->HasTypedField<EJson::Object>(TEXT("cvars")))
+		{
+			Compatibility->SetObjectField(
+				TEXT("cvars"),
+				CopyPerformanceObject(
+					Merged->GetObjectField(TEXT("cvars"))));
+		}
+		if (Merged->HasTypedField<EJson::Object>(TEXT("scalability")))
+		{
+			Compatibility->SetObjectField(
+				TEXT("scalability"),
+				CopyPerformanceObject(
+					Merged->GetObjectField(TEXT("scalability"))));
+		}
+		const FString CompatibilityDigest = DigestJson(Compatibility);
+		Merged->SetStringField(
+			TEXT("compatibilityKey"),
+			CompatibilityDigest.IsEmpty()
+				? FString()
+				: TEXT("sha256:") + CompatibilityDigest);
+		TSharedPtr<FJsonObject> Stable = CopyPerformanceObject(Merged);
+		Stable->RemoveField(TEXT("capturedAtUtc"));
+		Stable->RemoveField(TEXT("fingerprint"));
+		const FString FullDigest = DigestJson(Stable);
+		Merged->SetStringField(
+			TEXT("fingerprint"),
+			FullDigest.IsEmpty()
+				? FString()
+				: TEXT("sha256:") + FullDigest);
+		return Merged;
+	}
+
 	TSharedPtr<FJsonObject> FindResultObject(
 		const TSharedPtr<FJsonObject>& Response)
 	{
@@ -356,6 +581,45 @@ FPerformanceRegressionService::FPerformanceRegressionService(
 		WriteRegressionArtifacts(Job);
 		RegressionJobs.Add(Job.Id, MoveTemp(Job));
 	}
+
+	const FString ReportRoot = FPaths::Combine(
+		FPaths::ProjectSavedDir(),
+		TEXT("UE_AI_integration"),
+		TEXT("PerformanceReports"));
+	Directories.Reset();
+	IFileManager::Get().FindFiles(
+		Directories,
+		*FPaths::Combine(ReportRoot, TEXT("*")),
+		false,
+		true);
+	for (const FString& Directory : Directories)
+	{
+		const FString ReportPath = FPaths::Combine(
+			ReportRoot,
+			Directory,
+			TEXT("report.json"));
+		FString Json;
+		TSharedPtr<FJsonObject> Report;
+		if (!FFileHelper::LoadFileToString(Json, *ReportPath))
+		{
+			continue;
+		}
+		const TSharedRef<TJsonReader<>> Reader =
+			TJsonReaderFactory<>::Create(Json);
+		if (!FJsonSerializer::Deserialize(Reader, Report)
+			|| !Report.IsValid())
+		{
+			continue;
+		}
+		FRegressionJob Job;
+		Job.Id = StringField(Report, TEXT("reportId"), Directory);
+		Job.Kind = TEXT("performanceReport");
+		Job.CreatedAtUtc =
+			IFileManager::Get().GetTimeStamp(*ReportPath).ToIso8601();
+		Job.Comparison = Report;
+		WritePerformanceReportArtifacts(Job);
+		RegressionJobs.Add(Job.Id, MoveTemp(Job));
+	}
 }
 
 void FPerformanceRegressionService::Tick()
@@ -390,6 +654,14 @@ FMCPToolResult FPerformanceRegressionService::Execute(
 	{
 		return ComparePerformanceRuns(Params);
 	}
+	if (CapabilityId == TEXT("production.performance.diagnose"))
+	{
+		return DiagnosePerformance(Params);
+	}
+	if (CapabilityId == TEXT("production.performance.report.generate"))
+	{
+		return GeneratePerformanceReport(Params);
+	}
 	if (CapabilityId == TEXT("production.job.status")
 		|| CapabilityId == TEXT("production.job.result.get"))
 	{
@@ -420,6 +692,16 @@ bool FPerformanceRegressionService::NormalizeRunRequest(
 	OutError.Reset();
 	OutRequest = CopyPerformanceObject(Request);
 	OutProfile.Reset();
+	const FString ExecutionTarget =
+		StringField(Request, TEXT("executionTarget"), TEXT("pie"));
+	if (ExecutionTarget != TEXT("pie")
+		&& ExecutionTarget != TEXT("standalone"))
+	{
+		OutError =
+			TEXT("executionTarget must be 'pie' or 'standalone'.");
+		return false;
+	}
+	OutRequest->SetStringField(TEXT("executionTarget"), ExecutionTarget);
 	const FString Profile =
 		StringField(Request, TEXT("profile"), TEXT("custom"));
 	if (Profile == TEXT("custom") || Profile.IsEmpty())
@@ -442,6 +724,37 @@ bool FPerformanceRegressionService::NormalizeRunRequest(
 	}
 	const TSharedPtr<FJsonObject> Standard =
 		Request->GetObjectField(TEXT("standardProfile"));
+	const FString GameInstanceMode =
+		StringField(Standard, TEXT("gameInstanceMode"), TEXT("project"));
+	if (GameInstanceMode != TEXT("project")
+		&& GameInstanceMode != TEXT("minimal"))
+	{
+		OutError =
+			TEXT(
+				"standardProfile.gameInstanceMode must be 'project' or "
+				"'minimal'.");
+		return false;
+	}
+	if (ExecutionTarget != TEXT("standalone")
+		&& GameInstanceMode != TEXT("project"))
+	{
+		OutError =
+			TEXT(
+				"standardProfile.gameInstanceMode='minimal' is only "
+				"valid for executionTarget='standalone'.");
+		return false;
+	}
+	if (ExecutionTarget == TEXT("standalone")
+		&& Standard->HasTypedField<EJson::Array>(TEXT("inputSteps"))
+		&& !Standard->GetArrayField(TEXT("inputSteps")).IsEmpty())
+	{
+		OutError =
+			TEXT(
+				"Standalone profiles currently require an empty inputSteps "
+				"array; process-isolated keyboard replay must not be "
+				"silently approximated.");
+		return false;
+	}
 	const FString Map = StringField(Standard, TEXT("map"));
 	if (!Map.StartsWith(TEXT("/Game/")))
 	{
@@ -450,7 +763,8 @@ bool FPerformanceRegressionService::NormalizeRunRequest(
 		return false;
 	}
 	const FString NormalizedCurrentMap = NormalizeMapName(CurrentMap);
-	if (NormalizedCurrentMap != Map)
+	if (ExecutionTarget == TEXT("pie")
+		&& NormalizedCurrentMap != Map)
 	{
 		OutError = FString::Printf(
 			TEXT(
@@ -469,13 +783,13 @@ bool FPerformanceRegressionService::NormalizeRunRequest(
 	const TSharedPtr<FJsonObject> Camera =
 		Standard->GetObjectField(TEXT("camera"));
 	const FString CameraName = StringField(Camera, TEXT("name"));
-	if (CameraName.IsEmpty() || CameraName.Len() > 256
+	if (CameraName.IsEmpty() || CameraName.Len() > 128
 		|| CameraName.Contains(TEXT("*"))
 		|| CameraName.Contains(TEXT("?")))
 	{
 		OutError =
 			TEXT(
-				"standardProfile.camera.name must contain 1-256 exact "
+				"standardProfile.camera.name must contain 1-128 exact "
 				"characters without wildcards.");
 		return false;
 	}
@@ -706,6 +1020,12 @@ bool FPerformanceRegressionService::NormalizeRunRequest(
 
 	OutProfile = CopyPerformanceObject(Standard);
 	OutProfile->SetStringField(TEXT("kind"), TEXT("standardScenario"));
+	OutProfile->SetStringField(
+		TEXT("executionTarget"),
+		ExecutionTarget);
+	OutProfile->SetStringField(
+		TEXT("gameInstanceMode"),
+		GameInstanceMode);
 	OutProfile->SetNumberField(TEXT("warmupSeconds"), RequestedWarmup);
 	OutProfile->SetNumberField(TEXT("sampleSeconds"), RequestedSample);
 	OutProfile->SetNumberField(TEXT("repeatCount"), RepeatCount);
@@ -718,10 +1038,18 @@ bool FPerformanceRegressionService::NormalizeRunRequest(
 	}
 
 	OutRequest->SetStringField(TEXT("mode"), TEXT("scenario"));
+	OutRequest->GetObjectField(TEXT("standardProfile"))
+		->SetStringField(TEXT("gameInstanceMode"), GameInstanceMode);
 	OutRequest->SetObjectField(TEXT("scenario"), Scenario);
 	OutRequest->SetNumberField(TEXT("repeatCount"), RepeatCount);
-	// Standard warmup is an explicit Scenario step before metrics.begin.
-	OutRequest->SetNumberField(TEXT("warmupSeconds"), 0.0);
+	// PIE owns warmup inside the generated Scenario. The standalone runner
+	// captures a single CSV stream and needs the declared warmup preserved so
+	// it can discard the leading frames in every repeat window.
+	OutRequest->SetNumberField(
+		TEXT("warmupSeconds"),
+		ExecutionTarget == TEXT("standalone")
+			? RequestedWarmup
+			: 0.0);
 	OutRequest->SetNumberField(TEXT("sampleSeconds"), RequestedSample);
 	return true;
 }
@@ -889,6 +1217,793 @@ FString FPerformanceRegressionService::BuildJUnitReport(
 		*TestCases);
 }
 
+TSharedPtr<FJsonObject>
+FPerformanceRegressionService::BuildPerformanceDiagnosis(
+	const TSharedPtr<FJsonObject>& PerformanceResult,
+	const TSharedPtr<FJsonObject>& Fingerprint,
+	const TSharedPtr<FJsonObject>& TraceAnalysis)
+{
+	TSharedPtr<FJsonObject> Diagnosis = MakeShared<FJsonObject>();
+	Diagnosis->SetStringField(
+		TEXT("schema"),
+		TEXT("ue.performance-diagnosis.v1"));
+
+	TSharedPtr<FJsonObject> MetricEvidence = MakeShared<FJsonObject>();
+	static const TCHAR* MetricNames[] = {
+		TEXT("frameMs"),
+		TEXT("gameMs"),
+		TEXT("renderMs"),
+		TEXT("rhiMs"),
+		TEXT("gpuMs")
+	};
+	for (const TCHAR* MetricName : MetricNames)
+	{
+		const TSharedPtr<FJsonObject> Metric =
+			FindMetric(PerformanceResult, MetricName);
+		if (Metric.IsValid())
+		{
+			MetricEvidence->SetObjectField(
+				MetricName,
+				CopyPerformanceObject(Metric));
+		}
+	}
+	Diagnosis->SetObjectField(TEXT("metrics"), MetricEvidence);
+
+	const double FrameP50 =
+		MetricStatistic(PerformanceResult, TEXT("frameMs"), TEXT("p50"));
+	const double FrameP95 =
+		MetricStatistic(PerformanceResult, TEXT("frameMs"), TEXT("p95"));
+	const double FrameP99 =
+		MetricStatistic(PerformanceResult, TEXT("frameMs"), TEXT("p99"));
+	const double WorstFrame =
+		MetricStatistic(PerformanceResult, TEXT("frameMs"), TEXT("max"));
+	const double FrameMin =
+		MetricStatistic(PerformanceResult, TEXT("frameMs"), TEXT("min"));
+	const double Spread =
+		FMath::Max(0.0, FrameP99 - FrameP50);
+	const bool bFrameAvailable =
+		FindMetric(PerformanceResult, TEXT("frameMs")).IsValid()
+		&& BoolField(
+			FindMetric(PerformanceResult, TEXT("frameMs")),
+			TEXT("available"),
+			false);
+
+	double VSyncValue = 0.0;
+	const bool bHasVSync = TryParseFiniteNumber(
+		StringField(Fingerprint, TEXT("vsync")),
+		VSyncValue);
+	const bool bVSyncEnabled = bHasVSync && VSyncValue > 0.0;
+	double FpsCap = 0.0;
+	const bool bHasFpsCap = TryParseFiniteNumber(
+		StringField(Fingerprint, TEXT("fpsCap")),
+		FpsCap);
+	const bool bFpsCapped = bHasFpsCap && FpsCap > 0.0;
+	const double ExpectedFrameMs =
+		bFpsCapped ? 1000.0 / FpsCap : 0.0;
+	const bool bMatchesExplicitCap =
+		bFrameAvailable
+		&& ExpectedFrameMs > 0.0
+		&& FMath::Abs(FrameP50 - ExpectedFrameMs)
+			<= FMath::Max(0.35, ExpectedFrameMs * 0.03)
+		&& Spread <= FMath::Max(0.75, ExpectedFrameMs * 0.05);
+	const bool bStableSixtyHz =
+		bFrameAvailable
+		&& FMath::Abs(FrameP50 - (1000.0 / 60.0)) <= 0.35
+		&& Spread <= 0.75
+		&& FMath::Abs(FrameP50 - FrameMin) <= 0.75;
+	double InferredRefreshHz = 0.0;
+	if (bFrameAvailable && bVSyncEnabled)
+	{
+		static const double CommonRefreshRates[] = {
+			30.0,
+			50.0,
+			60.0,
+			72.0,
+			75.0,
+			90.0,
+			100.0,
+			120.0,
+			144.0,
+			165.0,
+			240.0
+		};
+		double BestErrorMs = TNumericLimits<double>::Max();
+		for (const double RefreshHz : CommonRefreshRates)
+		{
+			const double CandidateFrameMs = 1000.0 / RefreshHz;
+			const double ErrorMs =
+				FMath::Abs(FrameP50 - CandidateFrameMs);
+			if (ErrorMs < BestErrorMs)
+			{
+				BestErrorMs = ErrorMs;
+				InferredRefreshHz = RefreshHz;
+			}
+		}
+		const double InferredFrameMs =
+			InferredRefreshHz > 0.0
+				? 1000.0 / InferredRefreshHz
+				: 0.0;
+		if (BestErrorMs
+				> FMath::Max(0.35, InferredFrameMs * 0.03)
+			|| Spread > FMath::Max(0.75, InferredFrameMs * 0.05))
+		{
+			InferredRefreshHz = 0.0;
+		}
+	}
+	const bool bFrameLimited =
+		bMatchesExplicitCap
+		|| (bVSyncEnabled && InferredRefreshHz > 0.0);
+	const bool bSuspectedExternalLimiter =
+		bStableSixtyHz && !bVSyncEnabled && !bFpsCapped;
+
+	TSharedPtr<FJsonObject> Limiter = MakeShared<FJsonObject>();
+	Limiter->SetBoolField(TEXT("detected"), bFrameLimited);
+	Limiter->SetBoolField(TEXT("suspected"), bSuspectedExternalLimiter);
+	Limiter->SetBoolField(TEXT("vsyncEnabled"), bVSyncEnabled);
+	Limiter->SetBoolField(TEXT("fpsCapped"), bFpsCapped);
+	if (bFpsCapped)
+	{
+		Limiter->SetNumberField(TEXT("fpsCap"), FpsCap);
+		Limiter->SetNumberField(
+			TEXT("expectedFrameMs"),
+			ExpectedFrameMs);
+	}
+	Limiter->SetNumberField(TEXT("observedFrameP50Ms"), FrameP50);
+	Limiter->SetNumberField(TEXT("observedFrameP99Ms"), FrameP99);
+	Limiter->SetNumberField(TEXT("spreadP50ToP99Ms"), Spread);
+	Limiter->SetBoolField(
+		TEXT("stableSixteenPointSixMs"),
+		bStableSixtyHz);
+	if (InferredRefreshHz > 0.0)
+	{
+		Limiter->SetNumberField(
+			TEXT("inferredRefreshHz"),
+			InferredRefreshHz);
+	}
+	if (bSuspectedExternalLimiter)
+	{
+		Limiter->SetStringField(
+			TEXT("observation"),
+			TEXT("stable60HzWithoutExplicitLimiterEvidence"));
+		Limiter->SetStringField(
+			TEXT("classification"),
+			TEXT("suspectedExternalLimiter"));
+	}
+	Diagnosis->SetObjectField(TEXT("frameLimiter"), Limiter);
+	Diagnosis->SetNumberField(TEXT("worstFrameMs"), WorstFrame);
+
+	const double GameP95 =
+		MetricStatistic(PerformanceResult, TEXT("gameMs"), TEXT("p95"));
+	const double RenderP95 =
+		MetricStatistic(PerformanceResult, TEXT("renderMs"), TEXT("p95"));
+	const double RhiP95 =
+		MetricStatistic(PerformanceResult, TEXT("rhiMs"), TEXT("p95"));
+	const double GpuP95 =
+		MetricStatistic(PerformanceResult, TEXT("gpuMs"), TEXT("p95"));
+	const double CpuP95 = FMath::Max3(GameP95, RenderP95, RhiP95);
+	const bool bCpuAvailable = CpuP95 > 0.0;
+	const bool bGpuAvailable = GpuP95 > 0.0;
+
+	FString Verdict = TEXT("inconclusive");
+	FString Reason =
+		TEXT("CPU and GPU timing evidence is incomplete.");
+	double Confidence = 0.35;
+	if (!bFrameAvailable)
+	{
+		Reason = TEXT("Frame timing evidence is unavailable.");
+		Confidence = 0.0;
+	}
+	else if (bFrameLimited)
+	{
+		Verdict = TEXT("frameLimited");
+		Reason = bMatchesExplicitCap
+			? TEXT(
+				"Frame pacing matches the explicit FPS cap; CPU/GPU "
+				"headroom cannot be inferred from this run.")
+			: TEXT(
+				"VSync is enabled and frame pacing matches a common "
+				"display refresh interval; CPU/GPU headroom cannot be "
+				"inferred from this run.");
+		Confidence = bMatchesExplicitCap ? 0.95 : 0.85;
+	}
+	else if (bSuspectedExternalLimiter)
+	{
+		Reason =
+			TEXT(
+				"Frame pacing is stably near 16.6667 ms without an "
+				"explicit VSync or FPS-cap signal. An external limiter "
+				"or unreported presentation constraint is suspected, so "
+				"this run cannot support CPU/GPU attribution.");
+		Confidence = 0.45;
+	}
+	else if (bCpuAvailable && bGpuAvailable)
+	{
+		const double Ratio =
+			CpuP95 / FMath::Max(GpuP95, SMALL_NUMBER);
+		if (Ratio >= 1.15)
+		{
+			Verdict = TEXT("cpuBound");
+			Reason =
+				TEXT("The slowest CPU thread p95 materially exceeds GPU p95.");
+			Confidence = FMath::Clamp((Ratio - 1.0) / 0.75, 0.55, 0.95);
+		}
+		else if (Ratio <= (1.0 / 1.15))
+		{
+			Verdict = TEXT("gpuBound");
+			Reason = TEXT("GPU p95 materially exceeds the slowest CPU thread p95.");
+			Confidence = FMath::Clamp(((1.0 / Ratio) - 1.0) / 0.75, 0.55, 0.95);
+		}
+		else
+		{
+			Verdict = TEXT("mixed");
+			Reason =
+				TEXT("CPU and GPU p95 timings are within the mixed-bound band.");
+			Confidence = 0.65;
+		}
+	}
+	Diagnosis->SetStringField(TEXT("verdict"), Verdict);
+	Diagnosis->SetStringField(TEXT("reason"), Reason);
+	Diagnosis->SetNumberField(TEXT("confidence"), Confidence);
+	TSharedPtr<FJsonObject> BoundEvidence = MakeShared<FJsonObject>();
+	BoundEvidence->SetNumberField(TEXT("frameP95Ms"), FrameP95);
+	BoundEvidence->SetNumberField(TEXT("gameP95Ms"), GameP95);
+	BoundEvidence->SetNumberField(TEXT("renderP95Ms"), RenderP95);
+	BoundEvidence->SetNumberField(TEXT("rhiP95Ms"), RhiP95);
+	BoundEvidence->SetNumberField(TEXT("cpuMaxP95Ms"), CpuP95);
+	BoundEvidence->SetNumberField(TEXT("gpuP95Ms"), GpuP95);
+	Diagnosis->SetObjectField(TEXT("boundEvidence"), BoundEvidence);
+
+	int32 ErrorLines = 0;
+	int32 WarningLines = 0;
+	int32 AvailableWindows = 0;
+	int32 TotalWindows = 0;
+	if (PerformanceResult.IsValid()
+		&& PerformanceResult->HasTypedField<EJson::Array>(
+			TEXT("logWindows")))
+	{
+		const TArray<TSharedPtr<FJsonValue>>& Windows =
+			PerformanceResult->GetArrayField(TEXT("logWindows"));
+		TotalWindows = Windows.Num();
+		for (const TSharedPtr<FJsonValue>& Value : Windows)
+		{
+			if (!Value.IsValid() || Value->Type != EJson::Object)
+			{
+				continue;
+			}
+			const TSharedPtr<FJsonObject> Window = Value->AsObject();
+			if (!BoolField(Window, TEXT("available"), false))
+			{
+				continue;
+			}
+			++AvailableWindows;
+			TArray<FString> Lines;
+			StringField(Window, TEXT("content")).ParseIntoArrayLines(
+				Lines,
+				false);
+			for (const FString& Line : Lines)
+			{
+				if (Line.Contains(TEXT("Error:"), ESearchCase::IgnoreCase)
+					|| Line.Contains(TEXT("[Error]"), ESearchCase::IgnoreCase))
+				{
+					++ErrorLines;
+				}
+				else if (
+					Line.Contains(TEXT("Warning:"), ESearchCase::IgnoreCase)
+					|| Line.Contains(
+						TEXT("[Warning]"),
+						ESearchCase::IgnoreCase))
+				{
+					++WarningLines;
+				}
+			}
+		}
+	}
+	TSharedPtr<FJsonObject> LogHealth = MakeShared<FJsonObject>();
+	LogHealth->SetBoolField(TEXT("available"), AvailableWindows > 0);
+	LogHealth->SetNumberField(TEXT("windowCount"), TotalWindows);
+	LogHealth->SetNumberField(
+		TEXT("availableWindowCount"),
+		AvailableWindows);
+	LogHealth->SetNumberField(TEXT("errorLineCount"), ErrorLines);
+	LogHealth->SetNumberField(TEXT("warningLineCount"), WarningLines);
+	LogHealth->SetStringField(
+		TEXT("status"),
+		AvailableWindows == 0
+			? TEXT("unavailable")
+			: (ErrorLines > 0
+			? TEXT("errors")
+			: (WarningLines > 0 ? TEXT("warnings") : TEXT("clean"))));
+	Diagnosis->SetObjectField(TEXT("logHealth"), LogHealth);
+
+	TSharedPtr<FJsonObject> TraceEvidence = MakeShared<FJsonObject>();
+	TSharedPtr<FJsonObject> Analysis = TraceAnalysis;
+	if (TraceAnalysis.IsValid()
+		&& TraceAnalysis->HasTypedField<EJson::Object>(TEXT("analysis")))
+	{
+		Analysis = TraceAnalysis->GetObjectField(TEXT("analysis"));
+	}
+	const bool bTraceAvailable = Analysis.IsValid();
+	TraceEvidence->SetBoolField(TEXT("available"), bTraceAvailable);
+	if (bTraceAvailable)
+	{
+		if (Analysis->HasTypedField<EJson::Number>(
+				TEXT("intervalStartSeconds"))
+			&& Analysis->HasTypedField<EJson::Number>(
+				TEXT("intervalEndSeconds")))
+		{
+			TraceEvidence->SetNumberField(
+				TEXT("intervalStartSeconds"),
+				NumberField(
+					Analysis,
+					TEXT("intervalStartSeconds"),
+					0.0));
+			TraceEvidence->SetNumberField(
+				TEXT("intervalEndSeconds"),
+				NumberField(
+					Analysis,
+					TEXT("intervalEndSeconds"),
+					0.0));
+		}
+		TraceEvidence->SetArrayField(
+			TEXT("topCpuScopes"),
+			FilterTraceTimers(Analysis, false, 25));
+		TraceEvidence->SetArrayField(
+			TEXT("gpuIntervals"),
+			FilterTraceTimers(Analysis, true, 25));
+		if (Analysis->HasTypedField<EJson::Object>(TEXT("threadGroups")))
+		{
+			TraceEvidence->SetObjectField(
+				TEXT("threadGroups"),
+				CopyPerformanceObject(
+					Analysis->GetObjectField(TEXT("threadGroups"))));
+		}
+		if (Analysis->HasTypedField<EJson::Object>(
+			TEXT("threadAggregates")))
+		{
+			TraceEvidence->SetObjectField(
+				TEXT("threadAggregates"),
+				CopyPerformanceObject(
+					Analysis->GetObjectField(TEXT("threadAggregates"))));
+		}
+	}
+	Diagnosis->SetObjectField(TEXT("traceEvidence"), TraceEvidence);
+
+	TArray<TSharedPtr<FJsonValue>> NextSteps;
+	if (bFrameLimited)
+	{
+		NextSteps.Add(MakeShared<FJsonValueString>(
+			TEXT(
+				"Disable VSync and the FPS cap in a controlled profile, "
+				"then repeat the same scenario.")));
+	}
+	else if (bSuspectedExternalLimiter)
+	{
+		NextSteps.Add(MakeShared<FJsonValueString>(
+			TEXT(
+				"Check external frame limiters, driver presentation "
+				"settings, fixed frame rate, and child-process CVar "
+				"capture, then repeat the scenario uncapped.")));
+	}
+	else if (!bTraceAvailable)
+	{
+		NextSteps.Add(MakeShared<FJsonValueString>(
+			TEXT(
+				"Capture a bounded trace for the same scenario before "
+				"attributing the top scope.")));
+	}
+	if (ErrorLines > 0)
+	{
+		NextSteps.Add(MakeShared<FJsonValueString>(
+			TEXT("Resolve run-bounded log errors before accepting the result.")));
+	}
+	if (Verdict == TEXT("cpuBound"))
+	{
+		NextSteps.Add(MakeShared<FJsonValueString>(
+			TEXT("Inspect the top Game/Render/RHI scopes in the trace evidence.")));
+	}
+	else if (Verdict == TEXT("gpuBound"))
+	{
+		NextSteps.Add(MakeShared<FJsonValueString>(
+			TEXT("Inspect GPU timing intervals and RDG passes for the worst frames.")));
+	}
+	Diagnosis->SetArrayField(TEXT("nextSteps"), NextSteps);
+	return Diagnosis;
+}
+
+FString FPerformanceRegressionService::BuildHtmlPerformanceReport(
+	const FString& ReportId,
+	const TSharedPtr<FJsonObject>& Report)
+{
+	const TSharedPtr<FJsonObject> Diagnosis =
+		Report.IsValid()
+		&& Report->HasTypedField<EJson::Object>(TEXT("diagnosis"))
+			? Report->GetObjectField(TEXT("diagnosis"))
+			: MakeShared<FJsonObject>();
+	const TSharedPtr<FJsonObject> Performance =
+		Report.IsValid()
+		&& Report->HasTypedField<EJson::Object>(TEXT("performance"))
+			? Report->GetObjectField(TEXT("performance"))
+			: MakeShared<FJsonObject>();
+	const TSharedPtr<FJsonObject> Metrics =
+		Performance->HasTypedField<EJson::Object>(TEXT("metrics"))
+			? Performance->GetObjectField(TEXT("metrics"))
+			: MakeShared<FJsonObject>();
+	const TSharedPtr<FJsonObject> Fingerprint =
+		Report.IsValid()
+		&& Report->HasTypedField<EJson::Object>(
+			TEXT("environmentFingerprint"))
+			? Report->GetObjectField(TEXT("environmentFingerprint"))
+			: MakeShared<FJsonObject>();
+
+	FString MetricRows;
+	static const TCHAR* MetricNames[] = {
+		TEXT("frameMs"),
+		TEXT("gameMs"),
+		TEXT("renderMs"),
+		TEXT("rhiMs"),
+		TEXT("gpuMs")
+	};
+	for (const TCHAR* MetricName : MetricNames)
+	{
+		const TSharedPtr<FJsonObject>* Metric = nullptr;
+		if (!Metrics->TryGetObjectField(MetricName, Metric)
+			|| !Metric || !Metric->IsValid())
+		{
+			continue;
+		}
+		MetricRows += FString::Printf(
+			TEXT(
+				"<tr><th>%s</th><td>%.3f</td><td>%.3f</td>"
+				"<td>%.3f</td><td>%.3f</td><td>%.0f</td></tr>"),
+			MetricName,
+			NumberField(*Metric, TEXT("p50"), 0.0),
+			NumberField(*Metric, TEXT("p95"), 0.0),
+			NumberField(*Metric, TEXT("p99"), 0.0),
+			NumberField(*Metric, TEXT("max"), 0.0),
+			NumberField(*Metric, TEXT("overBudgetFrames"), 0.0));
+	}
+
+	FString CheckRows;
+	if (Report.IsValid()
+		&& Report->HasTypedField<EJson::Object>(TEXT("comparison")))
+	{
+		const TSharedPtr<FJsonObject> Comparison =
+			Report->GetObjectField(TEXT("comparison"));
+		if (Comparison->HasTypedField<EJson::Array>(TEXT("checks")))
+		{
+			for (const TSharedPtr<FJsonValue>& Value :
+				Comparison->GetArrayField(TEXT("checks")))
+			{
+				if (!Value.IsValid() || Value->Type != EJson::Object)
+				{
+					continue;
+				}
+				const TSharedPtr<FJsonObject> Check = Value->AsObject();
+				CheckRows += FString::Printf(
+					TEXT(
+						"<tr><th>%s.%s</th><td>%s</td><td>%.3f</td>"
+						"<td>%.3f</td><td>%.2f%%</td></tr>"),
+					*EscapePerformanceHtml(
+						StringField(Check, TEXT("metric"), TEXT("unknown"))),
+					*EscapePerformanceHtml(
+						StringField(Check, TEXT("statistic"), TEXT("unknown"))),
+					*EscapePerformanceHtml(
+						StringField(Check, TEXT("verdict"), TEXT("inconclusive"))),
+					NumberField(Check, TEXT("baseline"), 0.0),
+					NumberField(Check, TEXT("candidate"), 0.0),
+					NumberField(Check, TEXT("regressionPercent"), 0.0));
+			}
+		}
+	}
+	if (CheckRows.IsEmpty())
+	{
+		CheckRows =
+			TEXT("<tr><td colspan=\"5\">No before/after comparison supplied.</td></tr>");
+	}
+
+	const TSharedPtr<FJsonObject> LogHealth =
+		Diagnosis->HasTypedField<EJson::Object>(TEXT("logHealth"))
+			? Diagnosis->GetObjectField(TEXT("logHealth"))
+			: MakeShared<FJsonObject>();
+	const FString LogHealthStatus = EscapePerformanceHtml(
+		StringField(LogHealth, TEXT("status"), TEXT("unavailable")));
+	const FString LogHealthSummary = FString::Printf(
+		TEXT(
+			"<div class=\"grid\"><div>Status<br><strong>%s</strong></div>"
+			"<div>Available windows<br><strong>%.0f / %.0f</strong></div>"
+			"<div>Error lines<br><strong>%.0f</strong></div>"
+			"<div>Warning lines<br><strong>%.0f</strong></div></div>"),
+		*LogHealthStatus,
+		NumberField(LogHealth, TEXT("availableWindowCount"), 0.0),
+		NumberField(LogHealth, TEXT("windowCount"), 0.0),
+		NumberField(LogHealth, TEXT("errorLineCount"), 0.0),
+		NumberField(LogHealth, TEXT("warningLineCount"), 0.0));
+
+	const TSharedPtr<FJsonObject> TraceEvidence =
+		Diagnosis->HasTypedField<EJson::Object>(TEXT("traceEvidence"))
+			? Diagnosis->GetObjectField(TEXT("traceEvidence"))
+			: MakeShared<FJsonObject>();
+	FString CpuScopeRows;
+	if (TraceEvidence->HasTypedField<EJson::Array>(TEXT("topCpuScopes")))
+	{
+		for (const TSharedPtr<FJsonValue>& Value :
+			TraceEvidence->GetArrayField(TEXT("topCpuScopes")))
+		{
+			if (!Value.IsValid() || Value->Type != EJson::Object)
+			{
+				continue;
+			}
+			const TSharedPtr<FJsonObject> Scope = Value->AsObject();
+			CpuScopeRows += FString::Printf(
+				TEXT(
+					"<tr><th>%s</th><td>%.3f</td><td>%.3f</td>"
+					"<td>%.0f</td></tr>"),
+				*EscapePerformanceHtml(
+					StringField(Scope, TEXT("name"), TEXT("<unnamed>"))),
+				NumberField(Scope, TEXT("totalInclusiveMs"), 0.0),
+				NumberField(Scope, TEXT("maxInclusiveMs"), 0.0),
+				NumberField(Scope, TEXT("instanceCount"), 0.0));
+		}
+	}
+	if (CpuScopeRows.IsEmpty())
+	{
+		CpuScopeRows =
+			TEXT("<tr><td colspan=\"4\">No bounded CPU scope evidence.</td></tr>");
+	}
+
+	FString GpuIntervalRows;
+	if (TraceEvidence->HasTypedField<EJson::Array>(TEXT("gpuIntervals")))
+	{
+		for (const TSharedPtr<FJsonValue>& Value :
+			TraceEvidence->GetArrayField(TEXT("gpuIntervals")))
+		{
+			if (!Value.IsValid() || Value->Type != EJson::Object)
+			{
+				continue;
+			}
+			const TSharedPtr<FJsonObject> Interval = Value->AsObject();
+			GpuIntervalRows += FString::Printf(
+				TEXT(
+					"<tr><th>%s</th><td>%.3f</td><td>%.3f</td>"
+					"<td>%.0f</td></tr>"),
+				*EscapePerformanceHtml(
+					StringField(Interval, TEXT("name"), TEXT("<unnamed>"))),
+				NumberField(Interval, TEXT("totalInclusiveMs"), 0.0),
+				NumberField(Interval, TEXT("maxInclusiveMs"), 0.0),
+				NumberField(Interval, TEXT("instanceCount"), 0.0));
+		}
+	}
+	if (GpuIntervalRows.IsEmpty())
+	{
+		GpuIntervalRows =
+			TEXT("<tr><td colspan=\"4\">No bounded GPU interval evidence.</td></tr>");
+	}
+	TSharedPtr<FJsonObject> GpuAggregate = MakeShared<FJsonObject>();
+	if (TraceEvidence->HasTypedField<EJson::Object>(
+			TEXT("threadAggregates")))
+	{
+		const TSharedPtr<FJsonObject> Aggregates =
+			TraceEvidence->GetObjectField(TEXT("threadAggregates"));
+		if (Aggregates->HasTypedField<EJson::Object>(TEXT("gpu")))
+		{
+			GpuAggregate = Aggregates->GetObjectField(TEXT("gpu"));
+		}
+	}
+	const FString GpuEvidenceSummary = FString::Printf(
+		TEXT(
+			"<p class=\"meta\">GPU aggregate available: %s · "
+			"Timers: %.0f · Total exclusive: %.3f ms · "
+			"Analysis interval: %.3f–%.3f s</p>"),
+		BoolField(GpuAggregate, TEXT("available"), false)
+			? TEXT("yes")
+			: TEXT("no"),
+		NumberField(GpuAggregate, TEXT("timerCount"), 0.0),
+		NumberField(GpuAggregate, TEXT("totalExclusiveMs"), 0.0),
+		NumberField(
+			TraceEvidence,
+			TEXT("intervalStartSeconds"),
+			0.0),
+		NumberField(
+			TraceEvidence,
+			TEXT("intervalEndSeconds"),
+			0.0));
+
+	FString NextStepItems;
+	if (Diagnosis->HasTypedField<EJson::Array>(TEXT("nextSteps")))
+	{
+		for (const TSharedPtr<FJsonValue>& Value :
+			Diagnosis->GetArrayField(TEXT("nextSteps")))
+		{
+			if (!Value.IsValid() || Value->Type != EJson::String)
+			{
+				continue;
+			}
+			NextStepItems += FString::Printf(
+				TEXT("<li>%s</li>"),
+				*EscapePerformanceHtml(Value->AsString()));
+		}
+	}
+	if (NextStepItems.IsEmpty())
+	{
+		NextStepItems = TEXT("<li>No additional action was generated.</li>");
+	}
+
+	FString ArtifactItems;
+	FString ArtifactNavigation;
+	const FString RunId = StringField(
+		Report,
+		TEXT("runId"),
+		TEXT("unavailable"));
+	if (Report.IsValid()
+		&& Report->HasTypedField<EJson::Array>(TEXT("sourceArtifacts")))
+	{
+		int32 ArtifactIndex = 0;
+		for (const TSharedPtr<FJsonValue>& Value :
+			Report->GetArrayField(TEXT("sourceArtifacts")))
+		{
+			if (!Value.IsValid() || Value->Type != EJson::Object)
+			{
+				continue;
+			}
+			const TSharedPtr<FJsonObject> Artifact = Value->AsObject();
+			const FString ArtifactId = StringField(
+				Artifact,
+				TEXT("artifactId"),
+				TEXT("unknown"));
+			const FString ArtifactName = StringField(
+				Artifact,
+				TEXT("name"),
+				TEXT("artifact"));
+			const FString Fragment =
+				TEXT("artifact-")
+				+ SanitizePerformanceHtmlFragment(
+					ArtifactId,
+					ArtifactIndex)
+				+ FString::Printf(TEXT("-%d"), ArtifactIndex);
+			if (!ArtifactNavigation.IsEmpty())
+			{
+				ArtifactNavigation += TEXT(" · ");
+			}
+			ArtifactNavigation += FString::Printf(
+				TEXT("<a href=\"#%s\">%s</a>"),
+				*EscapePerformanceHtml(Fragment),
+				*EscapePerformanceHtml(ArtifactName));
+			ArtifactItems += FString::Printf(
+				TEXT(
+					"<li id=\"%s\"><strong>%s</strong> · "
+					"<code>%s</code> · %s · %.0f bytes"
+					"<div class=\"meta\">Retrieve with "
+					"<code>production.job.artifact.get</code> using "
+					"jobId <code>%s</code> and artifactId "
+					"<code>%s</code>.</div></li>"),
+				*EscapePerformanceHtml(Fragment),
+				*EscapePerformanceHtml(ArtifactName),
+				*EscapePerformanceHtml(ArtifactId),
+				*EscapePerformanceHtml(
+					StringField(
+						Artifact,
+						TEXT("mimeType"),
+						TEXT("application/octet-stream"))),
+				NumberField(Artifact, TEXT("sizeBytes"), 0.0),
+				*EscapePerformanceHtml(RunId),
+				*EscapePerformanceHtml(ArtifactId));
+			++ArtifactIndex;
+		}
+	}
+	if (ArtifactItems.IsEmpty())
+	{
+		ArtifactItems = TEXT("<li>No source artifacts registered.</li>");
+		ArtifactNavigation = TEXT("No source artifacts registered.");
+	}
+
+	const FString Title = EscapePerformanceHtml(
+		StringField(Report, TEXT("title"), TEXT("UE Performance Report")));
+	const FString Verdict = EscapePerformanceHtml(
+		StringField(Diagnosis, TEXT("verdict"), TEXT("inconclusive")));
+	const FString Reason = EscapePerformanceHtml(
+		StringField(Diagnosis, TEXT("reason")));
+	return FString::Printf(
+		TEXT("<!doctype html><html><head><meta charset=\"utf-8\">")
+		TEXT("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">")
+		TEXT("<title>%s</title><style>")
+		TEXT(
+			":root{color-scheme:dark;--bg:#12151a;--card:#1b2028;"
+			"--line:#303846;--fg:#e9edf2;--muted:#9ca8b8;--accent:#5ba7ff}")
+		TEXT(
+			"*{box-sizing:border-box}body{margin:0;background:var(--bg);"
+			"color:var(--fg);font:14px/1.5 system-ui,sans-serif}")
+		TEXT(
+			"main{max-width:1100px;margin:auto;padding:32px}"
+			"h1{margin:0 0 6px;font-size:28px}h2{font-size:18px}")
+		TEXT(
+			".meta{color:var(--muted)}.grid{display:grid;"
+			"grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}")
+		TEXT(
+			".card{background:var(--card);border:1px solid var(--line);"
+			"border-radius:8px;padding:18px;margin:16px 0}")
+		TEXT(
+			".verdict{color:var(--accent);font-size:22px;font-weight:700}"
+			"table{width:100%%;border-collapse:collapse}")
+		TEXT(
+			"th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line)}"
+			"code{color:#b7d8ff}a{color:var(--accent)}"
+			"li:target{outline:2px solid var(--accent);outline-offset:4px}"
+			"</style></head><body><main>")
+		TEXT(
+			"<h1>%s</h1><div class=\"meta\">Report <code>%s</code> · "
+			"Run <code>%s</code></div>")
+		TEXT(
+			"<section class=\"card\"><div class=\"verdict\">%s</div>"
+			"<p>%s</p><p>Worst frame: %.3f ms · Confidence: %.2f</p></section>")
+		TEXT(
+			"<section class=\"card\"><h2>Run-bounded log health</h2>%s</section>")
+		TEXT(
+			"<section class=\"card\"><h2>Timing summary</h2><table>"
+			"<thead><tr><th>Metric</th><th>p50</th><th>p95</th>"
+			"<th>p99</th><th>Max</th><th>Over budget</th></tr></thead>"
+			"<tbody>%s</tbody></table></section>")
+		TEXT(
+			"<section class=\"card\"><h2>Before / after checks</h2><table>"
+			"<thead><tr><th>Check</th><th>Verdict</th><th>Baseline</th>"
+			"<th>Candidate</th><th>Change</th></tr></thead>"
+			"<tbody>%s</tbody></table></section>")
+		TEXT(
+			"<section class=\"card\"><h2>Top CPU scopes</h2><table>"
+			"<thead><tr><th>Scope</th><th>Total inclusive</th>"
+			"<th>Max inclusive</th><th>Instances</th></tr></thead>"
+			"<tbody>%s</tbody></table></section>")
+		TEXT(
+			"<section class=\"card\"><h2>GPU intervals and evidence</h2>%s"
+			"<table><thead><tr><th>Interval</th><th>Total inclusive</th>"
+			"<th>Max inclusive</th><th>Instances</th></tr></thead>"
+			"<tbody>%s</tbody></table></section>")
+		TEXT(
+			"<section class=\"card\"><h2>Next steps</h2><ol>%s</ol></section>")
+		TEXT(
+			"<section class=\"card\"><h2>Environment</h2><div class=\"grid\">"
+			"<div>Map<br><code>%s</code></div><div>Git revision<br><code>%s</code></div>"
+			"<div>RHI / GPU<br><code>%s · %s</code></div>"
+			"<div>Driver / Resolution<br><code>%s · %s</code></div></div></section>")
+		TEXT(
+			"<section class=\"card\"><h2>Artifacts</h2>"
+			"<nav aria-label=\"Artifact references\">%s</nav><ul>%s</ul>"
+			"<p class=\"meta\">Only opaque IDs are embedded. No filesystem "
+			"paths or executable links are emitted.</p></section>")
+		TEXT(
+			"<footer class=\"meta\">Generated by UE_AI_integration. "
+			"Machine-readable JSON and JUnit artifacts remain authoritative.</footer>")
+		TEXT("</main></body></html>"),
+		*Title,
+		*Title,
+		*EscapePerformanceHtml(ReportId),
+		*EscapePerformanceHtml(RunId),
+		*Verdict,
+		*Reason,
+		NumberField(Diagnosis, TEXT("worstFrameMs"), 0.0),
+		NumberField(Diagnosis, TEXT("confidence"), 0.0),
+		*LogHealthSummary,
+		*MetricRows,
+		*CheckRows,
+		*CpuScopeRows,
+		*GpuEvidenceSummary,
+		*GpuIntervalRows,
+		*NextStepItems,
+		*EscapePerformanceHtml(
+			StringField(Fingerprint, TEXT("mapPackage"), TEXT("unavailable"))),
+		*EscapePerformanceHtml(
+			StringField(Fingerprint, TEXT("gitRevision"), TEXT("unavailable"))),
+		*EscapePerformanceHtml(
+			StringField(Fingerprint, TEXT("rhi"), TEXT("unavailable"))),
+		*EscapePerformanceHtml(
+			StringField(Fingerprint, TEXT("gpuAdapter"), TEXT("unavailable"))),
+		*EscapePerformanceHtml(
+			StringField(Fingerprint, TEXT("gpuDriver"), TEXT("unavailable"))),
+		*EscapePerformanceHtml(
+			StringField(Fingerprint, TEXT("resolution"), TEXT("unavailable"))),
+		*ArtifactNavigation,
+		*ArtifactItems);
+}
+
 FMCPToolResult FPerformanceRegressionService::StartPerformanceRun(
 	const TSharedPtr<FJsonObject>& Params)
 {
@@ -907,7 +2022,13 @@ FMCPToolResult FPerformanceRegressionService::StartPerformanceRun(
 			TEXT("invalid_performance_profile"),
 			422);
 	}
-	if (Profile.IsValid() && GEditor)
+	if (Profile.IsValid()
+		&& StringField(
+			Normalized,
+			TEXT("executionTarget"),
+			TEXT("pie"))
+			== TEXT("pie")
+		&& GEditor)
 	{
 		if (const UWorld* World =
 			GEditor->GetEditorWorldContext().World())
@@ -924,8 +2045,6 @@ FMCPToolResult FPerformanceRegressionService::StartPerformanceRun(
 			}
 		}
 	}
-	const TSharedPtr<FJsonObject> Fingerprint =
-		CaptureFingerprint(Profile);
 	FMCPToolResult Result = Operation(
 		TEXT("production.performance.run"),
 		Normalized);
@@ -938,14 +2057,21 @@ FMCPToolResult FPerformanceRegressionService::StartPerformanceRun(
 	{
 		RunId = StringField(Result.Data, TEXT("jobId"));
 	}
-	if (!RunId.IsEmpty())
+	const bool bIdempotentReplay =
+		BoolField(Result.Data, TEXT("idempotentReplay"), false);
+	TSharedPtr<FJsonObject> Fingerprint =
+		bIdempotentReplay ? LoadFingerprint(RunId) : CaptureFingerprint(Profile);
+	if (!RunId.IsEmpty() && Fingerprint.IsValid() && !bIdempotentReplay)
 	{
 		Fingerprints.Add(RunId, Fingerprint);
 		PersistFingerprint(RunId, Fingerprint);
 	}
-	Result.Data->SetObjectField(
-		TEXT("environmentFingerprint"),
-		CopyPerformanceObject(Fingerprint));
+	if (Fingerprint.IsValid())
+	{
+		Result.Data->SetObjectField(
+			TEXT("environmentFingerprint"),
+			CopyPerformanceObject(Fingerprint));
+	}
 	if (Profile.IsValid())
 	{
 		Result.Data->SetObjectField(
@@ -966,7 +2092,23 @@ FMCPToolResult FPerformanceRegressionService::GetPerformanceResult(
 		return Result;
 	}
 	const FString RunId = StringField(Params, TEXT("runId"));
-	const TSharedPtr<FJsonObject> Fingerprint = LoadFingerprint(RunId);
+	TSharedPtr<FJsonObject> Fingerprint = LoadFingerprint(RunId);
+	if (const TSharedPtr<FJsonObject> JobResult =
+		FindResultObject(Result.Data))
+	{
+		if (JobResult->HasTypedField<EJson::Object>(
+			TEXT("runtimeFingerprint")))
+		{
+			Fingerprint = MergeStandaloneRuntimeFingerprint(
+				Fingerprint,
+				JobResult->GetObjectField(TEXT("runtimeFingerprint")));
+			if (Fingerprint.IsValid())
+			{
+				Fingerprints.Add(RunId, Fingerprint);
+				PersistFingerprint(RunId, Fingerprint);
+			}
+		}
+	}
 	if (!Fingerprint.IsValid())
 	{
 		return Result;
@@ -990,6 +2132,19 @@ FMCPToolResult FPerformanceRegressionService::GetPerformanceResult(
 FMCPToolResult FPerformanceRegressionService::ComparePerformanceRuns(
 	const TSharedPtr<FJsonObject>& Params)
 {
+	for (const TCHAR* Field : {TEXT("baselineRunId"), TEXT("candidateRunId")})
+	{
+		const FString RunId = StringField(Params, Field);
+		if (!RunId.IsEmpty())
+		{
+			TSharedPtr<FJsonObject> Refresh = MakeShared<FJsonObject>();
+			Refresh->SetStringField(TEXT("runId"), RunId);
+			// Refresh a completed standalone run's child fingerprint before
+			// compatibility is evaluated. Errors are handled by the canonical
+			// compare operation below.
+			GetPerformanceResult(Refresh);
+		}
+	}
 	FMCPToolResult Result = Operation(
 		TEXT("production.performance.compare"),
 		Params);
@@ -1109,6 +2264,299 @@ FMCPToolResult FPerformanceRegressionService::ComparePerformanceRuns(
 		RegressionJobs.Remove(Oldest);
 	}
 	return Result;
+}
+
+FMCPToolResult FPerformanceRegressionService::DiagnosePerformance(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	const FString RunId = StringField(Params, TEXT("runId"));
+	if (RunId.IsEmpty())
+	{
+		return FMCPToolResult::Error(
+			TEXT("runId is required."),
+			TEXT("invalid_params"),
+			422);
+	}
+	TSharedPtr<FJsonObject> Query = MakeShared<FJsonObject>();
+	Query->SetStringField(TEXT("runId"), RunId);
+	FMCPToolResult Run = GetPerformanceResult(Query);
+	if (!Run.bSuccess || !Run.Data.IsValid())
+	{
+		return Run;
+	}
+	const FString Status = ResponseStatus(Run.Data);
+	if (!IsTerminal(Status))
+	{
+		return FMCPToolResult::Error(
+			TEXT("The performance run has not reached a terminal state."),
+			TEXT("performance_run_not_ready"),
+			409);
+	}
+	if (Status != TEXT("succeeded"))
+	{
+		return FMCPToolResult::Error(
+			TEXT("Only a succeeded performance run can be diagnosed."),
+			TEXT("performance_run_failed"),
+			409);
+	}
+	const TSharedPtr<FJsonObject> Performance =
+		FindResultObject(Run.Data);
+	if (!Performance.IsValid())
+	{
+		return FMCPToolResult::Error(
+			TEXT("The performance run has no result payload."),
+			TEXT("performance_result_unavailable"),
+			409);
+	}
+
+	TSharedPtr<FJsonObject> TraceAnalysis;
+	const FString TraceAnalysisJobId =
+		StringField(Params, TEXT("traceAnalysisJobId"));
+	if (!TraceAnalysisJobId.IsEmpty())
+	{
+		TSharedPtr<FJsonObject> TraceQuery = MakeShared<FJsonObject>();
+		TraceQuery->SetStringField(TEXT("jobId"), TraceAnalysisJobId);
+		const FMCPToolResult TraceResult = Operation(
+			TEXT("production.job.result.get"),
+			TraceQuery);
+		if (!TraceResult.bSuccess || !TraceResult.Data.IsValid())
+		{
+			return TraceResult;
+		}
+		if (!IsTerminal(ResponseStatus(TraceResult.Data)))
+		{
+			return FMCPToolResult::Error(
+				TEXT("The requested trace analysis job is still running."),
+				TEXT("trace_analysis_not_ready"),
+				409);
+		}
+		if (ResponseStatus(TraceResult.Data) != TEXT("succeeded"))
+		{
+			return FMCPToolResult::Error(
+				TEXT("The requested trace analysis job did not succeed."),
+				TEXT("trace_analysis_failed"),
+				409);
+		}
+		TraceAnalysis = FindResultObject(TraceResult.Data);
+		if (StringField(TraceResult.Data, TEXT("kind"))
+				!= TEXT("traceAnalysis")
+			|| !TraceAnalysis.IsValid()
+			|| StringField(TraceAnalysis, TEXT("traceId"))
+				!= StringField(Performance, TEXT("traceId")))
+		{
+			return FMCPToolResult::Error(
+				TEXT(
+					"traceAnalysisJobId must reference a succeeded "
+					"traceAnalysis job produced from this performance "
+					"run's trace."),
+				TEXT("trace_analysis_provenance_mismatch"),
+				409);
+		}
+	}
+
+	const TSharedPtr<FJsonObject> Fingerprint = LoadFingerprint(RunId);
+	TSharedPtr<FJsonObject> Diagnosis = BuildPerformanceDiagnosis(
+		Performance,
+		Fingerprint,
+		TraceAnalysis);
+	Diagnosis->SetStringField(TEXT("runId"), RunId);
+	if (Fingerprint.IsValid())
+	{
+		Diagnosis->SetObjectField(
+			TEXT("environmentFingerprint"),
+			CopyPerformanceObject(Fingerprint));
+	}
+	if (!TraceAnalysisJobId.IsEmpty())
+	{
+		Diagnosis->SetStringField(
+			TEXT("traceAnalysisJobId"),
+			TraceAnalysisJobId);
+	}
+	return FMCPToolResult::Ok(Diagnosis);
+}
+
+FMCPToolResult FPerformanceRegressionService::GeneratePerformanceReport(
+	const TSharedPtr<FJsonObject>& Params)
+{
+	const FString RunId = StringField(Params, TEXT("runId"));
+	if (RunId.IsEmpty())
+	{
+		return FMCPToolResult::Error(
+			TEXT("runId is required."),
+			TEXT("invalid_params"),
+			422);
+	}
+	TSharedPtr<FJsonObject> DiagnosisParams = MakeShared<FJsonObject>();
+	DiagnosisParams->SetStringField(TEXT("runId"), RunId);
+	const FString TraceAnalysisJobId =
+		StringField(Params, TEXT("traceAnalysisJobId"));
+	if (!TraceAnalysisJobId.IsEmpty())
+	{
+		DiagnosisParams->SetStringField(
+			TEXT("traceAnalysisJobId"),
+			TraceAnalysisJobId);
+	}
+	const FMCPToolResult DiagnosisResult =
+		DiagnosePerformance(DiagnosisParams);
+	if (!DiagnosisResult.bSuccess || !DiagnosisResult.Data.IsValid())
+	{
+		return DiagnosisResult;
+	}
+
+	TSharedPtr<FJsonObject> RunQuery = MakeShared<FJsonObject>();
+	RunQuery->SetStringField(TEXT("runId"), RunId);
+	const FMCPToolResult Run = GetPerformanceResult(RunQuery);
+	if (!Run.bSuccess || !Run.Data.IsValid())
+	{
+		return Run;
+	}
+	const TSharedPtr<FJsonObject> Performance =
+		FindResultObject(Run.Data);
+	if (!Performance.IsValid())
+	{
+		return FMCPToolResult::Error(
+			TEXT("The performance run has no result payload."),
+			TEXT("performance_result_unavailable"),
+			409);
+	}
+
+	const FString ComparisonId =
+		StringField(Params, TEXT("comparisonId"));
+	const FRegressionJob* ComparisonJob = nullptr;
+	if (!ComparisonId.IsEmpty())
+	{
+		ComparisonJob = RegressionJobs.Find(ComparisonId);
+		if (!ComparisonJob
+			|| ComparisonJob->Kind != TEXT("performanceRegression")
+			|| !ComparisonJob->Comparison.IsValid())
+		{
+			return FMCPToolResult::Error(
+				TEXT("The requested performance comparison was not found."),
+				TEXT("performance_comparison_not_found"),
+				404);
+		}
+		const FString CandidateRunId = StringField(
+			ComparisonJob->Comparison,
+			TEXT("candidateRunId"));
+		if (CandidateRunId != RunId)
+		{
+			return FMCPToolResult::Error(
+				TEXT(
+					"The requested performance comparison belongs to a "
+					"different candidate run."),
+				TEXT("performance_comparison_candidate_mismatch"),
+				409);
+		}
+	}
+
+	FRegressionJob ReportJob;
+	ReportJob.Id = NewId(TEXT("perf-report"));
+	ReportJob.Kind = TEXT("performanceReport");
+	ReportJob.CreatedAtUtc = FDateTime::UtcNow().ToIso8601();
+	TSharedPtr<FJsonObject> Report = MakeShared<FJsonObject>();
+	Report->SetStringField(
+		TEXT("schema"),
+		TEXT("ue.performance-report.v1"));
+	Report->SetStringField(TEXT("reportId"), ReportJob.Id);
+	Report->SetStringField(TEXT("runId"), RunId);
+	Report->SetStringField(
+		TEXT("title"),
+		StringField(
+			Params,
+			TEXT("title"),
+			TEXT("UE Performance Report")));
+	Report->SetStringField(
+		TEXT("generatedAtUtc"),
+		FDateTime::UtcNow().ToIso8601());
+	Report->SetObjectField(
+		TEXT("performance"),
+		CopyPerformanceObject(Performance));
+	if (Run.Data->HasTypedField<EJson::Array>(TEXT("artifacts")))
+	{
+		Report->SetArrayField(
+			TEXT("sourceArtifacts"),
+			Run.Data->GetArrayField(TEXT("artifacts")));
+	}
+	Report->SetObjectField(
+		TEXT("diagnosis"),
+		CopyPerformanceObject(DiagnosisResult.Data));
+	if (const TSharedPtr<FJsonObject> Fingerprint = LoadFingerprint(RunId))
+	{
+		Report->SetObjectField(
+			TEXT("environmentFingerprint"),
+			CopyPerformanceObject(Fingerprint));
+	}
+	if (ComparisonJob && ComparisonJob->Comparison.IsValid())
+	{
+		Report->SetStringField(TEXT("comparisonId"), ComparisonId);
+		Report->SetObjectField(
+			TEXT("comparison"),
+			CopyPerformanceObject(ComparisonJob->Comparison));
+		Report->SetStringField(
+			TEXT("verdict"),
+			StringField(
+				ComparisonJob->Comparison,
+				TEXT("verdict"),
+				TEXT("inconclusive")));
+		if (ComparisonJob->Comparison->HasTypedField<EJson::Array>(
+			TEXT("checks")))
+		{
+			Report->SetArrayField(
+				TEXT("checks"),
+				ComparisonJob->Comparison->GetArrayField(TEXT("checks")));
+		}
+	}
+	else
+	{
+		Report->SetStringField(
+			TEXT("verdict"),
+			TEXT("inconclusive"));
+		Report->SetStringField(
+			TEXT("reason"),
+			TEXT(
+				"No before/after threshold comparison was supplied; "
+				"the diagnostic classification is evidence, not a pass gate."));
+	}
+	ReportJob.Comparison = Report;
+	WritePerformanceReportArtifacts(ReportJob);
+	if (ReportJob.Artifacts.Num() != 3)
+	{
+		return FMCPToolResult::Error(
+			TEXT("The performance report artifacts could not be written."),
+			TEXT("artifact_write_failed"),
+			500);
+	}
+	RegressionJobs.Add(ReportJob.Id, ReportJob);
+	while (RegressionJobs.Num() > MaxRegressionJobs)
+	{
+		FString Oldest;
+		FString OldestTime;
+		for (const TPair<FString, FRegressionJob>& Pair : RegressionJobs)
+		{
+			if (Pair.Key == ReportJob.Id
+				|| Pair.Value.Status == TEXT("running"))
+			{
+				continue;
+			}
+			if (Oldest.IsEmpty()
+				|| Pair.Value.CreatedAtUtc < OldestTime)
+			{
+				Oldest = Pair.Key;
+				OldestTime = Pair.Value.CreatedAtUtc;
+			}
+		}
+		if (Oldest.IsEmpty())
+		{
+			break;
+		}
+		RegressionJobs.Remove(Oldest);
+	}
+
+	TSharedPtr<FJsonObject> Data =
+		MakeRegressionJobSummary(ReportJob, true);
+	Data->SetStringField(TEXT("reportId"), ReportJob.Id);
+	Data->SetStringField(TEXT("runId"), RunId);
+	return FMCPToolResult::Ok(Data);
 }
 
 FMCPToolResult FPerformanceRegressionService::GetRegressionJob(
@@ -1576,6 +3024,77 @@ void FPerformanceRegressionService::WriteRegressionArtifacts(
 		TEXT("application/xml"));
 }
 
+void FPerformanceRegressionService::WritePerformanceReportArtifacts(
+	FRegressionJob& Job)
+{
+	const FString Directory = ReportDirectory(Job.Id);
+	IFileManager::Get().MakeDirectory(*Directory, true);
+	TSharedPtr<FJsonObject> Report =
+		CopyPerformanceObject(Job.Comparison);
+	Report->SetStringField(
+		TEXT("schema"),
+		TEXT("ue.performance-report.v1"));
+	Report->SetStringField(TEXT("reportId"), Job.Id);
+	FString Json;
+	const TSharedRef<TJsonWriter<>> Writer =
+		TJsonWriterFactory<>::Create(&Json);
+	if (FJsonSerializer::Serialize(Report.ToSharedRef(), Writer))
+	{
+		FFileHelper::SaveStringToFile(
+			Json,
+			*FPaths::Combine(Directory, TEXT("report.json")),
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	}
+	FFileHelper::SaveStringToFile(
+		BuildJUnitReport(Job.Id, Report),
+		*FPaths::Combine(Directory, TEXT("junit.xml")),
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	FFileHelper::SaveStringToFile(
+		BuildHtmlPerformanceReport(Job.Id, Report),
+		*FPaths::Combine(Directory, TEXT("report.html")),
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+
+	Job.Artifacts.Reset();
+	const auto AddArtifact =
+		[&Job](
+			const FString& Path,
+			const FString& Id,
+			const FString& Name,
+			const FString& MimeType)
+		{
+			const int64 Size = IFileManager::Get().FileSize(*Path);
+			if (Size < 0)
+			{
+				return;
+			}
+			FArtifact Artifact;
+			Artifact.Id = Id;
+			Artifact.Name = Name;
+			Artifact.Path = Path;
+			Artifact.MimeType = MimeType;
+			Artifact.Size = Size;
+			Artifact.ModifiedAtUtc =
+				IFileManager::Get().GetTimeStamp(*Path);
+			Artifact.Sha256 = ComputeFileSha256Streaming(Path);
+			Job.Artifacts.Add(MoveTemp(Artifact));
+		};
+	AddArtifact(
+		FPaths::Combine(Directory, TEXT("report.json")),
+		TEXT("report-json"),
+		TEXT("report.json"),
+		TEXT("application/json"));
+	AddArtifact(
+		FPaths::Combine(Directory, TEXT("junit.xml")),
+		TEXT("junit"),
+		TEXT("junit.xml"),
+		TEXT("application/xml"));
+	AddArtifact(
+		FPaths::Combine(Directory, TEXT("report.html")),
+		TEXT("report-html"),
+		TEXT("report.html"),
+		TEXT("text/html"));
+}
+
 void FPerformanceRegressionService::PersistFingerprint(
 	const FString& RunId,
 	const TSharedPtr<FJsonObject>& Fingerprint) const
@@ -1634,7 +3153,28 @@ FPerformanceRegressionService::CaptureFingerprint(
 		TEXT("capturedAtUtc"),
 		FDateTime::UtcNow().ToIso8601());
 	Fingerprint->SetStringField(TEXT("gitRevision"), GitRevision());
-	const FString MapPackage = CurrentMapPackage();
+	const bool bStandaloneProfile =
+		Profile.IsValid()
+		&& StringField(
+			Profile,
+			TEXT("executionTarget"),
+			TEXT("pie"))
+			== TEXT("standalone");
+	Fingerprint->SetStringField(
+		TEXT("provenance"),
+		bStandaloneProfile
+			? TEXT("controllerLaunchIntentPendingChildReceipt")
+			: TEXT("connectedEditorRuntime"));
+	FString MapPackage = CurrentMapPackage();
+	if (Profile.IsValid())
+	{
+		const FString ProfileMap =
+			StringField(Profile, TEXT("map"));
+		if (ProfileMap.StartsWith(TEXT("/Game/")))
+		{
+			MapPackage = ProfileMap;
+		}
+	}
 	Fingerprint->SetStringField(TEXT("mapPackage"), MapPackage);
 	bool bMapDirty = false;
 	if (GEditor)
@@ -1644,6 +3184,9 @@ FPerformanceRegressionService::CaptureFingerprint(
 		{
 			bMapDirty =
 				World->GetOutermost()
+				&& NormalizeMapName(
+					World->GetOutermost()->GetName())
+					== MapPackage
 				&& World->GetOutermost()->IsDirty();
 		}
 	}
@@ -1797,7 +3340,7 @@ FPerformanceRegressionService::MakeRegressionJobSummary(
 	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
 	Data->SetStringField(TEXT("schema"), TEXT("ue.job.v1"));
 	Data->SetStringField(TEXT("jobId"), Job.Id);
-	Data->SetStringField(TEXT("kind"), TEXT("performanceRegression"));
+	Data->SetStringField(TEXT("kind"), Job.Kind);
 	Data->SetStringField(TEXT("status"), Job.Status);
 	Data->SetStringField(TEXT("phase"), Job.Phase);
 	Data->SetStringField(TEXT("createdAtUtc"), Job.CreatedAtUtc);
@@ -1859,6 +3402,16 @@ FString FPerformanceRegressionService::RegressionDirectory(
 		TEXT("UE_AI_integration"),
 		TEXT("PerformanceRegressions"),
 		ComparisonId);
+}
+
+FString FPerformanceRegressionService::ReportDirectory(
+	const FString& ReportId)
+{
+	return FPaths::Combine(
+		FPaths::ProjectSavedDir(),
+		TEXT("UE_AI_integration"),
+		TEXT("PerformanceReports"),
+		ReportId);
 }
 
 FString FPerformanceRegressionService::NewId(const TCHAR* Prefix)

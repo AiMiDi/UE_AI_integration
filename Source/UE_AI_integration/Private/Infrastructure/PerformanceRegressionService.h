@@ -40,6 +40,14 @@ public:
 	static FString BuildJUnitReport(
 		const FString& ComparisonId,
 		const TSharedPtr<FJsonObject>& Comparison);
+	static TSharedPtr<FJsonObject> BuildPerformanceDiagnosis(
+		const TSharedPtr<FJsonObject>& PerformanceResult,
+		const TSharedPtr<FJsonObject>& Fingerprint,
+		const TSharedPtr<FJsonObject>& TraceAnalysis =
+			TSharedPtr<FJsonObject>());
+	static FString BuildHtmlPerformanceReport(
+		const FString& ReportId,
+		const TSharedPtr<FJsonObject>& Report);
 
 private:
 	struct FArtifact
@@ -56,6 +64,7 @@ private:
 	struct FRegressionJob
 	{
 		FString Id;
+		FString Kind = TEXT("performanceRegression");
 		FString Status = TEXT("succeeded");
 		FString Phase = TEXT("complete");
 		FString CreatedAtUtc;
@@ -71,6 +80,10 @@ private:
 	FMCPToolResult GetPerformanceResult(
 		const TSharedPtr<FJsonObject>& Params);
 	FMCPToolResult ComparePerformanceRuns(
+		const TSharedPtr<FJsonObject>& Params);
+	FMCPToolResult DiagnosePerformance(
+		const TSharedPtr<FJsonObject>& Params);
+	FMCPToolResult GeneratePerformanceReport(
 		const TSharedPtr<FJsonObject>& Params);
 	FMCPToolResult GetRegressionJob(
 		const FString& CapabilityId,
@@ -89,6 +102,7 @@ private:
 		const FString& CandidateRunId,
 		TSharedPtr<FJsonObject>& Comparison) const;
 	void WriteRegressionArtifacts(FRegressionJob& Job);
+	void WritePerformanceReportArtifacts(FRegressionJob& Job);
 	void PersistFingerprint(
 		const FString& RunId,
 		const TSharedPtr<FJsonObject>& Fingerprint) const;
@@ -104,6 +118,7 @@ private:
 	static FString CurrentMapPackage();
 	static FString FingerprintDirectory(const FString& RunId);
 	static FString RegressionDirectory(const FString& ComparisonId);
+	static FString ReportDirectory(const FString& ReportId);
 	static FString NewId(const TCHAR* Prefix);
 
 	FOperation Operation;
