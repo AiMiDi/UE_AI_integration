@@ -7,7 +7,10 @@
 #include "HAL/PlatformMisc.h"
 #include "Infrastructure/PIESessionController.h"
 #include "Infrastructure/PerformanceRegressionService.h"
+#include "Infrastructure/PerformanceSuiteService.h"
 #include "Infrastructure/ProductionJobRuntime.h"
+#include "Infrastructure/RecoveryJournalService.h"
+#include "Infrastructure/ReflectionInspectService.h"
 #include "Interfaces/IPluginManager.h"
 #include "JsonUtils/JsonPointer.h"
 #include "Misc/App.h"
@@ -318,6 +321,21 @@ FProductionRuntimeController::FProductionRuntimeController(
 						TEXT("job_runtime_unavailable"),
 						503);
 			});
+	PerformanceSuites =
+		MakeUnique<FPerformanceSuiteService>(
+			[this](
+				const FString& CapabilityId,
+				const TSharedPtr<FJsonObject>& Params)
+			{
+				return PerformanceRegression.IsValid()
+					? PerformanceRegression->Execute(CapabilityId, Params)
+					: FMCPToolResult::Error(
+						TEXT("The performance regression service is unavailable."),
+						TEXT("job_runtime_unavailable"),
+						503);
+			});
+	RecoveryJournals = MakeUnique<FRecoveryJournalService>();
+	ReflectionInspect = MakeUnique<FReflectionInspectService>();
 }
 
 FProductionRuntimeController::~FProductionRuntimeController()
@@ -370,6 +388,10 @@ void FProductionRuntimeController::Tick(float DeltaTime)
 	{
 		PerformanceRegression->Tick();
 	}
+	if (PerformanceSuites.IsValid())
+	{
+		PerformanceSuites->Tick();
+	}
 }
 
 FMCPToolResult FProductionRuntimeController::ExecuteProductionJobOperation(
@@ -382,6 +404,21 @@ FMCPToolResult FProductionRuntimeController::ExecuteProductionJobOperation(
 			TEXT("The production job runtime is unavailable."),
 			TEXT("job_runtime_unavailable"),
 			503);
+	}
+	if (PerformanceSuites.IsValid()
+		&& PerformanceSuites->Handles(CapabilityId))
+	{
+		return PerformanceSuites->Execute(CapabilityId, Params);
+	}
+	if (RecoveryJournals.IsValid()
+		&& RecoveryJournals->Handles(CapabilityId))
+	{
+		return RecoveryJournals->Execute(CapabilityId, Params);
+	}
+	if (ReflectionInspect.IsValid()
+		&& ReflectionInspect->Handles(CapabilityId))
+	{
+		return ReflectionInspect->Execute(CapabilityId, Params);
 	}
 	return PerformanceRegression.IsValid()
 		? PerformanceRegression->Execute(CapabilityId, Params)
@@ -1605,6 +1642,34 @@ bool FProductionRuntimeController::ExecuteScenarioStep(
 	if (!EvaluateAssertions(Step, StepResult, OutErrorMessage))
 	{
 		OutErrorCode = TEXT("verification_failed");
+		// Runtime objects and widgets can become visible a few ticks after PIE
+		// reports that startup was requested. Treat eventual-state assertions as
+		// retryable within the step timeout instead of failing the scenario on
+		// the first empty read-back.
+		if (Step->HasTypedField<EJson::Array>(TEXT("assertions")))
+		{
+			for (const TSharedPtr<FJsonValue>& AssertionValue :
+				Step->GetArrayField(TEXT("assertions")))
+			{
+				if (!AssertionValue.IsValid()
+					|| AssertionValue->Type != EJson::Object)
+				{
+					continue;
+				}
+				const FString AssertionType = GetStringFieldOr(
+					AssertionValue->AsObject(),
+					TEXT("type"),
+					FString());
+				if (AssertionType == TEXT("exists")
+					|| AssertionType == TEXT("widgetState")
+					|| AssertionType == TEXT("delegateBound")
+					|| AssertionType == TEXT("hitTestContains"))
+				{
+					bOutShouldRetry = true;
+					break;
+				}
+			}
+		}
 		return false;
 	}
 

@@ -1,0 +1,174 @@
+{
+  "schema": "ue.performance-suite.v1",
+  "suiteId": "portable.standard",
+  "version": 1,
+  "title": "Portable UE AI regression scenarios",
+  "scenarios": [
+    {
+      "id": "portable.emptyBaseline",
+      "map": "/Game/UEAI_Performance/EmptyBaseline",
+      "mapHash": "fixture:portable.emptyBaseline.v1",
+      "checks": [
+        { "metric": "frameMs", "statistic": "p95", "maxRegressionPercent": 8.0 },
+        { "metric": "gameMs", "statistic": "p95", "maxRegressionPercent": 10.0 },
+        { "metric": "gpuMs", "statistic": "p95", "maxRegressionPercent": 10.0 }
+      ],
+      "request": {
+        "executionTarget": "pie",
+        "profile": "standardScenario",
+        "repeatCount": 5,
+        "warmupSeconds": 5,
+        "sampleSeconds": 10,
+        "budgetMs": 16.6667,
+        "captureTrace": false,
+        "standardProfile": {
+          "name": "portable.emptyBaseline",
+          "map": "/Game/UEAI_Performance/EmptyBaseline",
+          "camera": {
+            "name": "UEAI_PerformanceCamera",
+            "location": [0, 0, 200],
+            "rotation": [-15, 0, 0]
+          },
+          "resolution": { "width": 1280, "height": 720 },
+          "scalability": { "qualityLevel": "Epic" },
+          "cvars": {
+            "r.VSync": 0,
+            "t.MaxFPS": 0,
+            "r.ScreenPercentage": 100,
+            "sg.ViewDistanceQuality": 3,
+            "sg.ShadowQuality": 3,
+            "sg.PostProcessQuality": 3,
+            "sg.TextureQuality": 3,
+            "sg.EffectsQuality": 3,
+            "sg.FoliageQuality": 3,
+            "sg.ShadingQuality": 3
+          },
+          "inputSteps": [],
+          "captureScreenshot": true
+        }
+      }
+    },
+    {
+      "id": "portable.blueprintHotPath",
+      "map": "/Game/UEAI_Performance/BlueprintHotPath",
+      "mapHash": "fixture:portable.blueprintHotPath.v1",
+      "checks": [
+        { "metric": "frameMs", "statistic": "p95", "maxRegressionPercent": 8.0 },
+        { "metric": "gameMs", "statistic": "p95", "maxRegressionPercent": 8.0 },
+        { "metric": "gameMs", "statistic": "p99", "absoluteBudgetMs": 12.0 }
+      ],
+      "request": {
+        "executionTarget": "pie",
+        "profile": "standardScenario",
+        "repeatCount": 5,
+        "warmupSeconds": 5,
+        "sampleSeconds": 10,
+        "budgetMs": 16.6667,
+        "captureTrace": false,
+        "standardProfile": {
+          "name": "portable.blueprintHotPath",
+          "map": "/Game/UEAI_Performance/BlueprintHotPath",
+          "camera": {
+            "name": "UEAI_PerformanceCamera",
+            "location": [0, 0, 200],
+            "rotation": [-15, 0, 0]
+          },
+          "resolution": { "width": 1280, "height": 720 },
+          "scalability": { "qualityLevel": "Epic" },
+          "cvars": {
+            "r.VSync": 0,
+            "t.MaxFPS": 0,
+            "r.ScreenPercentage": 100,
+            "sg.ViewDistanceQuality": 3,
+            "sg.ShadowQuality": 3,
+            "sg.PostProcessQuality": 3,
+            "sg.TextureQuality": 3,
+            "sg.EffectsQuality": 3,
+            "sg.FoliageQuality": 3,
+            "sg.ShadingQuality": 3
+          },
+          "inputSteps": [],
+          "captureScreenshot": false
+        }
+      }
+    },
+    {
+      "id": "portable.umgInteraction",
+      "map": "/Game/UEAI_Performance/UMGInteraction",
+      "mapHash": "fixture:portable.umgInteraction.v1",
+      "checks": [
+        { "metric": "frameMs", "statistic": "p95", "maxRegressionPercent": 8.0 },
+        { "metric": "gameMs", "statistic": "p95", "maxRegressionPercent": 10.0 },
+        { "metric": "renderMs", "statistic": "p95", "maxRegressionPercent": 10.0 }
+      ],
+      "request": {
+        "executionTarget": "pie",
+        "profile": "standardScenario",
+        "repeatCount": 5,
+        "warmupSeconds": 5,
+        "sampleSeconds": 10,
+        "budgetMs": 16.6667,
+        "captureTrace": false,
+        "standardProfile": {
+          "name": "portable.umgInteraction",
+          "map": "/Game/UEAI_Performance/UMGInteraction",
+          "camera": {
+            "name": "UEAI_PerformanceCamera",
+            "location": [0, 0, 200],
+            "rotation": [-15, 0, 0]
+          },
+          "resolution": { "width": 1280, "height": 720 },
+          "scalability": { "qualityLevel": "Epic" },
+          "cvars": {
+            "r.VSync": 0,
+            "t.MaxFPS": 0,
+            "r.ScreenPercentage": 100,
+            "sg.ViewDistanceQuality": 3,
+            "sg.ShadowQuality": 3,
+            "sg.PostProcessQuality": 3,
+            "sg.TextureQuality": 3,
+            "sg.EffectsQuality": 3,
+            "sg.FoliageQuality": 3,
+            "sg.ShadingQuality": 3
+          },
+          "inputSteps": [
+            {
+              "id": "find-text-widget",
+              "action": "object.find",
+              "params": { "name": "UEAI_PerformanceTextBox*", "limit": 1 },
+              "assertions": [
+                { "type": "exists", "actual": "#/objects/0" }
+              ],
+              "timeoutMs": 30000
+            },
+            {
+              "id": "focus-widget",
+              "action": "widget.focus",
+              "params": {
+                "objectRef": "${find-text-widget#/objects/0/objectRef}"
+              }
+            },
+            { "id": "type-widget", "action": "input.key", "params": { "key": "A", "action": "press" } },
+            {
+              "id": "find-button-widget",
+              "action": "object.find",
+              "params": { "name": "UEAI_PerformanceButton*", "limit": 1 },
+              "assertions": [
+                { "type": "exists", "actual": "#/objects/0" }
+              ],
+              "timeoutMs": 30000
+            },
+            {
+              "id": "click-widget",
+              "action": "widget.click",
+              "params": {
+                "target": "${find-button-widget#/objects/0/objectRef}"
+              }
+            }
+          ],
+          "captureScreenshot": true
+        }
+      }
+    }
+  ]
+}

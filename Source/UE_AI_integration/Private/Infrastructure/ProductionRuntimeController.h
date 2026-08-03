@@ -11,6 +11,9 @@ namespace UEAIIntegration::Infrastructure
 class FPIESessionController;
 class FProductionJobRuntime;
 class FPerformanceRegressionService;
+class FPerformanceSuiteService;
+class FRecoveryJournalService;
+class FReflectionInspectService;
 
 /**
  * Owns the asynchronous production jobs exposed by the production domain.
@@ -157,5 +160,8 @@ private:
 	FDateTime InitializedAtUtc;
 	TUniquePtr<FProductionJobRuntime> JobRuntime;
 	TUniquePtr<FPerformanceRegressionService> PerformanceRegression;
+	TUniquePtr<FPerformanceSuiteService> PerformanceSuites;
+	TUniquePtr<FRecoveryJournalService> RecoveryJournals;
+	TUniquePtr<FReflectionInspectService> ReflectionInspect;
 };
 }

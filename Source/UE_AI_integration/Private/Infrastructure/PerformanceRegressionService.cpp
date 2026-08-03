@@ -843,7 +843,6 @@ bool FPerformanceRegressionService::NormalizeRunRequest(
 
 	TSharedPtr<FJsonObject> FindCameraParams = MakeShared<FJsonObject>();
 	FindCameraParams->SetStringField(TEXT("name"), CameraName);
-	FindCameraParams->SetStringField(TEXT("class"), TEXT("*Actor"));
 	FindCameraParams->SetNumberField(TEXT("limit"), 1);
 	TSharedPtr<FJsonObject> FindCamera = MakeStep(
 		TEXT("standard.camera.find"),
@@ -903,6 +902,7 @@ bool FPerformanceRegressionService::NormalizeRunRequest(
 
 	static const TSet<FString> AllowedInputActions = {
 		TEXT("wait"),
+		TEXT("object.find"),
 		TEXT("object.get"),
 		TEXT("object.set"),
 		TEXT("object.call"),

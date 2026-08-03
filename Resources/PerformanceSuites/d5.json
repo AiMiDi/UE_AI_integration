@@ -1,0 +1,75 @@
+{
+  "schema": "ue.performance-suite.v1",
+  "suiteId": "d5.standard",
+  "version": 1,
+  "title": "FusionEffectBuild project regression scenarios",
+  "project": "FusionEffectBuild",
+  "scenarios": [
+    {
+      "id": "d5.3dgsEditDemo",
+      "map": "/Game/3DGS/Test",
+      "mapHash": "sha256:bf54361c0f581ddfaf652cf407bf5370a045b25d0bc66026171d99e38a48f327",
+      "checks": [
+        { "metric": "frameMs", "statistic": "p95", "maxRegressionPercent": 5.0 },
+        { "metric": "gameMs", "statistic": "p95", "maxRegressionPercent": 8.0 },
+        { "metric": "renderMs", "statistic": "p95", "maxRegressionPercent": 8.0 },
+        { "metric": "gpuMs", "statistic": "p95", "maxRegressionPercent": 8.0 }
+      ],
+      "request": {
+        "executionTarget": "pie",
+        "profile": "standardScenario",
+        "repeatCount": 5,
+        "warmupSeconds": 5,
+        "sampleSeconds": 10,
+        "budgetMs": 16.6667,
+        "captureTrace": false,
+        "standardProfile": {
+          "name": "d5.3dgsEditDemo",
+          "map": "/Game/3DGS/Test",
+          "camera": {
+            "name": "BP_GSEditDemoPawn_C_0",
+            "location": [0, 0, 0],
+            "rotation": [0, 0, 0]
+          },
+          "resolution": { "width": 1920, "height": 1080 },
+          "scalability": { "qualityLevel": "Epic" },
+          "cvars": {
+            "r.VSync": 0,
+            "t.MaxFPS": 0,
+            "r.ScreenPercentage": 100,
+            "sg.ViewDistanceQuality": 3,
+            "sg.ShadowQuality": 3,
+            "sg.PostProcessQuality": 3,
+            "sg.TextureQuality": 3,
+            "sg.EffectsQuality": 3,
+            "sg.FoliageQuality": 3,
+            "sg.ShadingQuality": 3
+          },
+          "inputSteps": [
+            {
+              "id": "refresh-button-find",
+              "action": "object.find",
+              "params": {
+                "class": "Button",
+                "name": "RefreshActorButton",
+                "limit": 1
+              },
+              "assertions": [
+                { "type": "exists", "actual": "#/objects/0" }
+              ],
+              "timeoutMs": 30000
+            },
+            {
+              "id": "refresh-actor",
+              "action": "widget.click",
+              "params": {
+                "target": "${refresh-button-find#/objects/0/objectRef}"
+              }
+            }
+          ],
+          "captureScreenshot": true
+        }
+      }
+    }
+  ]
+}

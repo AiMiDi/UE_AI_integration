@@ -155,6 +155,7 @@ bool FPerformanceStandardProfileContractTest::RunTest(
 	int32 EndIndex = INDEX_NONE;
 	int32 InputIndex = INDEX_NONE;
 	int32 CameraIndex = INDEX_NONE;
+	TSharedPtr<FJsonObject> CameraFindStep;
 	for (int32 Index = 0; Index < Steps.Num(); ++Index)
 	{
 		const TSharedPtr<FJsonObject> Step = Steps[Index]->AsObject();
@@ -177,6 +178,7 @@ bool FPerformanceStandardProfileContractTest::RunTest(
 		if (Id == TEXT("standard.camera.find"))
 		{
 			CameraIndex = Index;
+			CameraFindStep = Step;
 		}
 	}
 	TestEqual(TEXT("one metrics.begin"), BeginCount, 1);
@@ -184,6 +186,20 @@ bool FPerformanceStandardProfileContractTest::RunTest(
 	TestTrue(
 		TEXT("camera is verified before deterministic input"),
 		CameraIndex >= 0 && CameraIndex < InputIndex);
+	if (TestTrue(
+		TEXT("camera lookup step is available"),
+		CameraFindStep.IsValid()))
+	{
+		const TSharedPtr<FJsonObject> FindParams =
+			CameraFindStep->GetObjectField(TEXT("params"));
+		TestEqual(
+			TEXT("camera lookup uses the declared exact object name"),
+			FindParams->GetStringField(TEXT("name")),
+			FString(TEXT("PerfCamera")));
+		TestFalse(
+			TEXT("camera lookup does not assume Blueprint class names end in Actor"),
+			FindParams->HasField(TEXT("class")));
+	}
 	TestTrue(
 		TEXT("input precedes bounded measurement"),
 		InputIndex >= 0 && InputIndex < BeginIndex);
@@ -240,6 +256,28 @@ bool FPerformanceStandardProfileValidationTest::RunTest(
 	TestTrue(
 		TEXT("unsafe input error names deterministic boundary"),
 		Error.Contains(TEXT("not deterministic input")));
+
+	TSharedPtr<FJsonObject> ObjectLookup = MakeStandardRequest();
+	TSharedPtr<FJsonObject> FindStep = MakeShared<FJsonObject>();
+	FindStep->SetStringField(TEXT("id"), TEXT("find-runtime-widget"));
+	FindStep->SetStringField(TEXT("action"), TEXT("object.find"));
+	TSharedPtr<FJsonObject> FindParams = MakeShared<FJsonObject>();
+	FindParams->SetStringField(TEXT("class"), TEXT("WBP_Test_C"));
+	FindParams->SetNumberField(TEXT("limit"), 1);
+	FindStep->SetObjectField(TEXT("params"), FindParams);
+	ObjectLookup->GetObjectField(TEXT("standardProfile"))->SetArrayField(
+		TEXT("inputSteps"),
+		{MakeShared<FJsonValueObject>(FindStep)});
+	Error.Reset();
+	TestTrue(
+		TEXT("runtime object lookup is deterministic scenario input"),
+		FPerformanceRegressionService::NormalizeRunRequest(
+			ObjectLookup,
+			TEXT("/Game/Maps/Golden"),
+			Normalized,
+			Profile,
+			Error));
+	TestTrue(TEXT("object lookup has no validation error"), Error.IsEmpty());
 
 	TSharedPtr<FJsonObject> Custom = MakeShared<FJsonObject>();
 	Custom->SetStringField(TEXT("mode"), TEXT("window"));
