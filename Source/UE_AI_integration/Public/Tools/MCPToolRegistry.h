@@ -41,6 +41,10 @@ public:
 		return CapabilitySchemas.Find(CapabilityId);
 	}
 
+	/** Return the immutable manifest descriptor for availability evaluation. */
+	const TSharedPtr<FJsonObject>* FindCapabilityDescriptor(
+		const FString& CapabilityId) const;
+
 	/** Manifest descriptors are authoritative for the public capability API. */
 	const TArray<TSharedPtr<FJsonObject>>& GetCapabilityDescriptors() const
 	{

@@ -650,6 +650,7 @@ bool ValidateDescriptor(
 			const TSharedPtr<FJsonObject> Requirements =
 				Descriptor->GetObjectField(TEXT("requires"));
 			static const TSet<FString> AllowedRequirementFields = {
+				TEXT("features"),
 				TEXT("plugins"),
 				TEXT("modules"),
 				TEXT("platforms"),
@@ -668,6 +669,8 @@ bool ValidateDescriptor(
 					bValid = false;
 				}
 			}
+			bValid &= ValidateOptionalStringArray(
+				Requirements, TEXT("features"), Context + TEXT(".requires"), Errors);
 			bValid &= ValidateOptionalStringArray(
 				Requirements, TEXT("plugins"), Context + TEXT(".requires"), Errors);
 			bValid &= ValidateOptionalStringArray(

@@ -636,7 +636,7 @@ def main() -> int:
         assert all(
             registration["clientKind"] == "cli"
             and registration["name"] == "ue-workflow"
-            and registration["version"] == "0.7.0"
+            and registration["version"] == "0.8.0"
             and registration["transport"] == "http"
             and isinstance(registration["pid"], int)
             and registration["pid"] > 0
@@ -711,7 +711,7 @@ def main() -> int:
     assert all(
         header["callerType"] == "cli"
         and header["caller"] == "ue-workflow"
-        and header["callerVersion"] == "0.7.0"
+        and header["callerVersion"] == "0.8.0"
         and header["invocationId"].startswith("cli-")
         and header["processId"].isdigit()
         and header["transport"] == "http"

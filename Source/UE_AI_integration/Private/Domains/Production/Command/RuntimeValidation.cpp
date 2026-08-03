@@ -214,6 +214,84 @@ public:
 	using FEngineeringOperationTool::FEngineeringOperationTool;
 	FString GetCapabilityId() const override { return TEXT("production.performance.report.generate"); }
 };
+class FPerformanceSuiteListTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.performance.suite.list"); }
+};
+class FPerformanceSuiteValidateTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.performance.suite.validate"); }
+};
+class FPerformanceSuiteRunTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.performance.suite.run"); }
+};
+class FPerformanceSuiteResultTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.performance.suite.result.get"); }
+};
+class FPerformanceBaselinePromoteTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.performance.baseline.promote"); }
+};
+class FRecoveryListTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.recovery.list"); }
+};
+class FRecoveryGetTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.recovery.get"); }
+};
+class FRecoveryCleanupTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.recovery.cleanup"); }
+};
+class FReflectionTypeSearchTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.reflection.type.search"); }
+};
+class FReflectionTypeGetTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.reflection.type.get"); }
+};
+class FReflectionMemberGetTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.reflection.member.get"); }
+};
+class FReflectionObjectDescribeTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.reflection.object.describe"); }
+};
+class FReflectionSnapshotCreateTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.reflection.snapshot.create"); }
+};
+class FPythonInspectTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.python.inspect"); }
+};
 class FTestListTool final : public FEngineeringOperationTool
 {
 public:
@@ -342,6 +420,20 @@ void RegisterProductionRuntimeTools(
 	Registry.Register(MakeShared<FPerformanceCompareTool>(Controller));
 	Registry.Register(MakeShared<FPerformanceDiagnoseTool>(Controller));
 	Registry.Register(MakeShared<FPerformanceReportGenerateTool>(Controller));
+	Registry.Register(MakeShared<FPerformanceSuiteListTool>(Controller));
+	Registry.Register(MakeShared<FPerformanceSuiteValidateTool>(Controller));
+	Registry.Register(MakeShared<FPerformanceSuiteRunTool>(Controller));
+	Registry.Register(MakeShared<FPerformanceSuiteResultTool>(Controller));
+	Registry.Register(MakeShared<FPerformanceBaselinePromoteTool>(Controller));
+	Registry.Register(MakeShared<FRecoveryListTool>(Controller));
+	Registry.Register(MakeShared<FRecoveryGetTool>(Controller));
+	Registry.Register(MakeShared<FRecoveryCleanupTool>(Controller));
+	Registry.Register(MakeShared<FReflectionTypeSearchTool>(Controller));
+	Registry.Register(MakeShared<FReflectionTypeGetTool>(Controller));
+	Registry.Register(MakeShared<FReflectionMemberGetTool>(Controller));
+	Registry.Register(MakeShared<FReflectionObjectDescribeTool>(Controller));
+	Registry.Register(MakeShared<FReflectionSnapshotCreateTool>(Controller));
+	Registry.Register(MakeShared<FPythonInspectTool>(Controller));
 	Registry.Register(MakeShared<FTestListTool>(Controller));
 	Registry.Register(MakeShared<FTestRunTool>(Controller));
 	Registry.Register(MakeShared<FTestResultTool>(Controller));

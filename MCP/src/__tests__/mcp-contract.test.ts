@@ -1105,7 +1105,7 @@ test("registers one MCP caller session and attributes subsequent requests", asyn
     } else if (url.endsWith("/api/health")) {
       data = {
         status: "ready",
-        pluginVersion: "0.7.0",
+        pluginVersion: "0.8.0",
         engineVersion: "5.3",
         projectName: "Test",
         mode: "editor",
@@ -1287,7 +1287,7 @@ test("re-registers after a heartbeat rejects an expired session", async () => {
         data: url.endsWith("/api/health")
           ? {
               status: "ready",
-              pluginVersion: "0.7.0",
+              pluginVersion: "0.8.0",
               engineVersion: "5.3",
               projectName: "Test",
               mode: "editor",

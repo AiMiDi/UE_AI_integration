@@ -291,6 +291,7 @@ for (const [domain, baselineCount] of Object.entries(baselineCounts)) {
         fail(`${location}.requires must be an object`);
       } else {
         const allowedRequirementFields = new Set([
+          "features",
           "plugins",
           "modules",
           "platforms",
@@ -301,7 +302,7 @@ for (const [domain, baselineCount] of Object.entries(baselineCounts)) {
             fail(`${location}.requires.${field} is not supported`);
           }
         }
-        for (const field of ["plugins", "modules", "platforms"]) {
+        for (const field of ["features", "plugins", "modules", "platforms"]) {
           const value = capability.requires[field];
           if (
             value !== undefined &&

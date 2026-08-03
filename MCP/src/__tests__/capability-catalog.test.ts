@@ -40,7 +40,7 @@ test("loads all six shipped manifests without regressing the shipped baseline", 
   for (const domain of CAPABILITY_DOMAINS) {
     assert.ok(summary.domainCounts[domain] >= baselines[domain]);
   }
-  assert.equal(summary.domainCounts.blueprint, 82);
+  assert.ok(summary.domainCounts.blueprint >= 82);
   for (const operation of [
     "blueprint.selection.set",
     "blueprint.layout.align",
@@ -54,7 +54,11 @@ test("loads all six shipped manifests without regressing the shipped baseline", 
     assert.equal(capability.domain, "blueprint");
     assert.equal(capability.kind, "command");
     assert.deepEqual(capability.inputSchema.additionalProperties, false);
-    assert.equal(capability.dsl, undefined);
+    if (operation === "blueprint.comment.bounds.set") {
+      assert.equal(capability.dsl?.admission, "editStep");
+    } else {
+      assert.equal(capability.dsl, undefined);
+    }
   }
   for (const [operation, kind, outputKind] of [
     ["blueprint.layout.validate", "validation", "json"],
@@ -244,6 +248,7 @@ test("preserves optional workflow DSL admission metadata", () => {
                 risk: "safeWrite",
               },
               requires: {
+                features: ["BlueprintAuthoring"],
                 plugins: ["EditorScriptingUtilities"],
                 modules: ["AssetRegistry"],
                 platforms: ["Windows"],
@@ -295,6 +300,7 @@ test("preserves optional workflow DSL admission metadata", () => {
   });
   assert.equal(catalog.get("blueprint.asset.get")?.dsl, undefined);
   assert.deepEqual(catalog.get("blueprint.asset.create")?.requires, {
+    features: ["BlueprintAuthoring"],
     plugins: ["EditorScriptingUtilities"],
     modules: ["AssetRegistry"],
     platforms: ["Windows"],

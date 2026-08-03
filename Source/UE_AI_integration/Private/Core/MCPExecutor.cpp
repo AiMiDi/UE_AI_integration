@@ -2,6 +2,7 @@
 
 #include "Dom/JsonValue.h"
 #include "Infrastructure/EngineeringContractUtils.h"
+#include "Infrastructure/OptionalFeatureAvailability.h"
 #include "Tools/MCPToolRegistry.h"
 
 namespace
@@ -94,6 +95,30 @@ FMCPResult FMCPExecutor::ExecuteUncached(const FMCPExecutionContext& Context) co
 			TEXT("capability_not_found"),
 			FString::Printf(TEXT("Capability '%s' was not found."), *Context.Capability),
 			404);
+	}
+
+	const TSharedPtr<FJsonObject>* Descriptor =
+		Registry.FindCapabilityDescriptor(Context.Capability);
+	const TArray<FString> AvailabilityReasons =
+		Descriptor && Descriptor->IsValid()
+			? UEAIIntegration::Infrastructure::GetCapabilityUnavailableReasons(
+				*Descriptor)
+			: TArray<FString>();
+	if (!AvailabilityReasons.IsEmpty())
+	{
+		TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+		TArray<TSharedPtr<FJsonValue>> ReasonValues;
+		for (const FString& Reason : AvailabilityReasons)
+		{
+			ReasonValues.Add(MakeShared<FJsonValueString>(Reason));
+		}
+		Details->SetStringField(TEXT("capability"), Context.Capability);
+		Details->SetArrayField(TEXT("availabilityReasons"), ReasonValues);
+		return FMCPResult::Fail(
+			TEXT("capability_unavailable"),
+			TEXT("The capability is not available in this plugin build or project."),
+			409,
+			Details);
 	}
 
 	TSharedPtr<FJsonObject> EffectiveParams =

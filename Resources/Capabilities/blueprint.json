@@ -1567,6 +1567,17 @@
       },
       "output": {
         "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "scopeParameters": ["blueprint"],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "confirmWrite"
       }
     },
     {
@@ -1983,6 +1994,17 @@
       },
       "output": {
         "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "scopeParameters": ["blueprint"],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
       }
     },
     {
@@ -3884,6 +3906,79 @@
         "deferCompile": false,
         "risk": "notOpen"
       }
+    },
+    {
+      "id": "blueprint.graph.build.validate",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Validate a bounded declarative ue.blueprint-buildgraph.v1 definition.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "definition": { "type": "object" } },
+        "required": ["definition"],
+        "additionalProperties": false
+      },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "blueprint.graph.build.plan",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Compile a declarative Blueprint BuildGraph into a normalized Workflow v2 and Editor-bound plan digest.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "definition": { "type": "object" } },
+        "required": ["definition"],
+        "additionalProperties": false
+      },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "blueprint.graph.build.definition.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Read the managed BuildGraph definition and stable ref to NodeGuid mapping stored in Blueprint metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": { "type": "string", "minLength": 1 },
+          "graph": { "type": "string", "minLength": 1 },
+          "buildId": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "required": ["blueprint", "graph", "buildId"],
+        "additionalProperties": false
+      },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "blueprint.graph.build.metadata.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Persist one approved BuildGraph definition and managed ref mapping as Blueprint package metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": { "type": "string", "minLength": 1 },
+          "graph": { "type": "string", "minLength": 1 },
+          "buildId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "definition": { "type": "object" },
+          "ref": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "nodeId": { "type": "string", "minLength": 1 },
+          "resetManagedRefs": { "type": "boolean" },
+          "seedManagedRefs": { "type": "object", "additionalProperties": { "type": "string" } }
+        },
+        "required": ["blueprint", "graph", "buildId", "definition", "ref", "nodeId"],
+        "additionalProperties": false
+      },
+      "traits": { "readOnly": false, "destructive": false, "expensive": false },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "editStep", "scopeKinds": ["blueprint"], "scopeParameters": ["blueprint"], "transactionDomain": "asset", "deferCompile": true, "risk": "safeWrite" }
     },
     {
       "id": "blueprint.debug.control",

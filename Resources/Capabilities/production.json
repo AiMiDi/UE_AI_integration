@@ -1891,6 +1891,147 @@
       }
     },
     {
+      "id": "production.performance.suite.list",
+      "domain": "production",
+      "kind": "query",
+      "description": "List versioned portable and project performance suites with stable digests and scenario counts.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": { "kind": "json" },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.performance.suite.validate",
+      "domain": "production",
+      "kind": "validation",
+      "description": "Validate versioned performance suite definitions, deterministic maps, measurement windows and threshold contracts without starting PIE.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "suiteId": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": { "kind": "json" },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.performance.suite.run",
+      "domain": "production",
+      "kind": "command",
+      "description": "Run selected scenarios sequentially with five-or-more repeats, deterministic CVar restoration, baseline comparison, regression trace capture and HTML evidence.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "suiteId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "scenarioIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+          }
+        },
+        "required": ["suiteId"],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": { "kind": "json" },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.performance.suite.result.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Read a bounded performance suite result with per-scenario run, comparison, diagnosis and report references.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "suiteRunId": { "type": "string", "minLength": 1, "maxLength": 160 }
+        },
+        "required": ["suiteRunId"],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": { "kind": "json" },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "production.performance.baseline.promote",
+      "domain": "production",
+      "kind": "command",
+      "description": "Atomically promote a succeeded suite scenario to a version-controlled project baseline after exact environment-fingerprint group validation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "suiteRunId": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "scenarioId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "confirmWrite": { "type": "boolean", "const": true },
+          "requestId": { "type": "string", "minLength": 1, "maxLength": 256 }
+        },
+        "required": ["suiteRunId", "scenarioId", "confirmWrite", "requestId"],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": false,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": { "kind": "json" },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "projectConfig",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      }
+    },
+    {
       "id": "production.test.list",
       "domain": "production",
       "kind": "query",
@@ -2589,6 +2730,119 @@
         "deferCompile": false,
         "risk": "notOpen"
       }
+    },
+    {
+      "id": "production.reflection.type.search",
+      "domain": "production",
+      "kind": "query",
+      "description": "Search loaded UClass, UStruct and UEnum types with deterministic pagination without exposing addresses or invoking reflected functions.",
+      "inputSchema": { "type": "object", "properties": { "query": { "type": "string", "maxLength": 256 }, "kind": { "type": "string", "enum": ["class", "struct", "enum"] }, "offset": { "type": "integer", "minimum": 0 }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 } }, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "interactiveOnly", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.reflection.type.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Describe one loaded reflected class, struct or enum, including inheritance, members, metadata, module and Engine version.",
+      "inputSchema": { "type": "object", "properties": { "type": { "type": "string", "minLength": 1, "maxLength": 512 } }, "required": ["type"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "interactiveOnly", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.reflection.member.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Describe one reflected property or function signature without invoking it.",
+      "inputSchema": { "type": "object", "properties": { "type": { "type": "string", "minLength": 1, "maxLength": 512 }, "member": { "type": "string", "minLength": 1, "maxLength": 256 } }, "required": ["type", "member"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "interactiveOnly", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.reflection.object.describe",
+      "domain": "production",
+      "kind": "query",
+      "description": "Describe a bounded set of exported values for one object path without returning its address.",
+      "inputSchema": { "type": "object", "properties": { "objectPath": { "type": "string", "minLength": 1, "maxLength": 1024 } }, "required": ["objectPath"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "interactiveOnly", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.reflection.snapshot.create",
+      "domain": "production",
+      "kind": "query",
+      "description": "Create an immutable bounded JSON snapshot of selected reflected types for offline inspection.",
+      "inputSchema": { "type": "object", "properties": { "types": { "type": "array", "items": { "type": "string", "minLength": 1 }, "maxItems": 64 } }, "required": ["types"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "interactiveOnly", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.python.inspect",
+      "domain": "production",
+      "kind": "query",
+      "description": "Evaluate a restricted expression over immutable reflection snapshot JSON in a killable isolated Engine Python worker.",
+      "inputSchema": { "type": "object", "properties": { "expression": { "type": "string", "minLength": 1, "maxLength": 4096 }, "snapshot": { "type": "object" } }, "required": ["expression", "snapshot"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "interactiveOnly", "scopeKinds": [], "transactionDomain": "external", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.recovery.list",
+      "domain": "production",
+      "kind": "query",
+      "description": "List bounded summaries for Workflow and domain durable recovery records.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "offset": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+        },
+        "additionalProperties": false
+      },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.recovery.get",
+      "domain": "production",
+      "kind": "query",
+      "description": "Read one durable recovery record by Workflow runId or changeSetId.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "changeSetId": { "type": "string", "format": "uuid" }
+        },
+        "required": ["changeSetId"],
+        "additionalProperties": false
+      },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.recovery.cleanup",
+      "domain": "production",
+      "kind": "command",
+      "description": "Preview or delete only expired terminal recovery metadata; active, conflicted, and rollback-pending records are retained.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dryRun": { "type": "boolean", "default": true },
+          "retentionDays": { "type": "integer", "minimum": 1, "maximum": 3650 },
+          "confirmWrite": { "type": "boolean" },
+          "requestId": { "type": "string", "minLength": 1, "maxLength": 128 }
+        },
+        "additionalProperties": false
+      },
+      "traits": { "readOnly": false, "destructive": true, "expensive": false },
+      "output": { "kind": "json" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
     },
     {
       "id": "production.horde.context.get",

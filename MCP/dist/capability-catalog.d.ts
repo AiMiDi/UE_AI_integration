@@ -5,6 +5,7 @@ export type CapabilityOutputKind = "json" | "image";
 export type CapabilityDslAdmission = "editStep" | "finalizer" | "observeOnly" | "interactiveOnly" | "none";
 export type CapabilityDslRisk = "readOnly" | "safeWrite" | "confirmWrite" | "notOpen";
 export interface CapabilityRequirements {
+    features?: string[];
     plugins?: string[];
     modules?: string[];
     platforms?: string[];

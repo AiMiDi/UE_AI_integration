@@ -2768,6 +2768,7 @@
       "description": "Inspect PCG components through optional-module reflection; returns unavailable when PCG is not loaded.",
       "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
       "requires": {
+        "features": ["PCG"],
         "plugins": ["PCG"],
         "modules": ["PCG"]
       },
@@ -2870,6 +2871,7 @@
       "domain": "scene",
       "kind": "command",
       "description": "Start an approved WorldPartitionHLODsBuilder commandlet job for the current saved map.",
+      "requires": { "plugins": ["WorldPartitionHLODUtilities"], "modules": ["WorldPartitionHLODUtilities"] },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2930,6 +2932,7 @@
         "additionalProperties": false
       },
       "requires": {
+        "features": ["PCG"],
         "plugins": ["PCG"],
         "modules": ["PCG"]
       },
@@ -2970,6 +2973,7 @@
         "additionalProperties": false
       },
       "requires": {
+        "features": ["PCG"],
         "plugins": ["PCG"],
         "modules": ["PCG"]
       },
@@ -3268,7 +3272,7 @@
         "properties": {},
         "additionalProperties": false
       },
-      "requires": { "plugins": ["Water"] },
+      "requires": { "features": ["Water"], "plugins": ["Water"], "modules": ["Water"] },
       "traits": { "readOnly": true, "destructive": false, "expensive": false },
       "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
       "output": { "kind": "json" }
@@ -3286,7 +3290,7 @@
         "required": ["water"],
         "additionalProperties": false
       },
-      "requires": { "plugins": ["Water"] },
+      "requires": { "features": ["Water"], "plugins": ["Water"], "modules": ["Water"] },
       "traits": { "readOnly": true, "destructive": false, "expensive": false },
       "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
       "output": { "kind": "json" }
@@ -3303,7 +3307,7 @@
         },
         "additionalProperties": false
       },
-      "requires": { "plugins": ["Water"] },
+      "requires": { "features": ["Water"], "plugins": ["Water"], "modules": ["Water"] },
       "traits": { "readOnly": true, "destructive": false, "expensive": false },
       "dsl": { "admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
       "output": { "kind": "json" }

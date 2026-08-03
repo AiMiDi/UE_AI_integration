@@ -30,7 +30,7 @@
 #include <vector>
 
 #ifndef UE_CLI_VERSION
-#define UE_CLI_VERSION "0.7.0"
+#define UE_CLI_VERSION "0.8.0"
 #endif
 
 namespace ue::command

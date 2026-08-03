@@ -133,6 +133,7 @@ function parseRequirements(value, location) {
     }
     const requirements = requireRecord(value, location);
     const allowedFields = new Set([
+        "features",
         "plugins",
         "modules",
         "platforms",
@@ -162,10 +163,12 @@ function parseRequirements(value, location) {
             ...(maxExclusive === undefined ? {} : { maxExclusive }),
         };
     }
+    const features = parseStringArray(requirements.features, `${location}.features`);
     const plugins = parseStringArray(requirements.plugins, `${location}.plugins`);
     const modules = parseStringArray(requirements.modules, `${location}.modules`);
     const platforms = parseStringArray(requirements.platforms, `${location}.platforms`);
     return {
+        ...(features === undefined ? {} : { features }),
         ...(plugins === undefined ? {} : { plugins }),
         ...(modules === undefined ? {} : { modules }),
         ...(platforms === undefined ? {} : { platforms }),

@@ -21,12 +21,6 @@
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "Factories/Factory.h"
-// LevelSequenceEditorBlueprintLibrary requires LevelSequenceEditor module
-// which is an editor plugin — include conditionally
-#if WITH_EDITOR
-#include "LevelSequenceEditorBlueprintLibrary.h"
-#endif
-
 #include "Editor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"

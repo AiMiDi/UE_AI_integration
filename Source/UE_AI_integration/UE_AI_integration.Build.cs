@@ -1,5 +1,7 @@
 using UnrealBuildTool;
+using System;
 using System.IO;
+using System.Linq;
 
 public class UE_AI_integration : ModuleRules
 {
@@ -14,7 +16,14 @@ public class UE_AI_integration : ModuleRules
 		PrivateIncludePaths.Add(
 			Path.Combine(ModuleDirectory, "..", "..", "Workflow", "ThirdParty"));
 
-		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"0.7.0\"");
+		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"0.8.0\"");
+
+		bool bWithNiagara = IsOptionalFeatureEnabled(Target, "Niagara");
+		bool bWithWater = IsOptionalFeatureEnabled(Target, "Water");
+		bool bWithPCG = IsOptionalFeatureEnabled(Target, "PCG");
+		PublicDefinitions.Add("WITH_UEAI_NIAGARA=" + (bWithNiagara ? "1" : "0"));
+		PublicDefinitions.Add("WITH_UEAI_WATER=" + (bWithWater ? "1" : "0"));
+		PublicDefinitions.Add("WITH_UEAI_PCG=" + (bWithPCG ? "1" : "0"));
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
@@ -65,16 +74,11 @@ public class UE_AI_integration : ModuleRules
 			"ToolMenus",
 			"Settings",
 
-			// Enhanced Input
-			"EnhancedInput",
-			"InputBlueprintNodes",
-
 			// Viewport capture
 			"ImageWrapper",
 
 			// Sequencer
 			"LevelSequence",
-			"LevelSequenceEditor",
 			"MovieScene",
 			"MovieSceneTracks",
 			"Sequencer",
@@ -84,18 +88,11 @@ public class UE_AI_integration : ModuleRules
 			"GameplayTasks",
 			"NavigationSystem",
 
-			// Niagara
-			"NiagaraCore",
-			"Niagara",
-			"NiagaraEditor",
-
 			// Foliage
 			"Foliage",
 
 			// Landscape
 			"Landscape",
-			"Water",
-			"PCG",
 
 			// Scripting utilities
 			"EditorScriptingUtilities",
@@ -109,6 +106,26 @@ public class UE_AI_integration : ModuleRules
 			// Cross-version SHA-256 implementation
 			"SSL"
 		});
+
+		if (bWithNiagara)
+		{
+			PrivateDependencyModuleNames.AddRange(new string[]
+			{
+				"NiagaraCore",
+				"Niagara",
+				"NiagaraEditor"
+			});
+		}
+		if (bWithWater)
+		{
+			PrivateDependencyModuleNames.Add("Water");
+		}
+		// PCG handlers use reflection so the production module never needs to
+		// link PCG. WITH_UEAI_PCG only enables the typed Automation coverage.
+		if (bWithPCG)
+		{
+			PrivateDependencyModuleNames.Add("PCG");
+		}
 		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL");
 
 		// Windows-only: Live Coding support
@@ -126,5 +143,47 @@ public class UE_AI_integration : ModuleRules
 		{
 			PublicDefinitions.Add("WITH_LIVE_CODING=0");
 		}
+	}
+
+	private static bool IsOptionalFeatureEnabled(
+		ReadOnlyTargetRules Target,
+		string FeatureName)
+	{
+		string FeatureOverride = Environment.GetEnvironmentVariable(
+			"UEAI_OPTIONAL_FEATURES") ?? String.Empty;
+		string[] RequestedFeatures = FeatureOverride.Split(
+			new char[] { ',', ';' },
+			StringSplitOptions.RemoveEmptyEntries);
+		if (RequestedFeatures.Any(
+			Feature => Feature.Trim().Equals("all", StringComparison.OrdinalIgnoreCase)
+				|| Feature.Trim().Equals(FeatureName, StringComparison.OrdinalIgnoreCase)))
+		{
+			return true;
+		}
+
+		if (Target.DisablePlugins.Any(
+			Plugin => Plugin.Equals(FeatureName, StringComparison.OrdinalIgnoreCase)))
+		{
+			return false;
+		}
+		if (Target.EnablePlugins.Any(
+			Plugin => Plugin.Equals(FeatureName, StringComparison.OrdinalIgnoreCase)))
+		{
+			return true;
+		}
+
+		if (Target.ProjectFile != null)
+		{
+			ProjectDescriptor Project = ProjectDescriptor.FromFile(Target.ProjectFile);
+			PluginReferenceDescriptor Reference = Project.Plugins == null
+				? null
+				: Project.Plugins.LastOrDefault(
+					Plugin => Plugin.Name.Equals(
+						FeatureName,
+						StringComparison.OrdinalIgnoreCase));
+			return Reference != null && Reference.bEnabled;
+		}
+
+		return false;
 	}
 }

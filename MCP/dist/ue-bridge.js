@@ -45,7 +45,7 @@ export class UEApiError extends Error {
     }
 }
 export const MCP_BRIDGE_NAME = "ue-ai-integration";
-export const MCP_BRIDGE_VERSION = "0.7.0";
+export const MCP_BRIDGE_VERSION = "0.8.0";
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }

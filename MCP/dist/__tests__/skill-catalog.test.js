@@ -15,11 +15,12 @@ function textPayload(response) {
     }
     return JSON.parse(response.content[0].text);
 }
-test("loads seven validated skill packages with complete recipe phases", () => {
+test("loads eight validated skill packages with complete recipe phases", () => {
     const capabilities = loadCapabilityCatalog();
     const skills = loadAgentSkillCatalog(capabilities);
     assert.deepEqual(skills.skills.map((skill) => skill.id), [
         "ue-asset-migration",
+        "ue-blueprint-buildgraph",
         "ue-blueprint-diagnose",
         "ue-blueprint-graph-organize",
         "ue-landscape-authoring",

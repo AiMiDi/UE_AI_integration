@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Core/MCPExecutor.h"
+#include "Infrastructure/OptionalFeatureAvailability.h"
 #include "Misc/AutomationTest.h"
 #include "Tools/MCPToolRegistry.h"
 
@@ -103,6 +104,30 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 		TEXT("Unknown capability code"),
 		Unknown.Error.Code,
 		FString(TEXT("capability_not_found")));
+
+	const FMCPResult OptionalNiagara = Executor.Execute(
+		{TEXT("content.niagara.system.list"), MakeShared<FJsonObject>()});
+	if (UEAIIntegration::Infrastructure::IsOptionalFeatureCompiled(
+			TEXT("Niagara")))
+	{
+		TestTrue(
+			TEXT("Compiled Niagara capability reaches its registered handler"),
+			OptionalNiagara.bOk);
+	}
+	else
+	{
+		TestFalse(
+			TEXT("Uncompiled Niagara capability is rejected before its handler"),
+			OptionalNiagara.bOk);
+		TestEqual(
+			TEXT("Optional feature rejection has a stable code"),
+			OptionalNiagara.Error.Code,
+			FString(TEXT("capability_unavailable")));
+		TestEqual(
+			TEXT("Optional feature rejection is a conflict"),
+			OptionalNiagara.Error.HttpStatus,
+			409);
+	}
 
 	const FMCPResult InvalidParams = Executor.Execute(
 		{TEXT("blueprint.asset.create"), MakeShared<FJsonObject>()});

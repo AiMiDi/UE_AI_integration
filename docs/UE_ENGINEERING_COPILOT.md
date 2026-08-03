@@ -24,8 +24,10 @@
 - `production.performance.run/result.get/compare/diagnose/report.generate`
 - `performance.run` 支持 `mode=window|scenario`、warmup、采样窗口、
   `repeatCount`、帧预算和可选自动 Trace。
-- `profile=standardScenario` 提供标准回归模板：要求当前 Editor 已打开指定
-  且已保存的 `/Game` 地图，PIE 后定位 Camera Actor 并在 PIE World 写入固定
+- `profile=standardScenario` 提供标准回归模板：直接调用 `performance.run` 时
+  要求当前 Editor 已打开指定且已保存的 `/Game` 地图；
+  `performance.suite.run` 会在确认没有 Dirty Package 后打开定义中的固定地图，
+  并在套件终态恢复原地图和 CVar，任何恢复失败都会使套件失败。PIE 后定位 Camera Actor 并在 PIE World 写入固定
   Location/Rotation，按固定顺序执行输入步骤，在
   `metrics.begin/end` 之间采样并清理 PIE。模板默认至少重复 5 次；普通
   `window`/自定义 `scenario` 的重复次数和行为保持不变。
@@ -258,5 +260,13 @@ StateTree、Mass、EQS 或运行时 AI Debugger。
   `production.project.cook/package/commandlet.run` 保留无 `requestId` 兼容入口；
   一旦提供 `requestId`，仍以顶层 envelope 为准。
 
-能力发现会根据 manifest 的 `requires.plugins/modules/platforms/engine` 返回
+能力发现会根据 manifest 的 `requires.features/plugins/modules/platforms/engine` 返回
 `available` 与结构化原因。默认目录是动态的，不再依赖每个领域的硬编码数量。
+
+Niagara、Water 与 PCG 是可选 feature pack。通用 `BuildPlugin` 默认不链接这些
+模块，也不会因启用 `UE_AI_integration` 自动拉起其依赖链。工程在 `.uproject`
+中显式启用对应插件时，UBT 自动定义 `WITH_UEAI_NIAGARA`、
+`WITH_UEAI_WATER` 或 `WITH_UEAI_PCG`；隔离构建也可通过
+`UEAI_OPTIONAL_FEATURES=Niagara,Water,PCG` 明确选择。未编译的能力仍可在目录中
+发现，但 `available=false`，执行时统一返回 `capability_unavailable`，不会进入
+缺失模块的 Handler。

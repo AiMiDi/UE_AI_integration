@@ -1029,6 +1029,7 @@
       "domain": "content",
       "kind": "command",
       "description": "Spawn a Niagara particle system actor at a location in the level.",
+      "requires": { "features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"] },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1071,6 +1072,7 @@
       "domain": "content",
       "kind": "command",
       "description": "Add an emitter to a Niagara System from a template emitter asset.",
+      "requires": { "features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"] },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1103,6 +1105,7 @@
       "domain": "content",
       "kind": "command",
       "description": "Set a parameter override on a spawned Niagara component in the level.",
+      "requires": { "features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"] },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1144,6 +1147,7 @@
       "domain": "content",
       "kind": "command",
       "description": "Create a new empty Niagara System asset.",
+      "requires": { "features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"] },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1171,6 +1175,7 @@
       "domain": "content",
       "kind": "query",
       "description": "List all Niagara System assets in the project via the Asset Registry.",
+      "requires": { "features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"] },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3306,11 +3311,15 @@
       "id": "content.asset.change.rollback",
       "domain": "content",
       "kind": "command",
-      "description": "Rollback an eligible asset change receipt in the same Editor process; reimport and redirector-fix receipts explicitly report unavailable.",
+      "description": "Rollback an eligible asset change by receiptId or changeSetId; saved package changes remain recoverable across Editor restarts while dirty-only changes remain session-bound.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "receiptId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "changeSetId": {
             "type": "string",
             "minLength": 1
           },
@@ -3323,9 +3332,10 @@
             "type": "boolean"
           }
         },
-        "required": [
-          "receiptId",
-          "confirmWrite"
+        "required": ["confirmWrite"],
+        "anyOf": [
+          { "required": ["receiptId"] },
+          { "required": ["changeSetId"] }
         ],
         "additionalProperties": false
       },
@@ -3660,6 +3670,31 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.static_mesh.settings.rollback",
+      "domain": "content",
+      "kind": "command",
+      "description": "Restore a saved Static Mesh settings change from its verified package snapshot, including after-state conflict detection across Editor restarts.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "changeSetId": { "type": "string", "minLength": 36, "maxLength": 36 },
+          "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "confirmWrite": { "type": "boolean" }
+        },
+        "required": ["changeSetId", "requestId", "confirmWrite"],
+        "additionalProperties": false
+      },
+      "traits": { "readOnly": false, "destructive": true, "expensive": true },
+      "output": { "kind": "json" },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
       }
     },
     {
@@ -4022,6 +4057,31 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      }
+    },
+    {
+      "id": "content.texture.settings.rollback",
+      "domain": "content",
+      "kind": "command",
+      "description": "Restore a saved Texture settings change from its verified package snapshot, including after-state conflict detection across Editor restarts.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "changeSetId": { "type": "string", "minLength": 36, "maxLength": 36 },
+          "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "confirmWrite": { "type": "boolean" }
+        },
+        "required": ["changeSetId", "requestId", "confirmWrite"],
+        "additionalProperties": false
+      },
+      "traits": { "readOnly": false, "destructive": true, "expensive": true },
+      "output": { "kind": "json" },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
       }
     },
     {

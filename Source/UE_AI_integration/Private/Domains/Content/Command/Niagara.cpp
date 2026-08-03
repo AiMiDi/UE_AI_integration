@@ -2,6 +2,11 @@
 #include "Tools/MCPToolBase.h"
 #include "Tools/MCPToolRegistry.h"
 
+#ifndef WITH_UEAI_NIAGARA
+#define WITH_UEAI_NIAGARA 0
+#endif
+
+#if WITH_UEAI_NIAGARA
 #include "NiagaraSystem.h"
 #include "NiagaraActor.h"
 #include "NiagaraComponent.h"
@@ -349,6 +354,32 @@ public:
 		return FMCPToolResult::Ok(Result);
 	}
 };
+#else
+class FUnavailableNiagaraTool final : public FMCPToolBase
+{
+public:
+	explicit FUnavailableNiagaraTool(FString InCapabilityId)
+		: CapabilityId(MoveTemp(InCapabilityId))
+	{
+	}
+
+	FString GetCapabilityId() const override
+	{
+		return CapabilityId;
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		return FMCPToolResult::Error(
+			TEXT("Niagara support was not compiled into this plugin build."),
+			TEXT("capability_unavailable"),
+			409);
+	}
+
+private:
+	FString CapabilityId;
+};
+#endif
 
 // ─────────────────────────────────────────────────────────────
 // Registration
@@ -357,10 +388,23 @@ namespace UEAIIntegrationTools
 {
 	void RegisterNiagaraTools(FMCPToolRegistry& Registry)
 	{
+#if WITH_UEAI_NIAGARA
 		Registry.Register(MakeShared<FTool_CreateNiagaraSystem>());
 		Registry.Register(MakeShared<FTool_SpawnNiagaraActor>());
 		Registry.Register(MakeShared<FTool_AddNiagaraEmitter>());
 		Registry.Register(MakeShared<FTool_SetNiagaraParameter>());
 		Registry.Register(MakeShared<FTool_ListNiagaraSystems>());
+#else
+		Registry.Register(MakeShared<FUnavailableNiagaraTool>(
+			TEXT("content.niagara.system.create")));
+		Registry.Register(MakeShared<FUnavailableNiagaraTool>(
+			TEXT("content.niagara.actor.spawn")));
+		Registry.Register(MakeShared<FUnavailableNiagaraTool>(
+			TEXT("content.niagara.emitter.add")));
+		Registry.Register(MakeShared<FUnavailableNiagaraTool>(
+			TEXT("content.niagara.parameter.set")));
+		Registry.Register(MakeShared<FUnavailableNiagaraTool>(
+			TEXT("content.niagara.system.list")));
+#endif
 	}
 }

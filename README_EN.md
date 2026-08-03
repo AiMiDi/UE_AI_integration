@@ -7,13 +7,13 @@ a single Editor Module with a TypeScript stdio bridge so MCP clients such as
 Codex CLI and Claude Code can inspect or modify Blueprints, scenes, content
 assets, animation, AI, and production workflows.
 
-The current plugin version is `0.7.0`. Unreal Engine 5.3 is the verified build
+The current plugin version is `0.8.0`. Unreal Engine 5.3 is the verified build
 baseline. Differences for UE 5.4–5.7 are isolated in the compatibility layer,
 but those versions have not all been compiled locally.
 
 ## Highlights
 
-- The current release snapshot contains 338 manifest-driven Editor and PIE
+- The current release snapshot contains 358 manifest-driven Editor and PIE
   runtime capabilities; the service derives the count from the manifests at
   startup.
 - Twelve stable MCP tools instead of exposing every capability as a tool.
@@ -63,13 +63,19 @@ but those versions have not all been compiled locally.
   fabricated CPU/GPU-bound verdict.
 - 0.7.0 adds a deterministic Landscape/Water Capability Pack: height/weight
   export, bounded import and structured change plans, recovery artifacts, and
-  same-Editor-session rollback. It does not expose arbitrary brush Sculpt or
+  restart-durable rollback. It does not expose arbitrary brush Sculpt or
   Paint. See [Landscape / Water](docs/UE_LANDSCAPE_WATER.md).
+- 0.7.1 adds a 32-package Blueprint analysis corpus and versioned performance
+  suites with per-rule JSON/JUnit metrics and the existing Trace/HTML evidence.
+- 0.7.2 publishes Workflow boundaries through `ue.recovery-journal.v1`, with
+  bounded recovery discovery and test-only real-process fault markers.
+- 0.8.0 adds declarative Blueprint BuildGraph, read-only UE reflection, and an
+  isolated restricted Python evaluator over immutable JSON only.
 - The [short-operation CLI](docs/UE_SHORT_CLI.md) takes a manifest capability ID
   as its first argument. It uses the local schema for one `/api/execute` call by
   default, supports forced live validation with `--live-schema`, and reuses the
   catalog and connection in `ue shell`; `ue-workflow` contains only DSL commands.
-- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) ships seven validated domain Skills
+- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) ships eight validated domain Skills
   and capability recipes for a Load → Discover → Execute → See Results loop
   without adding a generic script executor.
 
@@ -96,12 +102,12 @@ manifests and does not infer categories from operation names.
 
 | Domain | Count | Scope |
 |---|---:|---|
-| Blueprint | 82 | Asset lifecycle, Graph geometry/layout/capture, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
+| Blueprint | 86 | Asset lifecycle, Graph geometry/layout/capture, declarative BuildGraph, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
 | Scene | 93 | Actors, PIE runtime, trusted input/waits/capture, World Partition, Data Layers, HLOD, PCG, rendering diagnostics, Landscape/Water |
-| Content | 78 | Asset query/dependency/audit, safe import/reimport, Static Mesh and Texture settings, materials, Niagara, UMG, and event-handler verification |
+| Content | 80 | Asset query/dependency/audit, safe import/reimport, Static Mesh and Texture settings, materials, Niagara, UMG, and event-handler verification |
 | Animation | 19 | Animation Blueprint, state machine, and BlendSpace authoring, inspection, validation, and diff |
 | AI | 17 | Behavior Tree and Blackboard authoring, inspection, references, validation, and diff |
-| Production | 49 | Durable jobs, trace, performance diagnosis/HTML reports, tests, cook/package, source control, DDC, and BuildGraph |
+| Production | 63 | Durable jobs, performance suites, recovery management, trace, reflection/restricted Python, tests, cook/package, source control, DDC, and Epic BuildGraph |
 
 ## Requirements
 

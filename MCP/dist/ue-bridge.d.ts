@@ -110,7 +110,7 @@ export interface UECallerMetadata {
     command?: string;
 }
 export declare const MCP_BRIDGE_NAME = "ue-ai-integration";
-export declare const MCP_BRIDGE_VERSION = "0.7.0";
+export declare const MCP_BRIDGE_VERSION = "0.8.0";
 export declare class UEClient {
     readonly baseUrl: string;
     readonly timeoutMs: number;

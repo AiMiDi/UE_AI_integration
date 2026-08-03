@@ -5,6 +5,7 @@
 #include "HttpServerModule.h"
 #include "Interfaces/IPluginManager.h"
 #include "Infrastructure/ClientActivityService.h"
+#include "Infrastructure/OptionalFeatureAvailability.h"
 #include "Infrastructure/Runtime/BlueprintDebugService.h"
 #include "HAL/PlatformProperties.h"
 #include "Misc/App.h"
@@ -87,25 +88,6 @@ bool DescriptorMatchesTrait(const TSharedPtr<FJsonObject>& Descriptor, const FSt
 	       Actual == Expected.GetValue();
 }
 
-int32 CompareEngineVersionComponents(
-	const FEngineVersion& Left,
-	const FEngineVersion& Right)
-{
-	if (Left.GetMajor() != Right.GetMajor())
-	{
-		return Left.GetMajor() < Right.GetMajor() ? -1 : 1;
-	}
-	if (Left.GetMinor() != Right.GetMinor())
-	{
-		return Left.GetMinor() < Right.GetMinor() ? -1 : 1;
-	}
-	if (Left.GetPatch() != Right.GetPatch())
-	{
-		return Left.GetPatch() < Right.GetPatch() ? -1 : 1;
-	}
-	return 0;
-}
-
 TSharedPtr<FJsonObject> DecorateCapabilityAvailability(
 	const TSharedPtr<FJsonObject>& Descriptor)
 {
@@ -116,94 +98,11 @@ TSharedPtr<FJsonObject> DecorateCapabilityAvailability(
 	}
 
 	TArray<TSharedPtr<FJsonValue>> Reasons;
-	const TSharedPtr<FJsonObject>* Requirements = nullptr;
-	if (Descriptor.IsValid()
-		&& Descriptor->TryGetObjectField(TEXT("requires"), Requirements)
-		&& Requirements
-		&& Requirements->IsValid())
+	for (const FString& Reason :
+		UEAIIntegration::Infrastructure::GetCapabilityUnavailableReasons(
+			Descriptor))
 	{
-		if ((*Requirements)->HasTypedField<EJson::Array>(TEXT("plugins")))
-		{
-			for (const TSharedPtr<FJsonValue>& Value :
-				(*Requirements)->GetArrayField(TEXT("plugins")))
-			{
-				const FString PluginName = Value->AsString();
-				const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(PluginName);
-				if (!Plugin.IsValid() || !Plugin->IsEnabled())
-				{
-					Reasons.Add(MakeShared<FJsonValueString>(
-						FString::Printf(TEXT("plugin:%s"), *PluginName)));
-				}
-			}
-		}
-
-		if ((*Requirements)->HasTypedField<EJson::Array>(TEXT("modules")))
-		{
-			for (const TSharedPtr<FJsonValue>& Value :
-				(*Requirements)->GetArrayField(TEXT("modules")))
-			{
-				const FString ModuleName = Value->AsString();
-				if (!FModuleManager::Get().ModuleExists(*ModuleName))
-				{
-					Reasons.Add(MakeShared<FJsonValueString>(
-						FString::Printf(TEXT("module:%s"), *ModuleName)));
-				}
-			}
-		}
-
-		if ((*Requirements)->HasTypedField<EJson::Array>(TEXT("platforms")))
-		{
-			bool bPlatformMatched = false;
-			const FString PlatformName = UTF8_TO_TCHAR(FPlatformProperties::PlatformName());
-			const FString IniPlatformName =
-				UTF8_TO_TCHAR(FPlatformProperties::IniPlatformName());
-			for (const TSharedPtr<FJsonValue>& Value :
-				(*Requirements)->GetArrayField(TEXT("platforms")))
-			{
-				const FString RequiredPlatform = Value->AsString();
-				if (RequiredPlatform.Equals(PlatformName, ESearchCase::IgnoreCase)
-					|| RequiredPlatform.Equals(IniPlatformName, ESearchCase::IgnoreCase))
-				{
-					bPlatformMatched = true;
-					break;
-				}
-			}
-			if (!bPlatformMatched)
-			{
-				Reasons.Add(MakeShared<FJsonValueString>(
-					FString::Printf(TEXT("platform:%s"), *PlatformName)));
-			}
-		}
-
-		const TSharedPtr<FJsonObject>* EngineRequirement = nullptr;
-		if ((*Requirements)->TryGetObjectField(
-				TEXT("engine"), EngineRequirement)
-			&& EngineRequirement
-			&& EngineRequirement->IsValid())
-		{
-			FString MinimumText;
-			FEngineVersion Minimum;
-			if ((*EngineRequirement)->TryGetStringField(TEXT("min"), MinimumText)
-				&& (!FEngineVersion::Parse(MinimumText, Minimum)
-					|| CompareEngineVersionComponents(
-						FEngineVersion::Current(), Minimum) < 0))
-			{
-				Reasons.Add(MakeShared<FJsonValueString>(
-					FString::Printf(TEXT("engineMin:%s"), *MinimumText)));
-			}
-
-			FString MaximumText;
-			FEngineVersion Maximum;
-			if ((*EngineRequirement)->TryGetStringField(
-					TEXT("maxExclusive"), MaximumText)
-				&& (!FEngineVersion::Parse(MaximumText, Maximum)
-					|| CompareEngineVersionComponents(
-						FEngineVersion::Current(), Maximum) >= 0))
-			{
-				Reasons.Add(MakeShared<FJsonValueString>(
-					FString::Printf(TEXT("engineMaxExclusive:%s"), *MaximumText)));
-			}
-		}
+		Reasons.Add(MakeShared<FJsonValueString>(Reason));
 	}
 
 	Decorated->SetBoolField(TEXT("available"), Reasons.IsEmpty());
@@ -470,6 +369,23 @@ FUEAIIntegrationServer::FUEAIIntegrationServer(
 FUEAIIntegrationServer::~FUEAIIntegrationServer()
 {
 	Stop();
+}
+
+FMCPResult FUEAIIntegrationServer::PlanWorkflowDefinition(
+	const TSharedPtr<FJsonObject>& Workflow) const
+{
+	if (!WorkflowRuntime.IsValid() || !Workflow.IsValid())
+	{
+		return FMCPResult::Fail(
+			TEXT("workflow_runtime_unavailable"),
+			TEXT("The Editor Workflow planner is unavailable."),
+			503);
+	}
+	TSharedRef<FJsonObject> Request = MakeShared<FJsonObject>();
+	Request->SetStringField(TEXT("action"), TEXT("plan"));
+	Request->SetStringField(TEXT("detailLevel"), TEXT("standard"));
+	Request->SetObjectField(TEXT("workflow"), Workflow);
+	return WorkflowRuntime->HandleRequest(Request);
 }
 
 bool FUEAIIntegrationServer::Start(int32 Port)
@@ -895,6 +811,27 @@ bool FUEAIIntegrationServer::HandleHealth(
 	Data->SetStringField(TEXT("projectName"), FApp::GetProjectName());
 	Data->SetStringField(TEXT("mode"), TEXT("editor"));
 	Data->SetNumberField(TEXT("capabilityCount"), Registry.GetCapabilityCount());
+	int32 AvailableCapabilityCount = 0;
+	for (const TSharedPtr<FJsonObject>& Descriptor :
+		Registry.GetCapabilityDescriptors())
+	{
+		if (UEAIIntegration::Infrastructure::GetCapabilityUnavailableReasons(
+				Descriptor).IsEmpty())
+		{
+			++AvailableCapabilityCount;
+		}
+	}
+	Data->SetNumberField(
+		TEXT("availableCapabilityCount"),
+		AvailableCapabilityCount);
+	TSharedPtr<FJsonObject> OptionalFeatures = MakeShared<FJsonObject>();
+	for (const TCHAR* Feature : {TEXT("Niagara"), TEXT("Water"), TEXT("PCG")})
+	{
+		OptionalFeatures->SetBoolField(
+			Feature,
+			UEAIIntegration::Infrastructure::IsOptionalFeatureCompiled(Feature));
+	}
+	Data->SetObjectField(TEXT("optionalFeatures"), OptionalFeatures);
 	Data->SetNumberField(
 		TEXT("onlineMcpCount"),
 		ClientActivityService.GetOnlineMcpCount());

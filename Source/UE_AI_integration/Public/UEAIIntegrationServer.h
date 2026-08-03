@@ -9,6 +9,7 @@
 #include "HttpServerResponse.h"
 #include "IHttpRouter.h"
 #include "Templates/Function.h"
+#include "Core/MCPExecutionTypes.h"
 
 class FMCPToolRegistry;
 class FMCPExecutor;
@@ -67,6 +68,10 @@ public:
 
 	bool IsRunning() const { return bIsRunning; }
 	int32 GetPort() const { return ListenPort; }
+
+	/** Plan an internally generated Workflow through the same Editor planner. */
+	FMCPResult PlanWorkflowDefinition(
+		const TSharedPtr<FJsonObject>& Workflow) const;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	/**

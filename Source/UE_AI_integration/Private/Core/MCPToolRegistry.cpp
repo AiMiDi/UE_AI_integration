@@ -95,6 +95,19 @@ FMCPToolBase* FMCPToolRegistry::FindTool(const FString& Name) const
 	return Found ? Found->Get() : nullptr;
 }
 
+const TSharedPtr<FJsonObject>* FMCPToolRegistry::FindCapabilityDescriptor(
+	const FString& CapabilityId) const
+{
+	return CapabilityDescriptors.FindByPredicate(
+		[&CapabilityId](const TSharedPtr<FJsonObject>& Descriptor)
+		{
+			FString Id;
+			return Descriptor.IsValid()
+				&& Descriptor->TryGetStringField(TEXT("id"), Id)
+				&& Id == CapabilityId;
+		});
+}
+
 FMCPToolResult FMCPToolRegistry::ExecuteTool(
 	const FString& Name,
 	const TSharedPtr<FJsonObject>& Params)

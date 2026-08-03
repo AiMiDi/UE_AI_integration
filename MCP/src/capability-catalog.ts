@@ -27,6 +27,7 @@ export type CapabilityDslRisk =
   | "notOpen";
 
 export interface CapabilityRequirements {
+  features?: string[];
   plugins?: string[];
   modules?: string[];
   platforms?: string[];
@@ -297,6 +298,7 @@ function parseRequirements(
 
   const requirements = requireRecord(value, location);
   const allowedFields = new Set([
+    "features",
     "plugins",
     "modules",
     "platforms",
@@ -341,6 +343,10 @@ function parseRequirements(
     };
   }
 
+  const features = parseStringArray(
+    requirements.features,
+    `${location}.features`,
+  );
   const plugins = parseStringArray(
     requirements.plugins,
     `${location}.plugins`,
@@ -355,6 +361,7 @@ function parseRequirements(
   );
 
   return {
+    ...(features === undefined ? {} : { features }),
     ...(plugins === undefined ? {} : { plugins }),
     ...(modules === undefined ? {} : { modules }),
     ...(platforms === undefined ? {} : { platforms }),

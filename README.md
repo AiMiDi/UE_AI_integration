@@ -6,12 +6,12 @@
 Editor Module 和 TypeScript stdio bridge，让 Codex CLI、Claude Code 等
 MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与生产流程。
 
-当前插件版本为 `0.7.0`，以 Unreal Engine 5.3 为实际构建基线；UE
+当前插件版本为 `0.8.0`，以 Unreal Engine 5.3 为实际构建基线；UE
 5.4–5.7 的差异集中在兼容层，但尚未全部完成本地编译验证。
 
 ## 核心特性
 
-- 当前发布快照包含 338 项 manifest 驱动的 Editor 与 PIE Runtime 能力；
+- 当前发布快照包含 358 项 manifest 驱动的 Editor 与 PIE Runtime 能力；
   服务启动时从 manifest 动态计算数量。
 - 十二个稳定的 MCP 工具，不把全部能力直接展开成工具列表。
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
@@ -45,12 +45,19 @@ MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与
 - 0.6.2 增加性能诊断和自包含 HTML 证据报告；受 VSync/FPS cap 限制时会返回
   `frameLimited` 或 `inconclusive`，不会伪造 CPU/GPU 瓶颈结论。
 - 0.7.0 增加确定性的 Landscape/Water Capability Pack：高度/权重导出、
-  有限的导入与结构化变更计划、恢复 artifact 和同一 Editor 会话 rollback；
+  有限的导入与结构化变更计划、恢复 artifact 和 restart-durable rollback；
   不包含任意笔刷式 Sculpt/Paint。详见 [Landscape / Water](docs/UE_LANDSCAPE_WATER.md)。
+- 0.7.1 增加 32 个真实 Package Blueprint corpus 与版本化性能标准场景；
+  corpus 输出逐规则 precision/recall 和 JSON/JUnit，性能 suite 复用现有
+  sampling/compare/Trace/HTML 合同。
+- 0.7.2 将 Workflow 操作边界发布为 `ue.recovery-journal.v1`，支持持久
+  recovery 查询、冲突检查和测试专用的真实进程 fault marker。
+- 0.8.0 增加声明式 Blueprint BuildGraph、只读 UE 反射发现，以及只对
+  不可变 JSON 工作的隔离受限 Python；不开放 `unreal` 模块或写入入口。
 - [UE 短操作 CLI](docs/UE_SHORT_CLI.md) 以 manifest capability ID 作为首参数，
   默认用本地 schema 单次调用 `/api/execute`，`--live-schema` 可强制在线校验，
   `ue shell` 可复用目录与连接；`ue-workflow` 只保留 DSL。
-- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) 提供七个已验证领域 Skill 和
+- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) 提供八个已验证领域 Skill 和
   capability recipe，形成 Load → Discover → Execute → See Results 闭环，
   但不新增任意脚本执行器。
 
@@ -75,12 +82,12 @@ UE_AI_integration Editor Module
 
 | Domain | 数量 | 能力范围 |
 |---|---:|---|
-| Blueprint | 82 | 资产生命周期、Graph 几何/排版/截图、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
+| Blueprint | 86 | 资产生命周期、Graph 几何/排版/截图、声明式 BuildGraph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
 | Scene | 93 | Actor、PIE Runtime、可信输入/等待/截图、World Partition、Data Layer、HLOD、PCG、渲染诊断、Landscape/Water |
-| Content | 78 | 资产查询/依赖/审计、安全导入/重导入、Static Mesh/Texture 配置、Material、Niagara、UMG 与事件 Handler 验证 |
+| Content | 80 | 资产查询/依赖/审计、安全导入/重导入、Static Mesh/Texture 配置、Material、Niagara、UMG 与事件 Handler 验证 |
 | Animation | 19 | AnimBlueprint、状态机与 BlendSpace 的创建、读取、校验和 Diff |
 | AI | 17 | Behavior Tree 与 Blackboard 的创建、读取、引用、校验和 Diff |
-| Production | 49 | Durable Job、Trace、性能诊断/HTML 报告、测试、Cook/Package、Source Control、DDC、BuildGraph |
+| Production | 63 | Durable Job、性能标准 suite、恢复管理、Trace、反射/受限 Python、测试、Cook/Package、Source Control、DDC、Epic BuildGraph |
 
 ## 环境要求
 
