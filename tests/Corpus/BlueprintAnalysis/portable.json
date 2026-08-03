@@ -1,0 +1,54 @@
+{
+  "schema": "ue.blueprint-corpus.v1",
+  "corpusId": "portable.blueprint-analysis",
+  "version": 1,
+  "description": "Portable real-package corpus for the nine Blueprint analysis rules.",
+  "thresholds": {
+    "error": { "precision": 1.0, "recall": 1.0 },
+    "warning": { "precision": 0.9, "recall": 0.9 },
+    "infoBlocking": false
+  },
+  "fixtures": [
+    { "id": "tick-positive-01", "recipe": "tick", "label": { "rule": "blueprint.tick.present", "expected": true, "severity": "info", "graph": "EventGraph", "nodeType": "K2Node_Event", "function": "ReceiveTick", "runtimeStatus": "hypothesis" } },
+    { "id": "tick-positive-02", "recipe": "tick-chain", "label": { "rule": "blueprint.tick.present", "expected": true, "severity": "info", "graph": "EventGraph", "nodeType": "K2Node_Event", "function": "ReceiveTick", "runtimeStatus": "hypothesis" } },
+    { "id": "tick-negative-01", "recipe": "clean", "label": { "rule": "blueprint.tick.present", "expected": false, "severity": "info", "graph": "EventGraph", "nodeType": "K2Node_Event", "function": "ReceiveTick", "runtimeStatus": "hypothesis" } },
+    { "id": "tick-negative-02", "recipe": "begin-play", "label": { "rule": "blueprint.tick.present", "expected": false, "severity": "info", "graph": "EventGraph", "nodeType": "K2Node_Event", "function": "ReceiveTick", "runtimeStatus": "hypothesis" } },
+
+    { "id": "traversal-reachable-01", "recipe": "global-traversal-reachable", "label": { "rule": "blueprint.call.global_traversal", "expected": true, "severity": "error", "graph": "EventGraph", "nodeType": "K2Node_CallFunction", "function": "GetAllActorsOfClass", "runtimeStatus": "hypothesis" } },
+    { "id": "traversal-reachable-02", "recipe": "global-traversal-function", "label": { "rule": "blueprint.call.global_traversal", "expected": true, "severity": "error", "graph": "HotPath", "nodeType": "K2Node_CallFunction", "function": "GetAllActorsOfClass", "runtimeStatus": "hypothesis" } },
+    { "id": "traversal-unreachable-01", "recipe": "global-traversal-unreachable", "label": { "rule": "blueprint.call.global_traversal", "expected": true, "severity": "warning", "graph": "EventGraph", "nodeType": "K2Node_CallFunction", "function": "GetAllActorsOfClass", "runtimeStatus": "hypothesis" } },
+    { "id": "traversal-negative-01", "recipe": "clean", "label": { "rule": "blueprint.call.global_traversal", "expected": false, "severity": "warning", "graph": "EventGraph", "nodeType": "K2Node_CallFunction", "function": "GetAllActorsOfClass", "runtimeStatus": "hypothesis" } },
+
+    { "id": "sync-load-positive-01", "recipe": "sync-load-reachable", "label": { "rule": "blueprint.call.synchronous_load", "expected": true, "severity": "error", "graph": "EventGraph", "nodeType": "K2Node_CallFunction", "function": "LoadAsset_Blocking", "runtimeStatus": "hypothesis" } },
+    { "id": "sync-load-positive-02", "recipe": "sync-load-unreachable", "label": { "rule": "blueprint.call.synchronous_load", "expected": true, "severity": "warning", "graph": "EventGraph", "nodeType": "K2Node_CallFunction", "function": "LoadAsset_Blocking", "runtimeStatus": "hypothesis" } },
+    { "id": "sync-load-negative-01", "recipe": "clean", "label": { "rule": "blueprint.call.synchronous_load", "expected": false, "severity": "warning", "graph": "EventGraph", "nodeType": "K2Node_CallFunction", "function": "LoadObject", "runtimeStatus": "hypothesis" } },
+
+    { "id": "unresolved-positive-01", "recipe": "unresolved-call", "label": { "rule": "blueprint.reference.unresolved_function", "expected": true, "severity": "error", "graph": "EventGraph", "nodeType": "K2Node_CallFunction", "function": "MissingCorpusFunction", "runtimeStatus": "hypothesis" } },
+    { "id": "unresolved-positive-02", "recipe": "unresolved-call-secondary", "label": { "rule": "blueprint.reference.unresolved_function", "expected": true, "severity": "error", "graph": "EventGraph", "nodeType": "K2Node_CallFunction", "function": "MissingCorpusFunctionSecondary", "runtimeStatus": "hypothesis" } },
+    { "id": "unresolved-negative-01", "recipe": "resolved-call", "label": { "rule": "blueprint.reference.unresolved_function", "expected": false, "severity": "error", "graph": "EventGraph", "nodeType": "K2Node_CallFunction", "function": "GetGameTimeInSeconds", "runtimeStatus": "hypothesis" } },
+
+    { "id": "cast-reachable-01", "recipe": "dynamic-cast-reachable", "label": { "rule": "blueprint.cast.dynamic", "expected": true, "severity": "warning", "graph": "EventGraph", "nodeType": "K2Node_DynamicCast", "function": "", "runtimeStatus": "hypothesis" } },
+    { "id": "cast-unreachable-01", "recipe": "dynamic-cast-unreachable", "label": { "rule": "blueprint.cast.dynamic", "expected": true, "severity": "info", "graph": "EventGraph", "nodeType": "K2Node_DynamicCast", "function": "", "runtimeStatus": "hypothesis" } },
+    { "id": "cast-negative-01", "recipe": "clean", "label": { "rule": "blueprint.cast.dynamic", "expected": false, "severity": "warning", "graph": "EventGraph", "nodeType": "K2Node_DynamicCast", "function": "", "runtimeStatus": "hypothesis" } },
+
+    { "id": "loop-reachable-01", "recipe": "loop-reachable", "label": { "rule": "blueprint.loop.review", "expected": true, "severity": "warning", "graph": "EventGraph", "nodeType": "K2Node_MacroInstance", "function": "ForLoop", "runtimeStatus": "hypothesis" } },
+    { "id": "loop-unreachable-01", "recipe": "loop-unreachable", "label": { "rule": "blueprint.loop.review", "expected": true, "severity": "info", "graph": "EventGraph", "nodeType": "K2Node_MacroInstance", "function": "ForLoop", "runtimeStatus": "hypothesis" } },
+    { "id": "loop-negative-01", "recipe": "clean", "label": { "rule": "blueprint.loop.review", "expected": false, "severity": "warning", "graph": "EventGraph", "nodeType": "K2Node_MacroInstance", "function": "ForLoop", "runtimeStatus": "hypothesis" } },
+
+    { "id": "disconnected-positive-01", "recipe": "disconnected-output", "label": { "rule": "blueprint.exec.disconnected_output", "expected": true, "severity": "info", "graph": "EventGraph", "nodeType": "K2Node_CallFunction", "function": "GetAllActorsOfClass", "pin": "then", "runtimeStatus": "hypothesis" } },
+    { "id": "disconnected-positive-02", "recipe": "resolved-call", "label": { "rule": "blueprint.exec.disconnected_output", "expected": true, "severity": "info", "graph": "EventGraph", "nodeType": "K2Node_CallFunction", "function": "GetTimeSeconds", "pin": "then", "runtimeStatus": "hypothesis" } },
+    { "id": "disconnected-negative-01", "recipe": "clean", "label": { "rule": "blueprint.exec.disconnected_output", "expected": false, "severity": "info", "graph": "EventGraph", "nodeType": "K2Node_CallFunction", "function": "", "pin": "then", "runtimeStatus": "hypothesis" } },
+
+    { "id": "delegate-positive-01", "recipe": "duplicate-delegate", "label": { "rule": "blueprint.delegate.duplicate_binding", "expected": true, "severity": "warning", "graph": "EventGraph", "nodeType": "K2Node_AddDelegate", "function": "", "runtimeStatus": "hypothesis" } },
+    { "id": "delegate-positive-02", "recipe": "duplicate-delegate-tick", "label": { "rule": "blueprint.delegate.duplicate_binding", "expected": true, "severity": "warning", "graph": "EventGraph", "nodeType": "K2Node_AddDelegate", "function": "", "runtimeStatus": "hypothesis" } },
+    { "id": "delegate-negative-01", "recipe": "single-delegate", "label": { "rule": "blueprint.delegate.duplicate_binding", "expected": false, "severity": "warning", "graph": "EventGraph", "nodeType": "K2Node_AddDelegate", "function": "", "runtimeStatus": "hypothesis" } },
+
+    { "id": "dependency-cycle-a", "recipe": "dependency-cycle-a", "pair": "dependency-cycle-01", "label": { "rule": "blueprint.dependency.cycle", "expected": true, "severity": "high", "graph": "", "nodeType": "", "function": "", "runtimeStatus": "hypothesis" } },
+    { "id": "dependency-cycle-b", "recipe": "dependency-cycle-b", "pair": "dependency-cycle-01", "label": { "rule": "blueprint.dependency.cycle", "expected": true, "severity": "high", "graph": "", "nodeType": "", "function": "", "runtimeStatus": "hypothesis" } },
+    { "id": "dependency-negative-a", "recipe": "dependency-one-way-a", "pair": "dependency-negative-01", "label": { "rule": "blueprint.dependency.cycle", "expected": false, "severity": "high", "graph": "", "nodeType": "", "function": "", "runtimeStatus": "hypothesis" } },
+    { "id": "dependency-negative-b", "recipe": "dependency-one-way-b", "pair": "dependency-negative-01", "label": { "rule": "blueprint.dependency.cycle", "expected": false, "severity": "high", "graph": "", "nodeType": "", "function": "", "runtimeStatus": "hypothesis" } },
+
+    { "id": "clean-control-01", "recipe": "clean", "label": { "rule": "blueprint.reference.unresolved_function", "expected": false, "severity": "error", "graph": "EventGraph", "nodeType": "", "function": "", "runtimeStatus": "hypothesis" } },
+    { "id": "clean-control-02", "recipe": "begin-play", "label": { "rule": "blueprint.call.global_traversal", "expected": false, "severity": "warning", "graph": "EventGraph", "nodeType": "", "function": "", "runtimeStatus": "hypothesis" } }
+  ]
+}

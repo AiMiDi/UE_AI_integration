@@ -431,6 +431,27 @@ TSharedRef<FJsonObject> MakeNodeEvidence(
 	Evidence->SetStringField(
 		TEXT("nodeTitle"),
 		Node ? Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString() : FString());
+	if (const UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
+	{
+		Evidence->SetStringField(
+			TEXT("function"),
+			Call->GetFunctionName().ToString());
+	}
+	else if (const UK2Node_Event* Event = Cast<UK2Node_Event>(Node))
+	{
+		Evidence->SetStringField(
+			TEXT("function"),
+			Event->EventReference.GetMemberName().ToString());
+	}
+	else if (const UK2Node_MacroInstance* Macro =
+		Cast<UK2Node_MacroInstance>(Node))
+	{
+		Evidence->SetStringField(
+			TEXT("function"),
+			Macro->GetMacroGraph()
+				? Macro->GetMacroGraph()->GetName()
+				: Macro->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
+	}
 	if (!Detail.IsEmpty())
 	{
 		Evidence->SetStringField(TEXT("detail"), Detail);
@@ -532,10 +553,21 @@ bool IsLoopMacro(const UK2Node_MacroInstance* Macro)
 	{
 		return false;
 	}
-	const FString Title = Macro->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
-	return Title.Contains(TEXT("ForLoop"), ESearchCase::IgnoreCase)
-		|| Title.Contains(TEXT("ForEachLoop"), ESearchCase::IgnoreCase)
-		|| Title.Contains(TEXT("WhileLoop"), ESearchCase::IgnoreCase);
+	auto IsKnownLoopName = [](FString Value)
+	{
+		Value.ReplaceInline(TEXT(" "), TEXT(""));
+		Value.ReplaceInline(TEXT("_"), TEXT(""));
+		return Value.Contains(TEXT("ForLoop"), ESearchCase::IgnoreCase)
+			|| Value.Contains(TEXT("ForEachLoop"), ESearchCase::IgnoreCase)
+			|| Value.Contains(TEXT("WhileLoop"), ESearchCase::IgnoreCase);
+	};
+	if (IsKnownLoopName(
+		Macro->GetNodeTitle(ENodeTitleType::FullTitle).ToString()))
+	{
+		return true;
+	}
+	const UEdGraph* MacroGraph = Macro->GetMacroGraph();
+	return MacroGraph && IsKnownLoopName(MacroGraph->GetName());
 }
 
 TArray<const UEdGraphPin*> GetDisconnectedExecOutputs(
@@ -822,22 +854,30 @@ void AppendDependencyCycleFindings(
 			{
 				continue;
 			}
-			TSharedRef<FJsonObject> Evidence = MakeShared<FJsonObject>();
-			Evidence->SetStringField(TEXT("otherAsset"), Dependency.ToString());
-			Evidence->SetStringField(TEXT("cycleKind"), TEXT("directPackageDependency"));
-			Findings.Add(
-				MakeFinding(
-					TEXT("blueprint.dependency.cycle"),
-					TEXT("high"),
-					1.0,
-					Package.ToString(),
-					FString(),
-					FString(),
-					FString::Printf(
-						TEXT("Blueprint packages '%s' and '%s' depend on each other."),
-						*Package.ToString(),
-						*Dependency.ToString()),
-					Evidence));
+			auto AppendCycleForAsset =
+				[&Findings](const FName& Asset, const FName& Other)
+				{
+					TSharedRef<FJsonObject> LocalEvidence = MakeShared<FJsonObject>();
+					LocalEvidence->SetStringField(TEXT("otherAsset"), Other.ToString());
+					LocalEvidence->SetStringField(
+						TEXT("cycleKind"),
+						TEXT("directPackageDependency"));
+					Findings.Add(
+						MakeFinding(
+							TEXT("blueprint.dependency.cycle"),
+							TEXT("high"),
+							1.0,
+							Asset.ToString(),
+							FString(),
+							FString(),
+							FString::Printf(
+								TEXT("Blueprint packages '%s' and '%s' depend on each other."),
+								*Asset.ToString(),
+								*Other.ToString()),
+							LocalEvidence));
+				};
+			AppendCycleForAsset(Package, Dependency);
+			AppendCycleForAsset(Dependency, Package);
 			if (Findings.Num() >= MaxRawFindingLimit + 1)
 			{
 				return;

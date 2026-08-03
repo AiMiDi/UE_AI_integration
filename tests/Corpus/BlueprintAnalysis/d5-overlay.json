@@ -1,0 +1,46 @@
+{
+  "schema": "ue.blueprint-corpus.v1",
+  "corpusId": "d5.fusion-effect-build.blueprint-analysis",
+  "version": 1,
+  "project": "FusionEffectBuild",
+  "blockingScope": "installation",
+  "assets": [
+    {
+      "asset": "/Game/3DGS/WBP_GaussianEditDemo",
+      "reviewStatus": "reviewed",
+      "labels": [
+        {
+          "rule": "blueprint.call.global_traversal",
+          "expected": true,
+          "severity": "medium",
+          "graph": "EventGraph",
+          "nodeType": "K2Node_CallFunction",
+          "function": "GetAllActorsOfClass",
+          "runtimeStatus": "hypothesis"
+        }
+      ]
+    },
+    {
+      "asset": "/Game/3DGS/WBP_GSEditRectInputLayer",
+      "reviewStatus": "reviewed",
+      "labels": []
+    },
+    {
+      "asset": "/Game/3DGS/BP_GSEditDemoPawn",
+      "reviewStatus": "reviewed",
+      "labels": []
+    },
+    {
+      "asset": "/Game/3DGS/BP_GSEditVolumePreview",
+      "reviewStatus": "reviewed",
+      "labels": []
+    },
+    {
+      "asset": "/Game/WeatherTest/BP_VRTest",
+      "reviewStatus": "retired",
+      "retiredReason": "The package is absent from the current FusionEffectBuild checkout; retain the semantic tombstone so an unexpected reappearance is reviewed.",
+      "labels": []
+    }
+  ],
+  "notes": "Reviewed empty labels mean that no high or medium finding is expected. Retired entries are versioned tombstones and must remain absent. Empty labels without an explicit reviewed or retired state are corpus_label_stale and block FusionEffectBuild installation, not generic BuildPlugin."
+}
