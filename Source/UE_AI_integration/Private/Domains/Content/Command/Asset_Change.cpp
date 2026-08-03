@@ -4,6 +4,7 @@
 #include "Tools/MCPToolRegistry.h"
 
 #include "Infrastructure/EngineeringContractUtils.h"
+#include "Infrastructure/DurablePackageRecovery.h"
 
 #include "AssetImportTask.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -22,6 +23,8 @@
 namespace
 {
 using UEAIIntegration::Infrastructure::DigestJson;
+using UEAIIntegration::Infrastructure::FDurablePackageRecovery;
+using UEAIIntegration::Infrastructure::FDurablePackageRecoveryRequest;
 using UEAIIntegration::Infrastructure::MakeStableId;
 using UEAIIntegration::Infrastructure::SetBoundedArray;
 
@@ -46,6 +49,7 @@ struct FReverseAction
 struct FAssetChangeReceipt
 {
 	FString ReceiptId;
+	FString RollbackDurability = TEXT("session");
 	FString PlanDigest;
 	FString RequestId;
 	FDateTime CreatedAt;
@@ -54,6 +58,60 @@ struct FAssetChangeReceipt
 	TArray<FReverseAction> ReverseActions;
 	TArray<FString> RollbackBlockers;
 };
+
+void CollectDurableRecoveryInputs(
+	const TSharedPtr<FJsonObject>& NormalizedRequest,
+	const TArray<TSharedPtr<FJsonValue>>& Preconditions,
+	TArray<FString>& OutPackages,
+	TArray<FString>& OutExternalSources)
+{
+	TSet<FString> Packages;
+	TSet<FString> Sources;
+	const TArray<TSharedPtr<FJsonValue>>& Actions =
+		NormalizedRequest->GetArrayField(TEXT("actions"));
+	for (int32 Index = 0; Index < Actions.Num(); ++Index)
+	{
+		const TSharedPtr<FJsonObject> Action = Actions[Index]->AsObject();
+		FString Package;
+		if (Action->TryGetStringField(TEXT("source"), Package)
+			&& Package.StartsWith(TEXT("/Game/")))
+		{
+			Packages.Add(Package);
+		}
+		if (Action->TryGetStringField(TEXT("destination"), Package)
+			&& Package.StartsWith(TEXT("/Game/")))
+		{
+			Packages.Add(Package);
+		}
+		if (Index >= Preconditions.Num()
+			|| !Preconditions[Index].IsValid()
+			|| Preconditions[Index]->Type != EJson::Object)
+		{
+			continue;
+		}
+		const TArray<TSharedPtr<FJsonValue>>* ReimportSources = nullptr;
+		if (Preconditions[Index]->AsObject()->TryGetArrayField(
+				TEXT("reimportSources"),
+				ReimportSources)
+			&& ReimportSources)
+		{
+			for (const TSharedPtr<FJsonValue>& SourceValue : *ReimportSources)
+			{
+				FString Path;
+				if (SourceValue.IsValid()
+					&& SourceValue->Type == EJson::Object
+					&& SourceValue->AsObject()->TryGetStringField(TEXT("path"), Path))
+				{
+					Sources.Add(Path);
+				}
+			}
+		}
+	}
+	OutPackages = Packages.Array();
+	OutPackages.Sort();
+	OutExternalSources = Sources.Array();
+	OutExternalSources.Sort();
+}
 
 TMap<FString, FAssetChangeReceipt>& GetReceipts()
 {
@@ -580,6 +638,18 @@ bool BuildPlan(
 			RollbackBlockers.Add(MakeShared<FJsonValueString>(Blocker));
 		}
 	}
+	// A saved reimport is restart-durable because the original package and all
+	// external source hashes can be captured before FReimportManager runs. A
+	// dirty-only reimport still has no reliable in-memory reverse operation.
+	if (!bRollbackAvailable
+		&& Persistence == TEXT("saveOnSuccess")
+		&& NormalizedActions.Num() == 1
+		&& NormalizedActions[0]->AsObject()->GetStringField(TEXT("action"))
+			== TEXT("reimport"))
+	{
+		bRollbackAvailable = true;
+		RollbackBlockers.Reset();
+	}
 	if (!bRollbackAvailable && Actions->Num() != 1)
 	{
 		OutError =
@@ -618,7 +688,18 @@ bool BuildPlan(
 	OutPlan->SetBoolField(TEXT("changesState"), true);
 	OutPlan->SetStringField(
 		TEXT("rollbackBoundary"),
-		TEXT("sameEditorInstance"));
+		bRollbackAvailable && Persistence == TEXT("saveOnSuccess")
+			? TEXT("editorRestart")
+			: bRollbackAvailable
+				? TEXT("sameEditorInstance")
+				: TEXT("none"));
+	OutPlan->SetStringField(
+		TEXT("rollbackDurability"),
+		bRollbackAvailable && Persistence == TEXT("saveOnSuccess")
+			? TEXT("restart")
+			: bRollbackAvailable
+				? TEXT("session")
+				: TEXT("none"));
 	OutPlan->SetBoolField(TEXT("confirmWriteRequired"), true);
 	OutPlan->SetBoolField(TEXT("rollbackAvailable"), bRollbackAvailable);
 	OutPlan->SetObjectField(TEXT("request"), NormalizedRequest);
@@ -1049,18 +1130,55 @@ public:
 		const FString Persistence =
 			NormalizedRequest->GetStringField(TEXT("persistence"));
 		FAssetChangeReceipt Receipt;
-		Receipt.ReceiptId = FString::Printf(
-			TEXT("asset-run-%s"),
-			*FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower));
+		Receipt.ReceiptId =
+			FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
 		Receipt.PlanDigest = ApprovedDigest;
 		Receipt.RequestId = RequestId;
 		Receipt.CreatedAt = FDateTime::UtcNow();
 		Receipt.bRollbackAvailable =
 			Plan->GetBoolField(TEXT("rollbackAvailable"));
+		Receipt.RollbackDurability =
+			Plan->GetStringField(TEXT("rollbackDurability"));
 		for (const TSharedPtr<FJsonValue>& Blocker :
 			Plan->GetArrayField(TEXT("rollbackBlockers")))
 		{
 			Receipt.RollbackBlockers.Add(Blocker->AsString());
+		}
+
+		TSharedPtr<FJsonObject> RecoveryManifest;
+		const bool bDurableRecovery =
+			Receipt.bRollbackAvailable
+			&& Receipt.RollbackDurability == TEXT("restart");
+		if (bDurableRecovery)
+		{
+			TArray<FString> Packages;
+			TArray<FString> ExternalSources;
+			CollectDurableRecoveryInputs(
+				NormalizedRequest,
+				Plan->GetArrayField(TEXT("preconditions")),
+				Packages,
+				ExternalSources);
+			FDurablePackageRecoveryRequest RecoveryRequest;
+			RecoveryRequest.ChangeSetId = Receipt.ReceiptId;
+			RecoveryRequest.Kind = TEXT("content.asset.change");
+			RecoveryRequest.RequestId = RequestId;
+			RecoveryRequest.PlanDigest = ApprovedDigest;
+			TSharedRef<FJsonObject> RecoveryBaseline = MakeShared<FJsonObject>();
+			RecoveryBaseline->SetArrayField(
+				TEXT("preconditions"),
+				Plan->GetArrayField(TEXT("preconditions")));
+			RecoveryRequest.BeforeHash = DigestJson(RecoveryBaseline);
+			RecoveryRequest.PackageNames = Packages;
+			RecoveryRequest.ExternalSourceFiles = ExternalSources;
+			FString RecoveryErrorCode;
+			if (!FDurablePackageRecovery::Prepare(
+					RecoveryRequest,
+					RecoveryManifest,
+					RecoveryErrorCode,
+					Error))
+			{
+				return FMCPToolResult::Error(Error, RecoveryErrorCode, 409);
+			}
 		}
 
 		TArray<TSharedPtr<FJsonValue>> Changes;
@@ -1090,6 +1208,18 @@ public:
 					EvictOldReceipts();
 					RecoveryReceiptId = Receipt.ReceiptId;
 					GetReceipts().Add(RecoveryReceiptId, MoveTemp(Receipt));
+				}
+				if (bDurableRecovery)
+				{
+					FString SealCode;
+					FString SealError;
+					FDurablePackageRecovery::Seal(
+						Receipt.ReceiptId,
+						TEXT("failed"),
+						FString(),
+						RecoveryManifest,
+						SealCode,
+						SealError);
 				}
 				return FMCPToolResult::Error(
 					bRecovered
@@ -1140,10 +1270,6 @@ public:
 			}
 		}
 
-		EvictOldReceipts();
-		const FString ReceiptId = Receipt.ReceiptId;
-		GetReceipts().Add(ReceiptId, MoveTemp(Receipt));
-
 		TSharedRef<FJsonObject> Diff = MakeShared<FJsonObject>();
 		Diff->SetStringField(TEXT("schema"), TEXT("ue.snapshot-diff.v1"));
 		TArray<TSharedPtr<FJsonValue>> BeforeSnapshots;
@@ -1187,14 +1313,49 @@ public:
 		Diff->SetArrayField(TEXT("changes"), Changes);
 		Diff->SetStringField(TEXT("diffDigest"), DigestJson(Diff));
 
+		if (bDurableRecovery)
+		{
+			FString RecoveryErrorCode;
+			if (!FDurablePackageRecovery::Seal(
+					Receipt.ReceiptId,
+					TEXT("completed"),
+					Diff->GetStringField(TEXT("afterHash")),
+					RecoveryManifest,
+					RecoveryErrorCode,
+					Error))
+			{
+				return FMCPToolResult::Error(Error, RecoveryErrorCode, 500);
+			}
+		}
+
+		EvictOldReceipts();
+		const FString ReceiptId = Receipt.ReceiptId;
+		GetReceipts().Add(ReceiptId, MoveTemp(Receipt));
+
 		const FAssetChangeReceipt& Stored = GetReceipts().FindChecked(ReceiptId);
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("schema"), TEXT("ue.asset-change-receipt.v1"));
 		Result->SetStringField(TEXT("receiptId"), ReceiptId);
+		Result->SetStringField(TEXT("changeSetId"), ReceiptId);
 		Result->SetStringField(TEXT("planDigest"), ApprovedDigest);
 		Result->SetStringField(TEXT("requestId"), RequestId);
 		Result->SetStringField(TEXT("status"), TEXT("succeeded"));
 		Result->SetStringField(TEXT("persistence"), Persistence);
+		Result->SetStringField(
+			TEXT("rollbackDurability"),
+			Stored.RollbackDurability);
+		Result->SetStringField(
+			TEXT("beforeHash"),
+			Diff->GetStringField(TEXT("beforeHash")));
+		Result->SetStringField(
+			TEXT("afterHash"),
+			Diff->GetStringField(TEXT("afterHash")));
+		if (RecoveryManifest.IsValid())
+		{
+			Result->SetStringField(
+				TEXT("recoveryExpiresAt"),
+				RecoveryManifest->GetStringField(TEXT("recoveryExpiresAt")));
+		}
 		Result->SetBoolField(TEXT("rollbackAvailable"), Stored.bRollbackAvailable);
 		TArray<TSharedPtr<FJsonValue>> Blockers;
 		for (const FString& Blocker : Stored.RollbackBlockers)
@@ -1220,8 +1381,12 @@ public:
 		FString ReceiptId;
 		FString RequestId;
 		bool bConfirmWrite = false;
-		if (!Params->TryGetStringField(TEXT("receiptId"), ReceiptId)
-			|| ReceiptId.IsEmpty()
+		Params->TryGetStringField(TEXT("receiptId"), ReceiptId);
+		if (ReceiptId.IsEmpty())
+		{
+			Params->TryGetStringField(TEXT("changeSetId"), ReceiptId);
+		}
+		if (ReceiptId.IsEmpty()
 			|| !Params->TryGetStringField(TEXT("requestId"), RequestId)
 			|| RequestId.IsEmpty()
 			|| !Params->TryGetBoolField(TEXT("confirmWrite"), bConfirmWrite)
@@ -1233,6 +1398,23 @@ public:
 				400);
 		}
 		FAssetChangeReceipt* Receipt = GetReceipts().Find(ReceiptId);
+		if (!Receipt && FDurablePackageRecovery::IsValidChangeSetId(ReceiptId))
+		{
+			TSharedPtr<FJsonObject> DurableResult;
+			FString DurableErrorCode;
+			FString DurableError;
+			if (!FDurablePackageRecovery::Rollback(
+					ReceiptId,
+					RequestId,
+					DurableResult,
+					DurableErrorCode,
+					DurableError))
+			{
+				return FMCPToolResult::Error(DurableError, DurableErrorCode, 409);
+			}
+			DurableResult->SetStringField(TEXT("receiptId"), ReceiptId);
+			return FMCPToolResult::Ok(DurableResult);
+		}
 		if (!Receipt)
 		{
 			return FMCPToolResult::Error(
@@ -1257,8 +1439,26 @@ public:
 				TEXT("rollback_unavailable"),
 				409);
 		}
-
 		FString Error;
+		if (Receipt->RollbackDurability == TEXT("restart"))
+		{
+			TSharedPtr<FJsonObject> DurableResult;
+			FString DurableErrorCode;
+			if (!FDurablePackageRecovery::Rollback(
+					ReceiptId,
+					RequestId,
+					DurableResult,
+					DurableErrorCode,
+					Error))
+			{
+				return FMCPToolResult::Error(Error, DurableErrorCode, 409);
+			}
+			Receipt->bRolledBack = true;
+			ReleaseReceiptBackups(*Receipt);
+			DurableResult->SetStringField(TEXT("receiptId"), ReceiptId);
+			return FMCPToolResult::Ok(DurableResult);
+		}
+
 		if (!ApplyReverseActions(*Receipt, Error))
 		{
 			return FMCPToolResult::Error(Error, TEXT("rollback_failed"), 500);

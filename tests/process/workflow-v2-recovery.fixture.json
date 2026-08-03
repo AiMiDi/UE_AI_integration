@@ -1,0 +1,39 @@
+{
+  "dsl": "ue.workflow",
+  "dslVersion": "2.0",
+  "workflowKind": "assetEdit",
+  "workflowId": "process-recovery-v2",
+  "scopes": {
+    "first": {
+      "kind": "blueprint",
+      "asset": "/Game/Automation/UEAI_ProcessRecoveryA",
+      "createIfMissing": true
+    },
+    "second": {
+      "kind": "blueprint",
+      "asset": "/Game/Automation/UEAI_ProcessRecoveryB",
+      "createIfMissing": true
+    }
+  },
+  "persistence": "dirtyOnly",
+  "operations": [
+    {
+      "id": "addFirstVariable",
+      "scope": "first",
+      "type": "blueprint.variable.add",
+      "params": {
+        "variableName": "RecoveredFirst",
+        "variableType": "Boolean"
+      }
+    },
+    {
+      "id": "addSecondVariable",
+      "scope": "second",
+      "type": "blueprint.variable.add",
+      "params": {
+        "variableName": "RecoveredSecond",
+        "variableType": "Float"
+      }
+    }
+  ]
+}

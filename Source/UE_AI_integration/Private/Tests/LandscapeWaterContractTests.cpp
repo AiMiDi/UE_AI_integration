@@ -24,9 +24,15 @@
 #include "Misc/Guid.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
 #include "PackageTools.h"
+#if WITH_UEAI_PCG
 #include "PCGComponent.h"
+#else
+class UPCGComponent;
+#endif
 #include "UObject/Package.h"
+#include "UObject/SavePackage.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectGlobals.h"
 #include "WorldPartition/DataLayer/DataLayerAsset.h"
@@ -610,9 +616,13 @@ public:
 
 	FString GetPCGComponentPath() const
 	{
+#if WITH_UEAI_PCG
 		return PCGComponent
 			? PCGComponent->GetPathName()
 			: FString();
+#else
+		return FString();
+#endif
 	}
 
 	bool WasReloadedFromDisk() const
@@ -938,8 +948,8 @@ private:
 			LoadObject<UHLODLayer>(
 				nullptr,
 				*MergedHLODLayerPath));
-		PCGComponent =
-			nullptr;
+		PCGComponent = nullptr;
+#if WITH_UEAI_PCG
 		for (TActorIterator<AActor> It(World); It; ++It)
 		{
 			if (It->GetFName()
@@ -952,6 +962,7 @@ private:
 				break;
 			}
 		}
+#endif
 		const bool bHasExpectedDataLayer =
 			Landscape->GetDataLayerAssets().ContainsByPredicate(
 				[this](const UDataLayerAsset* Asset)
@@ -977,12 +988,14 @@ private:
 				TEXT("The reloaded Landscape lost its HLOD Layer assignment.");
 			return false;
 		}
+#if WITH_UEAI_PCG
 		if (!PCGActor || !PCGComponent)
 		{
 			OutError =
 				TEXT("The reloaded Landscape lost its serialized PCG Component.");
 			return false;
 		}
+#endif
 		if (LayerInfo->GetOutermost()->GetName()
 				!= LayerInfoPackageName
 			|| !LayerInfo->HasAnyFlags(RF_WasLoaded))
@@ -1086,6 +1099,7 @@ private:
 			MergedHLODLayer.Get());
 		Landscape->SetHLODLayer(InstancedHLODLayer.Get());
 
+#if WITH_UEAI_PCG
 		FActorSpawnParameters PCGActorSpawn;
 		PCGActorSpawn.Name =
 			TEXT("UEAI_PCGImpactFixture");
@@ -1134,6 +1148,7 @@ private:
 		}
 		PCGActor->AddInstanceComponent(PCGComponent);
 		PCGComponent->RegisterComponent();
+#endif
 
 		if (!SaveStandaloneAsset(
 				DataLayerAsset.Get(),
@@ -1481,6 +1496,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FLandscapeWaterChangeRecoveryTest::RunTest(const FString&)
 {
+	if (!FModuleManager::Get().ModuleExists(
+			TEXT("WorldPartitionHLODUtilities")))
+	{
+		AddInfo(
+			TEXT("Skipped: the fixture's typed HLOD Layer coverage requires the optional WorldPartitionHLODUtilities plugin."));
+		return true;
+	}
 	FScopedWorldPartitionLandscapeFixture Fixture;
 	FString FixtureError;
 	if (!Fixture.Initialize(FixtureError))
@@ -1622,7 +1644,7 @@ bool FLandscapeWaterChangeRecoveryTest::RunTest(const FString&)
 		WrongOwner.ErrorCode,
 		FString(TEXT("rollback_owner_mismatch")));
 
-	SetFixtureMaterial(OriginalMaterial);
+	SetFixtureMaterial(nullptr);
 	const FMCPToolResult ExternalConflict =
 		Service.RollbackChange(
 			MakeRollbackParams(SuccessRunId, SuccessRequestId));
@@ -1635,14 +1657,21 @@ bool FLandscapeWaterChangeRecoveryTest::RunTest(const FString&)
 		FString(TEXT("rollback_conflict")));
 
 	SetFixtureMaterial(AlternateMaterial);
+	Service.SimulateEditorRestartForTest();
 	const FMCPToolResult Rollback =
 		Service.RollbackChange(
 			MakeRollbackParams(SuccessRunId, SuccessRequestId));
-	TestTrue(TEXT("Owned rollback succeeds"), Rollback.bSuccess);
+	TestTrue(TEXT("Restart-durable owned rollback succeeds"), Rollback.bSuccess);
 	TestTrue(
-		TEXT("Owned rollback is hash verified"),
+		TEXT("Restart-durable rollback is hash verified"),
 		Rollback.bSuccess
 			&& Rollback.Data->GetBoolField(TEXT("rollbackVerified")));
+	TestEqual(
+		TEXT("Landscape rollback declares restart durability"),
+		Rollback.bSuccess
+			? Rollback.Data->GetStringField(TEXT("rollbackDurability"))
+			: FString(),
+		FString(TEXT("restart")));
 	TestTrue(
 		TEXT("Owned rollback restores the original material"),
 		Landscape->GetLandscapeMaterial() == OriginalMaterial);
@@ -1660,6 +1689,35 @@ bool FLandscapeWaterChangeRecoveryTest::RunTest(const FString&)
 		TEXT("Idempotent rollback re-verifies current state"),
 		RollbackReplay.bSuccess
 			&& RollbackReplay.Data->GetBoolField(TEXT("idempotentReplay")));
+
+	TSharedPtr<FJsonObject> RestartLossPlan;
+	TSharedPtr<FJsonObject> RestartLossResult;
+	FString RestartLossRequestId;
+	if (!ApplyLandscapeChange(
+			*this,
+			Fixture,
+			MakeMaterialParams(),
+			RestartLossPlan,
+			RestartLossResult,
+			&RestartLossRequestId))
+	{
+		return false;
+	}
+	TrackArtifact(RestartLossResult);
+	SetFixtureMaterial(OriginalMaterial);
+	Service.SimulateEditorRestartForTest();
+	const FMCPToolResult RestartLossRollback = Service.RollbackChange(
+		MakeRollbackParams(
+			RestartLossResult->GetStringField(TEXT("runId")),
+			RestartLossRequestId));
+	TestTrue(
+		TEXT("A restart that discarded dirty-only changes is a verified rollback"),
+		RestartLossRollback.bSuccess);
+	TestTrue(
+		TEXT("Restart-discard rollback reports an idempotent recovered baseline"),
+		RestartLossRollback.bSuccess
+			&& RestartLossRollback.Data->GetBoolField(TEXT("idempotentReplay"))
+			&& RestartLossRollback.Data->GetBoolField(TEXT("restoredByProcessRestart")));
 
 	auto RunInjectedFailure =
 		[&](
@@ -1791,6 +1849,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FLandscapeWaterWorldPartitionVerticalTest::RunTest(const FString&)
 {
+	if (!FModuleManager::Get().ModuleExists(
+			TEXT("WorldPartitionHLODUtilities")))
+	{
+		AddInfo(
+			TEXT("Skipped: the World Partition vertical fixture requires the optional WorldPartitionHLODUtilities plugin."));
+		return true;
+	}
 	FScopedWorldPartitionLandscapeFixture Fixture;
 	FString FixtureError;
 	if (!Fixture.Initialize(FixtureError))
@@ -2107,6 +2172,7 @@ bool FLandscapeWaterWorldPartitionVerticalTest::RunTest(const FString&)
 					+ TEXT(" marks HLOD rebuild impact")),
 				HLOD->GetBoolField(TEXT("rebuildMayBeRequired")));
 
+#if WITH_UEAI_PCG
 			const TSharedPtr<FJsonObject> PCG =
 				ImpactEvidence->GetObjectField(TEXT("pcg"));
 			TestTrue(
@@ -2121,6 +2187,7 @@ bool FLandscapeWaterWorldPartitionVerticalTest::RunTest(const FString&)
 					+ TEXT(" marks PCG regeneration impact")),
 				PCG->GetBoolField(
 					TEXT("regenerationMayBeRequired")));
+#endif
 		};
 	AssertImpactEvidence(
 		TEXT("Landscape snapshot"),
@@ -2204,6 +2271,7 @@ bool FLandscapeWaterWorldPartitionVerticalTest::RunTest(const FString&)
 		Diff.bSuccess
 			&& Diff.Data->GetNumberField(TEXT("changedPathCount")) >= 1.0);
 
+#if WITH_UEAI_WATER
 	const FMCPToolResult WaterAvailability =
 		Service.ListWater(EmptyParams);
 	TestTrue(TEXT("Water discovery executes"), WaterAvailability.bSuccess);
@@ -2658,6 +2726,7 @@ bool FLandscapeWaterWorldPartitionVerticalTest::RunTest(const FString&)
 				FailureRestoredActor
 					&& !FailureRestoredActor->GetActorEnableCollision());
 	}
+#endif
 	FString CleanupError;
 	const bool bCleanupSucceeded = Fixture.Cleanup(CleanupError);
 	TestTrue(

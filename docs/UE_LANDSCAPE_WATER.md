@@ -76,9 +76,10 @@ Saved/UE_AI_integration/Landscape/Runs/<runId>/
 After application it captures and persists a new snapshot and bounded diff.
 Any operation, artifact write, or read-back/Diff failure triggers automatic
 restoration and a persisted rollback snapshot. Failed runs remain registered
-for a safe retry. Explicit `scene.landscape.change.rollback` requires the same
-Editor world object/package, `runId`, the exact original execution `requestId`,
-and confirmation. It first verifies that the current semantic and package
+for a safe retry. Explicit `scene.landscape.change.rollback` requires the
+original map to be loaded, the `runId`, the exact original execution
+`requestId`, and confirmation. A new Editor process rehydrates ownership from
+the recovery manifest and verified package backups. It first verifies that the current semantic and package
 digests still match the recorded post-execution or failed-run retry baseline;
 success requires the restored semantic hash to equal the original hash.
 
@@ -99,12 +100,14 @@ success requires the restored semantic hash to equal the original hash.
 - Water update is limited to transform and label. Water delete is limited to
   service-managed actors with a complete bounded actor export; unmanaged Water
   actors are rejected.
-- Water delete rollback requires the original loaded Level and external actor
-  package identity in the same Editor instance. Missing/corrupt actor export,
+- Water delete rollback requires the original loaded Level and persisted
+  external actor package identity. Missing/corrupt actor export,
   class/factory drift, package drift, or property-digest mismatch fails
   rollback instead of claiming a shallow restoration.
 - No asset is automatically saved.
-- Rollback ownership is memory-resident and does not survive Editor restart.
+- Rollback ownership and package backups survive Editor restart. Unsaved
+  dirty-only changes that disappear during restart are accepted only when the
+  reloaded semantic and package digests exactly equal the recorded baseline.
 - Impact data covers loaded actors/components only. Dedicated HLOD, PCG,
   navigation, cook, and package jobs remain the completion authority.
 
@@ -136,15 +139,16 @@ non-partitioned Main map is not valid World Partition evidence.
 同一请求不能同时对同一层执行权重图导入和 Layer Info 替换。
 `waterDelete` 只允许删除插件创建并带管理标记的 Water Actor；计划和
 执行会记录完整 Actor T3D 属性、类、对象名、Actor GUID、原 Level、包与外部
-Actor 包身份。回滚必须通过 Water Factory 在同一 Editor 实例中恢复这些信息，
+Actor 包身份。回滚必须通过 Water Factory 恢复这些信息，跨进程时会从持久
+manifest 重新绑定原地图、Level 与外部 Actor 包，
 并重新核对完整属性摘要；任一证据不一致都返回失败。它不会提供任意
 笔刷式实时 Sculpt/Paint，也不会自动保存资产。
 
 执行前会写入原始高度/权重备份、语义快照、包证据和恢复 manifest；执行或读回
 失败时自动恢复并持久化恢复证据；失败 run 仍可用原始 requestId 重试 rollback。
-显式 rollback 需要同一个 Editor world 对象与 package，并先检查当前状态没有被
-外部修改，再恢复并重新校验原始
-语义 hash，因此不能宣称跨 Editor 重启的恢复能力。World Partition、Data Layer、
+显式 rollback 需要原地图已加载，并先检查当前状态没有被外部修改，再恢复并重新
+校验原始语义 hash。若 dirty-only 修改在 Editor 重启时自然丢弃，只有当前语义和
+Package digest 都精确回到原始基线时才按幂等 rollback 验证通过。World Partition、Data Layer、
 HLOD 与 PCG 只给出当前已加载对象的影响摘要；最终验收必须在真实的 Partitioned
 World 测试地图中完成，并覆盖 Water Create 回滚后外部 Actor 包无残留；普通
 Main 地图不构成 WP 闭环证据。

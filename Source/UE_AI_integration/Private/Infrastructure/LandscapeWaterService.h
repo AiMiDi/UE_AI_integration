@@ -50,6 +50,8 @@ public:
 	 * afterFirstOperationRollbackArtifact.
 	 */
 	void SetAutomationFailurePoint(FName FailurePoint);
+	/** Drops volatile ownership maps so the next rollback must rehydrate disk state. */
+	void SimulateEditorRestartForTest();
 #endif
 
 private:

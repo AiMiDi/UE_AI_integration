@@ -250,6 +250,39 @@
         }
       }
     },
+    "blueprint.node.delete": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "confirmWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "blueprint": {
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "nodeTitle": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
     "blueprint.node.move": {
       "admission": "editStep",
       "scopeKinds": [

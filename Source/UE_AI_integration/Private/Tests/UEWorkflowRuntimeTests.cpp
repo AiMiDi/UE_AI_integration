@@ -1846,14 +1846,41 @@ bool FUEWorkflowMaterialConnectionFailureRollbackTest::RunTest(
 			&& Result.Error.Details->GetBoolField(TEXT("rollbackVerified")));
 	const TSharedPtr<FJsonObject>* RollbackSection = nullptr;
 	TestTrue(
-		TEXT("Existing-scope execution captured an in-memory fallback"),
+		TEXT("Existing-scope execution exposes rollback evidence"),
 		Result.Error.Details.IsValid()
 			&& TryGetResultObject(
 				Result.Error.Details,
 				TEXT("rollback"),
-				RollbackSection)
-			&& (*RollbackSection)->GetBoolField(
-				TEXT("executionMemorySnapshotCaptured")));
+				RollbackSection));
+	if (RollbackSection && RollbackSection->IsValid())
+	{
+		bool bMemorySnapshotCaptured = true;
+		(*RollbackSection)->TryGetBoolField(
+			TEXT("executionMemorySnapshotCaptured"),
+			bMemorySnapshotCaptured);
+		TestFalse(
+			TEXT("Durable rollback does not retain an in-memory UObject fallback"),
+			bMemorySnapshotCaptured);
+	}
+	FString Durability;
+	FString SnapshotDigest;
+	TestTrue(
+		TEXT("Failure result reports restart durability"),
+		Result.Error.Details.IsValid()
+			&& Result.Error.Details->TryGetStringField(
+				TEXT("durability"),
+				Durability));
+	TestEqual(
+		TEXT("Existing-scope rollback is restart durable"),
+		Durability,
+		FString(TEXT("restart")));
+	TestTrue(
+		TEXT("Failure result identifies its verified recovery snapshot"),
+		Result.Error.Details.IsValid()
+			&& Result.Error.Details->TryGetStringField(
+				TEXT("snapshotDigest"),
+				SnapshotDigest)
+			&& !SnapshotDigest.IsEmpty());
 
 	UMaterial* Material = Cast<UMaterial>(
 		UEditorAssetLibrary::LoadAsset(MaterialPath));
@@ -2050,6 +2077,16 @@ bool FUEWorkflowV2MultiAssetRollbackTest::RunTest(
 	const FMCPResult Result =
 		ExecuteWorkflow(Runtime, Workflow, Digest);
 	TestTrue(TEXT("Workflow v2 executes"), Result.bOk);
+	if (!Result.bOk || !Result.Data.IsValid())
+	{
+		AddError(FString::Printf(
+			TEXT("Workflow v2 execution failed: %s: %s"),
+			*Result.Error.Code,
+			*Result.Error.Message));
+		CleanupAsset(ConsumerPath);
+		CleanupAsset(ProducerPath);
+		return false;
+	}
 	TestEqual(
 		TEXT("Workflow v2 result identifies the DSL version"),
 		Result.Data->GetStringField(TEXT("dslVersion")),
@@ -2279,55 +2316,46 @@ bool FUEWorkflowV2DurableRollbackAndConflictTest::RunTest(
 			ComputeAssetStructureHash(SecondAsset),
 		SecondHashBefore);
 
-	// Simulate an Editor restart after a persisted segment boundary. The
-	// package set is back at the staged baseline, so a new runtime must replay
-	// from that baseline and complete without relying on the old Undo stack.
-	const FString DurableRunId =
-		Result.Data->GetStringField(TEXT("runId"));
-	const FString JournalPath = FPaths::Combine(
-		FPaths::ProjectSavedDir(),
-		TEXT("UEWorkflow"),
-		DurableRunId + TEXT(".json"));
-	FString JournalText;
-	TSharedPtr<FJsonObject> Journal;
-	if (FFileHelper::LoadFileToString(JournalText, *JournalPath))
+	// Interrupt a distinct run at a real persisted operation boundary. The
+	// restart helper restores the on-disk baseline and drops the old runtime's
+	// transient ownership; the new runtime must install the verified package
+	// checkpoint and continue without replaying the completed operation.
+	const FMCPResult ResumePlan = PlanWorkflow(Runtime, Workflow);
+	FString ResumeDigest;
+	if (!GetPlanDigest(ResumePlan, ResumeDigest))
 	{
-		const TSharedRef<TJsonReader<>> JournalReaderJson =
-			TJsonReaderFactory<>::Create(JournalText);
-		FJsonSerializer::Deserialize(JournalReaderJson, Journal);
+		AddError(TEXT("Durable resume fixture did not plan."));
+		CleanupAsset(FirstPath);
+		CleanupAsset(SecondPath);
+		return false;
 	}
-	if (Journal.IsValid())
+	Runtime.SetTestFailAfterOperation(1, true);
+	const FMCPResult Interrupted =
+		ExecuteWorkflow(Runtime, Workflow, ResumeDigest, false);
+	TestFalse(
+		TEXT("Durable resume fixture stops at the operation boundary"),
+		Interrupted.bOk);
+	TestEqual(
+		TEXT("Durable resume fixture reports the test interruption"),
+		Interrupted.Error.Code,
+		FString(TEXT("workflow_test_interrupted")));
+	FString DurableRunId;
+	if (Interrupted.Error.Details.IsValid())
 	{
-		Journal->SetStringField(TEXT("status"), TEXT("running"));
-		Journal->SetStringField(
-			TEXT("rollbackStatus"),
-			TEXT("notRequested"));
-		Journal->SetStringField(
-			TEXT("currentPhase"),
-			TEXT("operations"));
-		Journal->SetNumberField(TEXT("nextInitializerIndex"), 0);
-		Journal->SetNumberField(TEXT("nextOperationIndex"), 1);
-		Journal->SetNumberField(TEXT("nextFinalizerIndex"), 0);
-		Journal->SetBoolField(TEXT("rollbackAvailable"), false);
-		Journal->SetArrayField(
-			TEXT("operations"),
-			TArray<TSharedPtr<FJsonValue>>());
-		Journal->SetArrayField(
-			TEXT("finalizers"),
-			TArray<TSharedPtr<FJsonValue>>());
-		Journal->SetObjectField(
-			TEXT("operationOutputs"),
-			MakeShared<FJsonObject>());
-		TestTrue(
-			TEXT("Synthetic restart journal is persisted"),
-			FFileHelper::SaveStringToFile(
-				SerializeJsonObject(Journal),
-				*JournalPath,
-				FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM));
+		Interrupted.Error.Details->TryGetStringField(
+			TEXT("runId"),
+			DurableRunId);
 	}
-	else
+	FString RestartError;
+	TestTrue(
+		TEXT("Restart fixture restores the original disk baseline"),
+		!DurableRunId.IsEmpty()
+			&& Runtime.SimulateEditorRestartForTest(
+				DurableRunId,
+				RestartError));
+	if (!RestartError.IsEmpty())
 	{
-		AddError(TEXT("Could not read the durable Workflow v2 journal."));
+		AddError(TEXT("Restart fixture failed: ") + RestartError);
 	}
 
 	UEAIIntegration::Workflow::FWorkflowRuntime ResumeRuntime(
@@ -2344,9 +2372,9 @@ bool FUEWorkflowV2DurableRollbackAndConflictTest::RunTest(
 	if (ResumeResult.bOk)
 	{
 		TestEqual(
-			TEXT("Restart recovery reports baseline replay"),
+			TEXT("Restart recovery reports durable checkpoint continuation"),
 			ResumeResult.Data->GetStringField(TEXT("resumeMode")),
-			FString(TEXT("restartFromStagedBaseline")));
+			FString(TEXT("continueFromDurableCheckpoint")));
 		TestTrue(
 			TEXT("Restart recovery reports resumed execution"),
 			ResumeResult.Data->GetBoolField(TEXT("resumedExecution")));
@@ -2360,10 +2388,22 @@ bool FUEWorkflowV2DurableRollbackAndConflictTest::RunTest(
 			DurableRunId);
 		ReplayRollback->SetStringField(
 			TEXT("approvePlanDigest"),
-			Digest);
+			ResumeDigest);
 		TestTrue(
 			TEXT("Replayed Workflow v2 restores its staged baseline"),
 			ResumeRuntime.HandleRequest(ReplayRollback).bOk);
+	}
+	else
+	{
+		AddError(FString::Printf(
+			TEXT("Durable operation-boundary resume failed: %s (%s)%s"),
+			*ResumeResult.Error.Code,
+			*ResumeResult.Error.Message,
+			ResumeResult.Error.Details.IsValid()
+				? *FString::Printf(
+					TEXT(" details=%s"),
+					*SerializeJsonObject(ResumeResult.Error.Details))
+				: TEXT("")));
 	}
 
 	// A second run demonstrates conflict refusal after an external structural
@@ -2613,9 +2653,9 @@ bool FUEWorkflowV2FaultBoundaryResumeTest::RunTest(
 	if (Resumed.bOk)
 	{
 		TestEqual(
-			TEXT("Cross-runtime recovery reports baseline replay"),
+			TEXT("Cross-runtime recovery reports durable checkpoint continuation"),
 			Resumed.Data->GetStringField(TEXT("resumeMode")),
-			FString(TEXT("restartFromStagedBaseline")));
+			FString(TEXT("continueFromDurableCheckpoint")));
 		TestTrue(
 			TEXT("Cross-runtime recovery actually resumes execution"),
 			Resumed.Data->GetBoolField(TEXT("resumedExecution")));
@@ -2625,6 +2665,13 @@ bool FUEWorkflowV2FaultBoundaryResumeTest::RunTest(
 		TestTrue(
 			TEXT("Resumed summary stays below the 8 KiB receipt gate"),
 			ResumeBytes <= 8 * 1024);
+	}
+	else
+	{
+		AddError(FString::Printf(
+			TEXT("Durable resume failed: %s (%s)"),
+			*Resumed.Error.Code,
+			*Resumed.Error.Message));
 	}
 
 	TestNotEqual(

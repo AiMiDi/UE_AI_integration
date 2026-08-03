@@ -133,15 +133,17 @@ bool FContentAssetSettingsRegistrarTest::RunTest(const FString& Parameters)
 	UEAIIntegrationTools::RegisterContentAssetSettingsTools(Registry);
 	Registry.EndDomainRegistration();
 
-	TestEqual(TEXT("Eight settings tools register"), Registry.Num(), 8);
+	TestEqual(TEXT("Ten settings tools register"), Registry.Num(), 10);
 	const TCHAR* ExpectedIds[] = {
 		TEXT("content.static_mesh.settings.get"),
 		TEXT("content.static_mesh.settings.plan"),
 		TEXT("content.static_mesh.settings.apply"),
+		TEXT("content.static_mesh.settings.rollback"),
 		TEXT("content.static_mesh.settings.validate"),
 		TEXT("content.texture.settings.get"),
 		TEXT("content.texture.settings.plan"),
 		TEXT("content.texture.settings.apply"),
+		TEXT("content.texture.settings.rollback"),
 		TEXT("content.texture.settings.validate"),
 	};
 	for (const TCHAR* Id : ExpectedIds)

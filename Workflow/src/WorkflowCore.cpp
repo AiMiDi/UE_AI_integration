@@ -583,7 +583,8 @@ std::optional<std::string> graph_read_back_target(const json& operation)
         field = "graphName";
     }
     else if (type == "blueprint.node.add" ||
-             type == "blueprint.layout.organize")
+             type == "blueprint.layout.organize" ||
+             type == "blueprint.graph.build.metadata.set")
     {
         field = "graph";
     }

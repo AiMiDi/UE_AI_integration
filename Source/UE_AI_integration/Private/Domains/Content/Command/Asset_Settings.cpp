@@ -3,6 +3,7 @@
 #include "Tools/MCPToolRegistry.h"
 
 #include "Infrastructure/DomainChangePlan.h"
+#include "Infrastructure/DurablePackageRecovery.h"
 #include "Infrastructure/EngineeringContractUtils.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -21,6 +22,8 @@ namespace
 {
 using UEAIIntegration::Infrastructure::CanonicalizeJson;
 using UEAIIntegration::Infrastructure::DigestJson;
+using UEAIIntegration::Infrastructure::FDurablePackageRecovery;
+using UEAIIntegration::Infrastructure::FDurablePackageRecoveryRequest;
 using UEAIIntegration::Infrastructure::ValidateChangeApproval;
 
 enum class EContentSettingsKind
@@ -823,7 +826,14 @@ bool BuildSettingsPlan(
 	OutPlan->SetBoolField(TEXT("confirmWriteRequired"), true);
 	OutPlan->SetStringField(
 		TEXT("rollbackBoundary"),
-		TEXT("sameCallBeforeSave"));
+		Persistence == TEXT("saveOnSuccess")
+			? TEXT("editorRestart")
+			: TEXT("sameEditorInstance"));
+	OutPlan->SetStringField(
+		TEXT("rollbackDurability"),
+		Persistence == TEXT("saveOnSuccess")
+			? TEXT("restart")
+			: TEXT("session"));
 	OutPlan->SetObjectField(TEXT("request"), NormalizedRequest);
 	OutPlan->SetObjectField(TEXT("preconditions"), Preconditions);
 	OutPlan->SetObjectField(TEXT("before"), Current);
@@ -981,6 +991,28 @@ FMCPToolResult ApplySettings(
 		return FMCPToolResult::Ok(Result);
 	}
 
+	const FString ChangeSetId =
+		FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	TSharedPtr<FJsonObject> RecoveryManifest;
+	if (Persistence == TEXT("saveOnSuccess"))
+	{
+		FDurablePackageRecoveryRequest RecoveryRequest;
+		RecoveryRequest.ChangeSetId = ChangeSetId;
+		RecoveryRequest.Kind = KindDomain(Kind) + TEXT(".settings");
+		RecoveryRequest.RequestId = RequestId;
+		RecoveryRequest.PlanDigest = Plan->GetStringField(TEXT("planDigest"));
+		RecoveryRequest.BeforeHash = Plan->GetStringField(TEXT("beforeHash"));
+		RecoveryRequest.PackageNames.Add(Loaded.PackagePath);
+		if (!FDurablePackageRecovery::Prepare(
+				RecoveryRequest,
+				RecoveryManifest,
+				ErrorCode,
+				Error))
+		{
+			return FMCPToolResult::Error(Error, ErrorCode, 409);
+		}
+	}
+
 	if (Kind == EContentSettingsKind::StaticMesh && GEditor)
 	{
 		UAssetEditorSubsystem* AssetEditorSubsystem =
@@ -1112,10 +1144,33 @@ FMCPToolResult ApplySettings(
 	const FString AfterHash = DigestJson(ReadBack);
 	if (AfterHash != Plan->GetStringField(TEXT("afterHash")))
 	{
+		if (RecoveryManifest.IsValid())
+		{
+			FString SealErrorCode;
+			FString SealError;
+			FDurablePackageRecovery::Seal(
+				ChangeSetId,
+				TEXT("failed"),
+				AfterHash,
+				RecoveryManifest,
+				SealErrorCode,
+				SealError);
+		}
 		return FMCPToolResult::Error(
 			TEXT("Final settings hash did not match the approved plan."),
 			TEXT("verification_failed"),
 			500);
+	}
+	if (RecoveryManifest.IsValid()
+		&& !FDurablePackageRecovery::Seal(
+			ChangeSetId,
+			TEXT("completed"),
+			AfterHash,
+			RecoveryManifest,
+			ErrorCode,
+			Error))
+	{
+		return FMCPToolResult::Error(Error, ErrorCode, 500);
 	}
 
 	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
@@ -1125,6 +1180,20 @@ FMCPToolResult ApplySettings(
 	Result->SetStringField(TEXT("asset"), Loaded.ObjectPath);
 	Result->SetStringField(TEXT("assetKind"), KindName(Kind));
 	Result->SetStringField(TEXT("requestId"), RequestId);
+	Result->SetStringField(TEXT("changeSetId"), ChangeSetId);
+	Result->SetStringField(
+		TEXT("rollbackDurability"),
+		Persistence == TEXT("saveOnSuccess")
+			? TEXT("restart")
+			: TEXT("session"));
+	Result->SetStringField(TEXT("beforeHash"), Plan->GetStringField(TEXT("beforeHash")));
+	Result->SetStringField(TEXT("afterHash"), AfterHash);
+	if (RecoveryManifest.IsValid())
+	{
+		Result->SetStringField(
+			TEXT("recoveryExpiresAt"),
+			RecoveryManifest->GetStringField(TEXT("recoveryExpiresAt")));
+	}
 	Result->SetStringField(
 		TEXT("planDigest"),
 		Plan->GetStringField(TEXT("planDigest")));
@@ -1147,6 +1216,41 @@ FMCPToolResult ApplySettings(
 		TEXT("errors"),
 		TArray<TSharedPtr<FJsonValue>>());
 	Result->SetObjectField(TEXT("mutation"), Mutation);
+	return FMCPToolResult::Ok(Result);
+}
+
+FMCPToolResult RollbackSettings(
+	const EContentSettingsKind Kind,
+	const TSharedPtr<FJsonObject>& Params)
+{
+	FString ChangeSetId;
+	FString RequestId;
+	bool bConfirmWrite = false;
+	Params->TryGetStringField(TEXT("changeSetId"), ChangeSetId);
+	Params->TryGetStringField(TEXT("requestId"), RequestId);
+	Params->TryGetBoolField(TEXT("confirmWrite"), bConfirmWrite);
+	if (!FDurablePackageRecovery::IsValidChangeSetId(ChangeSetId)
+		|| RequestId.IsEmpty()
+		|| !bConfirmWrite)
+	{
+		return FMCPToolResult::Error(
+			TEXT("changeSetId, requestId and confirmWrite=true are required."),
+			TEXT("write_confirmation_required"),
+			422);
+	}
+	TSharedPtr<FJsonObject> Result;
+	FString ErrorCode;
+	FString Error;
+	if (!FDurablePackageRecovery::Rollback(
+			ChangeSetId,
+			RequestId,
+			Result,
+			ErrorCode,
+			Error))
+	{
+		return FMCPToolResult::Error(Error, ErrorCode, 409);
+	}
+	Result->SetStringField(TEXT("assetKind"), KindName(Kind));
 	return FMCPToolResult::Ok(Result);
 }
 
@@ -1384,6 +1488,23 @@ private:
 	EContentSettingsKind Kind;
 };
 
+class FTool_SettingsRollback : public FMCPToolBase
+{
+public:
+	explicit FTool_SettingsRollback(const EContentSettingsKind InKind)
+		: Kind(InKind)
+	{
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		return RollbackSettings(Kind, Params);
+	}
+
+private:
+	EContentSettingsKind Kind;
+};
+
 class FTool_StaticMeshSettingsGet final : public FTool_SettingsGet
 {
 public:
@@ -1433,6 +1554,19 @@ public:
 	FString GetCapabilityId() const override
 	{
 		return TEXT("content.static_mesh.settings.validate");
+	}
+};
+
+class FTool_StaticMeshSettingsRollback final : public FTool_SettingsRollback
+{
+public:
+	FTool_StaticMeshSettingsRollback()
+		: FTool_SettingsRollback(EContentSettingsKind::StaticMesh)
+	{
+	}
+	FString GetCapabilityId() const override
+	{
+		return TEXT("content.static_mesh.settings.rollback");
 	}
 };
 
@@ -1487,6 +1621,19 @@ public:
 		return TEXT("content.texture.settings.validate");
 	}
 };
+
+class FTool_TextureSettingsRollback final : public FTool_SettingsRollback
+{
+public:
+	FTool_TextureSettingsRollback()
+		: FTool_SettingsRollback(EContentSettingsKind::Texture)
+	{
+	}
+	FString GetCapabilityId() const override
+	{
+		return TEXT("content.texture.settings.rollback");
+	}
+};
 }
 
 namespace UEAIIntegrationTools
@@ -1497,9 +1644,11 @@ void RegisterContentAssetSettingsTools(FMCPToolRegistry& Registry)
 	Registry.Register(MakeShared<FTool_StaticMeshSettingsPlan>());
 	Registry.Register(MakeShared<FTool_StaticMeshSettingsApply>());
 	Registry.Register(MakeShared<FTool_StaticMeshSettingsValidate>());
+	Registry.Register(MakeShared<FTool_StaticMeshSettingsRollback>());
 	Registry.Register(MakeShared<FTool_TextureSettingsGet>());
 	Registry.Register(MakeShared<FTool_TextureSettingsPlan>());
 	Registry.Register(MakeShared<FTool_TextureSettingsApply>());
 	Registry.Register(MakeShared<FTool_TextureSettingsValidate>());
+	Registry.Register(MakeShared<FTool_TextureSettingsRollback>());
 }
 }

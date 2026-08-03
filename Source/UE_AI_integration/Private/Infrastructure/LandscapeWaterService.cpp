@@ -35,8 +35,10 @@
 #include "UObject/UObjectHash.h"
 #include "UObject/UnrealType.h"
 #include "UnrealEdGlobals.h"
+#if WITH_UEAI_WATER
 #include "WaterBodyActor.h"
 #include "WaterBodyComponent.h"
+#endif
 #include "WorldPartition/DataLayer/DataLayerAsset.h"
 #include "WorldPartition/DataLayer/DataLayerInstance.h"
 #include "WorldPartition/DataLayer/DataLayerManager.h"
@@ -89,6 +91,15 @@ struct FLayerInfoBackup
 	FString Layer;
 	FString BeforeLayerInfoPath;
 	FString AfterLayerInfoPath;
+};
+
+struct FPackageFileBackup
+{
+	FString PackageName;
+	FString OriginalPath;
+	FString BackupPath;
+	FString Sha256;
+	bool bExisted = false;
 };
 
 struct FWaterState
@@ -737,11 +748,49 @@ bool SaveJsonFile(const FString& Path, const TSharedPtr<FJsonObject>& Object)
 	FString Serialized;
 	const TSharedRef<TJsonWriter<>> Writer =
 		TJsonWriterFactory<>::Create(&Serialized);
-	return FJsonSerializer::Serialize(Object.ToSharedRef(), Writer)
-		&& FFileHelper::SaveStringToFile(
+	if (!FJsonSerializer::Serialize(Object.ToSharedRef(), Writer))
+	{
+		return false;
+	}
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), true);
+	const FString TemporaryPath = FString::Printf(
+		TEXT("%s.%s.tmp"),
+		*Path,
+		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
+	if (!FFileHelper::SaveStringToFile(
 			Serialized,
+			*TemporaryPath,
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	{
+		return false;
+	}
+	if (!IFileManager::Get().Move(
 			*Path,
-			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+			*TemporaryPath,
+			true,
+			true,
+			false,
+			false))
+	{
+		IFileManager::Get().Delete(*TemporaryPath, false, true, true);
+		return false;
+	}
+	return true;
+}
+
+TSharedPtr<FJsonObject> LoadJsonFile(const FString& Path)
+{
+	FString Serialized;
+	if (!FFileHelper::LoadFileToString(Serialized, *Path))
+	{
+		return nullptr;
+	}
+	TSharedPtr<FJsonObject> Object;
+	const TSharedRef<TJsonReader<>> Reader =
+		TJsonReaderFactory<>::Create(Serialized);
+	return FJsonSerializer::Deserialize(Reader, Object) && Object.IsValid()
+		? Object
+		: nullptr;
 }
 
 TSharedRef<FJsonObject> ArtifactJson(
@@ -2810,6 +2859,7 @@ bool RestoreDeletedWater(
 	Restored->CheckDefaultSubobjects();
 	Restored->InvalidateLightingCache();
 	Restored->PostEditMove(true);
+#if WITH_UEAI_WATER
 	if (AWaterBody* RestoredWater = Cast<AWaterBody>(Restored))
 	{
 		if (UWaterBodyComponent* WaterComponent =
@@ -2822,6 +2872,7 @@ bool RestoreDeletedWater(
 			WaterComponent->UpdateWaterBodyRenderData();
 		}
 	}
+#endif
 	Restored->MarkPackageDirty();
 
 	const FWaterState RestoredState = CaptureWaterState(Restored);
@@ -3377,6 +3428,7 @@ struct FLandscapeWaterService::FChangeRecord
 	TArray<FMaterialBackup> MaterialBackups;
 	TArray<FLayerInfoBackup> LayerInfoBackups;
 	TArray<FWaterBackup> WaterBackups;
+	TArray<FPackageFileBackup> PackageFileBackups;
 	FString Status = TEXT("preparing");
 	FString FailureCode;
 	FString FailureMessage;
@@ -3384,6 +3436,7 @@ struct FLandscapeWaterService::FChangeRecord
 	bool bVerified = false;
 	bool bRollbackVerified = false;
 	bool bRolledBack = false;
+	bool bLoadedFromRecoveryJournal = false;
 };
 
 namespace
@@ -3392,13 +3445,185 @@ bool IsOriginalWorld(
 	UWorld* World,
 	const FLandscapeWaterService::FChangeRecord& Record)
 {
-	return World
-		&& Record.WorldObject.IsValid()
+	if (!World || Record.WorldPath != World->GetPathName())
+	{
+		return false;
+	}
+	if (Record.bLoadedFromRecoveryJournal)
+	{
+		return World->GetPackage()
+			&& FPackageName::ObjectPathToPackageName(Record.WorldPath)
+				== World->GetPackage()->GetName();
+	}
+	return Record.WorldObject.IsValid()
 		&& Record.WorldObject.Get() == World
 		&& Record.WorldPackage.IsValid()
 		&& Record.WorldPackage.Get() == World->GetPackage()
-		&& Record.WorldObjectId == World->GetUniqueID()
-		&& Record.WorldPath == World->GetPathName();
+		&& Record.WorldObjectId == World->GetUniqueID();
+}
+
+bool CapturePackageFileBackups(
+	const TSharedPtr<FJsonObject>& BeforeSnapshot,
+	const FString& ArtifactDirectory,
+	TArray<FPackageFileBackup>& OutBackups,
+	FString& OutError)
+{
+	OutBackups.Reset();
+	OutError.Reset();
+	const TSharedPtr<FJsonObject>* Evidence = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* Packages = nullptr;
+	if (!BeforeSnapshot.IsValid()
+		|| !BeforeSnapshot->TryGetObjectField(TEXT("packageEvidence"), Evidence)
+		|| !Evidence || !Evidence->IsValid()
+		|| !(*Evidence)->TryGetArrayField(TEXT("packages"), Packages)
+		|| !Packages)
+	{
+		OutError = TEXT("Package recovery evidence is unavailable.");
+		return false;
+	}
+	const FString BackupDirectory =
+		FPaths::Combine(ArtifactDirectory, TEXT("Packages"));
+	if (!IFileManager::Get().MakeDirectory(*BackupDirectory, true)
+		&& !IFileManager::Get().DirectoryExists(*BackupDirectory))
+	{
+		OutError = TEXT("Package recovery directory could not be created.");
+		return false;
+	}
+	for (const TSharedPtr<FJsonValue>& Value : *Packages)
+	{
+		const TSharedPtr<FJsonObject> Item = Value->AsObject();
+		const FString PackageName = LandscapeReadString(Item, TEXT("package"));
+		if (!PackageName.StartsWith(TEXT("/Game/")))
+		{
+			continue;
+		}
+		if (UPackage* Loaded = FindPackage(nullptr, *PackageName);
+			Loaded && Loaded->IsDirty())
+		{
+			OutError = FString::Printf(
+				TEXT("Package '%s' already contains unsaved changes."),
+				*PackageName);
+			return false;
+		}
+		FPackageFileBackup Backup;
+		Backup.PackageName = PackageName;
+		Backup.bExisted = FPackageName::DoesPackageExist(
+			PackageName,
+			&Backup.OriginalPath);
+		if (Backup.bExisted)
+		{
+			TArray<uint8> Bytes;
+			if (!FFileHelper::LoadFileToArray(Bytes, *Backup.OriginalPath))
+			{
+				OutError = FString::Printf(
+					TEXT("Package '%s' could not be read for durable recovery."),
+					*PackageName);
+				return false;
+			}
+			Backup.Sha256 = HashBytes(Bytes);
+			Backup.BackupPath = FPaths::Combine(
+				BackupDirectory,
+				FString::Printf(
+					TEXT("%03d%s"),
+					OutBackups.Num(),
+					*FPaths::GetExtension(Backup.OriginalPath, true)));
+			if (Backup.Sha256.IsEmpty()
+				|| !FFileHelper::SaveArrayToFile(Bytes, *Backup.BackupPath))
+			{
+				OutError = FString::Printf(
+					TEXT("Package '%s' recovery copy could not be written."),
+					*PackageName);
+				return false;
+			}
+			TArray<uint8> Persisted;
+			if (!FFileHelper::LoadFileToArray(Persisted, *Backup.BackupPath)
+				|| HashBytes(Persisted) != Backup.Sha256)
+			{
+				OutError = FString::Printf(
+					TEXT("Package '%s' recovery copy failed checksum verification."),
+					*PackageName);
+				return false;
+			}
+		}
+		OutBackups.Add(MoveTemp(Backup));
+	}
+	return true;
+}
+
+bool RestorePackageFileBackups(
+	const TArray<FPackageFileBackup>& Backups,
+	FString& OutError)
+{
+	OutError.Reset();
+	for (const FPackageFileBackup& Backup : Backups)
+	{
+		if (!Backup.bExisted)
+		{
+			if (!Backup.OriginalPath.IsEmpty()
+				&& IFileManager::Get().FileExists(*Backup.OriginalPath)
+				&& !IFileManager::Get().Delete(
+					*Backup.OriginalPath,
+					false,
+					true,
+					true))
+			{
+				OutError = FString::Printf(
+					TEXT("New package file '%s' could not be removed."),
+					*Backup.OriginalPath);
+				return false;
+			}
+			continue;
+		}
+		TArray<uint8> Bytes;
+		if (Backup.BackupPath.IsEmpty()
+			|| Backup.OriginalPath.IsEmpty()
+			|| !FFileHelper::LoadFileToArray(Bytes, *Backup.BackupPath)
+			|| HashBytes(Bytes) != Backup.Sha256)
+		{
+			OutError = FString::Printf(
+				TEXT("Package recovery copy for '%s' is missing or corrupt."),
+				*Backup.PackageName);
+			return false;
+		}
+		const FString TemporaryPath = FString::Printf(
+			TEXT("%s.ueai-restore-%s.tmp"),
+			*Backup.OriginalPath,
+			*FGuid::NewGuid().ToString(EGuidFormats::Digits));
+		if (!FFileHelper::SaveArrayToFile(Bytes, *TemporaryPath))
+		{
+			OutError = FString::Printf(
+				TEXT("Package recovery temporary file for '%s' could not be written."),
+				*Backup.PackageName);
+			return false;
+		}
+		FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(
+			*Backup.OriginalPath,
+			false);
+		if (!IFileManager::Get().Move(
+				*Backup.OriginalPath,
+				*TemporaryPath,
+				true,
+				true,
+				false,
+				false))
+		{
+			IFileManager::Get().Delete(*TemporaryPath, false, true, true);
+			OutError = FString::Printf(
+				TEXT("Package '%s' could not be restored atomically."),
+				*Backup.PackageName);
+			return false;
+		}
+		TArray<uint8> Restored;
+		if (!FFileHelper::LoadFileToArray(Restored, *Backup.OriginalPath)
+			|| HashBytes(Restored) != Backup.Sha256)
+		{
+			OutError = FString::Printf(
+				TEXT("Restored package '%s' failed checksum verification."),
+				*Backup.PackageName);
+			return false;
+		}
+	}
+	return true;
 }
 
 bool RestoreChangeData(
@@ -3572,6 +3797,10 @@ bool RestoreAndVerifyChange(
 	{
 		return false;
 	}
+	if (!RestorePackageFileBackups(Record->PackageFileBackups, OutError))
+	{
+		return false;
+	}
 	const TSharedPtr<FJsonObject>* PackageEvidence = nullptr;
 	const TArray<TSharedPtr<FJsonValue>>* Packages = nullptr;
 	if (!Record->BeforeSnapshot.IsValid()
@@ -3679,6 +3908,7 @@ TSharedRef<FJsonObject> MakeRecoveryManifest(
 {
 	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 	Result->SetStringField(TEXT("schema"), TEXT("ue.landscape-recovery.v1"));
+	Result->SetStringField(TEXT("changeSetId"), Record.RunId);
 	Result->SetStringField(TEXT("runId"), Record.RunId);
 	Result->SetStringField(TEXT("requestId"), Record.RequestId);
 	Result->SetStringField(TEXT("requestDigest"), Record.RequestDigest);
@@ -3686,6 +3916,12 @@ TSharedRef<FJsonObject> MakeRecoveryManifest(
 	Result->SetStringField(TEXT("world"), Record.WorldPath);
 	Result->SetNumberField(TEXT("worldObjectId"), Record.WorldObjectId);
 	Result->SetStringField(TEXT("status"), Record.Status);
+	Result->SetStringField(TEXT("rollbackDurability"), TEXT("restart"));
+	Result->SetStringField(TEXT("beforeHash"), Record.BeforeSnapshotDigest);
+	Result->SetStringField(TEXT("afterHash"), Record.AfterSnapshotDigest);
+	Result->SetStringField(
+		TEXT("recoveryExpiresAt"),
+		(FDateTime::UtcNow() + FTimespan::FromDays(7.0)).ToIso8601());
 	Result->SetStringField(
 		TEXT("beforeSnapshotDigest"),
 		Record.BeforeSnapshotDigest);
@@ -3828,7 +4064,270 @@ TSharedRef<FJsonObject> MakeRecoveryManifest(
 		Water.Add(MakeShared<FJsonValueObject>(Item));
 	}
 	Result->SetArrayField(TEXT("water"), Water);
+	TArray<TSharedPtr<FJsonValue>> PackageFiles;
+	for (const FPackageFileBackup& Backup : Record.PackageFileBackups)
+	{
+		TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
+		Item->SetStringField(TEXT("package"), Backup.PackageName);
+		Item->SetStringField(TEXT("originalPath"), Backup.OriginalPath);
+		Item->SetStringField(TEXT("backupPath"), Backup.BackupPath);
+		Item->SetStringField(TEXT("sha256"), Backup.Sha256);
+		Item->SetBoolField(TEXT("existed"), Backup.bExisted);
+		PackageFiles.Add(MakeShared<FJsonValueObject>(Item));
+	}
+	Result->SetArrayField(TEXT("packageFiles"), PackageFiles);
 	return Result;
+}
+
+bool LoadLandscapeRecoveryRecord(
+	const FString& RunId,
+	TSharedPtr<FLandscapeWaterService::FChangeRecord>& OutRecord,
+	FString& OutErrorCode,
+	FString& OutError)
+{
+	OutRecord.Reset();
+	OutErrorCode.Reset();
+	OutError.Reset();
+	FGuid ParsedRunId;
+	if (!FGuid::Parse(RunId, ParsedRunId))
+	{
+		OutErrorCode = TEXT("run_not_found");
+		OutError = TEXT("The Landscape change runId is invalid.");
+		return false;
+	}
+	const FString Directory =
+		FPaths::Combine(ArtifactRoot(), TEXT("Runs"), RunId);
+	const TSharedPtr<FJsonObject> Manifest = LoadJsonFile(
+		FPaths::Combine(Directory, TEXT("recovery.manifest.json")));
+	if (!Manifest.IsValid()
+		|| LandscapeReadString(Manifest, TEXT("schema"))
+			!= TEXT("ue.landscape-recovery.v1")
+		|| LandscapeReadString(Manifest, TEXT("runId")) != RunId)
+	{
+		OutErrorCode = TEXT("run_not_found");
+		OutError = TEXT("The Landscape recovery journal was not found.");
+		return false;
+	}
+
+	TSharedPtr<FLandscapeWaterService::FChangeRecord> Record =
+		MakeShared<FLandscapeWaterService::FChangeRecord>();
+	Record->RunId = RunId;
+	Record->RequestId = LandscapeReadString(Manifest, TEXT("requestId"));
+	Record->RequestDigest = LandscapeReadString(Manifest, TEXT("requestDigest"));
+	Record->PlanDigest = LandscapeReadString(Manifest, TEXT("planDigest"));
+	Record->WorldPath = LandscapeReadString(Manifest, TEXT("world"));
+	Record->ArtifactDirectory = Directory;
+	Record->Status = LandscapeReadString(Manifest, TEXT("status"));
+	Record->BeforeSnapshotDigest =
+		LandscapeReadString(Manifest, TEXT("beforeSnapshotDigest"));
+	Record->BeforePackageDigest =
+		LandscapeReadString(Manifest, TEXT("beforePackageDigest"));
+	Record->AfterSnapshotDigest =
+		LandscapeReadString(Manifest, TEXT("afterSnapshotDigest"));
+	Record->AfterPackageDigest =
+		LandscapeReadString(Manifest, TEXT("afterPackageDigest"));
+	Record->RollbackRetrySnapshotDigest =
+		LandscapeReadString(Manifest, TEXT("rollbackRetrySnapshotDigest"));
+	Record->RollbackRetryPackageDigest =
+		LandscapeReadString(Manifest, TEXT("rollbackRetryPackageDigest"));
+	Record->FailureCode = LandscapeReadString(Manifest, TEXT("failureCode"));
+	Record->FailureMessage = LandscapeReadString(Manifest, TEXT("failureMessage"));
+	double FailureHttpStatus = 500.0;
+	Manifest->TryGetNumberField(TEXT("failureHttpStatus"), FailureHttpStatus);
+	Record->FailureHttpStatus = static_cast<int32>(FailureHttpStatus);
+	Record->bVerified = ReadBool(Manifest, TEXT("verified"));
+	Record->bRollbackVerified =
+		ReadBool(Manifest, TEXT("rollbackVerified"));
+	Record->bRolledBack = ReadBool(Manifest, TEXT("rolledBack"));
+	Record->bLoadedFromRecoveryJournal = true;
+
+	Record->BeforeSnapshot = LoadJsonFile(
+		FPaths::Combine(Directory, TEXT("before.snapshot.json")));
+	if (!Record->BeforeSnapshot.IsValid()
+		|| LandscapeReadString(
+			Record->BeforeSnapshot,
+			TEXT("snapshotDigest")) != Record->BeforeSnapshotDigest
+		|| LandscapeReadString(
+			Record->BeforeSnapshot->GetObjectField(TEXT("packageEvidence")),
+			TEXT("digest")) != Record->BeforePackageDigest)
+	{
+		OutErrorCode = TEXT("recovery_checkpoint_corrupt");
+		OutError = TEXT("The Landscape baseline snapshot is missing or corrupt.");
+		return false;
+	}
+	if (!Record->AfterSnapshotDigest.IsEmpty())
+	{
+		Record->AfterSnapshot = LoadJsonFile(
+			FPaths::Combine(Directory, TEXT("after.snapshot.json")));
+		if (!Record->AfterSnapshot.IsValid()
+			|| LandscapeReadString(
+				Record->AfterSnapshot,
+				TEXT("snapshotDigest")) != Record->AfterSnapshotDigest)
+		{
+			OutErrorCode = TEXT("recovery_checkpoint_corrupt");
+			OutError = TEXT("The Landscape post-change snapshot is missing or corrupt.");
+			return false;
+		}
+	}
+
+	const TSharedPtr<FJsonObject> BeforeState =
+		Record->BeforeSnapshot->GetObjectField(TEXT("state"));
+	for (const TSharedPtr<FJsonValue>& Value :
+		BeforeState->GetArrayField(TEXT("landscapes")))
+	{
+		const TSharedPtr<FJsonObject> Item = Value->AsObject();
+		const FString LandscapeId =
+			LandscapeReadString(Item, TEXT("landscapeId"));
+		if (!LandscapeId.IsEmpty())
+		{
+			Record->LandscapeGuids.AddUnique(LandscapeId);
+		}
+	}
+	for (const TSharedPtr<FJsonValue>& Value :
+		BeforeState->GetArrayField(TEXT("water")))
+	{
+		const TSharedPtr<FJsonObject> Item = Value->AsObject();
+		const FString Identity =
+			LandscapeReadString(Item, TEXT("identity"));
+		if (!Identity.IsEmpty())
+		{
+			Record->WaterIdentities.AddUnique(Identity);
+		}
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+	if (Manifest->TryGetArrayField(TEXT("rasters"), Values) && Values)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Values)
+		{
+			const TSharedPtr<FJsonObject> Item = Value->AsObject();
+			FRasterBackup Backup;
+			Backup.Kind = LandscapeReadString(Item, TEXT("kind"));
+			Backup.LandscapeGuid = LandscapeReadString(Item, TEXT("landscapeId"));
+			Backup.Layer = LandscapeReadString(Item, TEXT("layer"));
+			Backup.Path = LandscapeReadString(Item, TEXT("path"));
+			Backup.Sha256 = LandscapeReadString(Item, TEXT("sha256"));
+			Backup.Extent = FIntRect(
+				static_cast<int32>(Item->GetNumberField(TEXT("minX"))),
+				static_cast<int32>(Item->GetNumberField(TEXT("minY"))),
+				static_cast<int32>(Item->GetNumberField(TEXT("maxX"))),
+				static_cast<int32>(Item->GetNumberField(TEXT("maxY"))));
+			Record->RasterBackups.Add(MoveTemp(Backup));
+		}
+	}
+	Values = nullptr;
+	if (Manifest->TryGetArrayField(TEXT("materials"), Values) && Values)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Values)
+		{
+			const TSharedPtr<FJsonObject> Item = Value->AsObject();
+			FMaterialBackup Backup;
+			Backup.LandscapeGuid = LandscapeReadString(Item, TEXT("landscapeId"));
+			Backup.MaterialPath = LandscapeReadString(Item, TEXT("material"));
+			Record->MaterialBackups.Add(MoveTemp(Backup));
+		}
+	}
+	Values = nullptr;
+	if (Manifest->TryGetArrayField(TEXT("layerInfos"), Values) && Values)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Values)
+		{
+			const TSharedPtr<FJsonObject> Item = Value->AsObject();
+			FLayerInfoBackup Backup;
+			Backup.LandscapeGuid = LandscapeReadString(Item, TEXT("landscapeId"));
+			Backup.Layer = LandscapeReadString(Item, TEXT("layer"));
+			Backup.BeforeLayerInfoPath =
+				LandscapeReadString(Item, TEXT("beforeLayerInfo"));
+			Backup.AfterLayerInfoPath =
+				LandscapeReadString(Item, TEXT("afterLayerInfo"));
+			Record->LayerInfoBackups.Add(MoveTemp(Backup));
+		}
+	}
+	Values = nullptr;
+	if (Manifest->TryGetArrayField(TEXT("water"), Values) && Values)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Values)
+		{
+			const TSharedPtr<FJsonObject> Item = Value->AsObject();
+			FWaterBackup Backup;
+			Backup.Action = LandscapeReadString(Item, TEXT("action"));
+			Backup.Before = WaterStateFromJson(Item->GetObjectField(TEXT("before")));
+			const TSharedPtr<FJsonObject>* Created = nullptr;
+			if (Item->TryGetObjectField(TEXT("created"), Created)
+				&& Created && Created->IsValid())
+			{
+				Backup.Created = WaterStateFromJson(*Created);
+			}
+			Backup.ActorExportPath =
+				LandscapeReadString(Item, TEXT("actorExportPath"));
+			Backup.ActorExportSha256 =
+				LandscapeReadString(Item, TEXT("actorExportSha256"));
+			const TArray<TSharedPtr<FJsonValue>>* SideEffects = nullptr;
+			if (Item->TryGetArrayField(TEXT("createdSideEffectActors"), SideEffects)
+				&& SideEffects)
+			{
+				for (const TSharedPtr<FJsonValue>& SideValue : *SideEffects)
+				{
+					const TSharedPtr<FJsonObject> Side = SideValue->AsObject();
+					FWaterSideEffectActor Actor;
+					Actor.ActorGuid = LandscapeReadString(Side, TEXT("actorGuid"));
+					Actor.ClassPath = LandscapeReadString(Side, TEXT("class"));
+					Actor.Name = LandscapeReadString(Side, TEXT("name"));
+					Actor.LevelPath = LandscapeReadString(Side, TEXT("level"));
+					Actor.PackageName = LandscapeReadString(Side, TEXT("package"));
+					Actor.ExternalPackageName =
+						LandscapeReadString(Side, TEXT("externalPackage"));
+					Actor.bExternalActor = ReadBool(Side, TEXT("externalActor"));
+					Backup.CreatedSideEffectActors.Add(MoveTemp(Actor));
+				}
+			}
+			SideEffects = nullptr;
+			if (Item->TryGetArrayField(TEXT("createdLandscapeLayers"), SideEffects)
+				&& SideEffects)
+			{
+				for (const TSharedPtr<FJsonValue>& SideValue : *SideEffects)
+				{
+					const TSharedPtr<FJsonObject> Side = SideValue->AsObject();
+					FWaterLayerSideEffect Layer;
+					Layer.LandscapeGuid =
+						LandscapeReadString(Side, TEXT("landscapeGuid"));
+					Layer.LayerGuid = LandscapeReadString(Side, TEXT("layerGuid"));
+					Backup.CreatedLandscapeLayers.Add(MoveTemp(Layer));
+				}
+			}
+			Record->WaterBackups.Add(MoveTemp(Backup));
+		}
+	}
+	Values = nullptr;
+	if (Manifest->TryGetArrayField(TEXT("packageFiles"), Values) && Values)
+	{
+		for (const TSharedPtr<FJsonValue>& Value : *Values)
+		{
+			const TSharedPtr<FJsonObject> Item = Value->AsObject();
+			FPackageFileBackup Backup;
+			Backup.PackageName = LandscapeReadString(Item, TEXT("package"));
+			Backup.OriginalPath = LandscapeReadString(Item, TEXT("originalPath"));
+			Backup.BackupPath = LandscapeReadString(Item, TEXT("backupPath"));
+			Backup.Sha256 = LandscapeReadString(Item, TEXT("sha256"));
+			Backup.bExisted = ReadBool(Item, TEXT("existed"));
+			Record->PackageFileBackups.Add(MoveTemp(Backup));
+		}
+	}
+	if (Record->PackageFileBackups.IsEmpty())
+	{
+		OutErrorCode = TEXT("recovery_checkpoint_corrupt");
+		OutError = TEXT("The Landscape package recovery set is missing.");
+		return false;
+	}
+
+	UWorld* World = GetEditorWorld();
+	if (World && World->GetPathName() == Record->WorldPath)
+	{
+		Record->WorldObject = World;
+		Record->WorldPackage = World->GetPackage();
+	}
+	OutRecord = MoveTemp(Record);
+	return true;
 }
 
 FLandscapeWaterService& FLandscapeWaterService::Get()
@@ -3843,6 +4342,13 @@ void FLandscapeWaterService::SetAutomationFailurePoint(
 {
 	check(IsInGameThread());
 	AutomationFailurePoint = FailurePoint;
+}
+
+void FLandscapeWaterService::SimulateEditorRestartForTest()
+{
+	check(IsInGameThread());
+	Runs.Reset();
+	RequestRuns.Reset();
 }
 #endif
 
@@ -4724,7 +5230,8 @@ FMCPToolResult FLandscapeWaterService::PlanChange(
 	Plan->SetStringField(TEXT("world"), World->GetPathName());
 	Plan->SetStringField(TEXT("persistence"), TEXT("dirtyOnly"));
 	Plan->SetStringField(TEXT("risk"), TEXT("confirmWrite"));
-	Plan->SetStringField(TEXT("rollbackBoundary"), TEXT("sameEditorInstance"));
+	Plan->SetStringField(TEXT("rollbackBoundary"), TEXT("editorRestart"));
+	Plan->SetStringField(TEXT("rollbackDurability"), TEXT("restart"));
 	Plan->SetBoolField(TEXT("rollbackAvailable"), true);
 	Plan->SetNumberField(TEXT("operationCount"), Normalized.Num());
 	Plan->SetArrayField(TEXT("operations"), Normalized);
@@ -4974,6 +5481,18 @@ FMCPToolResult FLandscapeWaterService::ExecuteChange(
 			TEXT("The recovery snapshot metadata could not be written."),
 			TEXT("artifact_write_failed"),
 			500);
+	}
+	FString PackageBackupError;
+	if (!CapturePackageFileBackups(
+			Record->BeforeSnapshot,
+			Record->ArtifactDirectory,
+			Record->PackageFileBackups,
+			PackageBackupError))
+	{
+		return FMCPToolResult::Error(
+			PackageBackupError,
+			TEXT("recovery_snapshot_failed"),
+			409);
 	}
 
 	const TArray<TSharedPtr<FJsonValue>>& Operations =
@@ -5570,12 +6089,19 @@ FMCPToolResult FLandscapeWaterService::ExecuteChange(
 
 	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 	Result->SetStringField(TEXT("schema"), TEXT("ue.landscape-change-result.v1"));
+	Result->SetStringField(TEXT("changeSetId"), Record->RunId);
 	Result->SetStringField(TEXT("runId"), Record->RunId);
 	Result->SetStringField(TEXT("planDigest"), PlanDigest);
 	Result->SetStringField(TEXT("status"), TEXT("succeeded"));
 	Result->SetBoolField(TEXT("idempotentReplay"), false);
 	Result->SetBoolField(TEXT("rolledBack"), false);
 	Result->SetBoolField(TEXT("verified"), true);
+	Result->SetStringField(TEXT("rollbackDurability"), TEXT("restart"));
+	Result->SetStringField(TEXT("beforeHash"), Record->BeforeSnapshotDigest);
+	Result->SetStringField(TEXT("afterHash"), Record->AfterSnapshotDigest);
+	Result->SetStringField(
+		TEXT("recoveryExpiresAt"),
+		(FDateTime::UtcNow() + FTimespan::FromDays(7.0)).ToIso8601());
 	Result->SetStringField(
 		TEXT("beforeSnapshotDigest"),
 		Record->BeforeSnapshot->GetStringField(TEXT("snapshotDigest")));
@@ -5609,15 +6135,30 @@ FMCPToolResult FLandscapeWaterService::RollbackChange(
 			TEXT("rollback_confirmation_required"),
 			422);
 	}
-	const TSharedPtr<FChangeRecord>* RecordPtr = Runs.Find(RunId);
-	if (!RecordPtr || !RecordPtr->IsValid())
+	TSharedPtr<FChangeRecord> Record;
+	if (const TSharedPtr<FChangeRecord>* RecordPtr = Runs.Find(RunId);
+		RecordPtr && RecordPtr->IsValid())
 	{
-		return FMCPToolResult::Error(
-			TEXT("The Landscape change run is unknown in this Editor instance."),
-			TEXT("run_not_found"),
-			404);
+		Record = *RecordPtr;
 	}
-	TSharedPtr<FChangeRecord> Record = *RecordPtr;
+	else
+	{
+		FString LoadCode;
+		FString LoadError;
+		if (!LoadLandscapeRecoveryRecord(
+				RunId,
+				Record,
+				LoadCode,
+				LoadError))
+		{
+			return FMCPToolResult::Error(
+				LoadError,
+				LoadCode,
+				LoadCode == TEXT("run_not_found") ? 404 : 409);
+		}
+		Runs.Add(RunId, Record);
+		RequestRuns.Add(Record->RequestId, RunId);
+	}
 	if (RequestId != Record->RequestId)
 	{
 		return FMCPToolResult::Error(
@@ -5629,8 +6170,8 @@ FMCPToolResult FLandscapeWaterService::RollbackChange(
 	if (!IsOriginalWorld(World, *Record))
 	{
 		return FMCPToolResult::Error(
-			TEXT("Rollback requires the original world object and package in the same Editor instance."),
-			TEXT("rollback_boundary_exceeded"),
+			TEXT("Rollback requires the original map to be loaded and unchanged."),
+			TEXT("rollback_conflict"),
 			409);
 	}
 
@@ -5689,10 +6230,12 @@ FMCPToolResult FLandscapeWaterService::RollbackChange(
 				409);
 		}
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetStringField(TEXT("changeSetId"), RunId);
 		Result->SetStringField(TEXT("runId"), RunId);
 		Result->SetStringField(TEXT("status"), TEXT("rolledBack"));
 		Result->SetBoolField(TEXT("idempotentReplay"), true);
 		Result->SetBoolField(TEXT("rollbackVerified"), true);
+		Result->SetStringField(TEXT("rollbackDurability"), TEXT("restart"));
 		Result->SetStringField(TEXT("snapshotDigest"), CurrentDigest);
 		Result->SetStringField(
 			TEXT("packageDigest"),
@@ -5722,12 +6265,50 @@ FMCPToolResult FLandscapeWaterService::RollbackChange(
 	const bool bSuccessfulRun = Record->bVerified
 		&& Record->FailureCode.IsEmpty()
 		&& !Record->AfterSnapshotDigest.IsEmpty();
+	// A dirty-only change can disappear naturally when the Editor process exits
+	// without saving. If the newly loaded project already matches the complete
+	// pre-change semantic and package baselines, rollback is durably satisfied;
+	// record that terminal state instead of misclassifying it as an external
+	// modification conflict.
 	if (bSuccessfulRun
-		&& (CurrentDigest != Record->AfterSnapshotDigest
-			|| CurrentPackageDigest != Record->AfterPackageDigest))
+		&& CurrentDigest == Record->BeforeSnapshotDigest
+		&& CurrentPackageDigest == Record->BeforePackageDigest)
+	{
+		Record->Status = TEXT("rolledBack");
+		Record->bRolledBack = true;
+		Record->bRollbackVerified = true;
+		if (!SaveJsonFile(
+				FPaths::Combine(
+					Record->ArtifactDirectory,
+					TEXT("recovery.manifest.json")),
+				MakeRecoveryManifest(*Record)))
+		{
+			Record->Status = TEXT("succeeded");
+			Record->bRolledBack = false;
+			Record->bRollbackVerified = false;
+			return FMCPToolResult::Error(
+				TEXT("The baseline is restored, but the recovery manifest could not be updated."),
+				TEXT("artifact_write_failed"),
+				500);
+		}
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetStringField(TEXT("changeSetId"), RunId);
+		Result->SetStringField(TEXT("runId"), RunId);
+		Result->SetStringField(TEXT("status"), TEXT("rolledBack"));
+		Result->SetBoolField(TEXT("idempotentReplay"), true);
+		Result->SetBoolField(TEXT("restoredByProcessRestart"), true);
+		Result->SetBoolField(TEXT("rollbackVerified"), true);
+		Result->SetStringField(TEXT("rollbackDurability"), TEXT("restart"));
+		Result->SetStringField(TEXT("snapshotDigest"), CurrentDigest);
+		Result->SetStringField(TEXT("packageDigest"), CurrentPackageDigest);
+		Result->SetStringField(TEXT("artifactDirectory"), Record->ArtifactDirectory);
+		return FMCPToolResult::Ok(Result);
+	}
+	if (bSuccessfulRun
+		&& CurrentDigest != Record->AfterSnapshotDigest)
 	{
 		return FMCPToolResult::Error(
-			TEXT("The current Landscape/Water state or package evidence changed after execution; rollback will not overwrite external changes."),
+			TEXT("The current Landscape/Water semantic state changed after execution; rollback will not overwrite external changes."),
 			TEXT("rollback_conflict"),
 			409);
 	}
@@ -5787,10 +6368,12 @@ FMCPToolResult FLandscapeWaterService::RollbackChange(
 				TEXT("recovery.manifest.json could not be written")));
 	}
 	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("changeSetId"), RunId);
 	Result->SetStringField(TEXT("runId"), RunId);
 	Result->SetStringField(TEXT("status"), TEXT("rolledBack"));
 	Result->SetBoolField(TEXT("idempotentReplay"), false);
 	Result->SetBoolField(TEXT("rollbackVerified"), true);
+	Result->SetStringField(TEXT("rollbackDurability"), TEXT("restart"));
 	Result->SetStringField(
 		TEXT("snapshotDigest"),
 		Record->BeforeSnapshotDigest);

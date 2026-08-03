@@ -756,6 +756,50 @@ int main()
             "layout.organize supplies its deterministic graph read-back target");
     }
 
+	// A replaceManaged BuildGraph may compile to metadata-only operations after
+	// obsolete managed nodes are removed. The metadata operation still carries
+	// the authoritative graph target and must be sufficient for the required
+	// graph read-back finalizer.
+	auto buildgraph_metadata =
+		minimal_workflow("blueprint", "/Game/Blueprints/BP_Test");
+	buildgraph_metadata["operations"].push_back({
+		{ "id", "persistManagedDefinition" },
+		{ "type", "blueprint.graph.build.metadata.set" },
+		{ "params", {
+			{ "graph", "EventGraph" },
+			{ "buildId", "automation-build" },
+			{ "definition", json::object() },
+			{ "ref", "managed-node" },
+			{ "nodeId", "00000000-0000-0000-0000-000000000001" },
+		} },
+	});
+	buildgraph_metadata["verify"] = {
+		{ "compile", true },
+		{ "readBack", json::array({ "graphs" }) },
+	};
+	const auto buildgraph_metadata_plan_result =
+		engine.PlanJson(buildgraph_metadata.dump());
+	require(
+		buildgraph_metadata_plan_result.ok,
+		"BuildGraph metadata-only workflow has a deterministic graph target");
+	if (buildgraph_metadata_plan_result.ok)
+	{
+		const auto buildgraph_metadata_plan =
+			parse_result(buildgraph_metadata_plan_result);
+		bool found_metadata_graph_read_back = false;
+		for (const auto& finalizer : buildgraph_metadata_plan["finalizers"])
+		{
+			found_metadata_graph_read_back =
+				found_metadata_graph_read_back ||
+				(finalizer.value("readBackKey", std::string{}) == "graphs" &&
+				 finalizer.value("params", json::object())
+					 .value("graph", std::string{}) == "EventGraph");
+		}
+		require(
+			found_metadata_graph_read_back,
+			"BuildGraph metadata supplies EventGraph read-back finalizer");
+	}
+
     auto custom_event =
         minimal_workflow("blueprint", "/Game/Blueprints/BP_Test");
     custom_event["operations"].push_back({

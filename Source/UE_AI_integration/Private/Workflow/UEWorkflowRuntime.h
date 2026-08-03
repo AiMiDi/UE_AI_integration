@@ -108,6 +108,11 @@ private:
 		FString StructureHashAfter;
 		FString StructureHashAfterRollback;
 		FString CurrentPhase;
+		FString Durability = TEXT("session");
+		FString RecoveryState = TEXT("none");
+		FString CheckpointId;
+		FString LastCompletedOperationId;
+		FString SnapshotDigest;
 		int32 NextInitializerIndex = 0;
 		int32 NextOperationIndex = 0;
 		int32 NextFinalizerIndex = 0;
@@ -124,6 +129,7 @@ private:
 		TArray<TSharedPtr<FJsonValue>> Finalizers;
 		TArray<TSharedPtr<FJsonValue>> DirtyPackages;
 		TArray<TSharedPtr<FJsonValue>> Diagnostics;
+		TArray<TSharedPtr<FJsonValue>> RecoveryWarnings;
 		TArray<TSharedPtr<FJsonValue>> Assets;
 		TSharedPtr<FJsonObject> NormalizedWorkflow;
 		TSharedPtr<FJsonObject> StoredPlan;
@@ -252,6 +258,12 @@ private:
 	int32 TestFailAfterOperationCount = INDEX_NONE;
 	bool bTestSimulateProcessInterruption = false;
 	FString TestSaveFailureScopeId;
+	FString TestProcessFaultPoint;
+	FString TestProcessFaultMarkerPath;
+	bool bTestProcessFaultTriggered = false;
+	bool TriggerProcessFaultForTest(
+		const FString& Point,
+		const FRunRecord& Record);
 #endif
 };
 }
