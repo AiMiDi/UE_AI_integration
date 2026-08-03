@@ -1,0 +1,96 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-blueprint-buildgraph",
+  "version": "1.0.0",
+  "title": "UE Blueprint BuildGraph",
+  "description": "Validate and compile a declarative managed Blueprint Graph definition into an approved, recoverable Workflow v2 execution.",
+  "domains": ["blueprint"],
+  "risk": "safeWrite",
+  "triggers": [
+    "blueprint buildgraph",
+    "declarative blueprint graph",
+    "generate blueprint graph",
+    "reconcile blueprint nodes",
+    "声明式蓝图",
+    "批量构建蓝图图表"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": { "min": "5.3" },
+    "capabilities": [
+      "blueprint.graph.build.validate",
+      "blueprint.graph.build.plan",
+      "blueprint.graph.build.definition.get",
+      "blueprint.graph.get",
+      "blueprint.graph.snapshot",
+      "blueprint.graph.diff",
+      "blueprint.layout.validate",
+      "blueprint.asset.validate"
+    ],
+    "optionalCapabilities": [
+      "blueprint.graph.capture",
+      "blueprint.graph.visual.compare"
+    ]
+  },
+  "recipes": [
+    {
+      "id": "build-and-verify",
+      "title": "Build and verify one managed Blueprint Graph",
+      "description": "Compile a versioned BuildGraph definition to Workflow v2, execute the approved plan, and verify ownership, structure, layout, and recovery evidence.",
+      "risk": "safeWrite",
+      "inputs": [
+        { "name": "definition", "type": "object", "required": true, "description": "Complete ue.blueprint-buildgraph.v1 definition." }
+      ],
+      "steps": [
+        {
+          "id": "read-baseline",
+          "phase": "discover",
+          "purpose": "Read the current managed definition and structural Graph baseline.",
+          "operations": ["blueprint.graph.build.definition.get", "blueprint.graph.get", "blueprint.graph.snapshot"]
+        },
+        {
+          "id": "validate-and-plan",
+          "phase": "execute",
+          "purpose": "Validate ownership and compile the definition into a normalized Workflow v2 plan.",
+          "operations": ["blueprint.graph.build.validate", "blueprint.graph.build.plan"]
+        },
+        {
+          "id": "execute-approved-workflow",
+          "phase": "execute",
+          "purpose": "Execute the exact approved Workflow with one transaction, deferred compile, durable checkpoints, and existing rollback semantics.",
+          "operations": ["blueprint.graph.build.plan"]
+        },
+        {
+          "id": "verify",
+          "phase": "verify",
+          "purpose": "Verify managed refs, graph identity, structural diff, compile status, and layout diagnostics.",
+          "operations": ["blueprint.graph.build.definition.get", "blueprint.graph.get", "blueprint.graph.diff", "blueprint.layout.validate", "blueprint.asset.validate"]
+        }
+      ],
+      "result": {
+        "summary": "Approved declarative Blueprint Graph reconciliation with managed ownership and Workflow recovery evidence.",
+        "evidence": [
+          "BuildGraph definition and build ID",
+          "before and after graph hashes",
+          "Workflow plan digest and run ID",
+          "managed ref to NodeGuid mapping",
+          "structural diff and compile diagnostics",
+          "layout and optional capture evidence",
+          "durable recovery and rollback state"
+        ],
+        "success": [
+          "the definition passed bounded schema and ownership validation",
+          "the exact planned Workflow digest was approved and executed",
+          "all declared refs resolve to stable managed nodes",
+          "unmanaged nodes remain untouched",
+          "compile and structural verification pass",
+          "idempotent replay produces no duplicate nodes or connections"
+        ]
+      }
+    }
+  ],
+  "resources": [
+    { "path": "references/buildgraph-recipe.md", "description": "Ownership, planning, Workflow recovery, and verification rules." }
+  ]
+}

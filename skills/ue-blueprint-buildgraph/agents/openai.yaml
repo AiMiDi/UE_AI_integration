@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE Blueprint BuildGraph"
+  short_description: "Plan and reconcile declarative Blueprint Graphs safely."
+  default_prompt: "Use $ue-blueprint-buildgraph to validate, plan, execute, and verify this declarative Blueprint Graph through Workflow v2."
