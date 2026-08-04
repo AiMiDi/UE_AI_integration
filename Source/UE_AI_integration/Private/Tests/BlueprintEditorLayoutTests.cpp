@@ -25,6 +25,7 @@
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "Tools/MCPToolRegistry.h"
 #include "UEAIIntegrationSubsystem.h"
+#include "UObject/MetaData.h"
 #include "Workflow/UEWorkflowRuntime.h"
 
 namespace {
@@ -61,6 +62,62 @@ bool JsonStringArrayContains(const TSharedPtr<FJsonObject> &Object,
         return Value.IsValid() && Value->TryGetString(Actual) &&
                Actual == Expected;
       });
+}
+
+int32 CountCommentNodes(const UEdGraph *Graph) {
+  int32 Count = 0;
+  if (Graph) {
+    for (const UEdGraphNode *Node : Graph->Nodes) {
+      Count += Cast<UEdGraphNode_Comment>(Node) ? 1 : 0;
+    }
+  }
+  return Count;
+}
+
+UEdGraphNode_Comment *FindCommentByGroupKey(UEdGraph *Graph,
+                                             const FString &GroupKey) {
+  UMetaData *Metadata = Graph && Graph->GetOutermost()
+                            ? Graph->GetOutermost()->GetMetaData()
+                            : nullptr;
+  if (!Metadata) {
+    return nullptr;
+  }
+  for (UEdGraphNode *Node : Graph->Nodes) {
+    UEdGraphNode_Comment *Comment = Cast<UEdGraphNode_Comment>(Node);
+    if (Comment &&
+        Metadata->GetValue(Comment, TEXT("UEAI.Layout.GroupKey")) ==
+            GroupKey) {
+      return Comment;
+    }
+  }
+  return nullptr;
+}
+
+bool CommentBoundsIntersect(const UEdGraphNode_Comment *Left,
+                            const UEdGraphNode_Comment *Right) {
+  return Left && Right && Left->NodePosX < Right->NodePosX + Right->NodeWidth &&
+         Left->NodePosX + Left->NodeWidth > Right->NodePosX &&
+         Left->NodePosY < Right->NodePosY + Right->NodeHeight &&
+         Left->NodePosY + Left->NodeHeight > Right->NodePosY;
+}
+
+TSharedRef<FJsonObject>
+MakeUpsertCommentGroup(const FString &Id, const UEdGraphNode *Node,
+                       const FString &GroupKey, const FString &Text) {
+  TSharedRef<FJsonObject> Group = MakeShared<FJsonObject>();
+  Group->SetStringField(TEXT("id"), Id);
+  Group->SetArrayField(
+      TEXT("nodeIds"),
+      {MakeShared<FJsonValueString>(Node->NodeGuid.ToString())});
+  Group->SetArrayField(TEXT("actions"), {});
+  TSharedRef<FJsonObject> Comment = MakeShared<FJsonObject>();
+  Comment->SetStringField(TEXT("text"), Text);
+  Comment->SetStringField(TEXT("mode"), TEXT("upsert"));
+  Comment->SetStringField(TEXT("groupKey"), GroupKey);
+  Comment->SetBoolField(TEXT("avoidOverlap"), true);
+  Comment->SetNumberField(TEXT("padding"), 256);
+  Group->SetObjectField(TEXT("comment"), Comment);
+  return Group;
 }
 
 UK2Node_IfThenElse *AddBranchNode(UEdGraph *Graph, const int32 X,
@@ -1331,6 +1388,154 @@ bool FBlueprintEditorNativeLayoutCommandsTest::RunTest(
           }
         }
       }
+    }
+
+    // Upserted layout Comments are stable plan resources rather than
+    // append-only nodes. Large padding deliberately overlaps the two initial
+    // rectangles so avoidOverlap must translate one complete group.
+    Blueprint->GetOutermost()->SetDirtyFlag(false);
+    const FString BeforeUpsertHash =
+        UEAIIntegration::BlueprintGraph::ComputeGraphHash(Graph);
+    const int32 BeforeUpsertCommentCount = CountCommentNodes(Graph);
+    TSharedRef<FJsonObject> UpsertGroupA = MakeUpsertCommentGroup(
+        TEXT("upsert-a"), First, TEXT("tests.layout.group-a"),
+        TEXT("Upsert Group A"));
+    TSharedRef<FJsonObject> UpsertGroupB = MakeUpsertCommentGroup(
+        TEXT("upsert-b"), Second, TEXT("tests.layout.group-b"),
+        TEXT("Upsert Group B"));
+    TSharedPtr<FJsonObject> UpsertParams =
+        MakeBlueprintGraphParams(BlueprintPath, GraphName);
+    UpsertParams->SetArrayField(
+        TEXT("groups"), {MakeShared<FJsonValueObject>(UpsertGroupA),
+                         MakeShared<FJsonValueObject>(UpsertGroupB)});
+    UpsertParams->SetBoolField(TEXT("dryRun"), true);
+    const FMCPToolResult UpsertPreview = Registry.ExecuteTool(
+        TEXT("blueprint.layout.organize"), UpsertParams);
+    TestTrue(TEXT("Comment upsert preview succeeds"),
+             UpsertPreview.bSuccess);
+    if (UpsertPreview.bSuccess) {
+      UpsertParams->SetBoolField(TEXT("dryRun"), false);
+      UpsertParams->SetStringField(
+          TEXT("expectedGraphHash"),
+          UpsertPreview.Data->GetStringField(TEXT("graphHash")));
+      UpsertParams->SetStringField(
+          TEXT("approvePlanDigest"),
+          UpsertPreview.Data->GetStringField(TEXT("planDigest")));
+      const FMCPToolResult FirstUpsertApply = Registry.ExecuteTool(
+          TEXT("blueprint.layout.organize"), UpsertParams);
+      if (!FirstUpsertApply.bSuccess) {
+        AddInfo(FString::Printf(TEXT("Comment upsert apply error [%s]: %s"),
+                                *FirstUpsertApply.ErrorCode,
+                                *FirstUpsertApply.ErrorMessage));
+      }
+      TestTrue(TEXT("Comment upsert apply succeeds"),
+               FirstUpsertApply.bSuccess);
+      TestEqual(TEXT("First upsert creates two Comments"),
+                CountCommentNodes(Graph), BeforeUpsertCommentCount + 2);
+      UEdGraphNode_Comment *UpsertCommentA =
+          FindCommentByGroupKey(Graph, TEXT("tests.layout.group-a"));
+      UEdGraphNode_Comment *UpsertCommentB =
+          FindCommentByGroupKey(Graph, TEXT("tests.layout.group-b"));
+      TestNotNull(TEXT("First groupKey is persisted"), UpsertCommentA);
+      TestNotNull(TEXT("Second groupKey is persisted"), UpsertCommentB);
+      TestFalse(TEXT("avoidOverlap separates all upserted Comments"),
+                CommentBoundsIntersect(UpsertCommentA, UpsertCommentB));
+
+      TSharedPtr<FJsonObject> RepeatParams =
+          MakeBlueprintGraphParams(BlueprintPath, GraphName);
+      RepeatParams->SetArrayField(
+          TEXT("groups"), {MakeShared<FJsonValueObject>(UpsertGroupA),
+                           MakeShared<FJsonValueObject>(UpsertGroupB)});
+      RepeatParams->SetBoolField(TEXT("dryRun"), true);
+      const FMCPToolResult RepeatUpsertPreview = Registry.ExecuteTool(
+          TEXT("blueprint.layout.organize"), RepeatParams);
+      TestTrue(TEXT("Repeated Comment upsert preview succeeds"),
+               RepeatUpsertPreview.bSuccess);
+      if (RepeatUpsertPreview.bSuccess) {
+        RepeatParams->SetBoolField(TEXT("dryRun"), false);
+        RepeatParams->SetStringField(
+            TEXT("expectedGraphHash"),
+            RepeatUpsertPreview.Data->GetStringField(TEXT("graphHash")));
+        RepeatParams->SetStringField(
+            TEXT("approvePlanDigest"),
+            RepeatUpsertPreview.Data->GetStringField(TEXT("planDigest")));
+        const FMCPToolResult RepeatUpsertApply = Registry.ExecuteTool(
+            TEXT("blueprint.layout.organize"), RepeatParams);
+        TestTrue(TEXT("Repeated Comment upsert apply succeeds"),
+                 RepeatUpsertApply.bSuccess);
+        TestEqual(TEXT("Repeated groupKey upsert creates no Comment"),
+                  RepeatUpsertApply.bSuccess
+                      ? RepeatUpsertApply.Data
+                            ->GetArrayField(TEXT("createdCommentIds"))
+                            .Num()
+                      : -1,
+                  0);
+        TestEqual(TEXT("Repeated groupKey upsert preserves Comment count"),
+                  CountCommentNodes(Graph), BeforeUpsertCommentCount + 2);
+      }
+
+      if (UpsertCommentA && UpsertCommentB) {
+        const FString RestoredTextA = UpsertCommentA->NodeComment;
+        const FString RestoredTextB = UpsertCommentB->NodeComment;
+        UpsertGroupA->GetObjectField(TEXT("comment"))
+            ->SetStringField(TEXT("text"), TEXT("Mutated Group A"));
+        UpsertGroupB->GetObjectField(TEXT("comment"))
+            ->SetStringField(TEXT("text"), TEXT("Mutated Group B"));
+        Blueprint->GetOutermost()->SetDirtyFlag(false);
+        const FString BeforeInjectedFailureHash =
+            UEAIIntegration::BlueprintGraph::ComputeGraphHash(Graph);
+        const int32 BeforeInjectedFailureCommentCount =
+            CountCommentNodes(Graph);
+        TSharedPtr<FJsonObject> FailureParams =
+            MakeBlueprintGraphParams(BlueprintPath, GraphName);
+        FailureParams->SetArrayField(
+            TEXT("groups"), {MakeShared<FJsonValueObject>(UpsertGroupA),
+                             MakeShared<FJsonValueObject>(UpsertGroupB)});
+        FailureParams->SetBoolField(TEXT("dryRun"), true);
+        const FMCPToolResult FailurePreview = Registry.ExecuteTool(
+            TEXT("blueprint.layout.organize"), FailureParams);
+        TestTrue(TEXT("Injected rollback preview succeeds"),
+                 FailurePreview.bSuccess);
+        if (FailurePreview.bSuccess) {
+          FailureParams->SetBoolField(TEXT("dryRun"), false);
+          FailureParams->SetStringField(
+              TEXT("expectedGraphHash"),
+              FailurePreview.Data->GetStringField(TEXT("graphHash")));
+          FailureParams->SetStringField(
+              TEXT("approvePlanDigest"),
+              FailurePreview.Data->GetStringField(TEXT("planDigest")));
+          FailureParams->SetBoolField(
+              TEXT("__testFailAfterCommentMutation"), true);
+          const FMCPToolResult InjectedFailure = Registry.ExecuteTool(
+              TEXT("blueprint.layout.organize"), FailureParams);
+          TestFalse(TEXT("Injected Comment mutation fails"),
+                    InjectedFailure.bSuccess);
+          TestEqual(TEXT("Injected Comment failure is explicit"),
+                    InjectedFailure.ErrorCode, FString(TEXT("layout_failed")));
+          TestEqual(TEXT("Injected failure restores Graph hash"),
+                    UEAIIntegration::BlueprintGraph::ComputeGraphHash(Graph),
+                    BeforeInjectedFailureHash);
+          TestEqual(TEXT("Injected failure restores Comment count"),
+                    CountCommentNodes(Graph),
+                    BeforeInjectedFailureCommentCount);
+          TestEqual(TEXT("Injected failure restores first Comment title"),
+                    UpsertCommentA->NodeComment, RestoredTextA);
+          TestEqual(TEXT("Injected failure restores second Comment title"),
+                    UpsertCommentB->NodeComment, RestoredTextB);
+          TestFalse(TEXT("Injected failure restores package cleanliness"),
+                    Blueprint->GetOutermost()->IsDirty());
+        }
+      }
+
+      TestTrue(TEXT("One Undo removes the complete first upsert"),
+               GEditor->UndoTransaction());
+      TestEqual(TEXT("Undo restores upsert Comment count"),
+                CountCommentNodes(Graph), BeforeUpsertCommentCount);
+      TestEqual(TEXT("Undo restores upsert Graph hash"),
+                UEAIIntegration::BlueprintGraph::ComputeGraphHash(Graph),
+                BeforeUpsertHash);
+      Blueprint->GetOutermost()->SetDirtyFlag(false);
+      RefreshLiveGraphEditor();
     }
 
     CaptureGraphEditor =
