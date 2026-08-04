@@ -11,6 +11,7 @@ using namespace UEAIIntegration::BlueprintGraph;
 
 constexpr int32 MaxValidatedNodes = 256;
 constexpr int32 MaxDiagnostics = 200;
+constexpr double MaxGeometryTolerance = 256.0;
 
 TSharedRef<FJsonObject> MakeDiagnostic(
 	const FString& Rule,
@@ -29,6 +30,101 @@ TSharedRef<FJsonObject> MakeDiagnostic(
 	}
 	Diagnostic->SetArrayField(TEXT("nodeIds"), Ids);
 	return Diagnostic;
+}
+
+TSharedRef<FJsonObject> BuildStoredGeometryFingerprint(
+	const TArray<UEdGraphNode*>& Nodes,
+	const TMap<FGuid, FNodeBounds>& BoundsByNode)
+{
+	TArray<TSharedPtr<FJsonValue>> BoundsValues;
+	for (const UEdGraphNode* Node : Nodes)
+	{
+		const FNodeBounds* Bounds =
+			Node ? BoundsByNode.Find(Node->NodeGuid) : nullptr;
+		if (!Bounds)
+		{
+			continue;
+		}
+		TSharedRef<FJsonObject> Entry = BoundsToJson(*Bounds);
+		Entry->SetStringField(TEXT("nodeId"), Node->NodeGuid.ToString());
+		BoundsValues.Add(MakeShared<FJsonValueObject>(Entry));
+	}
+	TSharedRef<FJsonObject> Evidence = MakeShared<FJsonObject>();
+	Evidence->SetStringField(
+		TEXT("schema"),
+		TEXT("ue.blueprint-stored-graph-bounds.v1"));
+	Evidence->SetStringField(TEXT("coordinateSpace"), TEXT("graph"));
+	Evidence->SetArrayField(TEXT("nodeBounds"), BoundsValues);
+	FString BoundsDigest;
+	const bool bHasDigest =
+		UEAIIntegration::Infrastructure::TryDigestJson(Evidence, BoundsDigest);
+
+	TSharedRef<FJsonObject> Fingerprint = MakeShared<FJsonObject>();
+	Fingerprint->SetStringField(
+		TEXT("schema"),
+		TEXT("ue.blueprint-editor-geometry-fingerprint.v1"));
+	Fingerprint->SetStringField(TEXT("coordinateSpace"), TEXT("graph"));
+	Fingerprint->SetStringField(TEXT("geometrySource"), TEXT("stored"));
+	Fingerprint->SetBoolField(TEXT("exact"), false);
+	Fingerprint->SetStringField(
+		TEXT("boundsHash"),
+		bHasDigest ? TEXT("sha256:") + BoundsDigest : FString());
+	Fingerprint->SetNumberField(TEXT("passCount"), 0);
+	return Fingerprint;
+}
+
+void AddGeometryEvidence(
+	const TSharedRef<FJsonObject>& Diagnostic,
+	const UEdGraphNode* LeftNode,
+	const UEdGraphNode* RightNode,
+	const FNodeBounds& Left,
+	const FNodeBounds& Right,
+	const double MeasuredGap,
+	const double RequiredGap,
+	const double Tolerance,
+	const FString& MeasurementAxis,
+	const TSharedPtr<FJsonObject>& GeometryFingerprint)
+{
+	Diagnostic->SetStringField(TEXT("leftNodeId"), LeftNode->NodeGuid.ToString());
+	Diagnostic->SetStringField(
+		TEXT("rightNodeId"),
+		RightNode->NodeGuid.ToString());
+	Diagnostic->SetObjectField(TEXT("leftBounds"), BoundsToJson(Left));
+	Diagnostic->SetObjectField(TEXT("rightBounds"), BoundsToJson(Right));
+	Diagnostic->SetNumberField(TEXT("measuredGap"), MeasuredGap);
+	Diagnostic->SetNumberField(TEXT("requiredGap"), RequiredGap);
+	Diagnostic->SetNumberField(TEXT("tolerance"), Tolerance);
+	Diagnostic->SetStringField(TEXT("measurementAxis"), MeasurementAxis);
+	Diagnostic->SetNumberField(
+		TEXT("overlapWidth"),
+		FMath::Max(
+			0.0,
+			FMath::Min(Left.Right(), Right.Right())
+				- FMath::Max(Left.X, Right.X)));
+	Diagnostic->SetNumberField(
+		TEXT("overlapHeight"),
+		FMath::Max(
+			0.0,
+			FMath::Min(Left.Bottom(), Right.Bottom())
+				- FMath::Max(Left.Y, Right.Y)));
+	Diagnostic->SetObjectField(
+		TEXT("geometryFingerprint"),
+		GeometryFingerprint);
+}
+
+double MinimumOverlapDepth(
+	const FNodeBounds& Left,
+	const FNodeBounds& Right)
+{
+	const double OverlapWidth = FMath::Max(
+		0.0,
+		FMath::Min(Left.Right(), Right.Right())
+			- FMath::Max(Left.X, Right.X));
+	const double OverlapHeight = FMath::Max(
+		0.0,
+		FMath::Min(Left.Bottom(), Right.Bottom())
+			- FMath::Max(Left.Y, Right.Y));
+	return FMath::Min(OverlapWidth, OverlapHeight);
 }
 
 class FTool_ValidateBlueprintLayout final : public FMCPToolBase
@@ -55,6 +151,8 @@ public:
 		double MinHorizontalGap = 32.0;
 		double MinVerticalGap = 24.0;
 		double CommentPadding = 32.0;
+		double Tolerance = 1.0;
+		bool bStrictWarnings = false;
 		Params->TryGetNumberField(
 			TEXT("minHorizontalGap"),
 			MinHorizontalGap);
@@ -64,19 +162,25 @@ public:
 		Params->TryGetNumberField(
 			TEXT("commentPadding"),
 			CommentPadding);
+		Params->TryGetNumberField(TEXT("tolerance"), Tolerance);
+		Params->TryGetBoolField(TEXT("strictWarnings"), bStrictWarnings);
 		if (!FMath::IsFinite(MinHorizontalGap)
 			|| !FMath::IsFinite(MinVerticalGap)
 			|| !FMath::IsFinite(CommentPadding)
+			|| !FMath::IsFinite(Tolerance)
 			|| MinHorizontalGap < 0.0
 			|| MinVerticalGap < 0.0
 			|| CommentPadding < 0.0
 			|| MinHorizontalGap > 4096.0
 			|| MinVerticalGap > 4096.0
-			|| CommentPadding > 4096.0)
+			|| CommentPadding > 4096.0
+			|| Tolerance < 0.0
+			|| Tolerance > MaxGeometryTolerance)
 		{
 			return InvalidRequest(
 				TEXT("Layout gap and padding values must be finite numbers "
-					"between 0 and 4096."));
+					"between 0 and 4096; tolerance must be between 0 and "
+					"256 Graph Units."));
 		}
 
 		FContext Context;
@@ -143,7 +247,6 @@ public:
 
 		TArray<UEdGraphNode*> Nodes;
 		TMap<FGuid, FNodeBounds> BoundsByNode;
-		int32 ExactCount = 0;
 		for (UEdGraphNode* Node : Context.Graph->Nodes)
 		{
 			if (!Node
@@ -159,13 +262,6 @@ public:
 						"provide nodeIds to narrow the scope."));
 			}
 			Nodes.Add(Node);
-			FNodeBounds Bounds;
-			TryGetNodeBounds(Context, Node, bUseEditorGeometry, Bounds);
-			BoundsByNode.Add(Node->NodeGuid, Bounds);
-			if (Bounds.bExact)
-			{
-				++ExactCount;
-			}
 		}
 		Nodes.Sort(
 			[](const UEdGraphNode& Left, const UEdGraphNode& Right)
@@ -173,14 +269,57 @@ public:
 				return Left.NodeGuid.ToString() < Right.NodeGuid.ToString();
 			});
 
-		const bool bGeometryComplete = ExactCount == Nodes.Num();
-		if (GeometryMode == TEXT("editor") && !bGeometryComplete)
+		TSharedPtr<FJsonObject> GeometryFingerprint;
+		int32 ExactCount = 0;
+		if (bUseEditorGeometry && !Nodes.IsEmpty())
 		{
-			return EditorUnavailable(
-				TEXT("Exact Graph Editor geometry is unavailable for one or "
-					"more requested nodes."),
-				TEXT("graph_geometry_unavailable"));
+			FEditorGeometryFingerprint SettledFingerprint;
+			FString GeometryError;
+			if (TryCaptureSettledEditorGeometry(
+					Context,
+					Nodes,
+					BoundsByNode,
+					SettledFingerprint,
+					GeometryError))
+			{
+				ExactCount = Nodes.Num();
+				GeometryFingerprint =
+					GeometryFingerprintToJson(SettledFingerprint);
+				GeometryFingerprint->SetStringField(
+					TEXT("geometrySource"),
+					TEXT("editor"));
+			}
+			else if (GeometryMode == TEXT("editor"))
+			{
+				return EditorUnavailable(
+					GeometryError,
+					TEXT("graph_geometry_unavailable"));
+			}
+			else
+			{
+				bUseEditorGeometry = false;
+			}
 		}
+		if (Nodes.IsEmpty())
+		{
+			bUseEditorGeometry = false;
+		}
+		if (!bUseEditorGeometry)
+		{
+			BoundsByNode.Reset();
+			ExactCount = 0;
+			for (UEdGraphNode* Node : Nodes)
+			{
+				FNodeBounds Bounds;
+				TryGetNodeBounds(Context, Node, false, Bounds);
+				BoundsByNode.Add(Node->NodeGuid, Bounds);
+				ExactCount += Bounds.bExact ? 1 : 0;
+			}
+			GeometryFingerprint =
+				BuildStoredGeometryFingerprint(Nodes, BoundsByNode);
+		}
+
+		const bool bGeometryComplete = ExactCount == Nodes.Num();
 
 		TArray<TSharedPtr<FJsonValue>> Diagnostics;
 		int32 TotalDiagnostics = 0;
@@ -207,13 +346,17 @@ public:
 
 		if (!bGeometryComplete)
 		{
-			AddDiagnostic(
-				MakeDiagnostic(
+			TSharedRef<FJsonObject> Diagnostic = MakeDiagnostic(
 					TEXT("geometry_incomplete"),
 					TEXT("warning"),
 					TEXT("Some node dimensions are stored-only; overlap and "
 						"spacing checks skip those nodes."),
-					{}));
+					{});
+			Diagnostic->SetNumberField(TEXT("tolerance"), Tolerance);
+			Diagnostic->SetObjectField(
+				TEXT("geometryFingerprint"),
+				GeometryFingerprint);
+			AddDiagnostic(Diagnostic);
 		}
 
 		for (int32 LeftIndex = 0; LeftIndex < Nodes.Num(); ++LeftIndex)
@@ -239,15 +382,29 @@ public:
 						&& Left.bExact
 						&& Right.bExact
 						&& Intersects(Left, Right)
+						&& MinimumOverlapDepth(Left, Right) > Tolerance
 						&& !Contains(Left, Right)
 						&& !Contains(Right, Left))
 					{
-						AddDiagnostic(
-							MakeDiagnostic(
+						const double OverlapDepth =
+							MinimumOverlapDepth(Left, Right);
+						TSharedRef<FJsonObject> Diagnostic = MakeDiagnostic(
 								TEXT("comment_overlap"),
 								TEXT("warning"),
 								TEXT("Comment boxes overlap without nesting."),
-								{LeftNode->NodeGuid, RightNode->NodeGuid}));
+								{LeftNode->NodeGuid, RightNode->NodeGuid});
+						AddGeometryEvidence(
+							Diagnostic,
+							LeftNode,
+							RightNode,
+							Left,
+							Right,
+							-OverlapDepth,
+							0.0,
+							Tolerance,
+							TEXT("minimumOverlap"),
+							GeometryFingerprint);
+						AddDiagnostic(Diagnostic);
 					}
 					continue;
 				}
@@ -256,14 +413,28 @@ public:
 					continue;
 				}
 
-				if (Intersects(Left, Right))
+				const double OverlapDepth =
+					MinimumOverlapDepth(Left, Right);
+				if (Intersects(Left, Right)
+					&& OverlapDepth > Tolerance)
 				{
-					AddDiagnostic(
-						MakeDiagnostic(
+					TSharedRef<FJsonObject> Diagnostic = MakeDiagnostic(
 							TEXT("node_overlap"),
 							TEXT("error"),
 							TEXT("Graph nodes overlap."),
-							{LeftNode->NodeGuid, RightNode->NodeGuid}));
+							{LeftNode->NodeGuid, RightNode->NodeGuid});
+					AddGeometryEvidence(
+						Diagnostic,
+						LeftNode,
+						RightNode,
+						Left,
+						Right,
+						-OverlapDepth,
+						0.0,
+						Tolerance,
+						TEXT("minimumOverlap"),
+						GeometryFingerprint);
+					AddDiagnostic(Diagnostic);
 					continue;
 				}
 
@@ -275,14 +446,25 @@ public:
 						: Left.X - Right.Right();
 				if (bVerticalOverlap
 					&& HorizontalGap >= 0.0
-					&& HorizontalGap < MinHorizontalGap)
+					&& HorizontalGap + Tolerance < MinHorizontalGap)
 				{
-					AddDiagnostic(
-						MakeDiagnostic(
+					TSharedRef<FJsonObject> Diagnostic = MakeDiagnostic(
 							TEXT("horizontal_gap"),
 							TEXT("warning"),
 							TEXT("Horizontally adjacent nodes are too close."),
-							{LeftNode->NodeGuid, RightNode->NodeGuid}));
+							{LeftNode->NodeGuid, RightNode->NodeGuid});
+					AddGeometryEvidence(
+						Diagnostic,
+						LeftNode,
+						RightNode,
+						Left,
+						Right,
+						HorizontalGap,
+						MinHorizontalGap,
+						Tolerance,
+						TEXT("horizontal"),
+						GeometryFingerprint);
+					AddDiagnostic(Diagnostic);
 				}
 
 				const bool bHorizontalOverlap =
@@ -293,14 +475,25 @@ public:
 						: Left.Y - Right.Bottom();
 				if (bHorizontalOverlap
 					&& VerticalGap >= 0.0
-					&& VerticalGap < MinVerticalGap)
+					&& VerticalGap + Tolerance < MinVerticalGap)
 				{
-					AddDiagnostic(
-						MakeDiagnostic(
+					TSharedRef<FJsonObject> Diagnostic = MakeDiagnostic(
 							TEXT("vertical_gap"),
 							TEXT("warning"),
 							TEXT("Vertically adjacent nodes are too close."),
-							{LeftNode->NodeGuid, RightNode->NodeGuid}));
+							{LeftNode->NodeGuid, RightNode->NodeGuid});
+					AddGeometryEvidence(
+						Diagnostic,
+						LeftNode,
+						RightNode,
+						Left,
+						Right,
+						VerticalGap,
+						MinVerticalGap,
+						Tolerance,
+						TEXT("vertical"),
+						GeometryFingerprint);
+					AddDiagnostic(Diagnostic);
 				}
 			}
 		}
@@ -330,30 +523,62 @@ public:
 				{
 					continue;
 				}
+				const double MeasuredPadding = FMath::Min(
+					FMath::Min(
+						CandidateBounds.X - CommentBounds.X,
+						CandidateBounds.Y - CommentBounds.Y),
+					FMath::Min(
+						CommentBounds.Right() - CandidateBounds.Right(),
+						CommentBounds.Bottom() - CandidateBounds.Bottom()));
 				if (Contains(CommentBounds, CandidateBounds)
-					&& !Contains(
-						CommentBounds,
-						CandidateBounds,
-						CommentPadding))
+					&& MeasuredPadding + Tolerance < CommentPadding)
 				{
-					AddDiagnostic(
-						MakeDiagnostic(
+					TSharedRef<FJsonObject> Diagnostic = MakeDiagnostic(
 							TEXT("comment_padding"),
 							TEXT("warning"),
 							TEXT("A contained node does not have the required "
 								"Comment padding."),
-							{Node->NodeGuid, Candidate->NodeGuid}));
+							{Node->NodeGuid, Candidate->NodeGuid});
+					AddGeometryEvidence(
+						Diagnostic,
+						Node,
+						Candidate,
+						CommentBounds,
+						CandidateBounds,
+						MeasuredPadding,
+						CommentPadding,
+						Tolerance,
+						TEXT("minimumContainmentPadding"),
+						GeometryFingerprint);
+					AddDiagnostic(Diagnostic);
 				}
 				else if (Intersects(CommentBounds, CandidateBounds)
+					&& MinimumOverlapDepth(
+						CommentBounds,
+						CandidateBounds) > Tolerance
 					&& !Contains(CommentBounds, CandidateBounds))
 				{
-					AddDiagnostic(
-						MakeDiagnostic(
+					const double OverlapDepth = MinimumOverlapDepth(
+						CommentBounds,
+						CandidateBounds);
+					TSharedRef<FJsonObject> Diagnostic = MakeDiagnostic(
 							TEXT("comment_partial_overlap"),
 							TEXT("error"),
 							TEXT("A Comment intersects a node without fully "
 								"containing it."),
-							{Node->NodeGuid, Candidate->NodeGuid}));
+							{Node->NodeGuid, Candidate->NodeGuid});
+					AddGeometryEvidence(
+						Diagnostic,
+						Node,
+						Candidate,
+						CommentBounds,
+						CandidateBounds,
+						-OverlapDepth,
+						0.0,
+						Tolerance,
+						TEXT("minimumOverlap"),
+						GeometryFingerprint);
+					AddDiagnostic(Diagnostic);
 				}
 			}
 		}
@@ -367,6 +592,11 @@ public:
 			TEXT("graphHash"),
 			ComputeGraphHash(Context.Graph));
 		Result->SetStringField(TEXT("geometryMode"), GeometryMode);
+		Result->SetObjectField(
+			TEXT("geometryFingerprint"),
+			GeometryFingerprint);
+		Result->SetNumberField(TEXT("tolerance"), Tolerance);
+		Result->SetBoolField(TEXT("strictWarnings"), bStrictWarnings);
 		Result->SetStringField(
 			TEXT("geometryStatus"),
 			Nodes.IsEmpty() && bUseEditorGeometry
@@ -403,7 +633,20 @@ public:
 		Result->SetBoolField(
 			TEXT("truncated"),
 			TotalDiagnostics > Diagnostics.Num());
-		if (ErrorCount > 0)
+		const bool bFailedByWarnings =
+			bStrictWarnings && WarningCount > 0;
+		TSharedRef<FJsonObject> ValidationSummary = MakeShared<FJsonObject>();
+		ValidationSummary->SetBoolField(
+			TEXT("failedByErrors"),
+			ErrorCount > 0);
+		ValidationSummary->SetBoolField(
+			TEXT("failedByWarnings"),
+			bFailedByWarnings);
+		ValidationSummary->SetBoolField(
+			TEXT("geometryComplete"),
+			bGeometryComplete);
+		Result->SetObjectField(TEXT("validationSummary"), ValidationSummary);
+		if (ErrorCount > 0 || bFailedByWarnings)
 		{
 			Result->SetStringField(TEXT("conclusion"), TEXT("invalid"));
 			Result->SetBoolField(TEXT("valid"), false);
