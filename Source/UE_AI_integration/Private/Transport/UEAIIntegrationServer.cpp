@@ -587,6 +587,12 @@ void FUEAIIntegrationServer::Stop()
 		return;
 	}
 
+	// Async handlers own transport completions while active. Cancel them while
+	// this server and its activity observers are still alive so they can restore
+	// Editor state and complete each request exactly once.
+	Executor.CancelAsyncOperations(
+		TEXT("The UE_AI_integration server is stopping."));
+
 	UnbindRoutes();
 	Router.Reset();
 	bIsRunning = false;
@@ -773,7 +779,30 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 	Context.Capability = CapabilityId;
 	Context.Params = Params;
 	Context.RequestId = RequestId;
-	const FMCPResult Result = Executor.Execute(Context);
+	FMCPResult Result;
+	const FHttpResultCallback Completion = Pending->OnComplete;
+	const bool bDeferred = Executor.BeginExecuteAsync(
+		Context,
+		[this, Completion](FMCPResult&& AsyncResult) mutable
+		{
+			check(IsInGameThread());
+			if (!AsyncResult.bOk)
+			{
+				SendError(
+					Completion,
+					AsyncResult.Error.HttpStatus,
+					AsyncResult.Error.Code,
+					AsyncResult.Error.Message,
+					AsyncResult.Error.Details);
+				return;
+			}
+			SendSuccess(Completion, AsyncResult.Data);
+		},
+		Result);
+	if (bDeferred)
+	{
+		return;
+	}
 	if (!Result.bOk)
 	{
 		SendError(

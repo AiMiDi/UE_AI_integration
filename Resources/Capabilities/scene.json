@@ -803,6 +803,305 @@
       }
     },
     {
+      "id": "scene.viewport.visualization.analyze",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Analyze a persisted lossless viewport debug-view capture with bounded color, luminance, regional, and mode-aware encoded-image statistics.",
+      "search": {
+        "title": "Analyze viewport debug visualization",
+        "keywords": [
+          "gbuffer",
+          "render debug",
+          "visualization",
+          "histogram",
+          "viewport"
+        ],
+        "aliases": [
+          "debug view analyze",
+          "调试视图分析",
+          "渲染分析"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "captureId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          }
+        },
+        "required": [
+          "captureId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "scene.viewport.visualization.capture",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Temporarily apply a named Editor or PIE visualization mode, capture only that viewport as a lossless PNG artifact, and verify restoration of the original state.",
+      "search": {
+        "title": "Capture viewport debug visualization",
+        "keywords": [
+          "gbuffer",
+          "buffer visualization",
+          "ray tracing debug",
+          "nanite",
+          "lumen",
+          "viewport"
+        ],
+        "aliases": [
+          "debug view capture",
+          "调试视图截图",
+          "GBuffer截图"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "editor",
+                  "pie"
+                ]
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          "visualization": {
+            "type": "object",
+            "properties": {
+              "family": {
+                "type": "string",
+                "enum": [
+                  "viewMode",
+                  "buffer",
+                  "rayTracingDebug",
+                  "nanite",
+                  "lumen",
+                  "virtualShadowMap",
+                  "gpuSkinCache",
+                  "strata",
+                  "groom"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "family",
+              "mode"
+            ],
+            "additionalProperties": false
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 64,
+            "maximum": 4096
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 64,
+            "maximum": 4096
+          }
+        },
+        "required": [
+          "visualization"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "image"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "scene.viewport.visualization.compare",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Compare two compatible lossless viewport visualization captures and persist a bounded PNG diff with changed-pixel and changed-region evidence.",
+      "search": {
+        "title": "Compare viewport debug visualizations",
+        "keywords": [
+          "visual regression",
+          "gbuffer diff",
+          "render diff",
+          "debug view",
+          "viewport"
+        ],
+        "aliases": [
+          "debug view compare",
+          "调试视图对比",
+          "渲染对比"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "beforeCaptureId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "afterCaptureId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "pixelThreshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 255,
+            "default": 8
+          }
+        },
+        "required": [
+          "beforeCaptureId",
+          "afterCaptureId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "image"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
+      "id": "scene.viewport.visualization.list",
+      "domain": "scene",
+      "kind": "query",
+      "description": "List named debug visualization modes and their live availability for the active Editor viewport or an exact PIE session generation.",
+      "search": {
+        "title": "List viewport debug visualizations",
+        "keywords": [
+          "view mode",
+          "gbuffer",
+          "ray tracing debug",
+          "nanite visualization",
+          "lumen visualization"
+        ],
+        "aliases": [
+          "debug views",
+          "调试视图",
+          "可视化模式"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "editor",
+                  "pie"
+                ]
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          "family": {
+            "type": "string",
+            "enum": [
+              "viewMode",
+              "buffer",
+              "rayTracingDebug",
+              "nanite",
+              "lumen",
+              "virtualShadowMap",
+              "gpuSkinCache",
+              "strata",
+              "groom"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "readOnly": true,
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      }
+    },
+    {
       "id": "scene.world.arch.create",
       "domain": "scene",
       "kind": "command",

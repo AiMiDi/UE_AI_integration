@@ -123,6 +123,29 @@ FMCPToolResult FMCPToolRegistry::ExecuteTool(
 	return Tool->Execute(Params);
 }
 
+bool FMCPToolRegistry::BeginExecuteToolAsync(
+	const FString& Name,
+	const TSharedPtr<FJsonObject>& Params,
+	FMCPToolAsyncCompletion Completion)
+{
+	FMCPToolBase* Tool = FindTool(Name);
+	return Tool
+		&& Tool->SupportsAsyncExecution()
+		&& Tool->BeginExecuteAsync(Params, MoveTemp(Completion));
+}
+
+void FMCPToolRegistry::CancelAsyncTools(const FString& Reason)
+{
+	check(IsInGameThread());
+	for (TPair<FString, TSharedPtr<FMCPToolBase>>& Pair : Tools)
+	{
+		if (Pair.Value.IsValid() && Pair.Value->SupportsAsyncExecution())
+		{
+			Pair.Value->CancelAsyncExecution(Reason);
+		}
+	}
+}
+
 bool FMCPToolRegistry::LoadCapabilityManifests()
 {
 	const TSharedPtr<IPlugin> Plugin =

@@ -39,6 +39,13 @@ struct FMCPToolResult
 };
 
 /**
+ * Completion for the small set of tools that must span real Editor frames.
+ * Implementations must invoke it on the Game Thread exactly once after a
+ * successful BeginExecuteAsync call, including cancellation and failure.
+ */
+using FMCPToolAsyncCompletion = TFunction<void(FMCPToolResult&&)>;
+
+/**
  * Base class for all MCP tools. Each tool category registers concrete subclasses.
  * Pattern: BlueprintMCP's handler-per-file + UnrealClaude's registry dispatch.
  */
@@ -52,4 +59,21 @@ public:
 
 	/** Execute the tool on the game thread. Params come from the MCP client. */
 	virtual FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) = 0;
+
+	/** True only for handlers whose result intentionally spans Editor frames. */
+	virtual bool SupportsAsyncExecution() const { return false; }
+
+	/**
+	 * Start a bounded asynchronous execution. Returning true transfers exactly
+	 * one completion obligation to the tool. Synchronous tools keep the default.
+	 */
+	virtual bool BeginExecuteAsync(
+		const TSharedPtr<FJsonObject>& Params,
+		FMCPToolAsyncCompletion Completion)
+	{
+		return false;
+	}
+
+	/** Cancel any active async execution and complete it before returning. */
+	virtual void CancelAsyncExecution(const FString& Reason) {}
 };

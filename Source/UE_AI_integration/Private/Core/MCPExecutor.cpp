@@ -51,50 +51,169 @@ FMCPResult FMCPExecutor::Execute(const FMCPExecutionContext& Context)
 	}
 
 	const FMCPResult Result = ExecuteUncached(Context);
-	if (IdempotencyCache.Num() >= MaxIdempotencyRecords)
+	StoreIdempotencyResult(Context.RequestId, PayloadKey, Result, NowUtc);
+	return Result;
+}
+
+bool FMCPExecutor::BeginExecuteAsync(
+	const FMCPExecutionContext& Context,
+	TFunction<void(FMCPResult&&)> Completion,
+	FMCPResult& OutImmediate)
+{
+	check(IsInGameThread());
+	FMCPToolBase* Tool = Registry.FindTool(Context.Capability);
+	if (!Tool || !Tool->SupportsAsyncExecution())
 	{
-		FString OldestRequestId;
-		FDateTime OldestAccessUtc;
-		bool bFoundOldest = false;
-		for (const TPair<FString, FIdempotencyRecord>& Pair : IdempotencyCache)
+		OutImmediate = Execute(Context);
+		return false;
+	}
+
+	const FDateTime NowUtc = FDateTime::UtcNow();
+	PruneIdempotencyCache(NowUtc);
+	const FString PayloadKey = MakePayloadKey(Context);
+	if (!Context.RequestId.IsEmpty())
+	{
+		if (FIdempotencyRecord* Existing =
+				IdempotencyCache.Find(Context.RequestId))
 		{
-			if (!bFoundOldest || Pair.Value.LastAccessUtc < OldestAccessUtc)
+			Existing->LastAccessUtc = NowUtc;
+			if (Existing->PayloadKey != PayloadKey)
 			{
-				bFoundOldest = true;
-				OldestRequestId = Pair.Key;
-				OldestAccessUtc = Pair.Value.LastAccessUtc;
+				TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+				Details->SetStringField(TEXT("requestId"), Context.RequestId);
+				OutImmediate = FMCPResult::Fail(
+					TEXT("idempotency_conflict"),
+					TEXT("The requestId has already been used with a different payload."),
+					409,
+					Details);
 			}
+			else
+			{
+				OutImmediate = Existing->Result;
+			}
+			return false;
 		}
-		if (bFoundOldest)
+		if (const FInFlightRecord* Existing =
+				InFlightRequests.Find(Context.RequestId))
 		{
-			IdempotencyCache.Remove(OldestRequestId);
+			TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+			Details->SetStringField(TEXT("requestId"), Context.RequestId);
+			OutImmediate = Existing->PayloadKey == PayloadKey
+				? FMCPResult::Fail(
+					TEXT("async_request_in_progress"),
+					TEXT("The requestId is already executing asynchronously."),
+					409,
+					Details)
+				: FMCPResult::Fail(
+					TEXT("idempotency_conflict"),
+					TEXT("The requestId is already executing with a different payload."),
+					409,
+					Details);
+			return false;
 		}
 	}
 
-	FIdempotencyRecord& Record = IdempotencyCache.Add(Context.RequestId);
-	Record.PayloadKey = PayloadKey;
-	Record.Result = Result;
-	Record.LastAccessUtc = NowUtc;
-	return Result;
+	TSharedPtr<FJsonObject> EffectiveParams;
+	if (!PrepareExecution(Context, EffectiveParams, OutImmediate))
+	{
+		return false;
+	}
+	if (!Context.RequestId.IsEmpty())
+	{
+		InFlightRequests.Add(Context.RequestId, FInFlightRecord{PayloadKey});
+	}
+
+	const FString RequestId = Context.RequestId;
+	const TSharedRef<bool, ESPMode::ThreadSafe> bCompleted =
+		MakeShared<bool, ESPMode::ThreadSafe>(false);
+	const bool bStarted = Registry.BeginExecuteToolAsync(
+		Context.Capability,
+		EffectiveParams,
+		[this,
+		 RequestId,
+		 PayloadKey,
+		 bCompleted,
+		 Completion = MoveTemp(Completion)](FMCPToolResult&& ToolResult) mutable
+		{
+			check(IsInGameThread());
+			if (*bCompleted)
+			{
+				ensureMsgf(false, TEXT("Async MCP tool completed more than once."));
+				return;
+			}
+			*bCompleted = true;
+			FMCPResult Result = ConvertToolResult(MoveTemp(ToolResult));
+			if (!RequestId.IsEmpty())
+			{
+				InFlightRequests.Remove(RequestId);
+				StoreIdempotencyResult(
+					RequestId,
+					PayloadKey,
+					Result,
+					FDateTime::UtcNow());
+			}
+			Completion(MoveTemp(Result));
+		});
+	if (bStarted)
+	{
+		return true;
+	}
+
+	if (!Context.RequestId.IsEmpty())
+	{
+		InFlightRequests.Remove(Context.RequestId);
+	}
+	OutImmediate = FMCPResult::Fail(
+		TEXT("async_start_failed"),
+		TEXT("The asynchronous capability did not accept the request."),
+		500);
+	return false;
+}
+
+void FMCPExecutor::CancelAsyncOperations(const FString& Reason)
+{
+	check(IsInGameThread());
+	Registry.CancelAsyncTools(Reason);
+	ensureMsgf(
+		InFlightRequests.IsEmpty(),
+		TEXT("An async MCP tool did not complete during cancellation."));
 }
 
 FMCPResult FMCPExecutor::ExecuteUncached(const FMCPExecutionContext& Context) const
 {
+	TSharedPtr<FJsonObject> EffectiveParams;
+	FMCPResult Failure;
+	if (!PrepareExecution(Context, EffectiveParams, Failure))
+	{
+		return Failure;
+	}
+
+	return ConvertToolResult(
+		Registry.ExecuteTool(Context.Capability, EffectiveParams));
+}
+
+bool FMCPExecutor::PrepareExecution(
+	const FMCPExecutionContext& Context,
+	TSharedPtr<FJsonObject>& OutEffectiveParams,
+	FMCPResult& OutFailure) const
+{
 	if (!Registry.IsReady())
 	{
-		return FMCPResult::Fail(
+		OutFailure = FMCPResult::Fail(
 			TEXT("service_degraded"),
 			TEXT("Capability bindings failed validation."),
 			503,
 			MakeValidationDetails(Registry.GetValidationErrors()));
+		return false;
 	}
 
 	if (!Registry.FindTool(Context.Capability))
 	{
-		return FMCPResult::Fail(
+		OutFailure = FMCPResult::Fail(
 			TEXT("capability_not_found"),
 			FString::Printf(TEXT("Capability '%s' was not found."), *Context.Capability),
 			404);
+		return false;
 	}
 
 	const TSharedPtr<FJsonObject>* Descriptor =
@@ -114,14 +233,15 @@ FMCPResult FMCPExecutor::ExecuteUncached(const FMCPExecutionContext& Context) co
 		}
 		Details->SetStringField(TEXT("capability"), Context.Capability);
 		Details->SetArrayField(TEXT("availabilityReasons"), ReasonValues);
-		return FMCPResult::Fail(
+		OutFailure = FMCPResult::Fail(
 			TEXT("capability_unavailable"),
 			TEXT("The capability is not available in this plugin build or project."),
 			409,
 			Details);
+		return false;
 	}
 
-	TSharedPtr<FJsonObject> EffectiveParams =
+	OutEffectiveParams =
 		Context.Params.IsValid()
 			? MakeShared<FJsonObject>(*Context.Params)
 			: MakeShared<FJsonObject>();
@@ -141,54 +261,60 @@ FMCPResult FMCPExecutor::ExecuteUncached(const FMCPExecutionContext& Context) co
 			AllowsLegacyRequestIdOmission(Context.Capability);
 		if (Context.RequestId.IsEmpty() && !bAllowsLegacyOmission)
 		{
-			return FMCPResult::Fail(
+			OutFailure = FMCPResult::Fail(
 				TEXT("request_id_required"),
 				TEXT(
 					"This capability requires requestId in the /api/execute envelope."),
 				422);
+			return false;
 		}
 		FString LegacyParamRequestId;
 		if (Context.RequestId.IsEmpty()
-			&& EffectiveParams->TryGetStringField(
+			&& OutEffectiveParams->TryGetStringField(
 				TEXT("requestId"),
 				LegacyParamRequestId)
 			&& !LegacyParamRequestId.IsEmpty())
 		{
-			return FMCPResult::Fail(
+			OutFailure = FMCPResult::Fail(
 				TEXT("request_id_required"),
 				TEXT(
 					"requestId must be supplied in the /api/execute envelope."),
 				422);
+			return false;
 		}
 		if (!Context.RequestId.IsEmpty())
 		{
 			FString ParamRequestId;
-			if (EffectiveParams->TryGetStringField(TEXT("requestId"), ParamRequestId)
+			if (OutEffectiveParams->TryGetStringField(TEXT("requestId"), ParamRequestId)
 				&& ParamRequestId != Context.RequestId)
 			{
-				return FMCPResult::Fail(
+				OutFailure = FMCPResult::Fail(
 					TEXT("request_id_mismatch"),
 					TEXT(
 						"params.requestId must match the /api/execute envelope requestId."),
 					409);
+				return false;
 			}
-			EffectiveParams->SetStringField(TEXT("requestId"), Context.RequestId);
+			OutEffectiveParams->SetStringField(TEXT("requestId"), Context.RequestId);
 		}
 	}
 
 	TArray<FString> ParamErrors;
 	if (!Registry.ValidateParams(
-			Context.Capability, EffectiveParams, ParamErrors))
+			Context.Capability, OutEffectiveParams, ParamErrors))
 	{
-		return FMCPResult::Fail(
+		OutFailure = FMCPResult::Fail(
 			TEXT("invalid_params"),
 			TEXT("Capability parameters failed manifest schema validation."),
 			422,
 			MakeValidationDetails(ParamErrors));
+		return false;
 	}
+	return true;
+}
 
-	const FMCPToolResult ToolResult =
-		Registry.ExecuteTool(Context.Capability, EffectiveParams);
+FMCPResult FMCPExecutor::ConvertToolResult(FMCPToolResult&& ToolResult)
+{
 	if (!ToolResult.bSuccess)
 	{
 		return FMCPResult::Fail(
@@ -201,6 +327,41 @@ FMCPResult FMCPExecutor::ExecuteUncached(const FMCPExecutionContext& Context) co
 	}
 
 	return FMCPResult::Ok(ToolResult.Data);
+}
+
+void FMCPExecutor::StoreIdempotencyResult(
+	const FString& RequestId,
+	const FString& PayloadKey,
+	const FMCPResult& Result,
+	const FDateTime& NowUtc)
+{
+	if (RequestId.IsEmpty())
+	{
+		return;
+	}
+	if (IdempotencyCache.Num() >= MaxIdempotencyRecords)
+	{
+		FString OldestRequestId;
+		FDateTime OldestAccessUtc;
+		bool bFoundOldest = false;
+		for (const TPair<FString, FIdempotencyRecord>& Pair : IdempotencyCache)
+		{
+			if (!bFoundOldest || Pair.Value.LastAccessUtc < OldestAccessUtc)
+			{
+				bFoundOldest = true;
+				OldestRequestId = Pair.Key;
+				OldestAccessUtc = Pair.Value.LastAccessUtc;
+			}
+		}
+		if (bFoundOldest)
+		{
+			IdempotencyCache.Remove(OldestRequestId);
+		}
+	}
+	FIdempotencyRecord& Record = IdempotencyCache.Add(RequestId);
+	Record.PayloadKey = PayloadKey;
+	Record.Result = Result;
+	Record.LastAccessUtc = NowUtc;
 }
 
 FString FMCPExecutor::MakePayloadKey(const FMCPExecutionContext& Context)

@@ -22,6 +22,15 @@ public:
 	/** Execute a tool by name. */
 	FMCPToolResult ExecuteTool(const FString& Name, const TSharedPtr<FJsonObject>& Params);
 
+	/** Begin a tool-owned bounded async execution when the tool supports it. */
+	bool BeginExecuteToolAsync(
+		const FString& Name,
+		const TSharedPtr<FJsonObject>& Params,
+		FMCPToolAsyncCompletion Completion);
+
+	/** Cancel all active async tools synchronously (server stop/module unload). */
+	void CancelAsyncTools(const FString& Reason);
+
 	/** Load and validate the six manifests from this plugin's Resources directory. */
 	bool LoadCapabilityManifests();
 

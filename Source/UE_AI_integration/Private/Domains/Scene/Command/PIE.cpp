@@ -152,6 +152,9 @@ void RegisterSceneRuntimeQueryTools(
 void RegisterSceneRuntimeCommandTools(
 	FMCPToolRegistry& Registry,
 	UEAIIntegration::Infrastructure::FPIESessionController& Controller);
+void RegisterViewportVisualizationTools(
+	FMCPToolRegistry& Registry,
+	UEAIIntegration::Infrastructure::FPIESessionController& Controller);
 
 void RegisterPIETools(
 	FMCPToolRegistry& Registry,
@@ -165,5 +168,6 @@ void RegisterPIETools(
 	Registry.Register(MakeShared<FTool_ResumePIE>(Controller));
 	RegisterSceneRuntimeQueryTools(Registry, Controller);
 	RegisterSceneRuntimeCommandTools(Registry, Controller);
+	RegisterViewportVisualizationTools(Registry, Controller);
 }
 }
