@@ -175,6 +175,38 @@ function parseRequirements(value, location) {
         ...(engine === undefined ? {} : { engine }),
     };
 }
+function parseExecutionMetadata(value, location) {
+    if (value === undefined) {
+        return undefined;
+    }
+    const execution = requireRecord(value, location);
+    for (const field of Object.keys(execution)) {
+        if (field !== "backends" && field !== "preferred") {
+            throw new CapabilityManifestError(`${location}.${field} is not supported`);
+        }
+    }
+    const allowed = [
+        "editor",
+        "localTrace",
+    ];
+    if (!Array.isArray(execution.backends) ||
+        execution.backends.length === 0 ||
+        execution.backends.some((backend) => typeof backend !== "string" ||
+            !allowed.includes(backend))) {
+        throw new CapabilityManifestError(`${location}.backends must contain editor and/or localTrace`);
+    }
+    const backends = [
+        ...new Set(execution.backends),
+    ];
+    if (typeof execution.preferred !== "string" ||
+        !backends.includes(execution.preferred)) {
+        throw new CapabilityManifestError(`${location}.preferred must be one of the declared backends`);
+    }
+    return {
+        backends,
+        preferred: execution.preferred,
+    };
+}
 function parseCapability(value, domain, index, manifestPath) {
     const location = `${manifestPath}.capabilities[${index}]`;
     const capability = requireRecord(value, location);
@@ -243,6 +275,11 @@ function parseCapability(value, domain, index, manifestPath) {
             ? {}
             : {
                 requires: parseRequirements(capability.requires, `${location}.requires`),
+            }),
+        ...(capability.execution === undefined
+            ? {}
+            : {
+                execution: parseExecutionMetadata(capability.execution, `${location}.execution`),
             }),
     };
 }

@@ -15,7 +15,7 @@ function textPayload(response) {
     }
     return JSON.parse(response.content[0].text);
 }
-test("loads eight validated skill packages with complete recipe phases", () => {
+test("loads ten validated skill packages with complete recipe phases", () => {
     const capabilities = loadCapabilityCatalog();
     const skills = loadAgentSkillCatalog(capabilities);
     assert.deepEqual(skills.skills.map((skill) => skill.id), [
@@ -25,6 +25,8 @@ test("loads eight validated skill packages with complete recipe phases", () => {
         "ue-blueprint-graph-organize",
         "ue-landscape-authoring",
         "ue-performance-regression",
+        "ue-render-debug-capture",
+        "ue-trace-insights",
         "ue-umg-authoring",
         "ue-world-partition-validate",
     ]);

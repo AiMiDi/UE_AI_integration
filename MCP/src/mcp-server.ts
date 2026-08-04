@@ -17,6 +17,8 @@ import {
   matchCapabilitySearch,
 } from "./capability-search.js";
 import {
+  BackendRoutingExecutor,
+  type CapabilityExecutor,
   DOMAIN_DESCRIPTIONS,
   DOMAIN_TOOL_NAMES,
   runDomainOperation,
@@ -51,6 +53,7 @@ import {
   loadAgentSkillCatalog,
 } from "./skill-catalog.js";
 import { handleAgentSkills } from "./skill-router.js";
+import { TraceWorkerClient } from "./trace-worker.js";
 
 export const MCP_TOOL_NAMES = [
   "ue_status",
@@ -86,6 +89,7 @@ export interface CreateMcpServerOptions {
   client?: UEConnectionClient;
   cliLocator?: () => CliLocationResult;
   shortCliLocator?: () => CliLocationResult;
+  localTraceExecutor?: CapabilityExecutor;
 }
 
 export interface UEAIIntegrationMcpServer {
@@ -196,6 +200,9 @@ function summarizeCapability(ranked: RankedCapability) {
     ...(capability.requires === undefined
       ? {}
       : { requires: capability.requires }),
+    ...(capability.execution === undefined
+      ? {}
+      : { execution: capability.execution }),
     ...(match === undefined ? {} : { match }),
   };
 }
@@ -344,9 +351,20 @@ export function createMcpServer(
   const client = options.client ?? (ueClient as UEClient);
   const cliLocator = options.cliLocator ?? locateWorkflowCli;
   const shortCliLocator = options.shortCliLocator ?? locateShortCli;
+  const localTraceExecutor =
+    options.localTraceExecutor ??
+    new TraceWorkerClient({
+      restrictImportRoots: true,
+      projectRoot: process.cwd(),
+    });
+  const domainExecutor = new BackendRoutingExecutor(
+    catalog,
+    client,
+    localTraceExecutor,
+  );
   const server = new McpServer({
     name: "ue-ai-integration",
-    version: "0.8.0",
+    version: "0.9.0",
   });
 
   server.tool(
@@ -568,7 +586,7 @@ export function createMcpServer(
       async (args) =>
         runDomainOperation(
           catalog,
-          client,
+          domainExecutor,
           domain,
           args.operation,
           args.params,

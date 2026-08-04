@@ -19,6 +19,11 @@ export interface CapabilitySearchMetadata {
     keywords?: string[];
     aliases?: string[];
 }
+export type CapabilityExecutionBackend = "editor" | "localTrace";
+export interface CapabilityExecutionMetadata {
+    backends: CapabilityExecutionBackend[];
+    preferred: CapabilityExecutionBackend;
+}
 export interface CapabilityInputSchema {
     type: "object";
     properties: Record<string, unknown>;
@@ -50,6 +55,7 @@ export interface CapabilityDescriptor {
     search?: CapabilitySearchMetadata;
     dsl?: CapabilityDslMetadata;
     requires?: CapabilityRequirements;
+    execution?: CapabilityExecutionMetadata;
 }
 export interface CapabilityManifest {
     schemaVersion: 2;

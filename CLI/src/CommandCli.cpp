@@ -4,6 +4,7 @@
 #include "UECliPlatform/Utf8Console.h"
 #include "UECommandCli/CapabilityCatalog.h"
 #include "UECommandCli/SkillCatalog.h"
+#include "UETraceWorker/TraceWorkerClient.h"
 #include "UEWorkflowCore/WorkflowCore.h"
 
 #include <algorithm>
@@ -30,7 +31,7 @@
 #include <vector>
 
 #ifndef UE_CLI_VERSION
-#define UE_CLI_VERSION "0.8.0"
+#define UE_CLI_VERSION "0.9.0"
 #endif
 
 namespace ue::command
@@ -63,6 +64,8 @@ struct Options
     bool help = false;
     bool live_schema = false;
     std::vector<RawOption> raw_options;
+    std::vector<std::string> trace_arguments;
+    bool trace_doctor = false;
 };
 
 struct ParsedEnvelope
@@ -71,6 +74,36 @@ struct ParsedEnvelope
     json value;
     std::string code;
     std::string message;
+};
+
+ParsedEnvelope ParseWorkerEnvelope(
+    const ue::trace::WorkerResult& response,
+    const std::string& expected_request_id = {});
+
+std::optional<std::pair<std::string, std::string>>
+ExpectedTraceWorkerDigests(
+    const ue::trace::WorkerLocation& location);
+
+enum class ExecutionBackend
+{
+    Editor,
+    LocalTrace,
+};
+
+struct BackendDecision
+{
+    bool ok = false;
+    ExecutionBackend backend = ExecutionBackend::Editor;
+    bool allow_editor_fallback = false;
+    std::string code;
+    std::string message;
+    bool allow_local_fallback = false;
+};
+
+struct ExplicitTraceImport
+{
+    std::filesystem::path file;
+    std::filesystem::path parent;
 };
 
 std::optional<std::string> Environment(const std::string_view name)
@@ -190,6 +223,11 @@ bool ParseArguments(
                 && options.help_capability.empty())
             {
                 options.help_capability = argument;
+                continue;
+            }
+            if (options.command == "trace")
+            {
+                options.trace_arguments.push_back(argument);
                 continue;
             }
             error = "Unexpected positional argument '" + argument + "'.";
@@ -360,6 +398,7 @@ void PrintGeneralHelp(std::ostream& output)
         << "  ue status [--json]\n"
         << "  ue capabilities [filters] [--json]\n"
         << "  ue skills [filters] [--json]\n"
+        << "  ue trace <command> [options]\n"
         << "  ue help <capability-id>\n"
         << "  ue shell [--live-schema]\n"
         << "  ue --version\n\n"
@@ -375,6 +414,124 @@ void PrintGeneralHelp(std::ostream& output)
         << "  --capability-root <path>   Override packaged local manifests\n"
         << "  --skill-root <path>        Override packaged Agent Skills\n"
         << "  --json                     Print the full JSON envelope\n";
+}
+
+void PrintTraceHelp(std::ostream& output)
+{
+    output
+        << "Offline-capable Unreal Trace CLI\n"
+        << "Usage:\n"
+        << "  ue trace doctor\n"
+        << "  ue trace target list\n"
+        << "  ue trace start|status|stop [options]\n"
+        << "  ue trace import|analyze|providers [options]\n"
+        << "  ue trace query <timing|counter|memory|loading|network|tasks|context-switches|log|io|bookmark|region|screenshot> [options]\n"
+        << "  ue trace export|open [options]\n\n"
+        << "Trace parameters use the normal schema-derived options, "
+           "including --backend auto|editor|local and --params-file.\n";
+}
+
+std::string PathToUtf8(const std::filesystem::path& path)
+{
+    const auto bytes = path.generic_u8string();
+    return std::string(
+        reinterpret_cast<const char*>(bytes.data()),
+        bytes.size());
+}
+
+bool SamePathSpelling(
+    const std::filesystem::path& left,
+    const std::filesystem::path& right)
+{
+    std::string left_text = PathToUtf8(left.lexically_normal());
+    std::string right_text = PathToUtf8(right.lexically_normal());
+#if defined(_WIN32)
+    const auto lower = [](std::string& value)
+    {
+        std::transform(
+            value.begin(), value.end(), value.begin(),
+            [](const unsigned char character)
+            {
+                return static_cast<char>(std::tolower(character));
+            });
+    };
+    lower(left_text);
+    lower(right_text);
+#endif
+    return left_text == right_text;
+}
+
+std::optional<ExplicitTraceImport> ResolveExplicitTraceImport(
+    const json& params,
+    std::string& error)
+{
+    error.clear();
+    const auto found = params.find("tracePath");
+    if (found == params.end() || !found->is_string())
+    {
+        return std::nullopt;
+    }
+    const std::string requested_text = found->get<std::string>();
+    if (requested_text.empty())
+    {
+        error = "tracePath must not be empty.";
+        return std::nullopt;
+    }
+    const std::filesystem::path requested =
+        ue::cli::Utf8Path(requested_text);
+    if (!requested.is_absolute())
+    {
+        error =
+            "CLI external Trace imports require an absolute tracePath.";
+        return std::nullopt;
+    }
+    std::error_code filesystem_error;
+    const std::filesystem::path final_file =
+        std::filesystem::canonical(requested, filesystem_error);
+    if (filesystem_error
+        || !std::filesystem::is_regular_file(final_file, filesystem_error)
+        || filesystem_error)
+    {
+        error =
+            "tracePath must resolve to an existing regular .utrace file.";
+        return std::nullopt;
+    }
+    const std::filesystem::path absolute_requested =
+        std::filesystem::absolute(requested, filesystem_error)
+            .lexically_normal();
+    if (filesystem_error
+        || !SamePathSpelling(absolute_requested, final_file))
+    {
+        error =
+            "tracePath must not traverse a symbolic link, junction, or other reparse indirection.";
+        return std::nullopt;
+    }
+    std::string extension = PathToUtf8(final_file.extension());
+    std::transform(
+        extension.begin(), extension.end(), extension.begin(),
+        [](const unsigned char character)
+        {
+            return static_cast<char>(std::tolower(character));
+        });
+    if (extension != ".utrace"
+        || std::filesystem::file_size(final_file, filesystem_error) == 0
+        || filesystem_error)
+    {
+        error =
+            "tracePath must resolve to a non-empty regular .utrace file.";
+        return std::nullopt;
+    }
+    const std::filesystem::path final_parent =
+        std::filesystem::canonical(
+            final_file.parent_path(), filesystem_error);
+    if (filesystem_error
+        || final_parent.empty()
+        || final_file.parent_path() != final_parent)
+    {
+        error = "The final tracePath parent could not be canonicalized.";
+        return std::nullopt;
+    }
+    return ExplicitTraceImport{ final_file, final_parent };
 }
 
 void PrintSkillsHelp(std::ostream& output)
@@ -418,6 +575,11 @@ void PrintCommandHelp(
         PrintSkillsHelp(output);
         return;
     }
+    if (options.command == "trace")
+    {
+        PrintTraceHelp(output);
+        return;
+    }
     if (options.command == "status")
     {
         output
@@ -456,6 +618,74 @@ void PrintCommandHelp(
         << "This syntactic help performs no catalog load or Editor request.\n"
         << "Run `ue help " << options.command
         << "` to inspect the schema-derived parameters.\n";
+}
+
+bool NormalizeTraceShortcut(Options& options, std::string& error)
+{
+    if (options.command != "trace")
+    {
+        return true;
+    }
+    if (options.trace_arguments.empty())
+    {
+        error = "ue trace requires a command.";
+        return false;
+    }
+    const std::string& action = options.trace_arguments[0];
+    if (action == "doctor" && options.trace_arguments.size() == 1)
+    {
+        options.trace_doctor = true;
+        return true;
+    }
+    if (action == "target"
+        && options.trace_arguments.size() == 2
+        && options.trace_arguments[1] == "list")
+    {
+        options.command = "production.trace.target.list";
+        return true;
+    }
+    static const std::map<std::string, std::string> direct = {
+        { "start", "production.trace.start" },
+        { "status", "production.trace.status" },
+        { "stop", "production.trace.stop" },
+        { "import", "production.trace.import" },
+        { "analyze", "production.trace.analyze" },
+        { "providers", "production.trace.provider.list" },
+        { "export", "production.trace.export" },
+        { "open", "production.trace.open_in_insights" },
+    };
+    if (const auto found = direct.find(action);
+        found != direct.end() && options.trace_arguments.size() == 1)
+    {
+        options.command = found->second;
+        return true;
+    }
+    if (action == "query" && options.trace_arguments.size() == 2)
+    {
+        static const std::map<std::string, std::string> providers = {
+            { "timing", "timing" },
+            { "counter", "counter" },
+            { "memory", "memory" },
+            { "loading", "loading" },
+            { "network", "network" },
+            { "tasks", "tasks" },
+            { "context-switches", "context_switches" },
+            { "log", "log" },
+            { "io", "io" },
+            { "bookmark", "bookmark" },
+            { "region", "region" },
+            { "screenshot", "screenshot" },
+        };
+        if (const auto provider = providers.find(options.trace_arguments[1]);
+            provider != providers.end())
+        {
+            options.command =
+                "production.trace." + provider->second + ".query";
+            return true;
+        }
+    }
+    error = "Unknown ue trace command. Run `ue trace --help`.";
+    return false;
 }
 
 std::optional<std::string> ReadParameterText(
@@ -598,19 +828,31 @@ int PrintFailure(
 {
     if (json_output)
     {
-        if (envelope.value.is_object())
+        if (envelope.value.is_object()
+            && !envelope.value.value("ok", true))
         {
             output << envelope.value.dump() << "\n";
         }
         else
         {
-            output << json({
+            json failure = {
                 { "ok", false },
                 { "error", {
                     { "code", envelope.code },
                     { "message", envelope.message },
                 } },
-            }).dump() << "\n";
+            };
+            // A transport may return a syntactically successful envelope that
+            // then fails local Engine/digest/schema verification. Never print
+            // that upstream `ok:true` object as the command result; retain it
+            // only as bounded diagnostic evidence under the canonical error.
+            if (envelope.value.is_object() && !envelope.value.empty())
+            {
+                failure["error"]["details"] = {
+                    { "rejectedResponse", envelope.value },
+                };
+            }
+            output << failure.dump() << "\n";
         }
         return exit_code;
     }
@@ -825,6 +1067,240 @@ std::string GenerateRequestId()
            << std::setw(8) << values[2] << "-"
            << std::setw(8) << values[3];
     return stream.str();
+}
+
+ParsedEnvelope InvokeRawTraceWorker(
+    const ue::trace::WorkerClient& worker,
+    const std::string& action,
+    const std::string& capability = {},
+    const json& params = json::object(),
+    const std::string& request_id = {})
+{
+    json request = {
+        { "schema", ue::trace::kProtocol },
+        { "action", action },
+        { "requestId",
+            request_id.empty() ? GenerateRequestId() : request_id },
+    };
+    if (!capability.empty())
+    {
+        request["capability"] = capability;
+        request["params"] = params;
+    }
+    return ParseWorkerEnvelope(
+        worker.Invoke(request.dump()),
+        request["requestId"].get<std::string>());
+}
+
+ParsedEnvelope InvokeRawTraceWorkerOneShot(
+    const ue::trace::WorkerClient& worker,
+    const std::string& action,
+    const std::string& capability = {},
+    const json& params = json::object(),
+    const std::string& request_id = {},
+    const std::optional<std::filesystem::path>& import_root = std::nullopt)
+{
+    json request = {
+        { "schema", ue::trace::kProtocol },
+        { "action", action },
+        { "requestId",
+            request_id.empty() ? GenerateRequestId() : request_id },
+    };
+    if (!capability.empty())
+    {
+        request["capability"] = capability;
+        request["params"] = params;
+    }
+    const ue::trace::WorkerResult result = import_root
+        ? worker.InvokeTraceImport(request.dump(), *import_root)
+        : worker.InvokeOneShot(request.dump());
+    return ParseWorkerEnvelope(
+        result,
+        request["requestId"].get<std::string>());
+}
+
+ParsedEnvelope ValidateTraceWorkerHandshake(
+    const ue::trace::WorkerClient& worker,
+    ParsedEnvelope handshake,
+    const bool require_known_engine,
+    const bool expect_one_shot = false)
+{
+    if (!handshake.ok)
+    {
+        return handshake;
+    }
+    const auto data_it = handshake.value.find("data");
+    if (data_it == handshake.value.end() || !data_it->is_object())
+    {
+        return {
+            false,
+            std::move(handshake.value),
+            "trace_worker_contract_mismatch",
+            "Trace Worker handshake has no structured data object.",
+        };
+    }
+    const json& data = *data_it;
+    const auto sha256 = [](const json& value, const char* field)
+    {
+        const auto found = value.find(field);
+        if (found == value.end() || !found->is_string())
+        {
+            return false;
+        }
+        const std::string digest = found->get<std::string>();
+        return digest.size() == 71
+            && digest.rfind("sha256:", 0) == 0
+            && std::all_of(
+                digest.begin() + 7,
+                digest.end(),
+                [](const unsigned char character)
+                {
+                    return std::isxdigit(character) != 0
+                        && (std::isdigit(character) != 0
+                            || std::islower(character) != 0);
+                });
+    };
+#if defined(_WIN32)
+    constexpr const char* expected_transport = "named-pipe";
+#else
+    constexpr const char* expected_transport = "unix-socket";
+#endif
+    const int maximum_sessions =
+        data.contains("maximumResidentSessions")
+            && data["maximumResidentSessions"].is_number_integer()
+        ? data["maximumResidentSessions"].get<int>()
+        : 0;
+    const std::string actual_transport =
+        data.value("transport", std::string{});
+    const bool transport_matches = expect_one_shot
+        ? actual_transport == "stdio-one-shot"
+        : actual_transport == expected_transport;
+    const bool session_limit_matches = expect_one_shot
+        ? maximum_sessions == 1
+            && data.value("maximumConcurrentConnections", 0) == 1
+            && data.value("residentSessionKind", std::string{})
+                == "connection"
+            && data.value("maximumConcurrentAnalyses", 0) == 1
+            && data.value("analysisSessionCacheCapacity", 0) == 2
+            && data.value("analysisSessionPolicy", std::string{})
+                == "sha256-lru"
+            && data.value("endpoint", std::string{}).empty()
+        : maximum_sessions >= 1 && maximum_sessions <= 2;
+    if (data.value("schema", std::string{})
+            != "ue.trace-worker-handshake.v1"
+        || !data.contains("protocolVersion")
+        || !data["protocolVersion"].is_number_integer()
+        || data["protocolVersion"].get<int>() != 1
+        || data.value("workerVersion", std::string{}) != UE_CLI_VERSION
+        || !data.value("contractBound", false)
+        || !sha256(data, "contractDigest")
+        || !sha256(data, "providerSchemaDigest")
+        || !session_limit_matches
+        || !transport_matches)
+    {
+        return {
+            false,
+            std::move(handshake.value),
+            "trace_worker_contract_mismatch",
+            "Trace Worker handshake does not match the bounded v1 contract.",
+        };
+    }
+    const std::string actual_engine =
+        data.value("engineVersion", std::string{});
+    const std::string expected_engine = worker.Location().engine_version;
+    if (actual_engine.empty()
+        || (require_known_engine && expected_engine == "unknown"))
+    {
+        return {
+            false,
+            std::move(handshake.value),
+            "trace_worker_contract_mismatch",
+            expected_engine == "unknown"
+                ? "The Trace Worker Engine version is ambiguous; set UE_ENGINE_VERSION before local execution."
+                : "Trace Worker did not report its Engine version.",
+        };
+    }
+    if (expected_engine != "unknown"
+        && actual_engine != expected_engine
+        && actual_engine.rfind(expected_engine + ".", 0) != 0
+        && actual_engine.rfind(expected_engine + "-", 0) != 0)
+    {
+        return {
+            false,
+            std::move(handshake.value),
+            "trace_worker_contract_mismatch",
+            "Trace Worker Engine version does not match the selected Worker.",
+        };
+    }
+    const auto expected_digests =
+        ExpectedTraceWorkerDigests(worker.Location());
+    if (!expected_digests && require_known_engine)
+    {
+        return {
+            false,
+            std::move(handshake.value),
+            "trace_worker_contract_mismatch",
+            "Trace Worker resources could not be found for contract verification.",
+        };
+    }
+    if (expected_digests
+        && (data.value("contractDigest", std::string{})
+                != expected_digests->first
+            || data.value("providerSchemaDigest", std::string{})
+                != expected_digests->second))
+    {
+        return {
+            false,
+            std::move(handshake.value),
+            "trace_worker_contract_mismatch",
+            "Trace Worker contract digest does not match the installed resources.",
+        };
+    }
+    return handshake;
+}
+
+ParsedEnvelope InvokeTraceWorker(
+    const ue::trace::WorkerClient& worker,
+    const std::string& action,
+    const std::string& capability = {},
+    const json& params = json::object(),
+    const std::string& request_id = {})
+{
+    ParsedEnvelope handshake = ValidateTraceWorkerHandshake(
+        worker,
+        InvokeRawTraceWorker(worker, "handshake"),
+        action != "handshake");
+    if (!handshake.ok || action == "handshake")
+    {
+        return handshake;
+    }
+    return InvokeRawTraceWorker(
+        worker, action, capability, params, request_id);
+}
+
+ParsedEnvelope InvokeTraceWorkerImport(
+    const ue::trace::WorkerClient& worker,
+    const std::string& capability,
+    const json& params,
+    const std::string& request_id,
+    const std::filesystem::path& canonical_parent)
+{
+    ParsedEnvelope handshake = ValidateTraceWorkerHandshake(
+        worker,
+        InvokeRawTraceWorkerOneShot(worker, "handshake"),
+        true,
+        true);
+    if (!handshake.ok)
+    {
+        return handshake;
+    }
+    return InvokeRawTraceWorkerOneShot(
+        worker,
+        "execute",
+        capability,
+        params,
+        request_id,
+        canonical_parent);
 }
 
 std::optional<json> ExtractCapability(
@@ -1286,6 +1762,129 @@ std::optional<std::string> HashFile(
         return std::nullopt;
     }
     return hash.Finish();
+}
+
+std::optional<std::pair<std::string, std::string>>
+ExpectedTraceWorkerDigests(
+    const ue::trace::WorkerLocation& location)
+{
+    if (!location.path)
+    {
+        return std::nullopt;
+    }
+    auto has_contract = [](const std::filesystem::path& root)
+    {
+        std::error_code error;
+        return std::filesystem::is_regular_file(
+            root / "Resources" / "Capabilities" / "production.json",
+            error)
+            && !error
+            && std::filesystem::is_regular_file(
+                root / "Resources" / "Trace" / "worker-protocol.v1.json",
+                error)
+            && !error;
+    };
+    std::optional<std::filesystem::path> root;
+    std::filesystem::path current = location.path->parent_path();
+    for (int depth = 0; depth < 8 && !current.empty(); ++depth)
+    {
+        if (has_contract(current))
+        {
+            root = current;
+            break;
+        }
+        const auto parent = current.parent_path();
+        if (parent == current)
+        {
+            break;
+        }
+        current = parent;
+    }
+    if (!root)
+    {
+        if (const auto configured = Environment("UEAI_TRACE_CONTRACT_ROOT"))
+        {
+            const std::filesystem::path configured_root(*configured);
+            if (has_contract(configured_root))
+            {
+                root = configured_root;
+            }
+        }
+    }
+    if (!root && std::string_view(UE_CLI_SOURCE_ROOT).size() > 0)
+    {
+        const std::filesystem::path source_root(UE_CLI_SOURCE_ROOT);
+        if (has_contract(source_root))
+        {
+            root = source_root;
+        }
+    }
+    if (!root)
+    {
+        return std::nullopt;
+    }
+    std::string engine_version = location.engine_version;
+    const auto first_dot = engine_version.find('.');
+    const auto second_dot = first_dot == std::string::npos
+        ? std::string::npos
+        : engine_version.find('.', first_dot + 1);
+    if (second_dot != std::string::npos)
+    {
+        engine_version.resize(second_dot);
+    }
+    if (first_dot == std::string::npos || engine_version == "unknown")
+    {
+        return std::nullopt;
+    }
+    std::vector<std::string> relative_files = {
+        "Resources/Capabilities/production.json",
+        "Resources/Trace/insights-actions." + engine_version + ".json",
+        "Resources/Trace/launch-profiles.json",
+        "Resources/Trace/worker-protocol.v1.json",
+    };
+    std::sort(relative_files.begin(), relative_files.end());
+    Sha256 contract;
+    std::array<std::uint8_t, 65536> buffer{};
+    const std::uint8_t separator = 0;
+    for (const std::string& relative : relative_files)
+    {
+        const std::filesystem::path path = *root
+            / std::filesystem::path(relative);
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream)
+        {
+            return std::nullopt;
+        }
+        contract.Update(
+            reinterpret_cast<const std::uint8_t*>(relative.data()),
+            relative.size());
+        contract.Update(&separator, 1);
+        while (stream)
+        {
+            stream.read(
+                reinterpret_cast<char*>(buffer.data()),
+                static_cast<std::streamsize>(buffer.size()));
+            const auto count = stream.gcount();
+            if (count > 0)
+            {
+                contract.Update(
+                    buffer.data(), static_cast<std::size_t>(count));
+            }
+        }
+        if (!stream.eof())
+        {
+            return std::nullopt;
+        }
+        contract.Update(&separator, 1);
+    }
+    const auto provider = HashFile(
+        *root / "Resources" / "Trace"
+        / ("insights-actions." + engine_version + ".json"));
+    if (!provider)
+    {
+        return std::nullopt;
+    }
+    return std::make_pair(contract.Finish(), *provider);
 }
 
 ParsedEnvelope ExportPayload(
@@ -1860,6 +2459,237 @@ json LocalCapabilitySummary(const json& descriptor)
         summary["risk"] = risk;
     }
     return summary;
+}
+
+ParsedEnvelope ParseWorkerEnvelope(
+    const ue::trace::WorkerResult& response,
+    const std::string& expected_request_id)
+{
+    if (!response.code.empty())
+    {
+        return {
+            false,
+            json(),
+            response.code,
+            response.error,
+        };
+    }
+    auto envelope = json::parse(
+        response.response,
+        nullptr,
+        false,
+        true);
+    const auto meta = envelope.is_object()
+        ? envelope.value("meta", json::object())
+        : json::object();
+    if (!envelope.is_object()
+        || envelope.value("schema", std::string{})
+            != "ue.trace-worker-response.v1"
+        || !envelope.contains("ok")
+        || !envelope["ok"].is_boolean()
+        || !meta.is_object()
+        || (!expected_request_id.empty()
+            && meta.value("requestId", std::string{})
+                != expected_request_id))
+    {
+        return {
+            false,
+            json(),
+            "trace_worker_invalid_response",
+            "Trace Worker returned an invalid or uncorrelated JSON response envelope.",
+        };
+    }
+    if (response.exit_code == 0 && envelope.value("ok", false))
+    {
+        return { true, std::move(envelope), {}, {} };
+    }
+    const auto error = envelope.value("error", json::object());
+    return {
+        false,
+        std::move(envelope),
+        error.value("code", "trace_worker_failed"),
+        error.value("message", "Trace Worker rejected the request."),
+    };
+}
+
+BackendDecision ChooseBackend(
+    const std::string& capability,
+    const json& descriptor,
+    const json& params)
+{
+    const auto execution = descriptor.find("execution");
+    const bool has_execution =
+        execution != descriptor.end() && execution->is_object();
+    const auto backends = has_execution
+        ? execution->value("backends", json::array())
+        : json::array({ "editor", "localTrace" });
+    const bool supports_editor =
+        std::find(backends.begin(), backends.end(), "editor")
+        != backends.end();
+    const bool supports_local =
+        std::find(backends.begin(), backends.end(), "localTrace")
+        != backends.end();
+    const std::string requested = params.value("backend", "auto");
+    if (requested != "auto"
+        && requested != "editor"
+        && requested != "local")
+    {
+        return {
+            false,
+            ExecutionBackend::Editor,
+            false,
+            "invalid_execution_backend",
+            "backend must be auto, editor, or local.",
+        };
+    }
+
+    const auto local_id = [](const std::string& value)
+    {
+        return value.starts_with("trace-local-")
+            || value.starts_with("trace-analysis-local-")
+            || value.starts_with("trace-launch-local-");
+    };
+    std::optional<ExecutionBackend> forced;
+    if (capability == "production.trace.start")
+    {
+        const auto target = params.find("target");
+        if (target != params.end() && target->is_object())
+        {
+            const std::string kind = target->value("kind", "");
+            if (kind == "development")
+            {
+                forced = ExecutionBackend::LocalTrace;
+            }
+            else if (kind == "editor" || kind == "pie")
+            {
+                forced = ExecutionBackend::Editor;
+            }
+        }
+        else
+        {
+            forced = ExecutionBackend::Editor;
+        }
+    }
+    else if (capability == "production.trace.channel.list")
+    {
+        const std::string kind = params.value("targetKind", "");
+        if (kind == "development")
+        {
+            forced = ExecutionBackend::LocalTrace;
+        }
+        else if (kind == "editor" || kind == "pie")
+        {
+            forced = ExecutionBackend::Editor;
+        }
+    }
+    if (!forced
+        && (capability.starts_with("production.trace.")
+            || capability.starts_with("production.job.")))
+    {
+        for (const char* field : { "traceId", "jobId", "analysisId" })
+        {
+            const auto id = params.find(field);
+            if (id != params.end()
+                && id->is_string()
+                && !id->get_ref<const std::string&>().empty())
+            {
+                forced = local_id(id->get_ref<const std::string&>())
+                    ? ExecutionBackend::LocalTrace
+                    : ExecutionBackend::Editor;
+                break;
+            }
+        }
+    }
+    if (forced)
+    {
+        const ExecutionBackend explicitly_requested =
+            requested == "local"
+                ? ExecutionBackend::LocalTrace
+                : ExecutionBackend::Editor;
+        if (requested != "auto" && explicitly_requested != *forced)
+        {
+            return {
+                false,
+                *forced,
+                false,
+                "execution_backend_conflict",
+                "Explicit backend conflicts with the target or owning ID.",
+            };
+        }
+        if (*forced == ExecutionBackend::Editor && !supports_editor)
+        {
+            return {
+                false, *forced, false, "execution_backend_unsupported",
+                "This capability does not support the Editor backend." };
+        }
+        if (*forced == ExecutionBackend::LocalTrace && !supports_local)
+        {
+            return {
+                false, *forced, false, "execution_backend_unsupported",
+                "This capability does not support the local Trace backend." };
+        }
+        return { true, *forced, false, {}, {} };
+    }
+    if (!has_execution)
+    {
+        return { true, ExecutionBackend::Editor, false, {}, {} };
+    }
+    if (requested == "editor")
+    {
+        return supports_editor
+            ? BackendDecision{
+                true, ExecutionBackend::Editor, false, {}, {} }
+            : BackendDecision{
+                false,
+                ExecutionBackend::Editor,
+                false,
+                "execution_backend_unsupported",
+                "This capability does not support the Editor backend.",
+            };
+    }
+    if (requested == "local")
+    {
+        return supports_local
+            ? BackendDecision{
+                true, ExecutionBackend::LocalTrace, false, {}, {} }
+            : BackendDecision{
+                false,
+                ExecutionBackend::LocalTrace,
+                false,
+                "execution_backend_unsupported",
+                "This capability does not support the local Trace backend.",
+            };
+    }
+    const std::string preferred =
+        execution->value("preferred", "editor");
+    if (preferred == "localTrace" && supports_local)
+    {
+        return {
+            true,
+            ExecutionBackend::LocalTrace,
+            supports_editor,
+            {},
+            {},
+        };
+    }
+    if (supports_editor)
+    {
+        BackendDecision decision{
+            true, ExecutionBackend::Editor, false, {}, {} };
+        decision.allow_local_fallback = supports_local;
+        return decision;
+    }
+    if (supports_local)
+    {
+        return { true, ExecutionBackend::LocalTrace, false, {}, {} };
+    }
+    return {
+        false,
+        ExecutionBackend::Editor,
+        false,
+        "execution_backend_unavailable",
+        "Capability descriptor declares no usable execution backend.",
+    };
 }
 
 ue::workflow::CapabilitySearchDocument CapabilitySearchDocument(
@@ -3060,6 +3890,7 @@ int ExecuteOptions(
     const CapabilityCatalog* catalog,
     const SkillCatalog* skill_catalog,
     ue::api::Client& client,
+    ue::trace::WorkerClient& trace_worker,
     std::istream& input,
     std::ostream& output,
     std::ostream& error)
@@ -3081,6 +3912,52 @@ int ExecuteOptions(
         || options.command == "version")
     {
         return PrintVersion(options.json_output, output);
+    }
+    if (options.trace_doctor)
+    {
+        if (options.params_json
+            || options.params_file
+            || !options.raw_options.empty())
+        {
+            return PrintFailure(
+                {
+                    false,
+                    json(),
+                    "params_option_misplaced",
+                    "ue trace doctor does not accept capability parameters.",
+                },
+                options.json_output,
+                kExitUsage,
+                output,
+                error);
+        }
+        ParsedEnvelope response = InvokeTraceWorker(
+            trace_worker,
+            "handshake");
+        if (!response.ok)
+        {
+            return PrintFailure(
+                response,
+                options.json_output,
+                response.code == "trace_worker_unavailable"
+                    ? kExitUnavailable
+                    : kExitExecution,
+                output,
+                error);
+        }
+        response.value["meta"]["backend"] = "localTrace";
+        if (trace_worker.Location().path)
+        {
+            response.value["meta"]["workerPath"] =
+                trace_worker.Location().path->generic_string();
+            response.value["meta"]["workerSource"] =
+                trace_worker.Location().source;
+        }
+        return PrintSuccess(
+            "trace doctor",
+            response,
+            options.json_output,
+            output);
     }
     if (options.command == "shell")
     {
@@ -3352,21 +4229,127 @@ int ExecuteOptions(
     {
         request["requestId"] = request_id;
     }
-    ParsedEnvelope response = ParseEnvelope(
-        client.Post("/api/execute", request.dump()));
+    std::optional<ExplicitTraceImport> explicit_trace_import;
+    if (capability == "production.trace.import"
+        && conversion.params.contains("tracePath"))
+    {
+        std::string import_error;
+        explicit_trace_import = ResolveExplicitTraceImport(
+            conversion.params, import_error);
+        if (!explicit_trace_import)
+        {
+            return PrintFailure(
+                {
+                    false,
+                    json(),
+                    "trace_import_path_invalid",
+                    import_error.empty()
+                        ? "The explicit Trace import path is invalid."
+                        : import_error,
+                },
+                options.json_output,
+                kExitUsage,
+                output,
+                error);
+        }
+        conversion.params["tracePath"] =
+            PathToUtf8(explicit_trace_import->file);
+        request["params"] = conversion.params;
+    }
+    const BackendDecision backend = ChooseBackend(
+        capability,
+        *descriptor,
+        conversion.params);
+    if (!backend.ok)
+    {
+        return PrintFailure(
+            { false, json(), backend.code, backend.message },
+            options.json_output,
+            kExitUsage,
+            output,
+            error);
+    }
+    bool used_local_trace =
+        backend.backend == ExecutionBackend::LocalTrace;
+    const bool temporary_import_grant = explicit_trace_import
+        && conversion.params.value("copyMode", std::string("copy"))
+            == "copy";
+    ParsedEnvelope response = used_local_trace
+        ? (temporary_import_grant
+            ? InvokeTraceWorkerImport(
+                trace_worker,
+                capability,
+                conversion.params,
+                request_id,
+                explicit_trace_import->parent)
+            : InvokeTraceWorker(
+                trace_worker,
+                "execute",
+                capability,
+                conversion.params,
+                request_id))
+        : ParseEnvelope(client.Post("/api/execute", request.dump()));
+    if (!response.ok
+        && used_local_trace
+        && !temporary_import_grant
+        && backend.allow_editor_fallback
+        && response.code == "trace_worker_unavailable")
+    {
+        used_local_trace = false;
+        response = ParseEnvelope(
+            client.Post("/api/execute", request.dump()));
+    }
+    else if (!response.ok
+        && !used_local_trace
+        && backend.allow_local_fallback
+        && response.code == "editor_unreachable")
+    {
+        used_local_trace = true;
+        response = temporary_import_grant
+            ? InvokeTraceWorkerImport(
+                trace_worker,
+                capability,
+                conversion.params,
+                request_id,
+                explicit_trace_import->parent)
+            : InvokeTraceWorker(
+                trace_worker,
+                "execute",
+                capability,
+                conversion.params,
+                request_id);
+    }
     if (!response.ok)
     {
         return PrintFailure(
             response,
             options.json_output,
             response.code == "editor_unreachable"
+                || response.code == "trace_worker_unavailable"
                 ? kExitUnavailable
                 : kExitExecution,
             output,
             error);
     }
+    response.value["meta"]["executionBackend"] =
+        used_local_trace ? "localTrace" : "editor";
     if (!options.output_path.empty())
     {
+        if (used_local_trace)
+        {
+            return PrintFailure(
+                {
+                    false,
+                    response.value,
+                    "local_output_option_unsupported",
+                    "Use production.trace.export output parameters instead "
+                    "of the global --output option with local Trace.",
+                },
+                options.json_output,
+                kExitUsage,
+                output,
+                error);
+        }
         response = ExportPayload(
             client,
             capability,
@@ -3460,6 +4443,7 @@ int RunShell(
     const CapabilityCatalog* catalog,
     const SkillCatalog* skill_catalog,
     ue::api::Client& client,
+    ue::trace::WorkerClient& trace_worker,
     std::istream& input,
     std::ostream& output,
     std::ostream& error)
@@ -3543,6 +4527,17 @@ int RunShell(
                 error);
             continue;
         }
+        if (!command.help
+            && !NormalizeTraceShortcut(command, parse_error))
+        {
+            (void)PrintFailure(
+                { false, json(), "invalid_trace_command", parse_error },
+                base.json_output || command.json_output,
+                kExitUsage,
+                output,
+                error);
+            continue;
+        }
         if (command.endpoint_explicit
             || command.timeout_explicit
             || !command.capability_root.empty()
@@ -3581,6 +4576,7 @@ int RunShell(
             catalog,
             skill_catalog,
             client,
+            trace_worker,
             input,
             output,
             error);
@@ -3632,6 +4628,16 @@ int Run(
         || options.command == "version")
     {
         return PrintVersion(options.json_output, output);
+    }
+
+    if (!NormalizeTraceShortcut(options, parse_error))
+    {
+        return PrintFailure(
+            { false, json(), "invalid_trace_command", parse_error },
+            options.json_output,
+            kExitUsage,
+            output,
+            error);
     }
 
     std::string capability_hint;
@@ -3741,6 +4747,9 @@ int Run(
     ue::api::Client client(
         options.endpoint,
         options.timeout_ms);
+    ue::trace::WorkerClient trace_worker(
+        executable,
+        options.timeout_ms);
     const std::string invocation_id = ue::api::NewInvocationId();
     client.ConfigureBestEffortCliSession({
         .name = "ue",
@@ -3757,6 +4766,7 @@ int Run(
             catalog ? &*catalog : nullptr,
             skill_catalog ? &*skill_catalog : nullptr,
             client,
+            trace_worker,
             input,
             output,
             error);
@@ -3766,6 +4776,7 @@ int Run(
         catalog ? &*catalog : nullptr,
         skill_catalog ? &*skill_catalog : nullptr,
         client,
+        trace_worker,
         input,
         output,
         error);

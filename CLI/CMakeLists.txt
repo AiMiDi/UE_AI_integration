@@ -36,6 +36,26 @@ else()
     target_compile_options(UECliPlatform PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+add_library(UETraceWorkerClient STATIC
+    src/TraceWorkerClient.cpp
+)
+add_library(UETrace::WorkerClient ALIAS UETraceWorkerClient)
+find_package(Threads REQUIRED)
+target_compile_features(UETraceWorkerClient PUBLIC cxx_std_20)
+target_include_directories(UETraceWorkerClient
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_compile_definitions(UETraceWorkerClient PRIVATE
+    UE_CLI_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+    UE_TRACE_CLIENT_VERSION="${PROJECT_VERSION}"
+)
+target_link_libraries(UETraceWorkerClient PUBLIC Threads::Threads)
+if(MSVC)
+    target_compile_options(UETraceWorkerClient PRIVATE /W4 /permissive- /EHsc)
+else()
+    target_compile_options(UETraceWorkerClient PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(ue-workflow
     src/main.cpp
 )
@@ -65,6 +85,7 @@ target_link_libraries(
         UEApi::Client
         UEWorkflow::Core
         UECli::Platform
+        UETrace::WorkerClient
 )
 
 target_compile_features(ue PRIVATE cxx_std_20)
@@ -120,6 +141,57 @@ if(UE_WORKFLOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(
         NAME ue_command_cli_unit
         COMMAND ue-command-cli-tests
+    )
+    add_executable(ue-trace-worker-fixture
+        tests/TraceWorkerFixture.cpp
+    )
+    target_compile_features(ue-trace-worker-fixture PRIVATE cxx_std_20)
+    target_include_directories(ue-trace-worker-fixture PRIVATE
+        "${CMAKE_SOURCE_DIR}/Workflow/ThirdParty"
+    )
+    add_executable(ue-trace-worker-client-tests
+        tests/TraceWorkerClientTests.cpp
+    )
+    target_compile_features(ue-trace-worker-client-tests PRIVATE cxx_std_20)
+    target_include_directories(ue-trace-worker-client-tests PRIVATE
+        "${CMAKE_SOURCE_DIR}/Workflow/ThirdParty"
+    )
+    target_link_libraries(
+        ue-trace-worker-client-tests PRIVATE UETrace::WorkerClient
+    )
+    # The test executable launches the fixture by path. Keep targeted builds
+    # from accidentally exercising an older fixture binary after its protocol
+    # evidence fields change.
+    add_dependencies(
+        ue-trace-worker-client-tests ue-trace-worker-fixture
+    )
+    add_test(
+        NAME ue_trace_worker_client
+        COMMAND ue-trace-worker-client-tests
+            "$<TARGET_FILE:ue-trace-worker-fixture>"
+    )
+    if(WIN32)
+        find_program(UE_POWERSHELL_EXECUTABLE NAMES pwsh powershell)
+        if(UE_POWERSHELL_EXECUTABLE)
+            add_test(
+                NAME ue_plugin_install_preflight
+                COMMAND "${UE_POWERSHELL_EXECUTABLE}"
+                    -NoProfile
+                    -NonInteractive
+                    -ExecutionPolicy Bypass
+                    -File "${CMAKE_SOURCE_DIR}/scripts/test_install_plugin_preflight.ps1"
+                    -Installer "${CMAKE_SOURCE_DIR}/scripts/install_plugin.ps1"
+                    -WorkerFixture "$<TARGET_FILE:ue-trace-worker-fixture>"
+                    -SourceRoot "${CMAKE_SOURCE_DIR}"
+            )
+            set_tests_properties(
+                ue_plugin_install_preflight PROPERTIES TIMEOUT 30
+            )
+        endif()
+    endif()
+    add_test(
+        NAME ue_cli_trace_help
+        COMMAND ue trace --help
     )
     add_test(
         NAME ue_cli_help
@@ -186,6 +258,14 @@ if(UE_WORKFLOW_BUILD_TESTS AND BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/ApprovalSmoke.cmake"
     )
     if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME ue_cli_trace_routing
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/trace_cli_routing.py"
+                --cli "$<TARGET_FILE:ue>"
+                --worker "$<TARGET_FILE:ue-trace-worker-fixture>"
+                --source-root "${CMAKE_SOURCE_DIR}"
+        )
         add_test(
             NAME ue_cli_http_integration
             COMMAND "${Python3_EXECUTABLE}"

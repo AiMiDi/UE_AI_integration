@@ -196,7 +196,7 @@ interface UEClientRegistrationData {
 }
 
 export const MCP_BRIDGE_NAME = "ue-ai-integration";
-export const MCP_BRIDGE_VERSION = "0.8.0";
+export const MCP_BRIDGE_VERSION = "0.9.0";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

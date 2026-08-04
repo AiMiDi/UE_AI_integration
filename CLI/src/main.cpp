@@ -29,7 +29,7 @@
 #endif
 
 #ifndef UE_WORKFLOW_VERSION
-#define UE_WORKFLOW_VERSION "0.1.0"
+#define UE_WORKFLOW_VERSION "0.9.0"
 #endif
 
 #ifndef UE_WORKFLOW_SOURCE_ROOT

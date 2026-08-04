@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type CapabilityCatalog, type CapabilityDomain, type CapabilityDslRisk, type CapabilityKind, type CapabilityOutputKind } from "./capability-catalog.js";
+import { type CapabilityExecutor } from "./domain-router.js";
 import { type MCPResponse } from "./helpers.js";
 import { type UECapabilitiesData, type UECapabilityQuery, type UEHealthData, type UEWorkflowData, type UEWorkflowRequest } from "./ue-bridge.js";
 import { type CliLocationResult } from "./cli-locator.js";
@@ -18,6 +19,7 @@ export interface CreateMcpServerOptions {
     client?: UEConnectionClient;
     cliLocator?: () => CliLocationResult;
     shortCliLocator?: () => CliLocationResult;
+    localTraceExecutor?: CapabilityExecutor;
 }
 export interface UEAIIntegrationMcpServer {
     server: McpServer;

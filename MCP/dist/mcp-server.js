@@ -2,13 +2,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CAPABILITY_DOMAINS, loadCapabilityCatalog, } from "./capability-catalog.js";
 import { compareCapabilityIds, matchCapabilitySearch, } from "./capability-search.js";
-import { DOMAIN_DESCRIPTIONS, DOMAIN_TOOL_NAMES, runDomainOperation, validateDomainOperation, } from "./domain-router.js";
+import { BackendRoutingExecutor, DOMAIN_DESCRIPTIONS, DOMAIN_TOOL_NAMES, runDomainOperation, validateDomainOperation, } from "./domain-router.js";
 import { formatErrorResponse, formatJsonResponse, } from "./helpers.js";
 import { UEApiError, ueClient, } from "./ue-bridge.js";
 import { handleWorkflowInput, UE_WORKFLOW_TOOL_SCHEMA, } from "./workflow-router.js";
 import { locateShortCli, locateWorkflowCli, } from "./cli-locator.js";
 import { loadAgentSkillCatalog, } from "./skill-catalog.js";
 import { handleAgentSkills } from "./skill-router.js";
+import { TraceWorkerClient } from "./trace-worker.js";
 export const MCP_TOOL_NAMES = [
     "ue_status",
     "ue_capabilities",
@@ -91,6 +92,9 @@ function summarizeCapability(ranked) {
         ...(capability.requires === undefined
             ? {}
             : { requires: capability.requires }),
+        ...(capability.execution === undefined
+            ? {}
+            : { execution: capability.execution }),
         ...(match === undefined ? {} : { match }),
     };
 }
@@ -182,9 +186,15 @@ export function createMcpServer(options = {}) {
     const client = options.client ?? ueClient;
     const cliLocator = options.cliLocator ?? locateWorkflowCli;
     const shortCliLocator = options.shortCliLocator ?? locateShortCli;
+    const localTraceExecutor = options.localTraceExecutor ??
+        new TraceWorkerClient({
+            restrictImportRoots: true,
+            projectRoot: process.cwd(),
+        });
+    const domainExecutor = new BackendRoutingExecutor(catalog, client, localTraceExecutor);
     const server = new McpServer({
         name: "ue-ai-integration",
-        version: "0.8.0",
+        version: "0.9.0",
     });
     server.tool("ue_status", "Check the running Unreal Editor's UE_AI_integration health status.", {}, async () => {
         try {
@@ -361,7 +371,7 @@ export function createMcpServer(options = {}) {
                 .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/)
                 .optional()
                 .describe("Optional idempotency key forwarded to POST /api/execute"),
-        }, async (args) => runDomainOperation(catalog, client, domain, args.operation, args.params, args.requestId));
+        }, async (args) => runDomainOperation(catalog, domainExecutor, domain, args.operation, args.params, args.requestId));
     }
     server.registerTool("ue_workflow", {
         description: "Validate, plan, execute, inspect, resume, or roll back a UE Workflow asset-edit run. The workflow must be passed inline; local file paths are not accepted.",

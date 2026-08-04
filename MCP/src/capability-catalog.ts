@@ -43,6 +43,13 @@ export interface CapabilitySearchMetadata {
   aliases?: string[];
 }
 
+export type CapabilityExecutionBackend = "editor" | "localTrace";
+
+export interface CapabilityExecutionMetadata {
+  backends: CapabilityExecutionBackend[];
+  preferred: CapabilityExecutionBackend;
+}
+
 export interface CapabilityInputSchema {
   type: "object";
   properties: Record<string, unknown>;
@@ -76,6 +83,7 @@ export interface CapabilityDescriptor {
   search?: CapabilitySearchMetadata;
   dsl?: CapabilityDslMetadata;
   requires?: CapabilityRequirements;
+  execution?: CapabilityExecutionMetadata;
 }
 
 export interface CapabilityManifest {
@@ -369,6 +377,55 @@ function parseRequirements(
   };
 }
 
+function parseExecutionMetadata(
+  value: unknown,
+  location: string,
+): CapabilityExecutionMetadata | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const execution = requireRecord(value, location);
+  for (const field of Object.keys(execution)) {
+    if (field !== "backends" && field !== "preferred") {
+      throw new CapabilityManifestError(
+        `${location}.${field} is not supported`,
+      );
+    }
+  }
+  const allowed: readonly CapabilityExecutionBackend[] = [
+    "editor",
+    "localTrace",
+  ];
+  if (
+    !Array.isArray(execution.backends) ||
+    execution.backends.length === 0 ||
+    execution.backends.some(
+      (backend) =>
+        typeof backend !== "string" ||
+        !allowed.includes(backend as CapabilityExecutionBackend),
+    )
+  ) {
+    throw new CapabilityManifestError(
+      `${location}.backends must contain editor and/or localTrace`,
+    );
+  }
+  const backends = [
+    ...new Set(execution.backends as CapabilityExecutionBackend[]),
+  ];
+  if (
+    typeof execution.preferred !== "string" ||
+    !backends.includes(execution.preferred as CapabilityExecutionBackend)
+  ) {
+    throw new CapabilityManifestError(
+      `${location}.preferred must be one of the declared backends`,
+    );
+  }
+  return {
+    backends,
+    preferred: execution.preferred as CapabilityExecutionBackend,
+  };
+}
+
 function parseCapability(
   value: unknown,
   domain: CapabilityDomain,
@@ -484,6 +541,14 @@ function parseCapability(
           requires: parseRequirements(
             capability.requires,
             `${location}.requires`,
+          ),
+        }),
+    ...(capability.execution === undefined
+      ? {}
+      : {
+          execution: parseExecutionMetadata(
+            capability.execution,
+            `${location}.execution`,
           ),
         }),
   };

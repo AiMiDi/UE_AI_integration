@@ -193,6 +193,70 @@ bool ValidateSearchMetadata(
     return true;
 }
 
+bool ValidateExecutionMetadata(
+    const json& descriptor,
+    const std::filesystem::path& manifest,
+    std::string& error)
+{
+    const auto execution = descriptor.find("execution");
+    if (execution == descriptor.end())
+    {
+        return true;
+    }
+    if (!execution->is_object())
+    {
+        error =
+            "Capability execution metadata must be an object in "
+            + manifest.generic_string();
+        return false;
+    }
+    for (const auto& [field, ignored] : execution->items())
+    {
+        (void)ignored;
+        if (field != "backends" && field != "preferred")
+        {
+            error =
+                "Unsupported capability execution field '" + field
+                + "' in " + manifest.generic_string();
+            return false;
+        }
+    }
+    const auto backends = execution->find("backends");
+    const auto preferred = execution->find("preferred");
+    if (backends == execution->end()
+        || !backends->is_array()
+        || backends->empty()
+        || preferred == execution->end()
+        || !preferred->is_string())
+    {
+        error =
+            "Capability execution metadata requires non-empty backends and "
+            "a preferred backend in " + manifest.generic_string();
+        return false;
+    }
+    std::set<std::string> unique;
+    for (const auto& backend : *backends)
+    {
+        if (!backend.is_string()
+            || (backend != "editor" && backend != "localTrace")
+            || !unique.insert(backend.get<std::string>()).second)
+        {
+            error =
+                "Capability execution backends must uniquely contain editor "
+                "and/or localTrace in " + manifest.generic_string();
+            return false;
+        }
+    }
+    if (!unique.contains(preferred->get<std::string>()))
+    {
+        error =
+            "Capability preferred execution backend must be declared in "
+            + manifest.generic_string();
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 std::optional<CapabilityCatalog> CapabilityCatalog::Load(
@@ -329,6 +393,10 @@ std::optional<CapabilityCatalog> CapabilityCatalog::LoadFiles(
                 return std::nullopt;
             }
             if (!ValidateSearchMetadata(descriptor, manifest, error))
+            {
+                return std::nullopt;
+            }
+            if (!ValidateExecutionMetadata(descriptor, manifest, error))
             {
                 return std::nullopt;
             }
