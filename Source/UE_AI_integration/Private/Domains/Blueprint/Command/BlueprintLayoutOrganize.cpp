@@ -11,6 +11,8 @@
 #include "SGraphPanel.h"
 #include "ScopedTransaction.h"
 #include "UObject/StrongObjectPtr.h"
+#include "UObject/MetaData.h"
+#include "UObject/Package.h"
 #include "UObject/UObjectGlobals.h"
 #include "Widgets/SWindow.h"
 #include "Workflow/UEWorkflowExecutionContext.h"
@@ -23,6 +25,10 @@ constexpr int32 MaxGroups = 32;
 constexpr int32 MaxActionsPerGroup = 8;
 constexpr int32 MaxNodesPerGroup = 128;
 constexpr int32 MaxTotalNodes = 256;
+constexpr double MaxAvoidOverlapTranslation = 8192.0;
+constexpr double DefaultLayoutTolerance = 1.0;
+constexpr const TCHAR* CommentGroupKeyMetadata =
+	TEXT("UEAI.Layout.GroupKey");
 constexpr const TCHAR* LayoutAlgorithmSemantics =
 	TEXT("native-sgraph-editor-v1");
 
@@ -40,6 +46,17 @@ struct FLayoutGroup
 	bool bCreateComment = false;
 	FString CommentText;
 	double CommentPadding = 50.0;
+	FString CommentMode = TEXT("create");
+	FString CommentNodeId;
+	FString CommentGroupKey;
+	bool bAvoidOverlap = false;
+	FGuid ResolvedCommentNodeId;
+	bool bResolvedCommentExists = false;
+
+	FString StableGroupKey() const
+	{
+		return CommentGroupKey.IsEmpty() ? Id : CommentGroupKey;
+	}
 };
 
 struct FNodeSnapshot
@@ -48,12 +65,18 @@ struct FNodeSnapshot
 	int32 Y = 0;
 	int32 Width = 0;
 	int32 Height = 0;
+	bool bComment = false;
+	FString CommentText;
+	bool bHasCommentGroupKey = false;
+	FString CommentGroupKey;
 };
 
 struct FLayoutExecution
 {
 	TArray<FGuid> CreatedCommentIds;
+	TArray<FGuid> AffectedCommentIds;
 	TMap<FGuid, FString> CreatedCommentGroups;
+	TMap<FString, FGuid> GroupCommentIds;
 	TArray<TSharedPtr<FJsonValue>> CommentPreviews;
 };
 
@@ -94,6 +117,44 @@ UEdGraphNode_Comment* CreateNativeComment(
 	return Comment;
 }
 
+UMetaData* GetGraphMetadata(UEdGraph* Graph)
+{
+	UPackage* Package = Graph ? Graph->GetOutermost() : nullptr;
+	return Package ? Package->GetMetaData() : nullptr;
+}
+
+FString GetCommentGroupKey(
+	UEdGraph* Graph,
+	const UEdGraphNode_Comment* Comment)
+{
+	if (UMetaData* Metadata = GetGraphMetadata(Graph))
+	{
+		return Metadata->GetValue(Comment, CommentGroupKeyMetadata);
+	}
+	return FString();
+}
+
+void SetCommentGroupKey(
+	UEdGraph* Graph,
+	UEdGraphNode_Comment* Comment,
+	const FString& GroupKey)
+{
+	UMetaData* Metadata = GetGraphMetadata(Graph);
+	if (!Metadata || !Comment)
+	{
+		return;
+	}
+	Metadata->Modify();
+	if (GroupKey.IsEmpty())
+	{
+		Metadata->RemoveValue(Comment, CommentGroupKeyMetadata);
+	}
+	else
+	{
+		Metadata->SetValue(Comment, CommentGroupKeyMetadata, *GroupKey);
+	}
+}
+
 bool ParseGroups(
 	const TSharedPtr<FJsonObject>& Params,
 	TArray<FLayoutGroup>& OutGroups,
@@ -116,6 +177,7 @@ bool ParseGroups(
 	}
 
 	TSet<FString> GroupIds;
+	TSet<FString> CommentGroupKeys;
 	TSet<FGuid> AllNodeIds;
 	TArray<TSharedPtr<FJsonValue>> NormalizedGroups;
 	for (const TSharedPtr<FJsonValue>& GroupValue : *GroupValues)
@@ -274,6 +336,78 @@ bool ParseGroups(
 				return false;
 			}
 			Group.CommentText = Group.CommentText.TrimStartAndEnd();
+			(*Comment)->TryGetStringField(
+				TEXT("mode"),
+				Group.CommentMode);
+			if (Group.CommentMode != TEXT("create")
+				&& Group.CommentMode != TEXT("update")
+				&& Group.CommentMode != TEXT("upsert"))
+			{
+				OutError = TEXT("comment.mode must be create, update, or upsert.");
+				return false;
+			}
+			(*Comment)->TryGetStringField(
+				TEXT("commentNodeId"),
+				Group.CommentNodeId);
+			if (!Group.CommentNodeId.IsEmpty())
+			{
+				FGuid CommentGuid;
+				FString GuidError;
+				if (!TryParseNodeGuid(
+						Group.CommentNodeId,
+						CommentGuid,
+						GuidError))
+				{
+					OutError = GuidError;
+					return false;
+				}
+				Group.CommentNodeId = CommentGuid.ToString();
+			}
+			(*Comment)->TryGetStringField(
+				TEXT("groupKey"),
+				Group.CommentGroupKey);
+			Group.CommentGroupKey =
+				Group.CommentGroupKey.TrimStartAndEnd();
+			if (Group.CommentGroupKey.Len() > 128)
+			{
+				OutError = TEXT("comment.groupKey is limited to 128 characters.");
+				return false;
+			}
+			if (!Group.CommentGroupKey.IsEmpty()
+				&& CommentGroupKeys.Contains(Group.CommentGroupKey))
+			{
+				OutError = FString::Printf(
+					TEXT("comment.groupKey '%s' is duplicated."),
+					*Group.CommentGroupKey);
+				return false;
+			}
+			if (!Group.CommentGroupKey.IsEmpty())
+			{
+				CommentGroupKeys.Add(Group.CommentGroupKey);
+			}
+			(*Comment)->TryGetBoolField(
+				TEXT("avoidOverlap"),
+				Group.bAvoidOverlap);
+			if (Group.CommentMode == TEXT("update")
+				&& Group.CommentNodeId.IsEmpty())
+			{
+				OutError = TEXT("comment.mode=update requires commentNodeId.");
+				return false;
+			}
+			if (Group.CommentMode == TEXT("upsert")
+				&& Group.CommentGroupKey.IsEmpty()
+				&& Group.CommentNodeId.IsEmpty())
+			{
+				OutError = TEXT(
+					"comment.mode=upsert requires groupKey or commentNodeId.");
+				return false;
+			}
+			if (Group.CommentMode == TEXT("create")
+				&& !Group.CommentNodeId.IsEmpty())
+			{
+				OutError = TEXT("comment.mode=create cannot use commentNodeId.");
+				return false;
+			}
 			(*Comment)->TryGetNumberField(
 				TEXT("padding"),
 				Group.CommentPadding);
@@ -333,6 +467,24 @@ bool ParseGroups(
 			NormalizedComment->SetNumberField(
 				TEXT("padding"),
 				Group.CommentPadding);
+			NormalizedComment->SetStringField(
+				TEXT("mode"),
+				Group.CommentMode);
+			if (!Group.CommentNodeId.IsEmpty())
+			{
+				NormalizedComment->SetStringField(
+					TEXT("commentNodeId"),
+					Group.CommentNodeId);
+			}
+			if (!Group.CommentGroupKey.IsEmpty())
+			{
+				NormalizedComment->SetStringField(
+					TEXT("groupKey"),
+					Group.CommentGroupKey);
+			}
+			NormalizedComment->SetBoolField(
+				TEXT("avoidOverlap"),
+				Group.bAvoidOverlap);
 			NormalizedGroup->SetObjectField(
 				TEXT("comment"),
 				NormalizedComment);
@@ -542,6 +694,303 @@ bool HasSelectedConnection(const TArray<UEdGraphNode*>& Nodes)
 	return false;
 }
 
+void UpdateNativeComment(
+	UEdGraph* Graph,
+	UEdGraphNode_Comment* Comment,
+	const FSlateRect& Bounds,
+	const FString& Text,
+	const FString& GroupKey)
+{
+	Comment->Modify();
+	Comment->SetBounds(Bounds);
+	Comment->OnRenameNode(Text);
+	Comment->MoveMode = ECommentBoxMode::GroupMovement;
+	if (!GroupKey.IsEmpty())
+	{
+		SetCommentGroupKey(Graph, Comment, GroupKey);
+	}
+}
+
+FNodeBounds StoredCommentBounds(const UEdGraphNode_Comment* Comment)
+{
+	FNodeBounds Bounds;
+	if (Comment)
+	{
+		Bounds.X = Comment->NodePosX;
+		Bounds.Y = Comment->NodePosY;
+		Bounds.Width = Comment->NodeWidth;
+		Bounds.Height = Comment->NodeHeight;
+		Bounds.Source = TEXT("editor");
+		Bounds.bExact = Bounds.Width > 0.0 && Bounds.Height > 0.0;
+	}
+	return Bounds;
+}
+
+bool IntersectsWithTolerance(
+	const FNodeBounds& Left,
+	const FNodeBounds& Right,
+	const double Tolerance)
+{
+	return Left.X < Right.Right() + Tolerance
+		&& Left.Right() + Tolerance > Right.X
+		&& Left.Y < Right.Bottom() + Tolerance
+		&& Left.Bottom() + Tolerance > Right.Y;
+}
+
+bool TranslateGroup(
+	UEdGraph* Graph,
+	const FLayoutGroup& Group,
+	UEdGraphNode_Comment* Comment,
+	const FIntPoint& Delta,
+	FString& OutError)
+{
+	const UEdGraphSchema* Schema = Graph ? Graph->GetSchema() : nullptr;
+	if (!Schema || !Comment)
+	{
+		OutError = TEXT("Graph schema or Comment is unavailable.");
+		return false;
+	}
+	TSet<FGuid> MovedNodes;
+	for (const FGuid& NodeId : Group.NodeIds)
+	{
+		UEdGraphNode* Node = FindNode(Graph, NodeId);
+		if (!Node)
+		{
+			OutError = FString::Printf(
+				TEXT("Group node '%s' disappeared during overlap avoidance."),
+				*NodeId.ToString());
+			return false;
+		}
+		Node->Modify();
+		Schema->SetNodePosition(
+			Node,
+			FVector2D(
+				Node->NodePosX + Delta.X,
+				Node->NodePosY + Delta.Y));
+		MovedNodes.Add(NodeId);
+	}
+	if (!MovedNodes.Contains(Comment->NodeGuid))
+	{
+		Comment->Modify();
+		Comment->SetBounds(
+			FSlateRect(
+				Comment->NodePosX + Delta.X,
+				Comment->NodePosY + Delta.Y,
+				Comment->NodePosX + Delta.X + Comment->NodeWidth,
+				Comment->NodePosY + Delta.Y + Comment->NodeHeight));
+	}
+	return true;
+}
+
+bool AvoidCommentOverlaps(
+	const TSharedRef<SGraphEditor>& Editor,
+	UEdGraph* Graph,
+	const TArray<FLayoutGroup>& Groups,
+	FLayoutExecution& Execution,
+	const double Tolerance,
+	FString& OutError)
+{
+	TArray<const FLayoutGroup*> MovableGroups;
+	TSet<FGuid> MovableCommentIds;
+	for (const FLayoutGroup& Group : Groups)
+	{
+		if (!Group.bCreateComment || !Group.bAvoidOverlap)
+		{
+			continue;
+		}
+		const FGuid* CommentId = Execution.GroupCommentIds.Find(Group.Id);
+		if (!CommentId)
+		{
+			OutError = FString::Printf(
+				TEXT("Comment for group '%s' is unavailable."),
+				*Group.Id);
+			return false;
+		}
+		MovableGroups.Add(&Group);
+		MovableCommentIds.Add(*CommentId);
+	}
+	MovableGroups.Sort(
+		[](const FLayoutGroup& Left, const FLayoutGroup& Right)
+		{
+			const FString LeftKey = Left.StableGroupKey();
+			const FString RightKey = Right.StableGroupKey();
+			return LeftKey == RightKey ? Left.Id < Right.Id : LeftKey < RightKey;
+		});
+
+	TArray<UEdGraphNode_Comment*> FixedComments;
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		UEdGraphNode_Comment* Comment = Cast<UEdGraphNode_Comment>(Node);
+		if (Comment && !MovableCommentIds.Contains(Comment->NodeGuid))
+		{
+			FixedComments.Add(Comment);
+		}
+	}
+	FixedComments.Sort(
+		[](const UEdGraphNode_Comment& Left,
+			const UEdGraphNode_Comment& Right)
+		{
+			return Left.NodeGuid.ToString() < Right.NodeGuid.ToString();
+		});
+
+	for (const FLayoutGroup* Group : MovableGroups)
+	{
+		const FGuid CommentId = Execution.GroupCommentIds.FindChecked(Group->Id);
+		UEdGraphNode_Comment* Comment =
+			Cast<UEdGraphNode_Comment>(FindNode(Graph, CommentId));
+		if (!Comment)
+		{
+			OutError = TEXT("An affected Comment disappeared.");
+			return false;
+		}
+		const FNodeBounds OriginalBounds = StoredCommentBounds(Comment);
+		TSet<int32> XOffsets;
+		TSet<int32> YOffsets;
+		XOffsets.Add(0);
+		YOffsets.Add(0);
+		for (const UEdGraphNode_Comment* FixedComment : FixedComments)
+		{
+			const FNodeBounds FixedBounds = StoredCommentBounds(FixedComment);
+			XOffsets.Add(FMath::CeilToInt(
+				FixedBounds.Right() - OriginalBounds.X + Tolerance));
+			XOffsets.Add(FMath::FloorToInt(
+				FixedBounds.X - OriginalBounds.Right() - Tolerance));
+			YOffsets.Add(FMath::CeilToInt(
+				FixedBounds.Bottom() - OriginalBounds.Y + Tolerance));
+			YOffsets.Add(FMath::FloorToInt(
+				FixedBounds.Y - OriginalBounds.Bottom() - Tolerance));
+		}
+
+		TArray<FIntPoint> Candidates;
+		for (const int32 X : XOffsets)
+		{
+			for (const int32 Y : YOffsets)
+			{
+				const FVector2D Delta(X, Y);
+				if (Delta.Size() <= MaxAvoidOverlapTranslation)
+				{
+					Candidates.Add(FIntPoint(X, Y));
+				}
+			}
+		}
+		Candidates.Sort(
+			[](const FIntPoint& Left, const FIntPoint& Right)
+			{
+				const int64 LeftDistance =
+					static_cast<int64>(Left.X) * Left.X
+					+ static_cast<int64>(Left.Y) * Left.Y;
+				const int64 RightDistance =
+					static_cast<int64>(Right.X) * Right.X
+					+ static_cast<int64>(Right.Y) * Right.Y;
+				if (LeftDistance != RightDistance)
+				{
+					return LeftDistance < RightDistance;
+				}
+				if (Left.X != Right.X)
+				{
+					return Left.X < Right.X;
+				}
+				return Left.Y < Right.Y;
+			});
+
+		TOptional<FIntPoint> BestDelta;
+		for (const FIntPoint& Candidate : Candidates)
+		{
+			FNodeBounds CandidateBounds = OriginalBounds;
+			CandidateBounds.X += Candidate.X;
+			CandidateBounds.Y += Candidate.Y;
+			const bool bIntersects = FixedComments.ContainsByPredicate(
+				[&CandidateBounds, Tolerance](
+					const UEdGraphNode_Comment* FixedComment)
+				{
+					return IntersectsWithTolerance(
+						CandidateBounds,
+						StoredCommentBounds(FixedComment),
+						Tolerance);
+				});
+			if (!bIntersects)
+			{
+				BestDelta = Candidate;
+				break;
+			}
+		}
+		if (!BestDelta.IsSet())
+		{
+			OutError = FString::Printf(
+				TEXT("Comment group '%s' cannot avoid overlap within %.0f "
+					"Graph Units."),
+				*Group->StableGroupKey(),
+				MaxAvoidOverlapTranslation);
+			return false;
+		}
+		if (BestDelta.GetValue() != FIntPoint::ZeroValue
+			&& !TranslateGroup(
+				Graph,
+				*Group,
+				Comment,
+				BestDelta.GetValue(),
+				OutError))
+		{
+			return false;
+		}
+		FixedComments.Add(Comment);
+	}
+	return RefreshGraphEditorLayout(Editor);
+}
+
+bool BuildCommentPreviews(
+	UEdGraph* Graph,
+	const TArray<FLayoutGroup>& Groups,
+	FLayoutExecution& Execution,
+	FString& OutError)
+{
+	Execution.CommentPreviews.Reset();
+	for (const FLayoutGroup& Group : Groups)
+	{
+		if (!Group.bCreateComment)
+		{
+			continue;
+		}
+		const FGuid* CommentId = Execution.GroupCommentIds.Find(Group.Id);
+		UEdGraphNode_Comment* Comment = CommentId
+			? Cast<UEdGraphNode_Comment>(FindNode(Graph, *CommentId))
+			: nullptr;
+		if (!Comment)
+		{
+			OutError = FString::Printf(
+				TEXT("Comment preview for group '%s' is unavailable."),
+				*Group.Id);
+			return false;
+		}
+		TSharedRef<FJsonObject> Preview = MakeShared<FJsonObject>();
+		Preview->SetStringField(TEXT("groupId"), Group.Id);
+		Preview->SetStringField(TEXT("text"), Group.CommentText);
+		Preview->SetStringField(TEXT("mode"), Group.CommentMode);
+		Preview->SetStringField(
+			TEXT("operation"),
+			Group.bResolvedCommentExists ? TEXT("update") : TEXT("create"));
+		if (Group.bResolvedCommentExists)
+		{
+			Preview->SetStringField(
+				TEXT("commentNodeId"),
+				Group.ResolvedCommentNodeId.ToString());
+		}
+		if (!Group.CommentGroupKey.IsEmpty())
+		{
+			Preview->SetStringField(
+				TEXT("groupKey"),
+				Group.CommentGroupKey);
+		}
+		Preview->SetBoolField(TEXT("avoidOverlap"), Group.bAvoidOverlap);
+		Preview->SetObjectField(
+			TEXT("bounds"),
+			BoundsToJson(StoredCommentBounds(Comment)));
+		Execution.CommentPreviews.Add(
+			MakeShared<FJsonValueObject>(Preview));
+	}
+	return true;
+}
+
 bool ExecuteGroups(
 	const TSharedRef<SGraphEditor>& Editor,
 	UEdGraph* Graph,
@@ -623,37 +1072,36 @@ bool ExecuteGroups(
 					+ TEXT("'.");
 				return false;
 			}
-			UEdGraphNode_Comment* Comment =
-				CreateNativeComment(
+			UEdGraphNode_Comment* Comment = Group.bResolvedCommentExists
+				? Cast<UEdGraphNode_Comment>(
+					FindNode(Graph, Group.ResolvedCommentNodeId))
+				: CreateNativeComment(
 					Graph,
 					SelectionBounds,
 					Group.CommentText);
 			if (!Comment)
 			{
 				OutError =
-					TEXT("Native Comment creation failed for group '")
+					TEXT("Native Comment create/update failed for group '")
 					+ Group.Id
 					+ TEXT("'.");
 				return false;
 			}
-			OutExecution.CreatedCommentIds.Add(Comment->NodeGuid);
+			UpdateNativeComment(
+				Graph,
+				Comment,
+				SelectionBounds,
+				Group.CommentText,
+				Group.CommentGroupKey);
+			if (!Group.bResolvedCommentExists)
+			{
+				OutExecution.CreatedCommentIds.Add(Comment->NodeGuid);
+			}
+			OutExecution.AffectedCommentIds.Add(Comment->NodeGuid);
 			OutExecution.CreatedCommentGroups.Add(
 				Comment->NodeGuid,
 				Group.Id);
-
-			FNodeBounds Bounds;
-			Bounds.X = Comment->NodePosX;
-			Bounds.Y = Comment->NodePosY;
-			Bounds.Width = Comment->NodeWidth;
-			Bounds.Height = Comment->NodeHeight;
-			Bounds.Source = TEXT("editor");
-			Bounds.bExact = true;
-			TSharedRef<FJsonObject> Preview = MakeShared<FJsonObject>();
-			Preview->SetStringField(TEXT("groupId"), Group.Id);
-			Preview->SetStringField(TEXT("text"), Group.CommentText);
-			Preview->SetObjectField(TEXT("bounds"), BoundsToJson(Bounds));
-			OutExecution.CommentPreviews.Add(
-				MakeShared<FJsonValueObject>(Preview));
+			OutExecution.GroupCommentIds.Add(Group.Id, Comment->NodeGuid);
 		}
 		if (!RefreshGraphEditorLayout(Editor))
 		{
@@ -663,7 +1111,21 @@ bool ExecuteGroups(
 			return false;
 		}
 	}
-	return true;
+	if (!AvoidCommentOverlaps(
+			Editor,
+			Graph,
+			Groups,
+			OutExecution,
+			DefaultLayoutTolerance,
+			OutError))
+	{
+		return false;
+	}
+	return BuildCommentPreviews(
+		Graph,
+		Groups,
+		OutExecution,
+		OutError);
 }
 
 TMap<FGuid, FNodeSnapshot> CaptureNodeSnapshots(UEdGraph* Graph)
@@ -680,6 +1142,19 @@ TMap<FGuid, FNodeSnapshot> CaptureNodeSnapshots(UEdGraph* Graph)
 		Snapshot.Y = Node->NodePosY;
 		Snapshot.Width = Node->NodeWidth;
 		Snapshot.Height = Node->NodeHeight;
+		if (const UEdGraphNode_Comment* Comment =
+				Cast<UEdGraphNode_Comment>(Node))
+		{
+			Snapshot.bComment = true;
+			Snapshot.CommentText = Comment->NodeComment;
+			if (UMetaData* Metadata = GetGraphMetadata(Graph))
+			{
+				Snapshot.bHasCommentGroupKey =
+					Metadata->HasValue(Comment, CommentGroupKeyMetadata);
+				Snapshot.CommentGroupKey =
+					GetCommentGroupKey(Graph, Comment);
+			}
+		}
 		Snapshots.Add(Node->NodeGuid, Snapshot);
 	}
 	return Snapshots;
@@ -699,6 +1174,11 @@ void RestoreSnapshot(
 	}
 	for (UEdGraphNode* AddedNode : AddedNodes)
 	{
+		if (UEdGraphNode_Comment* AddedComment =
+				Cast<UEdGraphNode_Comment>(AddedNode))
+		{
+			SetCommentGroupKey(Graph, AddedComment, FString());
+		}
 		Graph->RemoveNode(AddedNode);
 	}
 	for (const TPair<FGuid, FNodeSnapshot>& Pair : Snapshots)
@@ -709,9 +1189,63 @@ void RestoreSnapshot(
 			Node->NodePosY = Pair.Value.Y;
 			Node->NodeWidth = Pair.Value.Width;
 			Node->NodeHeight = Pair.Value.Height;
+			if (Pair.Value.bComment)
+			{
+				if (UEdGraphNode_Comment* Comment =
+						Cast<UEdGraphNode_Comment>(Node))
+				{
+					Comment->NodeComment = Pair.Value.CommentText;
+					SetCommentGroupKey(
+						Graph,
+						Comment,
+						Pair.Value.bHasCommentGroupKey
+							? Pair.Value.CommentGroupKey
+							: FString());
+				}
+			}
 		}
 	}
 	Graph->NotifyGraphChanged();
+}
+
+bool SnapshotMatches(
+	UEdGraph* Graph,
+	const TMap<FGuid, FNodeSnapshot>& Snapshots)
+{
+	if (!Graph || Graph->Nodes.Num() != Snapshots.Num())
+	{
+		return false;
+	}
+	for (const TPair<FGuid, FNodeSnapshot>& Pair : Snapshots)
+	{
+		const UEdGraphNode* Node = FindNode(Graph, Pair.Key);
+		if (!Node
+			|| Node->NodePosX != Pair.Value.X
+			|| Node->NodePosY != Pair.Value.Y
+			|| Node->NodeWidth != Pair.Value.Width
+			|| Node->NodeHeight != Pair.Value.Height)
+		{
+			return false;
+		}
+		if (Pair.Value.bComment)
+		{
+			const UEdGraphNode_Comment* Comment =
+				Cast<UEdGraphNode_Comment>(Node);
+			UMetaData* Metadata = GetGraphMetadata(Graph);
+			if (!Comment
+				|| Comment->NodeComment != Pair.Value.CommentText
+				|| !Metadata
+				|| Metadata->HasValue(Comment, CommentGroupKeyMetadata)
+					!= Pair.Value.bHasCommentGroupKey
+				|| (Pair.Value.bHasCommentGroupKey
+					&& GetCommentGroupKey(Graph, Comment)
+						!= Pair.Value.CommentGroupKey))
+			{
+				return false;
+			}
+		}
+	}
+	return true;
 }
 
 TArray<TSharedPtr<FJsonValue>> BuildPositionChanges(
@@ -766,7 +1300,7 @@ TArray<TSharedPtr<FJsonValue>> BuildLayoutDiagnostics(
 	{
 		AffectedIds.Append(Group.NodeIds);
 	}
-	AffectedIds.Append(Execution.CreatedCommentIds);
+	AffectedIds.Append(Execution.AffectedCommentIds);
 
 	FContext Context;
 	Context.Graph = Graph;
@@ -1033,6 +1567,117 @@ bool BuildGeometryFingerprint(
 	return true;
 }
 
+bool ResolveCommentTargets(
+	UEdGraph* Graph,
+	TArray<FLayoutGroup>& Groups,
+	FString& OutError)
+{
+	for (FLayoutGroup& Group : Groups)
+	{
+		if (!Group.bCreateComment)
+		{
+			continue;
+		}
+
+		UEdGraphNode_Comment* RequestedComment = nullptr;
+		if (!Group.CommentNodeId.IsEmpty())
+		{
+			FGuid RequestedId;
+			FGuid::Parse(Group.CommentNodeId, RequestedId);
+			RequestedComment = Cast<UEdGraphNode_Comment>(
+				FindNode(Graph, RequestedId));
+			if (!RequestedComment)
+			{
+				OutError = FString::Printf(
+					TEXT("Comment node '%s' was not found in graph '%s'."),
+					*Group.CommentNodeId,
+					Graph ? *Graph->GetName() : TEXT(""));
+				return false;
+			}
+		}
+
+		TArray<UEdGraphNode_Comment*> GroupKeyMatches;
+		if (!Group.CommentGroupKey.IsEmpty())
+		{
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				UEdGraphNode_Comment* Comment =
+					Cast<UEdGraphNode_Comment>(Node);
+				if (Comment
+					&& GetCommentGroupKey(Graph, Comment)
+						== Group.CommentGroupKey)
+				{
+					GroupKeyMatches.Add(Comment);
+				}
+			}
+			if (GroupKeyMatches.Num() > 1)
+			{
+				OutError = FString::Printf(
+					TEXT("groupKey '%s' matches more than one Comment."),
+					*Group.CommentGroupKey);
+				return false;
+			}
+		}
+
+		UEdGraphNode_Comment* GroupKeyComment =
+			GroupKeyMatches.IsEmpty() ? nullptr : GroupKeyMatches[0];
+		if (RequestedComment && GroupKeyComment
+			&& RequestedComment != GroupKeyComment)
+		{
+			OutError = FString::Printf(
+				TEXT("commentNodeId '%s' does not match groupKey '%s'."),
+				*Group.CommentNodeId,
+				*Group.CommentGroupKey);
+			return false;
+		}
+
+		if (Group.CommentMode == TEXT("create"))
+		{
+			if (GroupKeyComment)
+			{
+				OutError = FString::Printf(
+					TEXT("groupKey '%s' already belongs to Comment '%s'."),
+					*Group.CommentGroupKey,
+					*GroupKeyComment->NodeGuid.ToString());
+				return false;
+			}
+			continue;
+		}
+
+		UEdGraphNode_Comment* ResolvedComment = RequestedComment;
+		if (!ResolvedComment && Group.CommentMode == TEXT("upsert"))
+		{
+			ResolvedComment = GroupKeyComment;
+		}
+		if (Group.CommentMode == TEXT("update") && !ResolvedComment)
+		{
+			OutError = FString::Printf(
+				TEXT("Group '%s' update target does not exist."),
+				*Group.Id);
+			return false;
+		}
+		if (ResolvedComment)
+		{
+			const FString ExistingGroupKey =
+				GetCommentGroupKey(Graph, ResolvedComment);
+			if (!Group.CommentGroupKey.IsEmpty()
+				&& !ExistingGroupKey.IsEmpty()
+				&& ExistingGroupKey != Group.CommentGroupKey)
+			{
+				OutError = FString::Printf(
+					TEXT("Comment '%s' belongs to groupKey '%s', not '%s'."),
+					*ResolvedComment->NodeGuid.ToString(),
+					*ExistingGroupKey,
+					*Group.CommentGroupKey);
+				return false;
+			}
+			Group.ResolvedCommentNodeId = ResolvedComment->NodeGuid;
+			Group.bResolvedCommentExists = true;
+		}
+	}
+	return true;
+}
+
 bool BuildLayoutPrediction(
 	UBlueprint* SourceBlueprint,
 	UEdGraph* SourceGraph,
@@ -1147,10 +1792,10 @@ bool BuildLayoutPrediction(
 	FLayoutExecution PreviewExecution;
 	if (!ExecuteGroups(
 			PreviewEditor,
-			PreviewGraph,
-			Groups,
-			PreviewExecution,
-			OutError))
+		PreviewGraph,
+		Groups,
+		PreviewExecution,
+		OutError))
 	{
 		OutErrorCode = TEXT("invalid_request");
 		return false;
@@ -1164,9 +1809,9 @@ bool BuildLayoutPrediction(
 	OutPrediction.LayoutDiagnostics =
 		BuildLayoutDiagnostics(
 			PreviewEditor,
-			PreviewGraph,
-			Groups,
-			PreviewExecution);
+		PreviewGraph,
+		Groups,
+		PreviewExecution);
 
 	TSharedRef<FJsonObject> PredictionEvidence = MakeShared<FJsonObject>();
 	PredictionEvidence->SetStringField(
@@ -1261,6 +1906,9 @@ bool ApplyLayoutPrediction(
 		const TSharedPtr<FJsonObject>* BoundsJson = nullptr;
 		FString GroupId;
 		FString Text;
+		FString Operation;
+		FString CommentNodeId;
+		FString GroupKey;
 		double X = 0.0;
 		double Y = 0.0;
 		double Width = 0.0;
@@ -1268,6 +1916,8 @@ bool ApplyLayoutPrediction(
 		if (!CommentJson.IsValid()
 			|| !CommentJson->TryGetStringField(TEXT("groupId"), GroupId)
 			|| !CommentJson->TryGetStringField(TEXT("text"), Text)
+			|| !CommentJson->TryGetStringField(TEXT("operation"), Operation)
+			|| (Operation != TEXT("create") && Operation != TEXT("update"))
 			|| !CommentJson->TryGetObjectField(
 				TEXT("bounds"),
 				BoundsJson)
@@ -1288,21 +1938,52 @@ bool ApplyLayoutPrediction(
 				"bounds.");
 			return false;
 		}
-		UEdGraphNode_Comment* Comment = CreateNativeComment(
-			Graph,
-			FSlateRect(X, Y, X + Width, Y + Height),
-			Text);
+		CommentJson->TryGetStringField(TEXT("groupKey"), GroupKey);
+		UEdGraphNode_Comment* Comment = nullptr;
+		if (Operation == TEXT("update"))
+		{
+			FGuid CommentGuid;
+			FString GuidError;
+			if (!CommentJson->TryGetStringField(
+					TEXT("commentNodeId"),
+					CommentNodeId)
+				|| !TryParseNodeGuid(CommentNodeId, CommentGuid, GuidError))
+			{
+				OutError = TEXT("The approved Comment update target is invalid.");
+				return false;
+			}
+			Comment = Cast<UEdGraphNode_Comment>(FindNode(Graph, CommentGuid));
+		}
+		else
+		{
+			Comment = CreateNativeComment(
+				Graph,
+				FSlateRect(X, Y, X + Width, Y + Height),
+				Text);
+		}
 		if (!Comment)
 		{
 			OutError = FString::Printf(
-				TEXT("Native Comment creation failed for group '%s'."),
+				TEXT("Native Comment %s failed for group '%s'."),
+				*Operation,
 				*GroupId);
 			return false;
 		}
-		OutExecution.CreatedCommentIds.Add(Comment->NodeGuid);
+		UpdateNativeComment(
+			Graph,
+			Comment,
+			FSlateRect(X, Y, X + Width, Y + Height),
+			Text,
+			GroupKey);
+		if (Operation == TEXT("create"))
+		{
+			OutExecution.CreatedCommentIds.Add(Comment->NodeGuid);
+		}
+		OutExecution.AffectedCommentIds.Add(Comment->NodeGuid);
 		OutExecution.CreatedCommentGroups.Add(
 			Comment->NodeGuid,
 			GroupId);
+		OutExecution.GroupCommentIds.Add(GroupId, Comment->NodeGuid);
 	}
 	OutExecution.CommentPreviews = Prediction.CommentPreviews;
 	Graph->NotifyGraphChanged();
@@ -1387,6 +2068,11 @@ public:
 			{
 				return NotFound(ResolveError);
 			}
+		}
+		FString CommentResolveError;
+		if (!ResolveCommentTargets(Context.Graph, Groups, CommentResolveError))
+		{
+			return InvalidRequest(CommentResolveError);
 		}
 
 		const FString GraphHash = ComputeGraphHash(Context.Graph);
@@ -1591,7 +2277,8 @@ public:
 				{
 					Transaction.Cancel();
 				}
-				return ComputeGraphHash(Context.Graph) == GraphHash;
+				return ComputeGraphHash(Context.Graph) == GraphHash
+					&& SnapshotMatches(Context.Graph, Before);
 			};
 		if (!ApplyLayoutPrediction(
 				Context.Graph,
@@ -1612,6 +2299,27 @@ public:
 				TEXT("layout_failed"),
 				422);
 		}
+#if WITH_DEV_AUTOMATION_TESTS
+		bool bInjectFailureAfterCommentMutation = false;
+		if (Params->TryGetBoolField(
+				TEXT("__testFailAfterCommentMutation"),
+				bInjectFailureAfterCommentMutation)
+			&& bInjectFailureAfterCommentMutation
+			&& !Execution.AffectedCommentIds.IsEmpty())
+		{
+			if (!RestoreFailedApply())
+			{
+				return FMCPToolResult::Error(
+					TEXT("Injected layout failure could not restore the Graph."),
+					TEXT("verification_failed"),
+					500);
+			}
+			return FMCPToolResult::Error(
+				TEXT("Injected failure after Comment mutation."),
+				TEXT("layout_failed"),
+				422);
+		}
+#endif
 
 		Context.GraphEditor->NotifyGraphChanged();
 		RefreshGraphEditorLayout(Context.GraphEditor);
@@ -1640,7 +2348,8 @@ public:
 		}
 
 		const FString AfterHash = ComputeGraphHash(Context.Graph);
-		const bool bChanged = AfterHash != GraphHash;
+		const bool bChanged = AfterHash != GraphHash
+			|| !SnapshotMatches(Context.Graph, Before);
 		if (bChanged)
 		{
 			Context.Blueprint->MarkPackageDirty();
