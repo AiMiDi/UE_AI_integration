@@ -10,6 +10,7 @@
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphNode_Comment.h"
 #include "EdGraphSchema_K2_Actions.h"
+#include "Editor.h"
 #include "Engine/Blueprint.h"
 #include "GraphEditor.h"
 #include "Infrastructure/MCPToolHelpers.h"
@@ -188,6 +189,291 @@ bool HasConnectionBetweenSelectedNodes(const TArray<UEdGraphNode *> &Nodes) {
   return false;
 }
 
+constexpr double MaxStraightenNodeDisplacement = 2048.0;
+constexpr double MaxStraightenRegionExpansion = 2.0;
+constexpr double MaxStraightenConnectionSpanGrowth = 4.0;
+constexpr double ClearConnectionDirectionThreshold = 16.0;
+
+struct FNodeLayoutSnapshot {
+  int32 X = 0;
+  int32 Y = 0;
+  int32 Width = 0;
+  int32 Height = 0;
+};
+
+struct FStraightenConnectionSnapshot {
+  FGuid SourceNodeId;
+  FGuid TargetNodeId;
+  bool bHorizontal = true;
+  int32 DirectionSign = 0;
+  double Span = 0.0;
+};
+
+struct FStraightenBaseline {
+  TMap<FGuid, FNodeLayoutSnapshot> Nodes;
+  TArray<FGuid> Selection;
+  TArray<FStraightenConnectionSnapshot> Connections;
+  UEAIIntegration::BlueprintGraph::FNodeBounds Region;
+  UEAIIntegration::BlueprintGraph::FEditorGeometryFingerprint Geometry;
+  FString GraphHash;
+  bool bPackageDirty = false;
+};
+
+FVector2D BoundsCenter(
+    const UEAIIntegration::BlueprintGraph::FNodeBounds &Bounds) {
+  return FVector2D(Bounds.X + Bounds.Width * 0.5,
+                   Bounds.Y + Bounds.Height * 0.5);
+}
+
+bool TryComputeGraphRegion(
+    const TMap<FGuid, UEAIIntegration::BlueprintGraph::FNodeBounds> &Bounds,
+    UEAIIntegration::BlueprintGraph::FNodeBounds &OutRegion) {
+  if (Bounds.IsEmpty()) {
+    return false;
+  }
+  double Left = TNumericLimits<double>::Max();
+  double Top = TNumericLimits<double>::Max();
+  double Right = TNumericLimits<double>::Lowest();
+  double Bottom = TNumericLimits<double>::Lowest();
+  for (const TPair<FGuid, UEAIIntegration::BlueprintGraph::FNodeBounds> &Pair :
+       Bounds) {
+    Left = FMath::Min(Left, Pair.Value.X);
+    Top = FMath::Min(Top, Pair.Value.Y);
+    Right = FMath::Max(Right, Pair.Value.Right());
+    Bottom = FMath::Max(Bottom, Pair.Value.Bottom());
+  }
+  OutRegion.X = Left;
+  OutRegion.Y = Top;
+  OutRegion.Width = Right - Left;
+  OutRegion.Height = Bottom - Top;
+  OutRegion.Source = TEXT("editor");
+  OutRegion.bExact = OutRegion.Width > 0.0 && OutRegion.Height > 0.0;
+  return OutRegion.bExact;
+}
+
+TArray<UEdGraphNode *> GetGraphNodes(UEdGraph *Graph) {
+  TArray<UEdGraphNode *> Nodes;
+  if (Graph) {
+    for (UEdGraphNode *Node : Graph->Nodes) {
+      if (Node) {
+        Nodes.Add(Node);
+      }
+    }
+  }
+  return Nodes;
+}
+
+void RestoreSelection(const FBlueprintGraphEditorContext &Context,
+                      const TArray<FGuid> &Selection) {
+  Context.GraphEditor->ClearSelectionSet();
+  for (const FGuid &NodeId : Selection) {
+    if (UEdGraphNode *Node =
+            UEAIIntegration::BlueprintGraph::FindNode(Context.Graph, NodeId)) {
+      Context.GraphEditor->SetNodeSelection(Node, true);
+    }
+  }
+}
+
+bool CaptureStraightenBaseline(
+    const FBlueprintGraphEditorContext &Context,
+    const TArray<UEdGraphNode *> &SelectedNodes, FStraightenBaseline &OutBaseline,
+    FString &OutError) {
+  OutBaseline = FStraightenBaseline();
+  const TArray<UEdGraphNode *> GraphNodes = GetGraphNodes(Context.Graph);
+  TMap<FGuid, UEAIIntegration::BlueprintGraph::FNodeBounds> EditorBounds;
+  if (!UEAIIntegration::BlueprintGraph::TryCaptureSettledEditorGeometry(
+          Context, GraphNodes, EditorBounds, OutBaseline.Geometry, OutError) ||
+      !TryComputeGraphRegion(EditorBounds, OutBaseline.Region)) {
+    if (OutError.IsEmpty()) {
+      OutError = TEXT("The Graph region could not be calculated.");
+    }
+    return false;
+  }
+
+  for (const UEdGraphNode *Node : GraphNodes) {
+    FNodeLayoutSnapshot Snapshot;
+    Snapshot.X = Node->NodePosX;
+    Snapshot.Y = Node->NodePosY;
+    Snapshot.Width = Node->NodeWidth;
+    Snapshot.Height = Node->NodeHeight;
+    OutBaseline.Nodes.Add(Node->NodeGuid, Snapshot);
+  }
+  TSet<const UEdGraphNode *> SelectedSet;
+  for (const UEdGraphNode *Node : SelectedNodes) {
+    if (Node) {
+      OutBaseline.Selection.Add(Node->NodeGuid);
+      SelectedSet.Add(Node);
+    }
+  }
+
+  TSet<FString> SeenConnections;
+  for (const UEdGraphNode *SourceNode : SelectedNodes) {
+    for (const UEdGraphPin *SourcePin : SourceNode->Pins) {
+      if (!SourcePin || SourcePin->Direction != EGPD_Output) {
+        continue;
+      }
+      for (const UEdGraphPin *TargetPin : SourcePin->LinkedTo) {
+        const UEdGraphNode *TargetNode =
+            TargetPin ? TargetPin->GetOwningNode() : nullptr;
+        if (!TargetPin || TargetPin->Direction != EGPD_Input || !TargetNode ||
+            !SelectedSet.Contains(TargetNode)) {
+          continue;
+        }
+        const FString Key = SourceNode->NodeGuid.ToString() + TEXT(":") +
+                            TargetNode->NodeGuid.ToString();
+        if (SeenConnections.Contains(Key)) {
+          continue;
+        }
+        SeenConnections.Add(Key);
+        const UEAIIntegration::BlueprintGraph::FNodeBounds *SourceBounds =
+            EditorBounds.Find(SourceNode->NodeGuid);
+        const UEAIIntegration::BlueprintGraph::FNodeBounds *TargetBounds =
+            EditorBounds.Find(TargetNode->NodeGuid);
+        if (!SourceBounds || !TargetBounds) {
+          OutError = TEXT("Connection geometry is incomplete.");
+          return false;
+        }
+        const FVector2D Delta =
+            BoundsCenter(*TargetBounds) - BoundsCenter(*SourceBounds);
+        FStraightenConnectionSnapshot Connection;
+        Connection.SourceNodeId = SourceNode->NodeGuid;
+        Connection.TargetNodeId = TargetNode->NodeGuid;
+        Connection.bHorizontal =
+            FMath::Abs(Delta.X) >= ClearConnectionDirectionThreshold;
+        const double DirectionDelta = Connection.bHorizontal ? Delta.X
+                                                             : Delta.Y;
+        if (FMath::Abs(DirectionDelta) >= ClearConnectionDirectionThreshold) {
+          Connection.DirectionSign = DirectionDelta > 0.0 ? 1 : -1;
+        }
+        Connection.Span = Delta.Size();
+        OutBaseline.Connections.Add(Connection);
+      }
+    }
+  }
+  OutBaseline.GraphHash =
+      UEAIIntegration::BlueprintGraph::ComputeGraphHash(Context.Graph);
+  OutBaseline.bPackageDirty = Context.Blueprint->GetOutermost()->IsDirty();
+  if (OutBaseline.GraphHash.IsEmpty()) {
+    OutError = TEXT("The pre-straighten Graph hash could not be computed.");
+  }
+  return !OutBaseline.GraphHash.IsEmpty();
+}
+
+bool ValidateStraightenResult(
+    const FBlueprintGraphEditorContext &Context,
+    const FStraightenBaseline &Baseline,
+    const TMap<FGuid, UEAIIntegration::BlueprintGraph::FNodeBounds> &AfterBounds,
+    FString &OutError) {
+  if (AfterBounds.Num() != Baseline.Nodes.Num()) {
+    OutError = TEXT("Straighten changed the Graph node set.");
+    return false;
+  }
+  for (const TPair<FGuid, FNodeLayoutSnapshot> &Pair : Baseline.Nodes) {
+    const UEdGraphNode *Node =
+        UEAIIntegration::BlueprintGraph::FindNode(Context.Graph, Pair.Key);
+    if (!Node) {
+      OutError = FString::Printf(TEXT("Node '%s' disappeared during straighten."),
+                                 *Pair.Key.ToString());
+      return false;
+    }
+    const FVector2D Displacement(Node->NodePosX - Pair.Value.X,
+                                 Node->NodePosY - Pair.Value.Y);
+    if (Displacement.Size() > MaxStraightenNodeDisplacement) {
+      OutError = FString::Printf(
+          TEXT("Node '%s' moved %.1f Graph Units; the limit is %.0f."),
+          *Pair.Key.ToString(), Displacement.Size(),
+          MaxStraightenNodeDisplacement);
+      return false;
+    }
+    if (Node->NodeWidth != Pair.Value.Width ||
+        Node->NodeHeight != Pair.Value.Height) {
+      OutError = FString::Printf(
+          TEXT("Straighten unexpectedly resized node '%s' from %dx%d to "
+               "%dx%d."),
+          *Pair.Key.ToString(), Pair.Value.Width, Pair.Value.Height,
+          Node->NodeWidth, Node->NodeHeight);
+      return false;
+    }
+  }
+
+  UEAIIntegration::BlueprintGraph::FNodeBounds AfterRegion;
+  if (!TryComputeGraphRegion(AfterBounds, AfterRegion)) {
+    OutError = TEXT("The Graph region is unavailable after straighten.");
+    return false;
+  }
+  if (AfterRegion.Width > Baseline.Region.Width * MaxStraightenRegionExpansion ||
+      AfterRegion.Height >
+          Baseline.Region.Height * MaxStraightenRegionExpansion) {
+    OutError = FString::Printf(
+        TEXT("Straighten expanded the Graph region from %.1fx%.1f to "
+             "%.1fx%.1f; the limit is %.1fx."),
+        Baseline.Region.Width, Baseline.Region.Height, AfterRegion.Width,
+        AfterRegion.Height, MaxStraightenRegionExpansion);
+    return false;
+  }
+
+  for (const FStraightenConnectionSnapshot &Connection :
+       Baseline.Connections) {
+    const UEAIIntegration::BlueprintGraph::FNodeBounds *SourceBounds =
+        AfterBounds.Find(Connection.SourceNodeId);
+    const UEAIIntegration::BlueprintGraph::FNodeBounds *TargetBounds =
+        AfterBounds.Find(Connection.TargetNodeId);
+    if (!SourceBounds || !TargetBounds) {
+      OutError = TEXT("Connection geometry is unavailable after straighten.");
+      return false;
+    }
+    const FVector2D Delta =
+        BoundsCenter(*TargetBounds) - BoundsCenter(*SourceBounds);
+    const double DirectionDelta =
+        Connection.bHorizontal ? Delta.X : Delta.Y;
+    if (Connection.DirectionSign != 0 &&
+        DirectionDelta * Connection.DirectionSign < 0.0) {
+      OutError = FString::Printf(
+          TEXT("Straighten reversed connection '%s' -> '%s'."),
+          *Connection.SourceNodeId.ToString(),
+          *Connection.TargetNodeId.ToString());
+      return false;
+    }
+    if (Connection.Span > 0.0 &&
+        Delta.Size() >
+            Connection.Span * MaxStraightenConnectionSpanGrowth) {
+      OutError = FString::Printf(
+          TEXT("Straighten grew connection '%s' -> '%s' from %.1f to %.1f "
+               "Graph Units; the limit is %.1fx."),
+          *Connection.SourceNodeId.ToString(),
+          *Connection.TargetNodeId.ToString(), Connection.Span, Delta.Size(),
+          MaxStraightenConnectionSpanGrowth);
+      return false;
+    }
+  }
+  return true;
+}
+
+bool RestoreStraightenBaseline(const FBlueprintGraphEditorContext &Context,
+                               const FStraightenBaseline &Baseline) {
+  if (Context.Graph->Nodes.Num() != Baseline.Nodes.Num()) {
+    return false;
+  }
+  for (const TPair<FGuid, FNodeLayoutSnapshot> &Pair : Baseline.Nodes) {
+    UEdGraphNode *Node =
+        UEAIIntegration::BlueprintGraph::FindNode(Context.Graph, Pair.Key);
+    if (!Node) {
+      return false;
+    }
+    Node->NodePosX = Pair.Value.X;
+    Node->NodePosY = Pair.Value.Y;
+    Node->NodeWidth = Pair.Value.Width;
+    Node->NodeHeight = Pair.Value.Height;
+  }
+  Context.Graph->NotifyGraphChanged();
+  UEAIIntegration::BlueprintGraph::RefreshGraphEditorLayout(
+      Context.GraphEditor);
+  RestoreSelection(Context, Baseline.Selection);
+  Context.Blueprint->GetOutermost()->SetDirtyFlag(Baseline.bPackageDirty);
+  return UEAIIntegration::BlueprintGraph::ComputeGraphHash(Context.Graph) ==
+         Baseline.GraphHash;
+}
+
 class FTool_SetBlueprintSelection final : public FMCPToolBase {
 public:
   FString GetCapabilityId() const override {
@@ -364,10 +650,102 @@ public:
                "least one connection between selected nodes."));
     }
 
+    if (GEditor && GEditor->IsTransactionActive()) {
+      return FMCPToolResult::Error(
+          TEXT("Another Editor transaction is active. Retry after it "
+               "finishes or use blueprint.layout.organize for an approved "
+               "atomic layout."),
+          TEXT("editor_transaction_busy"), 409);
+    }
+
+    FStraightenBaseline Baseline;
+    FString GeometryError;
+    if (!CaptureStraightenBaseline(Context, SelectedNodes, Baseline,
+                                   GeometryError)) {
+      return FMCPToolResult::Error(GeometryError,
+                                   TEXT("graph_geometry_unavailable"), 409);
+    }
+    // Geometry refreshes may rebuild SGraphNode widgets and clear the live
+    // selection. Reapply the validated snapshot before invoking UE's native
+    // selection-driven command.
+    RestoreSelection(Context, Baseline.Selection);
+
     const TMap<FGuid, FIntPoint> Before = CapturePositions(SelectedNodes);
+    FScopedTransaction Transaction(
+        NSLOCTEXT("UEAIIntegration", "GuardBlueprintStraighten",
+                  "Guard Blueprint Straighten"));
+    Context.Blueprint->Modify();
+    Context.Graph->Modify();
+    for (UEdGraphNode *Node : GetGraphNodes(Context.Graph)) {
+      Node->Modify();
+    }
     Context.GraphEditor->OnStraightenConnections();
-    return FMCPToolResult::Ok(
-        BuildLayoutResult(Context, SelectedNodes, Before));
+#if WITH_DEV_AUTOMATION_TESTS
+    bool bInjectUnsafeDisplacement = false;
+    if (Params.IsValid() &&
+        Params->TryGetBoolField(TEXT("__testInjectUnsafeDisplacement"),
+                                bInjectUnsafeDisplacement) &&
+        bInjectUnsafeDisplacement && !SelectedNodes.IsEmpty()) {
+      if (const FNodeLayoutSnapshot *Snapshot =
+              Baseline.Nodes.Find(SelectedNodes[0]->NodeGuid)) {
+        SelectedNodes[0]->NodePosX =
+            Snapshot->X + static_cast<int32>(MaxStraightenNodeDisplacement) +
+            1;
+        SelectedNodes[0]->NodePosY = Snapshot->Y;
+      }
+    }
+#endif
+
+    TMap<FGuid, UEAIIntegration::BlueprintGraph::FNodeBounds> AfterBounds;
+    UEAIIntegration::BlueprintGraph::FEditorGeometryFingerprint AfterGeometry;
+    FString ValidationError;
+    const TArray<UEdGraphNode *> GraphNodes = GetGraphNodes(Context.Graph);
+    const bool bGeometryReady =
+        UEAIIntegration::BlueprintGraph::TryCaptureSettledEditorGeometry(
+            Context, GraphNodes, AfterBounds, AfterGeometry, ValidationError);
+    const bool bValid = bGeometryReady && ValidateStraightenResult(
+                                              Context, Baseline, AfterBounds,
+                                              ValidationError);
+    if (!bValid) {
+      const FString FailureReason = ValidationError.IsEmpty()
+                                        ? TEXT("Straighten validation failed.")
+                                        : ValidationError;
+      const bool bRestored = RestoreStraightenBaseline(Context, Baseline);
+      Transaction.Cancel();
+      if (!bRestored) {
+        return FMCPToolResult::Error(
+            TEXT("Straighten validation failed and the complete Graph "
+                 "snapshot could not be verified after restoration. Root "
+                 "cause: ") +
+                FailureReason,
+            TEXT("verification_failed"), 500);
+      }
+      return FMCPToolResult::Error(
+          FailureReason +
+              TEXT(" The complete Graph snapshot was restored."),
+          TEXT("layout_validation_failed"), 422);
+    }
+
+    const FString AfterGraphHash =
+        UEAIIntegration::BlueprintGraph::ComputeGraphHash(Context.Graph);
+    const bool bChanged = AfterGraphHash != Baseline.GraphHash;
+    if (!bChanged) {
+      Context.Blueprint->GetOutermost()->SetDirtyFlag(
+          Baseline.bPackageDirty);
+      Transaction.Cancel();
+    } else {
+      Context.Blueprint->MarkPackageDirty();
+    }
+    RestoreSelection(Context, Baseline.Selection);
+    TSharedRef<FJsonObject> Result =
+        BuildLayoutResult(Context, SelectedNodes, Before);
+    Result->SetStringField(TEXT("beforeGraphHash"), Baseline.GraphHash);
+    Result->SetStringField(TEXT("afterGraphHash"), AfterGraphHash);
+    Result->SetObjectField(
+        TEXT("geometryFingerprint"),
+        UEAIIntegration::BlueprintGraph::GeometryFingerprintToJson(
+            AfterGeometry));
+    return FMCPToolResult::Ok(Result);
   }
 };
 

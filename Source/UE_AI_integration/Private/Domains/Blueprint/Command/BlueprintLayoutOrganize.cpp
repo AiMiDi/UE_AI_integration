@@ -966,32 +966,42 @@ bool BuildGeometryFingerprint(
 			Nodes.Add(Node);
 		}
 	}
+	FContext Context;
+	Context.Graph = Graph;
+	Context.GraphEditor = Editor;
+	TMap<FGuid, FNodeBounds> SettledBounds;
+	FEditorGeometryFingerprint SettledFingerprint;
+	if (!TryCaptureSettledEditorGeometry(
+			Context,
+			Nodes,
+			SettledBounds,
+			SettledFingerprint,
+			OutError))
+	{
+		return false;
+	}
 	Nodes.Sort(
 		[](const UEdGraphNode& Left, const UEdGraphNode& Right)
 		{
 			return Left.NodeGuid.ToString() < Right.NodeGuid.ToString();
 		});
-
 	TArray<TSharedPtr<FJsonValue>> BoundsValues;
 	for (const UEdGraphNode* Node : Nodes)
 	{
-		FNodeBounds Bounds;
-		if (!TryBounds(Editor, Node, Bounds) || !Bounds.bExact)
+		const FNodeBounds* Bounds = SettledBounds.Find(Node->NodeGuid);
+		if (!Bounds)
 		{
-			OutError = FString::Printf(
-				TEXT("Exact Graph geometry is unavailable for node '%s'."),
-				*Node->NodeGuid.ToString());
+			OutError = TEXT("Settled Graph geometry is incomplete.");
 			return false;
 		}
 		TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
 		Entry->SetStringField(TEXT("nodeId"), Node->NodeGuid.ToString());
-		Entry->SetNumberField(TEXT("x"), Bounds.X);
-		Entry->SetNumberField(TEXT("y"), Bounds.Y);
-		Entry->SetNumberField(TEXT("width"), Bounds.Width);
-		Entry->SetNumberField(TEXT("height"), Bounds.Height);
+		Entry->SetNumberField(TEXT("x"), Bounds->X);
+		Entry->SetNumberField(TEXT("y"), Bounds->Y);
+		Entry->SetNumberField(TEXT("width"), Bounds->Width);
+		Entry->SetNumberField(TEXT("height"), Bounds->Height);
 		BoundsValues.Add(MakeShared<FJsonValueObject>(Entry));
 	}
-
 	TSharedRef<FJsonObject> Evidence = MakeShared<FJsonObject>();
 	Evidence->SetStringField(
 		TEXT("schema"),
@@ -1002,15 +1012,13 @@ bool BuildGeometryFingerprint(
 	Evidence->SetStringField(TEXT("graphHash"), GraphHash);
 	Evidence->SetArrayField(TEXT("nodeBounds"), BoundsValues);
 	FString BoundsDigest;
-	if (!UEAIIntegration::Infrastructure::TryDigestJson(
-			Evidence,
-			BoundsDigest))
+	if (!UEAIIntegration::Infrastructure::TryDigestJson(Evidence, BoundsDigest))
 	{
 		OutError = TEXT("Could not compute the Graph geometry fingerprint.");
 		return false;
 	}
 
-	OutFingerprint = MakeShared<FJsonObject>();
+	OutFingerprint = GeometryFingerprintToJson(SettledFingerprint);
 	OutFingerprint->SetStringField(
 		TEXT("schema"),
 		TEXT("ue.blueprint-layout-geometry-fingerprint.v1"));
@@ -1019,7 +1027,6 @@ bool BuildGeometryFingerprint(
 		LayoutAlgorithmSemantics);
 	OutFingerprint->SetStringField(TEXT("graphHash"), GraphHash);
 	OutFingerprint->SetNumberField(TEXT("nodeCount"), Nodes.Num());
-	OutFingerprint->SetBoolField(TEXT("exact"), true);
 	OutFingerprint->SetStringField(
 		TEXT("boundsHash"),
 		TEXT("sha256:") + BoundsDigest);

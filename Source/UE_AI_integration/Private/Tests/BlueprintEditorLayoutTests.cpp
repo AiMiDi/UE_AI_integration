@@ -235,6 +235,84 @@ bool FBlueprintEditorNativeLayoutCommandsTest::RunTest(
       UEAIIntegration::BlueprintGraph::RefreshGraphEditorLayout(GraphEditor);
     }
   };
+  if (ConcreteBlueprintEditor.IsValid()) {
+    const TSharedPtr<SGraphEditor> GeometryEditor =
+        ConcreteBlueprintEditor->OpenGraphAndBringToFront(Graph, false);
+    TestTrue(TEXT("Geometry stability has a live SGraphEditor"),
+             GeometryEditor.IsValid());
+    if (GeometryEditor.IsValid()) {
+      FVector2D OriginalView;
+      float OriginalZoom = 1.0f;
+      GeometryEditor->GetViewLocation(OriginalView, OriginalZoom);
+      UEAIIntegration::BlueprintGraph::FNodeBounds ReferenceBounds;
+      bool bHasReferenceBounds = false;
+      FString ReferenceBoundsHash;
+      const float ZoomLevels[] = {0.2f, 0.5f, 1.0f};
+      for (int32 Index = 0; Index < UE_ARRAY_COUNT(ZoomLevels); ++Index) {
+        GeometryEditor->SetViewLocation(
+            FVector2D(-300.0 + Index * 175.0, -250.0 + Index * 90.0),
+            ZoomLevels[Index]);
+        UEAIIntegration::BlueprintGraph::FContext GeometryContext;
+        GeometryContext.Blueprint = Blueprint;
+        GeometryContext.Graph = Graph;
+        GeometryContext.GraphEditor = GeometryEditor;
+        TMap<FGuid, UEAIIntegration::BlueprintGraph::FNodeBounds> Bounds;
+        UEAIIntegration::BlueprintGraph::FEditorGeometryFingerprint
+            Fingerprint;
+        FString GeometryError;
+        const bool bSettled =
+            UEAIIntegration::BlueprintGraph::TryCaptureSettledEditorGeometry(
+                GeometryContext, {First}, Bounds, Fingerprint, GeometryError);
+        TestTrue(
+            FString::Printf(
+                TEXT("Editor geometry settles at zoom %.1f: %s"),
+                ZoomLevels[Index], *GeometryError),
+            bSettled);
+        if (!bSettled) {
+          continue;
+        }
+        TestTrue(TEXT("Geometry fingerprint records exact Graph-space bounds"),
+                 Fingerprint.bExact && Fingerprint.PassCount >= 2 &&
+                     Fingerprint.BoundsHash.StartsWith(TEXT("sha256:")) &&
+                     FMath::IsFinite(Fingerprint.Zoom) &&
+                     Fingerprint.Zoom > 0.0 &&
+                     Fingerprint.ApplicationScale > 0.0 &&
+                     Fingerprint.DPIScale > 0.0);
+        const UEAIIntegration::BlueprintGraph::FNodeBounds *CurrentBounds =
+            Bounds.Find(First->NodeGuid);
+        TestNotNull(TEXT("Settled geometry contains the requested node"),
+                    CurrentBounds);
+        if (!CurrentBounds) {
+          continue;
+        }
+        if (!bHasReferenceBounds) {
+          ReferenceBounds = *CurrentBounds;
+          ReferenceBoundsHash = Fingerprint.BoundsHash;
+          bHasReferenceBounds = true;
+        } else {
+          TestTrue(
+              TEXT("Native Graph bounds are invariant across zoom and view "
+                   "offset"),
+              FMath::IsNearlyEqual(CurrentBounds->X, ReferenceBounds.X, 1.0) &&
+                  FMath::IsNearlyEqual(CurrentBounds->Y, ReferenceBounds.Y,
+                                       1.0) &&
+                  FMath::IsNearlyEqual(CurrentBounds->Width,
+                                       ReferenceBounds.Width, 1.0) &&
+                  FMath::IsNearlyEqual(CurrentBounds->Height,
+                                       ReferenceBounds.Height, 1.0));
+          TestEqual(TEXT("Bounds hash is invariant across zoom and view offset"),
+                    Fingerprint.BoundsHash, ReferenceBoundsHash);
+        }
+      }
+      GeometryEditor->SetViewLocation(OriginalView, OriginalZoom);
+      UEAIIntegration::BlueprintGraph::RefreshGraphEditorLayout(
+          GeometryEditor);
+      GeometryEditor->ClearSelectionSet();
+      for (UEdGraphNode *Node : AllNodes) {
+        GeometryEditor->SetNodeSelection(Node, true);
+      }
+    }
+  }
   TestTrue(TEXT("Rejected selection preserves the previous selection"),
            ConcreteBlueprintEditor.IsValid() &&
                ConcreteBlueprintEditor->GetSelectedNodes().Num() == 3);
@@ -292,6 +370,47 @@ bool FBlueprintEditorNativeLayoutCommandsTest::RunTest(
       TEXT("blueprint.layout.straighten"), StraightenParams);
   TestTrue(TEXT("Native straighten succeeds for connected selected nodes"),
            StraightenResult.bSuccess);
+  if (StraightenResult.bSuccess) {
+    const TSharedPtr<FJsonObject> GeometryFingerprint =
+        StraightenResult.Data->GetObjectField(TEXT("geometryFingerprint"));
+    TestTrue(TEXT("Straighten returns settled Graph-space geometry evidence"),
+             GeometryFingerprint->GetBoolField(TEXT("exact")) &&
+                 GeometryFingerprint->GetStringField(TEXT("coordinateSpace")) ==
+                     TEXT("graph") &&
+                 GeometryFingerprint->GetNumberField(TEXT("passCount")) >=
+                     2.0);
+  }
+
+  Blueprint->GetOutermost()->SetDirtyFlag(false);
+  const FString BeforeUnsafeStraightenHash =
+      UEAIIntegration::BlueprintGraph::ComputeGraphHash(Graph);
+  const int32 BeforeUnsafeFirstX = First->NodePosX;
+  const int32 BeforeUnsafeFirstY = First->NodePosY;
+  TSharedPtr<FJsonObject> UnsafeStraightenParams =
+      MakeBlueprintGraphParams(BlueprintPath, GraphName);
+  UnsafeStraightenParams->SetBoolField(
+      TEXT("__testInjectUnsafeDisplacement"), true);
+  const FMCPToolResult UnsafeStraightenResult = Registry.ExecuteTool(
+      TEXT("blueprint.layout.straighten"), UnsafeStraightenParams);
+  TestFalse(TEXT("Unsafe straighten is rejected"),
+            UnsafeStraightenResult.bSuccess);
+  TestEqual(TEXT("Unsafe straighten returns an explicit validation error"),
+            UnsafeStraightenResult.ErrorCode,
+            FString(TEXT("layout_validation_failed")));
+  TestEqual(TEXT("Unsafe straighten restores the complete Graph hash"),
+            UEAIIntegration::BlueprintGraph::ComputeGraphHash(Graph),
+            BeforeUnsafeStraightenHash);
+  TestEqual(TEXT("Unsafe straighten restores the first node X"),
+            First->NodePosX, BeforeUnsafeFirstX);
+  TestEqual(TEXT("Unsafe straighten restores the first node Y"),
+            First->NodePosY, BeforeUnsafeFirstY);
+  TestFalse(TEXT("Unsafe straighten restores package cleanliness"),
+            Blueprint->GetOutermost()->IsDirty());
+  TestEqual(TEXT("Unsafe straighten restores the selected nodes"),
+            ConcreteBlueprintEditor.IsValid()
+                ? ConcreteBlueprintEditor->GetSelectedNodes().Num()
+                : 0,
+            2);
 
   TSharedPtr<SGraphEditor> CaptureGraphEditor;
   if (FApp::CanEverRender()) {
