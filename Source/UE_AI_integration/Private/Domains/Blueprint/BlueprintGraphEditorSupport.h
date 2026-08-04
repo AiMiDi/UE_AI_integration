@@ -54,6 +54,17 @@ struct FNodeBounds
 	}
 };
 
+struct FEditorGeometryFingerprint
+{
+	FVector2D ViewOffset = FVector2D::ZeroVector;
+	double Zoom = 1.0;
+	double ApplicationScale = 1.0;
+	double DPIScale = 1.0;
+	int32 PassCount = 0;
+	FString BoundsHash;
+	bool bExact = false;
+};
+
 inline FMCPToolResult InvalidRequest(const FString& Message)
 {
 	return FMCPToolResult::Error(Message, TEXT("invalid_request"), 400);
@@ -394,6 +405,156 @@ inline TSharedRef<FJsonObject> BoundsToJson(const FNodeBounds& Bounds)
 	Json->SetStringField(TEXT("source"), Bounds.Source);
 	Json->SetBoolField(TEXT("exact"), Bounds.bExact);
 	return Json;
+}
+
+inline TSharedRef<FJsonObject> GeometryFingerprintToJson(
+	const FEditorGeometryFingerprint& Fingerprint)
+{
+	TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+	Json->SetStringField(
+		TEXT("schema"),
+		TEXT("ue.blueprint-editor-geometry-fingerprint.v1"));
+	Json->SetStringField(TEXT("coordinateSpace"), TEXT("graph"));
+	Json->SetBoolField(TEXT("exact"), Fingerprint.bExact);
+	Json->SetStringField(TEXT("boundsHash"), Fingerprint.BoundsHash);
+	Json->SetNumberField(TEXT("zoom"), Fingerprint.Zoom);
+	TSharedRef<FJsonObject> ViewOffset = MakeShared<FJsonObject>();
+	ViewOffset->SetNumberField(TEXT("x"), Fingerprint.ViewOffset.X);
+	ViewOffset->SetNumberField(TEXT("y"), Fingerprint.ViewOffset.Y);
+	Json->SetObjectField(TEXT("viewOffset"), ViewOffset);
+	Json->SetNumberField(
+		TEXT("applicationScale"),
+		Fingerprint.ApplicationScale);
+	Json->SetNumberField(TEXT("dpiScale"), Fingerprint.DPIScale);
+	Json->SetNumberField(TEXT("passCount"), Fingerprint.PassCount);
+	return Json;
+}
+
+/**
+ * Captures native SGraphEditor bounds in Graph-space. UE 5.3's
+ * GetBoundsForNode already returns SNode positions and desired sizes in Graph
+ * Units, so callers must not divide these values by the current zoom.
+ *
+ * A capture is accepted only after two consecutive refresh passes produce the
+ * same bounds hash. This avoids consuming a transient Slate desired size while
+ * a newly opened Graph tab or a changed zoom level is still settling.
+ */
+inline bool TryCaptureSettledEditorGeometry(
+	const FContext& Context,
+	const TArray<UEdGraphNode*>& RequestedNodes,
+	TMap<FGuid, FNodeBounds>& OutBounds,
+	FEditorGeometryFingerprint& OutFingerprint,
+	FString& OutError,
+	const int32 MaxPasses = 6)
+{
+	OutBounds.Reset();
+	OutFingerprint = FEditorGeometryFingerprint();
+	OutError.Reset();
+	if (!Context.GraphEditor.IsValid() || RequestedNodes.IsEmpty())
+	{
+		OutError = TEXT("A live Graph Editor and at least one node are required.");
+		return false;
+	}
+
+	TArray<UEdGraphNode*> Nodes;
+	Nodes.Reserve(RequestedNodes.Num());
+	for (UEdGraphNode* Node : RequestedNodes)
+	{
+		if (Node && Node->GetGraph() == Context.Graph)
+		{
+			Nodes.AddUnique(Node);
+		}
+	}
+	Nodes.Sort(
+		[](const UEdGraphNode& Left, const UEdGraphNode& Right)
+		{
+			return Left.NodeGuid.ToString() < Right.NodeGuid.ToString();
+		});
+	if (Nodes.IsEmpty())
+	{
+		OutError = TEXT("None of the requested nodes belong to the Graph.");
+		return false;
+	}
+
+	FString PreviousBoundsHash;
+	for (int32 PassIndex = 1; PassIndex <= FMath::Max(2, MaxPasses); ++PassIndex)
+	{
+		if (!RefreshGraphEditorLayout(Context.GraphEditor))
+		{
+			OutError = TEXT("The Graph Editor could not refresh native geometry.");
+			return false;
+		}
+
+		TMap<FGuid, FNodeBounds> CurrentBounds;
+		TArray<TSharedPtr<FJsonValue>> BoundsValues;
+		for (const UEdGraphNode* Node : Nodes)
+		{
+			FNodeBounds Bounds;
+			if (!TryGetNodeBounds(Context, Node, true, Bounds) || !Bounds.bExact)
+			{
+				OutError = FString::Printf(
+					TEXT("Exact Graph geometry is unavailable for node '%s'."),
+					*Node->NodeGuid.ToString());
+				return false;
+			}
+			CurrentBounds.Add(Node->NodeGuid, Bounds);
+			TSharedRef<FJsonObject> Entry = BoundsToJson(Bounds);
+			Entry->SetStringField(TEXT("nodeId"), Node->NodeGuid.ToString());
+			BoundsValues.Add(MakeShared<FJsonValueObject>(Entry));
+		}
+
+		TSharedRef<FJsonObject> Evidence = MakeShared<FJsonObject>();
+		Evidence->SetStringField(
+			TEXT("schema"),
+			TEXT("ue.blueprint-editor-graph-bounds.v1"));
+		Evidence->SetStringField(TEXT("coordinateSpace"), TEXT("graph"));
+		Evidence->SetArrayField(TEXT("nodeBounds"), BoundsValues);
+		FString BoundsDigest;
+		if (!Infrastructure::TryDigestJson(Evidence, BoundsDigest))
+		{
+			OutError = TEXT("Could not compute the Graph bounds fingerprint.");
+			return false;
+		}
+		const FString CurrentBoundsHash = TEXT("sha256:") + BoundsDigest;
+
+		FVector2D ViewOffset = FVector2D::ZeroVector;
+		float Zoom = 1.0f;
+		Context.GraphEditor->GetViewLocation(ViewOffset, Zoom);
+		double ApplicationScale = FSlateApplication::Get().GetApplicationScale();
+		double DPIScale = 1.0;
+		const TSharedPtr<SWindow> Window =
+			FSlateApplication::Get().FindWidgetWindow(
+				Context.GraphEditor.ToSharedRef());
+		if (Window.IsValid())
+		{
+			const TSharedPtr<FGenericWindow> NativeWindow =
+				Window->GetNativeWindow();
+			if (NativeWindow.IsValid())
+			{
+				DPIScale = NativeWindow->GetDPIScaleFactor();
+			}
+		}
+
+		if (!PreviousBoundsHash.IsEmpty()
+			&& PreviousBoundsHash == CurrentBoundsHash)
+		{
+			OutBounds = MoveTemp(CurrentBounds);
+			OutFingerprint.ViewOffset = ViewOffset;
+			OutFingerprint.Zoom = Zoom;
+			OutFingerprint.ApplicationScale = ApplicationScale;
+			OutFingerprint.DPIScale = DPIScale;
+			OutFingerprint.PassCount = PassIndex;
+			OutFingerprint.BoundsHash = CurrentBoundsHash;
+			OutFingerprint.bExact = true;
+			return true;
+		}
+		PreviousBoundsHash = CurrentBoundsHash;
+	}
+
+	OutError = FString::Printf(
+		TEXT("Graph geometry did not settle in %d refresh passes."),
+		FMath::Max(2, MaxPasses));
+	return false;
 }
 
 inline bool Contains(
