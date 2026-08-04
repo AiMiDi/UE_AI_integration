@@ -3,6 +3,9 @@
 #include "Dom/JsonValue.h"
 #include "DynamicRHI.h"
 #include "Editor.h"
+#include "Engine/GameInstance.h"
+#include "Engine/NetConnection.h"
+#include "Engine/NetDriver.h"
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
@@ -21,7 +24,9 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
+#include "Net/Core/Trace/NetTrace.h"
 #include "ProfilingDebugging/TraceAuxiliary.h"
+#include "ProfilingDebugging/MiscTrace.h"
 #include "RenderTimer.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -34,6 +39,9 @@
 #include "TraceServices/Model/Frames.h"
 #include "TraceServices/Model/Threads.h"
 #include "TraceServices/Model/TimingProfiler.h"
+#include "Trace/Trace.h"
+#include "TraceAnalysisContracts.h"
+#include "TraceAnalysisService.h"
 #include "UnrealEngine.h"
 
 namespace UEAIIntegration::Infrastructure
@@ -51,11 +59,54 @@ namespace ProductionJobRuntimePrivate
 	constexpr int32 MaxTraceTimers = 200;
 	constexpr int32 MaxTraceCounters = 64;
 	constexpr int32 MaxTraceCounterValues = 10000;
+	constexpr double TraceConnectionTimeoutSeconds = 5.0;
+	constexpr double TraceWriterFinalizeTimeoutSeconds = 10.0;
+	constexpr int32 MaximumReplayedNetDrivers = 8;
+	constexpr int32 MaximumReplayedNetConnections = 128;
 	constexpr double MaxStartupTimeoutSeconds = 3600.0;
 	constexpr double MaxExecutionTimeoutSeconds = 43200.0;
 	constexpr double MaxShutdownTimeoutSeconds = 600.0;
 	constexpr double MaxHardTimeoutSeconds = 86400.0;
 	constexpr int32 MaxValidatedJsonDepth = 64;
+
+	bool WaitForTraceWriterClose()
+	{
+		const double Deadline = FPlatformTime::Seconds()
+			+ TraceWriterFinalizeTimeoutSeconds;
+		while (UE::Trace::IsTracing()
+			&& FPlatformTime::Seconds() < Deadline)
+		{
+			// In a no-writer-thread build this pumps the pending close. With the
+			// normal Trace writer thread it is a no-op while that thread drains.
+			UE::Trace::Update();
+			FPlatformProcess::SleepNoStats(0.01f);
+		}
+		return !UE::Trace::IsTracing();
+	}
+
+	bool HasExistingPIENetDriver()
+	{
+		if (!GEngine)
+		{
+			return false;
+		}
+		for (const FWorldContext& Context : GEngine->GetWorldContexts())
+		{
+			UWorld* World = Context.World();
+			if (Context.WorldType == EWorldType::PIE
+				&& World
+				&& (World->GetNetDriver()
+					|| Context.ActiveNetDrivers.ContainsByPredicate(
+						[](const FNamedNetDriver& NamedDriver)
+						{
+							return NamedDriver.NetDriver != nullptr;
+						})))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
 
 	FString BuildStandaloneCVarCommands()
 	{
@@ -1116,6 +1167,228 @@ namespace ProductionJobRuntimePrivate
 			MatchingCounterTotal > CounterValues.Num());
 		return Summary;
 	}
+
+	TArray<TSharedPtr<FJsonValue>> TraceStringsToJson(
+		const TArray<FString>& Values)
+	{
+		TArray<TSharedPtr<FJsonValue>> Result;
+		Result.Reserve(Values.Num());
+		for (const FString& Value : Values)
+		{
+			Result.Add(MakeShared<FJsonValueString>(Value));
+		}
+		return Result;
+	}
+
+	TSharedPtr<FJsonValue> TraceScalarToJson(
+		const UEAI::Trace::FTraceValue& Value)
+	{
+		switch (Value.Type)
+		{
+		case UEAI::Trace::ETraceValueType::Boolean:
+			return MakeShared<FJsonValueBoolean>(Value.BooleanValue);
+		case UEAI::Trace::ETraceValueType::Integer:
+			return MakeShared<FJsonValueNumber>(
+				static_cast<double>(Value.IntegerValue));
+		case UEAI::Trace::ETraceValueType::Number:
+			if (FMath::IsFinite(Value.NumberValue))
+			{
+				return MakeShared<FJsonValueNumber>(Value.NumberValue);
+			}
+			return MakeShared<FJsonValueNull>();
+		case UEAI::Trace::ETraceValueType::String:
+			return MakeShared<FJsonValueString>(Value.StringValue);
+		case UEAI::Trace::ETraceValueType::Null:
+		default:
+			return MakeShared<FJsonValueNull>();
+		}
+	}
+
+	TSharedPtr<FJsonObject> TraceQueryToJson(
+		const UEAI::Trace::FTraceQueryResult& Query)
+	{
+		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetStringField(TEXT("schema"), Query.Schema);
+		Result->SetStringField(TEXT("provider"), Query.Provider);
+		Result->SetStringField(TEXT("operation"), Query.Operation);
+		Result->SetNumberField(
+			TEXT("intervalStartSeconds"), Query.IntervalStartSeconds);
+		Result->SetNumberField(
+			TEXT("intervalEndSeconds"), Query.IntervalEndSeconds);
+		Result->SetNumberField(
+			TEXT("total"), static_cast<double>(Query.TotalRows));
+		Result->SetBoolField(TEXT("truncated"), Query.bTruncated);
+		Result->SetArrayField(TEXT("columns"), TraceStringsToJson(Query.Columns));
+		TArray<TSharedPtr<FJsonValue>> Rows;
+		Rows.Reserve(Query.Rows.Num());
+		for (const UEAI::Trace::FTraceRow& Row : Query.Rows)
+		{
+			TSharedPtr<FJsonObject> RowObject = MakeShared<FJsonObject>();
+			for (const FString& Column : Query.Columns)
+			{
+				const UEAI::Trace::FTraceValue* Value = Row.Fields.Find(Column);
+				RowObject->SetField(
+					Column,
+					Value ? TraceScalarToJson(*Value)
+						: MakeShared<FJsonValueNull>());
+			}
+			Rows.Add(MakeShared<FJsonValueObject>(RowObject));
+		}
+		Result->SetArrayField(TEXT("rows"), Rows);
+		TArray<TSharedPtr<FJsonValue>> Diagnostics;
+		for (const UEAI::Trace::FTraceDiagnostic& Diagnostic : Query.Diagnostics)
+		{
+			TSharedPtr<FJsonObject> Item = MakeShared<FJsonObject>();
+			Item->SetStringField(TEXT("severity"), Diagnostic.Severity);
+			Item->SetStringField(TEXT("code"), Diagnostic.Code);
+			Item->SetStringField(TEXT("message"), Diagnostic.Message);
+			Diagnostics.Add(MakeShared<FJsonValueObject>(Item));
+		}
+		Result->SetArrayField(TEXT("diagnostics"), Diagnostics);
+		return Result;
+	}
+
+	TSharedPtr<FJsonObject> TraceProviderStatusToJson(
+		const UEAI::Trace::FTraceProviderStatus& Status)
+	{
+		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetStringField(TEXT("id"), Status.Descriptor.Id);
+		Result->SetStringField(
+			TEXT("displayName"), Status.Descriptor.DisplayName);
+		Result->SetStringField(
+			TEXT("insightsPanel"), Status.Descriptor.InsightsPanel);
+		Result->SetArrayField(
+			TEXT("operations"),
+			TraceStringsToJson(Status.Descriptor.Operations));
+		Result->SetArrayField(
+			TEXT("requiredChannels"),
+			TraceStringsToJson(Status.Descriptor.RequiredChannels));
+		Result->SetBoolField(
+			TEXT("queryImplemented"), Status.Descriptor.bQueryImplemented);
+		Result->SetBoolField(TEXT("recorded"), Status.bRecorded);
+		Result->SetStringField(TEXT("channelStatus"), Status.ChannelStatus);
+		Result->SetArrayField(
+			TEXT("recordedChannels"),
+			TraceStringsToJson(Status.RecordedChannels));
+		Result->SetArrayField(
+			TEXT("missingChannels"),
+			TraceStringsToJson(Status.MissingChannels));
+		Result->SetArrayField(
+			TEXT("recordedProviderNames"),
+			TraceStringsToJson(Status.RecordedProviderNames));
+		Result->SetArrayField(
+			TEXT("missingProviderNames"),
+			TraceStringsToJson(Status.MissingProviderNames));
+		Result->SetStringField(
+			TEXT("unavailableReason"), Status.UnavailableReason);
+		return Result;
+	}
+
+	TSharedPtr<FJsonObject> BuildTracePostStopAnalysis(
+		UEAI::Trace::FTraceAnalysisSession& Session,
+		const FString& AnalysisLevel,
+		const FString& RegionName,
+		const TArray<FString>& RequestedChannels)
+	{
+		const bool bFull = AnalysisLevel == TEXT("full");
+		TSet<FString> RequestedChannelSet;
+		for (const FString& Channel : RequestedChannels)
+		{
+			RequestedChannelSet.Add(Channel.ToLower());
+		}
+		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetStringField(
+			TEXT("schema"), TEXT("ue.trace-post-stop-analysis.v1"));
+		Result->SetStringField(TEXT("analysisLevel"), AnalysisLevel);
+		Result->SetStringField(
+			TEXT("engineVersionStatus"), Session.GetEngineVersionStatus());
+		Result->SetStringField(
+			TEXT("managedEngineMarker"), Session.GetManagedEngineMarker());
+		Result->SetNumberField(
+			TEXT("durationSeconds"), Session.GetDurationSeconds());
+		Result->SetNumberField(
+			TEXT("queryLimitPerOperation"), bFull ? 100 : 25);
+		TArray<TSharedPtr<FJsonValue>> Providers;
+		TArray<TSharedPtr<FJsonValue>> Queries;
+		TArray<TSharedPtr<FJsonValue>> Warnings;
+		bool bPartial = false;
+		for (const UEAI::Trace::FTraceProviderStatus& Status :
+			Session.GetProviderStatuses())
+		{
+			Providers.Add(MakeShared<FJsonValueObject>(
+				TraceProviderStatusToJson(Status)));
+			bool bRequested = false;
+			for (const FString& Required : Status.Descriptor.RequiredChannels)
+			{
+				if (RequestedChannelSet.Contains(Required.ToLower()))
+				{
+					bRequested = true;
+					break;
+				}
+			}
+			if (!Status.bRecorded)
+			{
+				if (bRequested && Status.Descriptor.bQueryImplemented)
+				{
+					bPartial = true;
+					TSharedPtr<FJsonObject> Warning = MakeShared<FJsonObject>();
+					Warning->SetStringField(
+						TEXT("code"), TEXT("trace_provider_missing"));
+					Warning->SetStringField(
+						TEXT("provider"), Status.Descriptor.Id);
+					Warning->SetStringField(
+						TEXT("message"),
+						Status.UnavailableReason.IsEmpty()
+							? TEXT("A requested Trace provider recorded no queryable data.")
+							: Status.UnavailableReason);
+					Warnings.Add(MakeShared<FJsonValueObject>(Warning));
+				}
+				continue;
+			}
+			if (!Status.Descriptor.bQueryImplemented)
+			{
+				continue;
+			}
+			for (const FString& Operation :
+				UEAI::Trace::GetTracePostStopOperations(
+					Status.Descriptor.Id, bFull))
+			{
+				UEAI::Trace::FTraceQueryRequest Request;
+				Request.Provider = Status.Descriptor.Id;
+				Request.Operation = Operation;
+				Request.Page.Limit = bFull ? 100 : 25;
+				if (!RegionName.IsEmpty())
+				{
+					Request.Options.Add(TEXT("regionName"), RegionName);
+				}
+				UEAI::Trace::FTraceQueryResult Query;
+				FString ErrorCode;
+				FString ErrorMessage;
+				if (Session.Query(Request, Query, ErrorCode, ErrorMessage))
+				{
+					Queries.Add(MakeShared<FJsonValueObject>(
+						TraceQueryToJson(Query)));
+					continue;
+				}
+				bPartial = true;
+				TSharedPtr<FJsonObject> Warning = MakeShared<FJsonObject>();
+				Warning->SetStringField(
+					TEXT("code"),
+					ErrorCode.IsEmpty()
+						? TEXT("trace_post_stop_query_failed") : ErrorCode);
+				Warning->SetStringField(
+					TEXT("provider"), Status.Descriptor.Id);
+				Warning->SetStringField(TEXT("operation"), Operation);
+				Warning->SetStringField(TEXT("message"), ErrorMessage);
+				Warnings.Add(MakeShared<FJsonValueObject>(Warning));
+			}
+		}
+		Result->SetBoolField(TEXT("partial"), bPartial);
+		Result->SetArrayField(TEXT("providerCoverage"), Providers);
+		Result->SetArrayField(TEXT("semanticQueries"), Queries);
+		Result->SetArrayField(TEXT("warnings"), Warnings);
+		return Result;
+	}
 }
 
 using namespace ProductionJobRuntimePrivate;
@@ -1124,11 +1397,13 @@ FProductionJobRuntime::FProductionJobRuntime(
 	FScenarioOperation InStartScenario,
 	FScenarioOperation InGetScenarioStatus,
 	FScenarioOperation InGetScenarioResult,
-	FScenarioOperation InCancelScenario)
+	FScenarioOperation InCancelScenario,
+	FPIESessionSnapshot InGetPIESession)
 	: StartScenario(MoveTemp(InStartScenario))
 	, GetScenarioStatus(MoveTemp(InGetScenarioStatus))
 	, GetScenarioResult(MoveTemp(InGetScenarioResult))
 	, CancelScenario(MoveTemp(InCancelScenario))
+	, GetPIESession(MoveTemp(InGetPIESession))
 {
 	IFileManager::Get().MakeDirectory(*JobsRoot(), true);
 	LoadJournals();
@@ -1136,9 +1411,30 @@ FProductionJobRuntime::FProductionJobRuntime(
 
 FProductionJobRuntime::~FProductionJobRuntime()
 {
-	if (!ActiveTraceJobId.IsEmpty() && FTraceAuxiliary::IsConnected())
+	RemoveTraceConnectionDelegate();
+	if (!ActiveTraceJobId.IsEmpty())
 	{
-		FTraceAuxiliary::Stop();
+		const TSharedPtr<FJob>* ActiveJob = Jobs.Find(ActiveTraceJobId);
+		if (ActiveJob && ActiveJob->IsValid()
+			&& (*ActiveJob)->bTraceRegionStarted)
+		{
+			TRACE_BOOKMARK(
+				TEXT("%s.end"), *(*ActiveJob)->TraceRegionName);
+			TRACE_END_REGION(*(*ActiveJob)->TraceRegionName);
+			(*ActiveJob)->bTraceRegionStarted = false;
+		}
+		if (ActiveJob && ActiveJob->IsValid())
+		{
+			SuspendManagedNetTrace(**ActiveJob);
+		}
+		if (FTraceAuxiliary::Stop())
+		{
+			WaitForTraceWriterClose();
+		}
+		if (ActiveJob && ActiveJob->IsValid())
+		{
+			RestorePreviousNetTrace(**ActiveJob);
+		}
 	}
 	for (TPair<FString, TSharedPtr<FJob>>& Pair : Jobs)
 	{
@@ -1196,6 +1492,9 @@ FProductionJobRuntime::~FProductionJobRuntime()
 
 void FProductionJobRuntime::Tick(float DeltaTime)
 {
+	// StopTrace may create a post-stop analysis job. Deferring it until after
+	// iteration keeps the Jobs map stable while the current snapshot is walked.
+	TArray<FString> TraceJobsToStop;
 	for (TPair<FString, TSharedPtr<FJob>>& Pair : Jobs)
 	{
 		if (!Pair.Value.IsValid() || Pair.Value->Status != TEXT("running"))
@@ -1210,10 +1509,87 @@ void FProductionJobRuntime::Tick(float DeltaTime)
 		{
 			TickTraceAnalysisJob(*Pair.Value);
 		}
+		else if (Pair.Value->Kind == TEXT("trace"))
+		{
+			if (Pair.Value->Phase == TEXT("loading"))
+			{
+				// Programs without a Trace writer thread require an explicit pump;
+				// regular Editor builds treat this as a harmless no-op.
+				UE::Trace::Update();
+				if (bTraceConnected.load(std::memory_order_acquire))
+				{
+					ActivateTraceRecording(*Pair.Value);
+				}
+				else if (FPlatformTime::Seconds()
+						- Pair.Value->TraceConnectionStartedAtSeconds
+					>= TraceConnectionTimeoutSeconds)
+				{
+					Pair.Value->ErrorCode =
+						TEXT("trace_connection_timeout");
+					Pair.Value->Message =
+						TEXT("The Editor Trace file connection was not established before the bounded timeout.");
+					Pair.Value->Result->SetBoolField(TEXT("partial"), true);
+					TraceJobsToStop.AddUnique(Pair.Value->Id);
+					continue;
+				}
+			}
+			if (Pair.Value->TraceTargetKind == TEXT("pie"))
+			{
+				FString CurrentSessionId;
+				uint64 CurrentGeneration = 0;
+				const bool bSamePIESession = GetPIESession
+					&& GetPIESession(CurrentSessionId, CurrentGeneration)
+					&& CurrentSessionId == Pair.Value->TracePIESessionId
+					&& CurrentGeneration == Pair.Value->TracePIEGeneration;
+				if (!bSamePIESession)
+				{
+					Pair.Value->Result->SetBoolField(TEXT("partial"), true);
+					Pair.Value->Result->SetStringField(
+						TEXT("terminationReason"),
+						TEXT("pieSessionEndedOrRestarted"));
+					TArray<TSharedPtr<FJsonValue>> Warnings;
+					if (Pair.Value->Result->HasTypedField<EJson::Array>(
+							TEXT("warnings")))
+					{
+						Warnings = Pair.Value->Result->GetArrayField(
+							TEXT("warnings"));
+					}
+					TSharedPtr<FJsonObject> Warning = MakeShared<FJsonObject>();
+					Warning->SetStringField(
+						TEXT("code"), TEXT("pie_trace_target_ended"));
+					Warning->SetStringField(
+						TEXT("message"),
+						TEXT("The bound PIE session ended or restarted; recording was finalized before another generation could be included."));
+					Warnings.Add(MakeShared<FJsonValueObject>(Warning));
+					Pair.Value->Result->SetArrayField(TEXT("warnings"), Warnings);
+					TraceJobsToStop.AddUnique(Pair.Value->Id);
+					continue;
+				}
+			}
+			const bool bDurationExceeded =
+				Pair.Value->TimeoutAtSeconds > 0.0
+				&& FPlatformTime::Seconds() >= Pair.Value->TimeoutAtSeconds;
+			const FString TracePath =
+				GetStringFieldOr(Pair.Value->Result, TEXT("destination"));
+			const bool bSizeExceeded =
+				Pair.Value->TraceMaxFileSizeBytes > 0
+				&& IFileManager::Get().FileSize(*TracePath)
+					>= Pair.Value->TraceMaxFileSizeBytes;
+			if (bDurationExceeded || bSizeExceeded)
+			{
+				TraceJobsToStop.AddUnique(Pair.Value->Id);
+			}
+		}
 		else if (Pair.Value->Kind != TEXT("trace"))
 		{
 			TickProcessJob(*Pair.Value);
 		}
+	}
+	for (const FString& TraceId : TraceJobsToStop)
+	{
+		TSharedPtr<FJsonObject> StopParams = MakeShared<FJsonObject>();
+		StopParams->SetStringField(TEXT("traceId"), TraceId);
+		StopTrace(StopParams);
 	}
 }
 
@@ -1230,6 +1606,10 @@ FMCPToolResult FProductionJobRuntime::Execute(
 	if (CapabilityId == TEXT("production.trace.status")) return GetTraceStatus(Params);
 	if (CapabilityId == TEXT("production.trace.stop")) return StopTrace(Params);
 	if (CapabilityId == TEXT("production.trace.analyze")) return AnalyzeTrace(Params);
+	if (CapabilityId.StartsWith(TEXT("production.trace.")))
+	{
+		return ExecuteTraceInsightsOperation(CapabilityId, Params);
+	}
 	if (CapabilityId == TEXT("production.performance.run")) return StartPerformanceRun(Params);
 	if (CapabilityId == TEXT("production.performance.result.get")) return GetPerformanceResult(Params);
 	if (CapabilityId == TEXT("production.performance.compare")) return ComparePerformanceRuns(Params);
@@ -1415,7 +1795,36 @@ FMCPToolResult FProductionJobRuntime::CancelJob(
 
 	if (Job.Kind == TEXT("trace"))
 	{
-		FTraceAuxiliary::Stop();
+		RemoveTraceConnectionDelegate();
+		if (Job.bTraceRegionStarted)
+		{
+			TRACE_BOOKMARK(TEXT("%s.end"), *Job.TraceRegionName);
+			TRACE_END_REGION(*Job.TraceRegionName);
+			Job.bTraceRegionStarted = false;
+		}
+		SuspendManagedNetTrace(Job);
+		const bool bWriterFinalized = FTraceAuxiliary::Stop()
+			&& WaitForTraceWriterClose();
+		RestorePreviousNetTrace(Job);
+		Job.Result->SetBoolField(
+			TEXT("traceWriterFinalized"), bWriterFinalized);
+		if (!bWriterFinalized)
+		{
+			Job.Result->SetBoolField(TEXT("partial"), true);
+			TArray<TSharedPtr<FJsonValue>> Warnings;
+			if (Job.Result->HasTypedField<EJson::Array>(TEXT("warnings")))
+			{
+				Warnings = Job.Result->GetArrayField(TEXT("warnings"));
+			}
+			TSharedPtr<FJsonObject> Warning = MakeShared<FJsonObject>();
+			Warning->SetStringField(
+				TEXT("code"), TEXT("trace_finalize_timeout"));
+			Warning->SetStringField(
+				TEXT("message"),
+				TEXT("The cancelled Trace did not confirm a flushed low-level writer close before the bounded deadline."));
+			Warnings.Add(MakeShared<FJsonValueObject>(Warning));
+			Job.Result->SetArrayField(TEXT("warnings"), Warnings);
+		}
 		if (ActiveTraceJobId == Job.Id)
 		{
 			ActiveTraceJobId.Reset();
@@ -2220,6 +2629,69 @@ void FProductionJobRuntime::FinishJob(
 FMCPToolResult FProductionJobRuntime::StartTrace(
 	const TSharedPtr<FJsonObject>& Params)
 {
+	const FString Backend = GetStringFieldOr(Params, TEXT("backend"), TEXT("auto"));
+	if (Backend == TEXT("local"))
+	{
+		return FMCPToolResult::Error(
+			TEXT("Local Trace requests must be dispatched to UEAITraceWorker."),
+			TEXT("trace_local_backend_required"),
+			409);
+	}
+	FString TargetKind = TEXT("editor");
+	const TSharedPtr<FJsonObject>* Target = nullptr;
+	if (Params.IsValid()
+		&& Params->TryGetObjectField(TEXT("target"), Target)
+		&& Target && Target->IsValid())
+	{
+		TargetKind = GetStringFieldOr(*Target, TEXT("kind"), TEXT("editor"));
+	}
+	if (TargetKind == TEXT("development"))
+	{
+		return FMCPToolResult::Error(
+			TEXT("Development Trace capture requires the local Trace Worker launch backend."),
+			TEXT("trace_local_backend_required"),
+			409);
+	}
+	FString BoundPIESessionId;
+	uint64 BoundPIEGeneration = 0;
+	if (TargetKind == TEXT("pie"))
+	{
+		FString RequestedSessionId;
+		double RequestedGeneration = -1.0;
+		if (!Target || !Target->IsValid()
+			|| !(*Target)->TryGetStringField(
+				TEXT("sessionId"), RequestedSessionId)
+			|| !(*Target)->TryGetNumberField(
+				TEXT("generation"), RequestedGeneration)
+			|| RequestedSessionId.IsEmpty()
+			|| !FMath::IsFinite(RequestedGeneration)
+			|| RequestedGeneration < 1.0
+			|| FMath::FloorToDouble(RequestedGeneration)
+				!= RequestedGeneration)
+		{
+			return FMCPToolResult::Error(
+				TEXT("PIE Trace targets require sessionId and integer generation."),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (!GetPIESession
+			|| !GetPIESession(BoundPIESessionId, BoundPIEGeneration))
+		{
+			return FMCPToolResult::Error(
+				TEXT("The requested PIE Trace target is not running."),
+				TEXT("pie_session_not_running"),
+				409);
+		}
+		if (RequestedSessionId != BoundPIESessionId
+			|| static_cast<uint64>(RequestedGeneration)
+				!= BoundPIEGeneration)
+		{
+			return FMCPToolResult::Error(
+				TEXT("The requested PIE Trace target belongs to another PIE generation."),
+				TEXT("pie_generation_conflict"),
+				409);
+		}
+	}
 	bool bIdempotencyConflict = false;
 	if (TSharedPtr<FJob> Existing =
 		FindIdempotentJob(TEXT("trace"), Params, bIdempotencyConflict))
@@ -2251,15 +2723,22 @@ FMCPToolResult FProductionJobRuntime::StartTrace(
 	TArray<FString> Channels = ReadStringArray(Params, TEXT("channels"));
 	if (Channels.IsEmpty())
 	{
-		Channels = {
-			TEXT("default"),
-			TEXT("frame"),
-			TEXT("cpu"),
-			TEXT("gpu"),
-			TEXT("bookmark"),
-			TEXT("log")
-		};
+		const FString Preset = GetStringFieldOr(Params, TEXT("preset"), TEXT("standard"));
+		Channels = UEAI::Trace::GetTracePresetChannels(Preset);
+		if (Channels.IsEmpty())
+		{
+			Jobs.Remove(Job->Id);
+			return FMCPToolResult::Error(
+				TEXT("Unknown Trace preset."),
+				TEXT("invalid_params"),
+				422);
+		}
 	}
+	// Managed traces always carry an engine marker and a bounded UEAI region.
+	// These channels are evidence contracts, even when callers provide a
+	// custom channel subset.
+	Channels.AddUnique(TEXT("bookmark"));
+	Channels.AddUnique(TEXT("region"));
 	for (const FString& Channel : Channels)
 	{
 		if (!IsSafeToken(Channel, 64))
@@ -2272,18 +2751,53 @@ FMCPToolResult FProductionJobRuntime::StartTrace(
 		}
 	}
 	const FString ChannelList = FString::Join(Channels, TEXT(","));
+	Job->bTraceNetRequested = Channels.ContainsByPredicate(
+		[](const FString& Channel)
+		{
+			return Channel.Equals(TEXT("net"), ESearchCase::IgnoreCase);
+		});
+	Job->TracePreviousNetVerbosity = FNetTrace::GetTraceVerbosity();
+	const bool bExistingPIENetDriver = HasExistingPIENetDriver();
+	const bool bRequireCompleteNetwork = GetBoolFieldOr(
+		Params,
+		TEXT("requireCompleteNetwork"),
+		false);
+	FString NetworkWarningCode;
+	FString NetworkStartErrorCode;
+	FString NetworkStartErrorMessage;
+	if (TargetKind == TEXT("pie")
+		&& !ValidatePIENetworkTraceStart(
+			Job->bTraceNetRequested,
+			bExistingPIENetDriver,
+			bRequireCompleteNetwork,
+			Job->bTraceNetworkSessionPredatesRecording,
+			NetworkWarningCode,
+			NetworkStartErrorCode,
+			NetworkStartErrorMessage))
+	{
+		Jobs.Remove(Job->Id);
+		return FMCPToolResult::Error(
+			NetworkStartErrorMessage,
+			NetworkStartErrorCode,
+			409);
+	}
 	FTraceAuxiliary::FOptions Options;
 	Options.bTruncateFile = true;
 	Options.bExcludeTail = GetBoolFieldOr(
 		Params,
 		TEXT("excludeTail"),
 		true);
+	bTraceConnected.store(false, std::memory_order_release);
+	TraceConnectionHandle = FTraceAuxiliary::OnConnection.AddRaw(
+		this,
+		&FProductionJobRuntime::HandleTraceConnected);
 	if (!FTraceAuxiliary::Start(
 			FTraceAuxiliary::EConnectionType::File,
 			*TracePath,
 			*ChannelList,
 			&Options))
 	{
+		RemoveTraceConnectionDelegate();
 		FinishJob(
 			*Job,
 			TEXT("failed"),
@@ -2295,16 +2809,244 @@ FMCPToolResult FProductionJobRuntime::StartTrace(
 			503);
 	}
 	Job->Status = TEXT("running");
-	Job->Phase = TEXT("recording");
+	Job->Phase = TEXT("loading");
 	Job->StartedAtUtc = FDateTime::UtcNow().ToIso8601();
 	Job->StartedAtSeconds = FPlatformTime::Seconds();
+	Job->TraceConnectionStartedAtSeconds = Job->StartedAtSeconds;
+	Job->TraceTargetKind = TargetKind;
+	Job->TracePIESessionId = BoundPIESessionId;
+	Job->TracePIEGeneration = BoundPIEGeneration;
+	Job->TraceRegionName = FString::Printf(TEXT("UEAI.Trace.%s"), *Job->Id);
+	Job->TracePostStop =
+		GetStringFieldOr(Params, TEXT("postStop"), TEXT("artifactOnly"));
+	Job->TraceMaxDurationSeconds = ReadBoundedNumber(
+			Params,
+			TEXT("maxDurationSeconds"),
+			120.0,
+			1.0,
+			3600.0);
+	Job->TimeoutAtSeconds = 0.0;
+	Job->TraceMaxFileSizeBytes = static_cast<int64>(ReadBoundedNumber(
+		Params,
+		TEXT("maxFileSizeMiB"),
+		4096.0,
+		1.0,
+		16384.0) * 1024.0 * 1024.0);
 	Job->Result->SetStringField(TEXT("destination"), TracePath);
 	Job->Result->SetStringField(TEXT("channels"), ChannelList);
+	Job->Result->SetStringField(TEXT("targetKind"), TargetKind);
+	if (TargetKind == TEXT("pie"))
+	{
+		Job->Result->SetStringField(TEXT("sessionId"), BoundPIESessionId);
+		Job->Result->SetNumberField(
+			TEXT("generation"), static_cast<double>(BoundPIEGeneration));
+	}
+	Job->Result->SetStringField(TEXT("regionName"), Job->TraceRegionName);
+	Job->Result->SetStringField(TEXT("postStop"), Job->TracePostStop);
+	const FString ManagedEngineVersion = FString::Printf(
+		TEXT("%d.%d"),
+		FEngineVersion::Current().GetMajor(),
+		FEngineVersion::Current().GetMinor());
+	Job->Result->SetStringField(
+		TEXT("managedEngineMarker"),
+		TEXT("UEAI_TRACE_ENGINE_VERSION=") + ManagedEngineVersion);
 	ActiveTraceJobId = Job->Id;
 	SaveJournal(*Job);
 	TSharedPtr<FJsonObject> Result = MakeJobSummary(*Job, false);
 	Result->SetStringField(TEXT("traceId"), Job->Id);
 	return FMCPToolResult::Ok(Result);
+}
+
+void FProductionJobRuntime::HandleTraceConnected()
+{
+	// FTraceAuxiliary may invoke this from its writer thread. Publish only an
+	// atomic signal; the Game Thread performs all job and region mutations.
+	bTraceConnected.store(true, std::memory_order_release);
+}
+
+void FProductionJobRuntime::RemoveTraceConnectionDelegate()
+{
+	if (TraceConnectionHandle.IsValid())
+	{
+		FTraceAuxiliary::OnConnection.Remove(TraceConnectionHandle);
+		TraceConnectionHandle.Reset();
+	}
+}
+
+void FProductionJobRuntime::ActivateTraceRecording(FJob& Job)
+{
+	RemoveTraceConnectionDelegate();
+	const double Now = FPlatformTime::Seconds();
+	Job.Phase = TEXT("recording");
+	Job.PhaseHistory.AddUnique(Job.Phase);
+	Job.StartedAtUtc = FDateTime::UtcNow().ToIso8601();
+	Job.StartedAtSeconds = Now;
+	Job.TimeoutAtSeconds = Now + Job.TraceMaxDurationSeconds;
+	if (Job.bTraceNetRequested)
+	{
+		// UEngine may have parsed -NetTrace before this on-demand file Trace
+		// existed. Re-arm only after OnConnection so the Net init/version event
+		// and subsequent packet events are recorded in the same .utrace.
+		FNetTrace::SetTraceVerbosity(0U);
+		FNetTrace::SetTraceVerbosity(FMath::Max<uint32>(
+			1U,
+			Job.TracePreviousNetVerbosity));
+		Job.bTraceNetActivated = FNetTrace::IsEnabled();
+		ReplayExistingNetworkMetadata(Job);
+	}
+	const FString ManagedEngineVersion = FString::Printf(
+		TEXT("%d.%d"),
+		FEngineVersion::Current().GetMajor(),
+		FEngineVersion::Current().GetMinor());
+	TRACE_BOOKMARK(
+		TEXT("UEAI_TRACE_ENGINE_VERSION=%s"), *ManagedEngineVersion);
+	TRACE_BEGIN_REGION(*Job.TraceRegionName);
+	TRACE_BOOKMARK(TEXT("%s.begin"), *Job.TraceRegionName);
+	Job.bTraceRegionStarted = true;
+	SaveJournal(Job);
+}
+
+void FProductionJobRuntime::ReplayExistingNetworkMetadata(FJob& Job)
+{
+#if UE_NET_TRACE_ENABLED
+	if (!GEngine || !FNetTrace::IsEnabled())
+	{
+		return;
+	}
+	TSet<UNetDriver*> SeenDrivers;
+	for (const FWorldContext& Context : GEngine->GetWorldContexts())
+	{
+		UWorld* World = Context.World();
+		if (!World
+			|| (Context.WorldType != EWorldType::PIE
+				&& Context.WorldType != EWorldType::Game
+				&& Context.WorldType != EWorldType::GamePreview))
+		{
+			continue;
+		}
+		for (const FNamedNetDriver& NamedDriver : Context.ActiveNetDrivers)
+		{
+			UNetDriver* Driver = NamedDriver.NetDriver.Get();
+			if (!Driver || SeenDrivers.Contains(Driver))
+			{
+				continue;
+			}
+			Job.bTraceNetworkSessionPredatesRecording = true;
+			if (Job.TraceReplayedNetDriverCount
+				>= MaximumReplayedNetDrivers)
+			{
+				Job.bTraceNetworkReplayTruncated = true;
+				continue;
+			}
+			SeenDrivers.Add(Driver);
+			const uint32 GameInstanceId = Driver->GetNetTraceId();
+			if (GameInstanceId == NetTraceInvalidGameInstanceId)
+			{
+				continue;
+			}
+			++Job.TraceReplayedNetDriverCount;
+			const FString InstanceName = FString::Printf(
+				TEXT("%s (%s)"),
+				*GetNameSafe(World->GetGameInstance()),
+				LexToString(World->WorldType.GetValue()));
+			FNetTrace::TraceInstanceUpdated(
+				GameInstanceId,
+				Driver->IsServer(),
+				*InstanceName);
+			auto ReplayConnection =
+				[&Job, GameInstanceId](UNetConnection* Connection)
+				{
+					if (!Connection)
+					{
+						return;
+					}
+					if (Job.TraceReplayedNetConnectionCount
+						>= MaximumReplayedNetConnections)
+					{
+						Job.bTraceNetworkReplayTruncated = true;
+						return;
+					}
+					++Job.TraceReplayedNetConnectionCount;
+					const uint32 ConnectionId = Connection->GetConnectionId();
+					FNetTrace::TraceConnectionCreated(
+						GameInstanceId,
+						ConnectionId);
+					FNetTrace::TraceConnectionStateUpdated(
+						GameInstanceId,
+						ConnectionId,
+						static_cast<uint8>(Connection->GetConnectionState()));
+					const FString Address =
+						Connection->LowLevelGetRemoteAddress(true);
+					const FString OwningActor =
+						GetNameSafe(Connection->OwningActor.Get());
+					FNetTrace::TraceConnectionUpdated(
+						GameInstanceId,
+						ConnectionId,
+						*Address,
+						*OwningActor);
+				};
+			ReplayConnection(Driver->ServerConnection.Get());
+			for (const TObjectPtr<UNetConnection>& Connection
+				: Driver->ClientConnections)
+			{
+				ReplayConnection(Connection.Get());
+			}
+		}
+	}
+#endif
+	Job.Result->SetBoolField(
+		TEXT("partial"),
+		Job.bTraceNetworkSessionPredatesRecording);
+	Job.Result->SetStringField(
+		TEXT("networkCompleteness"),
+		Job.bTraceNetworkSessionPredatesRecording
+			? TEXT("partialPreexistingSession")
+			: TEXT("complete"));
+	Job.Result->SetNumberField(
+		TEXT("replayedNetDriverCount"),
+		Job.TraceReplayedNetDriverCount);
+	Job.Result->SetNumberField(
+		TEXT("replayedNetConnectionCount"),
+		Job.TraceReplayedNetConnectionCount);
+	Job.Result->SetBoolField(
+		TEXT("networkReplayTruncated"),
+		Job.bTraceNetworkReplayTruncated);
+	if (Job.bTraceNetworkSessionPredatesRecording)
+	{
+		TArray<TSharedPtr<FJsonValue>> Warnings;
+		if (Job.Result->HasTypedField<EJson::Array>(TEXT("warnings")))
+		{
+			Warnings = Job.Result->GetArrayField(TEXT("warnings"));
+		}
+		TSharedPtr<FJsonObject> Warning = MakeShared<FJsonObject>();
+		Warning->SetStringField(
+			TEXT("code"),
+			TEXT("network_session_predates_trace"));
+		Warning->SetStringField(
+			TEXT("message"),
+			TEXT("Basic network instance and connection metadata was replayed after Trace connected, but object/name history from before recording is incomplete."));
+		Warnings.Add(MakeShared<FJsonValueObject>(Warning));
+		Job.Result->SetArrayField(TEXT("warnings"), Warnings);
+	}
+}
+
+void FProductionJobRuntime::SuspendManagedNetTrace(FJob& Job)
+{
+	if (!Job.bTraceNetActivated)
+	{
+		return;
+	}
+	FNetTrace::SetTraceVerbosity(0U);
+	Job.bTraceNetActivated = false;
+}
+
+void FProductionJobRuntime::RestorePreviousNetTrace(FJob& Job)
+{
+	if (!Job.bTraceNetRequested || Job.TracePreviousNetVerbosity == 0U)
+	{
+		return;
+	}
+	FNetTrace::SetTraceVerbosity(Job.TracePreviousNetVerbosity);
 }
 
 FMCPToolResult FProductionJobRuntime::GetTraceStatus(
@@ -2346,8 +3088,29 @@ FMCPToolResult FProductionJobRuntime::StopTrace(
 	{
 		return FMCPToolResult::Ok(MakeJobSummary(Job, true));
 	}
-	if (TraceId != ActiveTraceJobId || !FTraceAuxiliary::Stop())
+	if (TraceId != ActiveTraceJobId)
 	{
+		return FMCPToolResult::Error(
+			TEXT("The requested trace is not the active recording."),
+			TEXT("trace_not_active"),
+			409);
+	}
+	Job.Phase = TEXT("finalizing");
+	Job.Progress = 0.85;
+	Job.PhaseHistory.AddUnique(Job.Phase);
+	SaveJournal(Job);
+	RemoveTraceConnectionDelegate();
+	const bool bWasRecording = Job.bTraceRegionStarted;
+	if (bWasRecording)
+	{
+		TRACE_BOOKMARK(TEXT("%s.end"), *Job.TraceRegionName);
+		TRACE_END_REGION(*Job.TraceRegionName);
+		Job.bTraceRegionStarted = false;
+	}
+	SuspendManagedNetTrace(Job);
+	if (!FTraceAuxiliary::Stop())
+	{
+		RestorePreviousNetTrace(Job);
 		FinishJob(
 			Job,
 			TEXT("failed"),
@@ -2356,7 +3119,35 @@ FMCPToolResult FProductionJobRuntime::StopTrace(
 		ActiveTraceJobId.Reset();
 		return FMCPToolResult::Error(Job.Message, Job.ErrorCode, 500);
 	}
+	const bool bWriterFinalized = WaitForTraceWriterClose();
+	RestorePreviousNetTrace(Job);
+	if (!bWriterFinalized)
+	{
+		ActiveTraceJobId.Reset();
+		Job.Result->SetBoolField(TEXT("partial"), true);
+		Job.Result->SetBoolField(TEXT("traceWriterFinalized"), false);
+		TArray<TSharedPtr<FJsonValue>> Warnings;
+		if (Job.Result->HasTypedField<EJson::Array>(TEXT("warnings")))
+		{
+			Warnings = Job.Result->GetArrayField(TEXT("warnings"));
+		}
+		TSharedPtr<FJsonObject> Warning = MakeShared<FJsonObject>();
+		Warning->SetStringField(
+			TEXT("code"), TEXT("trace_finalize_timeout"));
+		Warning->SetStringField(
+			TEXT("message"),
+			TEXT("The Trace writer did not flush and close before the bounded finalization deadline; the file is not registered as a complete artifact."));
+		Warnings.Add(MakeShared<FJsonValueObject>(Warning));
+		Job.Result->SetArrayField(TEXT("warnings"), Warnings);
+		FinishJob(
+			Job,
+			TEXT("failed"),
+			TEXT("trace_finalize_timeout"),
+			TEXT("The Trace writer did not finish its bounded low-level close."));
+		return FMCPToolResult::Error(Job.Message, Job.ErrorCode, 500);
+	}
 	ActiveTraceJobId.Reset();
+	Job.Result->SetBoolField(TEXT("traceWriterFinalized"), true);
 	const FString TracePath =
 		GetStringFieldOr(Job.Result, TEXT("destination"));
 	if (!AddArtifact(
@@ -2375,7 +3166,67 @@ FMCPToolResult FProductionJobRuntime::StopTrace(
 			Job.ErrorCode,
 			500);
 	}
-	FinishJob(Job, TEXT("succeeded"));
+	if (!bWasRecording)
+	{
+		const FString ErrorCode = Job.ErrorCode.IsEmpty()
+			? TEXT("trace_stopped_before_recording")
+			: Job.ErrorCode;
+		const FString ErrorMessage = Job.Message.IsEmpty()
+			? TEXT("The Trace was stopped before its file connection entered recording.")
+			: Job.Message;
+		FinishJob(Job, TEXT("failed"), ErrorCode, ErrorMessage);
+		return FMCPToolResult::Error(Job.Message, Job.ErrorCode, 500);
+	}
+	if (Job.TracePostStop == TEXT("artifactOnly"))
+	{
+		FinishJob(Job, TEXT("succeeded"));
+	}
+	else
+	{
+		Job.Phase = TEXT("analyzing");
+		Job.Progress = 0.9;
+		Job.PhaseHistory.AddUnique(Job.Phase);
+		SaveJournal(Job);
+		TSharedPtr<FJsonObject> AnalyzeParams = MakeShared<FJsonObject>();
+		AnalyzeParams->SetStringField(TEXT("traceId"), TraceId);
+		AnalyzeParams->SetStringField(
+			TEXT("analysisLevel"),
+			Job.TracePostStop == TEXT("analyzeFull")
+				? TEXT("full") : TEXT("summary"));
+		const FMCPToolResult AnalysisResult = AnalyzeTrace(AnalyzeParams);
+		if (AnalysisResult.bSuccess && AnalysisResult.Data.IsValid())
+		{
+			FString AnalysisJobId;
+			if (AnalysisResult.Data->TryGetStringField(TEXT("jobId"), AnalysisJobId))
+			{
+				Job.Result->SetStringField(TEXT("analysisJobId"), AnalysisJobId);
+				SaveJournal(Job);
+			}
+		}
+		else
+		{
+			Job.Result->SetBoolField(TEXT("partial"), true);
+			TArray<TSharedPtr<FJsonValue>> Warnings;
+			if (Job.Result->HasTypedField<EJson::Array>(TEXT("warnings")))
+			{
+				Warnings = Job.Result->GetArrayField(TEXT("warnings"));
+			}
+			TSharedPtr<FJsonObject> Warning = MakeShared<FJsonObject>();
+			Warning->SetStringField(
+				TEXT("code"),
+				AnalysisResult.ErrorCode.IsEmpty()
+					? TEXT("trace_post_stop_analysis_failed")
+					: AnalysisResult.ErrorCode);
+			Warning->SetStringField(
+				TEXT("message"),
+				AnalysisResult.ErrorMessage.IsEmpty()
+					? TEXT("Post-stop Trace analysis could not be started.")
+					: AnalysisResult.ErrorMessage);
+			Warnings.Add(MakeShared<FJsonValueObject>(Warning));
+			Job.Result->SetArrayField(TEXT("warnings"), Warnings);
+			FinishJob(Job, TEXT("succeeded"));
+		}
+	}
 	TSharedPtr<FJsonObject> Result = MakeJobSummary(Job, true);
 	Result->SetStringField(TEXT("traceId"), TraceId);
 	return FMCPToolResult::Ok(Result);
@@ -2396,12 +3247,26 @@ FMCPToolResult FProductionJobRuntime::AnalyzeTrace(
 			TEXT("trace_not_found"),
 			404);
 	}
-	if ((*Trace)->Status != TEXT("succeeded"))
+	const bool bAutoPostStopAnalysis =
+		(*Trace)->Status == TEXT("running")
+		&& (*Trace)->Phase == TEXT("analyzing");
+	if ((*Trace)->Status != TEXT("succeeded") && !bAutoPostStopAnalysis)
 	{
 		return FMCPToolResult::Error(
 			TEXT("Only a completed trace can be analyzed."),
 			TEXT("trace_not_ready"),
 			409);
+	}
+	const FString AnalysisLevel =
+		GetStringFieldOr(Params, TEXT("analysisLevel"), TEXT("providers"));
+	if (AnalysisLevel != TEXT("providers")
+		&& AnalysisLevel != TEXT("summary")
+		&& AnalysisLevel != TEXT("full"))
+	{
+		return FMCPToolResult::Error(
+			TEXT("analysisLevel must be providers, summary, or full."),
+			TEXT("invalid_params"),
+			422);
 	}
 	if (!ActiveHeavyJobId.IsEmpty())
 	{
@@ -2481,7 +3346,7 @@ FMCPToolResult FProductionJobRuntime::AnalyzeTrace(
 	Analysis->Result->SetStringField(
 		TEXT("traceSourceKind"),
 		(*Trace)->Kind);
-	Analysis->Result->SetStringField(TEXT("analysisLevel"), TEXT("providers"));
+	Analysis->Result->SetStringField(TEXT("analysisLevel"), AnalysisLevel);
 	Analysis->Result->SetBoolField(TEXT("traceServicesAvailable"), true);
 	Analysis->Result->SetObjectField(
 		TEXT("traceArtifact"),
@@ -2505,6 +3370,642 @@ FMCPToolResult FProductionJobRuntime::AnalyzeTrace(
 	return FMCPToolResult::Ok(MakeJobSummary(*Analysis, false));
 }
 
+FMCPToolResult FProductionJobRuntime::ExecuteTraceInsightsOperation(
+	const FString& CapabilityId,
+	const TSharedPtr<FJsonObject>& Params)
+{
+	if (CapabilityId == TEXT("production.trace.channel.list"))
+	{
+		struct FTracePreset
+		{
+			const TCHAR* Name;
+			const TCHAR* Channels;
+		};
+		static const FTracePreset Presets[] = {
+			{TEXT("standard"), TEXT("standard")},
+			{TEXT("cpu"), TEXT("cpu")},
+			{TEXT("gpu"), TEXT("gpu")},
+			{TEXT("memory"), TEXT("memory")},
+			{TEXT("loading"), TEXT("loading")},
+			{TEXT("network"), TEXT("network")},
+			{TEXT("fullInsights"), TEXT("fullInsights")}
+		};
+		TArray<TSharedPtr<FJsonValue>> Values;
+		for (const FTracePreset& Preset : Presets)
+		{
+			TSharedPtr<FJsonObject> Item = MakeShared<FJsonObject>();
+			Item->SetStringField(TEXT("id"), Preset.Name);
+			TArray<TSharedPtr<FJsonValue>> Channels;
+			TArray<FString> ChannelNames;
+			ChannelNames = UEAI::Trace::GetTracePresetChannels(Preset.Channels);
+			for (const FString& Channel : ChannelNames)
+			{
+				Channels.Add(MakeShared<FJsonValueString>(Channel));
+			}
+			Item->SetArrayField(TEXT("channels"), Channels);
+			Item->SetBoolField(TEXT("available"), true);
+			Values.Add(MakeShared<FJsonValueObject>(Item));
+		}
+		TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+		Data->SetStringField(TEXT("schema"), TEXT("ue.trace-channels.v1"));
+		Data->SetArrayField(TEXT("presets"), Values);
+		return FMCPToolResult::Ok(Data);
+	}
+
+	const FString Backend = GetStringFieldOr(Params, TEXT("backend"), TEXT("auto"));
+	if (Backend == TEXT("local")
+		|| CapabilityId == TEXT("production.trace.launch.plan")
+		|| CapabilityId == TEXT("production.trace.import")
+		|| CapabilityId == TEXT("production.trace.open_in_insights"))
+	{
+		return FMCPToolResult::Error(
+			TEXT("This Trace operation is executed by the local UEAITraceWorker backend."),
+			TEXT("trace_local_backend_required"),
+			409);
+	}
+
+	const FString TraceId = GetJobIdParam(Params);
+	const TSharedPtr<FJob>* TraceJob = Jobs.Find(TraceId);
+	if (!TraceJob || !TraceJob->IsValid()
+		|| ((*TraceJob)->Kind != TEXT("trace")
+			&& (*TraceJob)->Kind != TEXT("performanceStandalone")))
+	{
+		return FMCPToolResult::Error(
+			FString::Printf(TEXT("Trace '%s' was not found in the Editor job store."), *TraceId),
+			TEXT("trace_not_found"),
+			404);
+	}
+	if ((*TraceJob)->Status != TEXT("succeeded"))
+	{
+		return FMCPToolResult::Error(
+			TEXT("Only a completed Trace can be queried."),
+			TEXT("trace_not_ready"),
+			409);
+	}
+	const FArtifact* TraceArtifact = (*TraceJob)->Artifacts.FindByPredicate(
+		[](const FArtifact& Candidate)
+		{
+			return Candidate.MimeType == TEXT("application/x-unreal-trace")
+				&& Candidate.Name.EndsWith(TEXT(".utrace"), ESearchCase::IgnoreCase);
+		});
+	if (!TraceArtifact || !IFileManager::Get().FileExists(*TraceArtifact->Path))
+	{
+		return FMCPToolResult::Error(
+			TEXT("The registered .utrace artifact is unavailable."),
+			TEXT("trace_artifact_unavailable"),
+			410);
+	}
+
+	UEAI::Trace::FTraceAnalysisSession Session;
+	FString ErrorCode;
+	FString ErrorMessage;
+	if (!Session.Open(
+			TraceArtifact->Path,
+			ReadBoundedNumber(Params, TEXT("timeoutSeconds"), 120.0, 1.0, 600.0),
+			ErrorCode,
+			ErrorMessage))
+	{
+		return FMCPToolResult::Error(
+			ErrorMessage,
+			ErrorCode.IsEmpty() ? TEXT("trace_analysis_unavailable") : ErrorCode,
+			ErrorCode == TEXT("trace_engine_version_mismatch") ? 409 : 503);
+	}
+
+	const auto StringsToJson = [](const TArray<FString>& Values)
+	{
+		TArray<TSharedPtr<FJsonValue>> Result;
+		Result.Reserve(Values.Num());
+		for (const FString& Value : Values)
+		{
+			Result.Add(MakeShared<FJsonValueString>(Value));
+		}
+		return Result;
+	};
+	const auto DescriptorToJson = [&StringsToJson](
+		const UEAI::Trace::FTraceProviderStatus& Status)
+	{
+		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetStringField(TEXT("id"), Status.Descriptor.Id);
+		Result->SetStringField(TEXT("displayName"), Status.Descriptor.DisplayName);
+		Result->SetStringField(TEXT("insightsPanel"), Status.Descriptor.InsightsPanel);
+		Result->SetArrayField(
+			TEXT("providerNames"), StringsToJson(Status.Descriptor.ProviderNames));
+		Result->SetArrayField(
+			TEXT("requiredChannels"), StringsToJson(Status.Descriptor.RequiredChannels));
+		Result->SetArrayField(
+			TEXT("operations"), StringsToJson(Status.Descriptor.Operations));
+		Result->SetBoolField(TEXT("queryImplemented"), Status.Descriptor.bQueryImplemented);
+		Result->SetBoolField(TEXT("recorded"), Status.bRecorded);
+		Result->SetStringField(TEXT("channelStatus"), Status.ChannelStatus);
+		Result->SetArrayField(
+			TEXT("recordedChannels"), StringsToJson(Status.RecordedChannels));
+		Result->SetArrayField(
+			TEXT("missingChannels"), StringsToJson(Status.MissingChannels));
+		Result->SetArrayField(
+			TEXT("recordedProviderNames"), StringsToJson(Status.RecordedProviderNames));
+		Result->SetArrayField(
+			TEXT("missingProviderNames"), StringsToJson(Status.MissingProviderNames));
+		Result->SetStringField(TEXT("unavailableReason"), Status.UnavailableReason);
+		return Result;
+	};
+	const auto ScalarToJson = [](const UEAI::Trace::FTraceValue& Value)
+		-> TSharedPtr<FJsonValue>
+	{
+		switch (Value.Type)
+		{
+		case UEAI::Trace::ETraceValueType::Boolean:
+			return MakeShared<FJsonValueBoolean>(Value.BooleanValue);
+		case UEAI::Trace::ETraceValueType::Integer:
+			return MakeShared<FJsonValueNumber>(static_cast<double>(Value.IntegerValue));
+		case UEAI::Trace::ETraceValueType::Number:
+			if (FMath::IsFinite(Value.NumberValue))
+			{
+				return MakeShared<FJsonValueNumber>(Value.NumberValue);
+			}
+			return MakeShared<FJsonValueNull>();
+		case UEAI::Trace::ETraceValueType::String:
+			return MakeShared<FJsonValueString>(Value.StringValue);
+		case UEAI::Trace::ETraceValueType::Null:
+		default:
+			return MakeShared<FJsonValueNull>();
+		}
+	};
+	const auto QueryToJson = [&StringsToJson, &ScalarToJson](
+		const UEAI::Trace::FTraceQueryResult& Query)
+	{
+		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetStringField(TEXT("schema"), Query.Schema);
+		Result->SetStringField(TEXT("provider"), Query.Provider);
+		Result->SetStringField(TEXT("operation"), Query.Operation);
+		Result->SetNumberField(TEXT("intervalStartSeconds"), Query.IntervalStartSeconds);
+		Result->SetNumberField(TEXT("intervalEndSeconds"), Query.IntervalEndSeconds);
+		Result->SetNumberField(TEXT("total"), static_cast<double>(Query.TotalRows));
+		Result->SetNumberField(TEXT("rowCount"), Query.Rows.Num());
+		Result->SetBoolField(TEXT("truncated"), Query.bTruncated);
+		if (Query.bHasNextCursor)
+		{
+			Result->SetStringField(TEXT("nextCursor"), LexToString(Query.NextCursor));
+		}
+		else
+		{
+			Result->SetField(TEXT("nextCursor"), MakeShared<FJsonValueNull>());
+		}
+		Result->SetArrayField(TEXT("columns"), StringsToJson(Query.Columns));
+		TArray<TSharedPtr<FJsonValue>> Rows;
+		Rows.Reserve(Query.Rows.Num());
+		for (const UEAI::Trace::FTraceRow& Row : Query.Rows)
+		{
+			TSharedPtr<FJsonObject> RowObject = MakeShared<FJsonObject>();
+			for (const FString& Column : Query.Columns)
+			{
+				const UEAI::Trace::FTraceValue* Value = Row.Fields.Find(Column);
+				RowObject->SetField(
+					Column,
+					Value ? ScalarToJson(*Value) : MakeShared<FJsonValueNull>());
+			}
+			Rows.Add(MakeShared<FJsonValueObject>(RowObject));
+		}
+		Result->SetArrayField(TEXT("rows"), Rows);
+		TArray<TSharedPtr<FJsonValue>> Diagnostics;
+		for (const UEAI::Trace::FTraceDiagnostic& Diagnostic : Query.Diagnostics)
+		{
+			TSharedPtr<FJsonObject> Item = MakeShared<FJsonObject>();
+			Item->SetStringField(TEXT("severity"), Diagnostic.Severity);
+			Item->SetStringField(TEXT("code"), Diagnostic.Code);
+			Item->SetStringField(TEXT("message"), Diagnostic.Message);
+			Diagnostics.Add(MakeShared<FJsonValueObject>(Item));
+		}
+		Result->SetArrayField(TEXT("diagnostics"), Diagnostics);
+		return Result;
+	};
+
+	if (CapabilityId == TEXT("production.trace.provider.list"))
+	{
+		TSharedPtr<FJob> AnalysisJob = CreateJob(TEXT("traceAnalysisQuery"), Params);
+		TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+		Data->SetStringField(TEXT("schema"), TEXT("ue.trace-provider-list.v1"));
+		Data->SetStringField(TEXT("traceId"), TraceId);
+		Data->SetStringField(TEXT("analysisId"), AnalysisJob->Id);
+		Data->SetNumberField(TEXT("durationSeconds"), Session.GetDurationSeconds());
+		Data->SetStringField(
+			TEXT("recordedBuildVersion"), Session.GetRecordedBuildVersion());
+		Data->SetStringField(
+			TEXT("engineVersionStatus"), Session.GetEngineVersionStatus());
+		Data->SetStringField(
+			TEXT("managedEngineMarker"), Session.GetManagedEngineMarker());
+		TArray<TSharedPtr<FJsonValue>> Providers;
+		for (const UEAI::Trace::FTraceProviderStatus& Status : Session.GetProviderStatuses())
+		{
+			Providers.Add(MakeShared<FJsonValueObject>(DescriptorToJson(Status)));
+		}
+		Data->SetNumberField(TEXT("total"), Providers.Num());
+		Data->SetArrayField(TEXT("providers"), Providers);
+		Data->SetObjectField(TEXT("traceArtifact"), MakeArtifactSummary(*TraceArtifact));
+		AnalysisJob->Result = Data;
+		FinishJob(*AnalysisJob, TEXT("succeeded"));
+		return FMCPToolResult::Ok(Data);
+	}
+
+	UEAI::Trace::FTraceQueryRequest QueryRequest;
+	if (CapabilityId == TEXT("production.trace.export"))
+	{
+		QueryRequest.Provider = GetStringFieldOr(Params, TEXT("provider"));
+		QueryRequest.Operation = GetStringFieldOr(Params, TEXT("operation"));
+	}
+	else
+	{
+		static const TMap<FString, FString> ProviderByCapability = {
+			{TEXT("production.trace.timing.query"), TEXT("timing")},
+			{TEXT("production.trace.counter.query"), TEXT("counter")},
+			{TEXT("production.trace.memory.query"), TEXT("memory")},
+			{TEXT("production.trace.loading.query"), TEXT("loading")},
+			{TEXT("production.trace.network.query"), TEXT("network")},
+			{TEXT("production.trace.tasks.query"), TEXT("tasks")},
+			{TEXT("production.trace.context_switches.query"), TEXT("contextSwitches")},
+			{TEXT("production.trace.log.query"), TEXT("log")},
+			{TEXT("production.trace.io.query"), TEXT("io")},
+			{TEXT("production.trace.bookmark.query"), TEXT("bookmark")},
+			{TEXT("production.trace.region.query"), TEXT("region")},
+			{TEXT("production.trace.screenshot.query"), TEXT("screenshot")}
+		};
+		const FString* Provider = ProviderByCapability.Find(CapabilityId);
+		if (!Provider)
+		{
+			return FMCPToolResult::Error(
+				TEXT("The requested Trace operation is not supported by the Editor adapter."),
+				TEXT("trace_query_unsupported"),
+				422);
+		}
+		QueryRequest.Provider = *Provider;
+		QueryRequest.Operation = GetStringFieldOr(Params, TEXT("operation"));
+		if (QueryRequest.Provider == TEXT("bookmark"))
+		{
+			QueryRequest.Operation = TEXT("list");
+		}
+		else if (QueryRequest.Provider == TEXT("timing")
+			&& QueryRequest.Operation == TEXT("threads"))
+		{
+			QueryRequest.Provider = TEXT("threads");
+			QueryRequest.Operation = TEXT("list");
+		}
+	}
+	if (QueryRequest.Provider.IsEmpty() || QueryRequest.Operation.IsEmpty())
+	{
+		return FMCPToolResult::Error(
+			TEXT("A Trace provider and operation are required."),
+			TEXT("trace_query_invalid"),
+			422);
+	}
+	QueryRequest.Filter = GetStringFieldOr(Params, TEXT("filter"));
+	const int32 RequestedLimit = FMath::Clamp(
+		static_cast<int32>(GetNumberFieldOr(Params, TEXT("limit"), 100.0)),
+		1,
+		CapabilityId == TEXT("production.trace.export") ? 100000 : 1000);
+	QueryRequest.Page.Limit = FMath::Min(
+		RequestedLimit,
+		UEAI::Trace::MaximumPageLimit);
+	FString Cursor;
+	if (Params->TryGetStringField(TEXT("cursor"), Cursor)
+		&& !Cursor.IsEmpty()
+		&& !LexTryParseString(QueryRequest.Page.Cursor, *Cursor))
+	{
+		return FMCPToolResult::Error(
+			TEXT("cursor must be an unsigned decimal row offset."),
+			TEXT("trace_query_invalid"),
+			422);
+	}
+	if (Params->HasField(TEXT("startTimeSeconds")))
+	{
+		QueryRequest.TimeRange.bHasStart = true;
+		QueryRequest.TimeRange.StartSeconds =
+			GetNumberFieldOr(Params, TEXT("startTimeSeconds"), 0.0);
+	}
+	if (Params->HasField(TEXT("endTimeSeconds")))
+	{
+		QueryRequest.TimeRange.bHasEnd = true;
+		QueryRequest.TimeRange.EndSeconds =
+			GetNumberFieldOr(Params, TEXT("endTimeSeconds"), 0.0);
+	}
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Params->Values)
+	{
+		if (!Pair.Value.IsValid())
+		{
+			continue;
+		}
+		if (Pair.Value->Type == EJson::String)
+		{
+			QueryRequest.Options.Add(Pair.Key, Pair.Value->AsString());
+		}
+		else if (Pair.Value->Type == EJson::Boolean)
+		{
+			QueryRequest.Options.Add(
+				Pair.Key, Pair.Value->AsBool() ? TEXT("true") : TEXT("false"));
+		}
+		else if (Pair.Value->Type == EJson::Number)
+		{
+			QueryRequest.Options.Add(Pair.Key, LexToString(Pair.Value->AsNumber()));
+		}
+		else if (Pair.Key == TEXT("names") && Pair.Value->Type == EJson::Array)
+		{
+			TArray<FString> Names;
+			for (const TSharedPtr<FJsonValue>& Name : Pair.Value->AsArray())
+			{
+				if (Name.IsValid() && Name->Type == EJson::String)
+				{
+					Names.Add(Name->AsString());
+				}
+			}
+			QueryRequest.Options.Add(TEXT("names"), FString::Join(Names, TEXT("\n")));
+		}
+	}
+	if (!QueryRequest.TimeRange.bHasStart
+		&& !QueryRequest.TimeRange.bHasEnd
+		&& !(*TraceJob)->TraceRegionName.IsEmpty())
+	{
+		QueryRequest.Options.Add(TEXT("regionName"), (*TraceJob)->TraceRegionName);
+	}
+
+	UEAI::Trace::FTraceQueryResult QueryResult;
+	if (!Session.Query(QueryRequest, QueryResult, ErrorCode, ErrorMessage))
+	{
+		return FMCPToolResult::Error(
+			ErrorMessage,
+			ErrorCode.IsEmpty() ? TEXT("trace_query_failed") : ErrorCode,
+			ErrorCode == TEXT("trace_provider_unavailable") ? 409 : 422);
+	}
+	if (CapabilityId == TEXT("production.trace.export"))
+	{
+		auto HasCollectionBoundDiagnostic = [](
+			const UEAI::Trace::FTraceQueryResult& Result)
+		{
+			return Result.Diagnostics.ContainsByPredicate(
+				[](const UEAI::Trace::FTraceDiagnostic& Diagnostic)
+				{
+					return Diagnostic.Code
+						== TEXT("trace_query_collection_bounded");
+				});
+		};
+		auto AddUniqueDiagnostics = [](
+			UEAI::Trace::FTraceQueryResult& Destination,
+			const TArray<UEAI::Trace::FTraceDiagnostic>& Source)
+		{
+			for (const UEAI::Trace::FTraceDiagnostic& Diagnostic : Source)
+			{
+				const bool bAlreadyPresent =
+					Destination.Diagnostics.ContainsByPredicate(
+						[&Diagnostic](
+							const UEAI::Trace::FTraceDiagnostic& Existing)
+						{
+							return Existing.Severity == Diagnostic.Severity
+								&& Existing.Code == Diagnostic.Code
+								&& Existing.Message == Diagnostic.Message;
+						});
+				if (!bAlreadyPresent)
+				{
+					Destination.Diagnostics.Add(Diagnostic);
+				}
+			}
+		};
+
+		bool bCollectionBounded = HasCollectionBoundDiagnostic(QueryResult);
+		uint64 PageCursor = QueryRequest.Page.Cursor;
+		if (QueryResult.bHasNextCursor
+			&& QueryResult.NextCursor <= PageCursor)
+		{
+			return FMCPToolResult::Error(
+				TEXT("Trace export pagination returned a cursor that did not advance."),
+				TEXT("trace_query_cursor_stalled"),
+				500);
+		}
+		while (QueryResult.Rows.Num() < RequestedLimit
+			&& QueryResult.bHasNextCursor)
+		{
+			PageCursor = QueryResult.NextCursor;
+			UEAI::Trace::FTraceQueryRequest PageRequest = QueryRequest;
+			PageRequest.Page.Cursor = PageCursor;
+			PageRequest.Page.Limit = FMath::Min(
+				RequestedLimit - QueryResult.Rows.Num(),
+				UEAI::Trace::MaximumPageLimit);
+			UEAI::Trace::FTraceQueryResult PageResult;
+			if (!Session.Query(
+					PageRequest,
+					PageResult,
+					ErrorCode,
+					ErrorMessage))
+			{
+				return FMCPToolResult::Error(
+					ErrorMessage,
+					ErrorCode.IsEmpty()
+						? TEXT("trace_query_failed")
+						: ErrorCode,
+					ErrorCode == TEXT("trace_provider_unavailable") ? 409 : 422);
+			}
+			if (PageResult.Provider != QueryResult.Provider
+				|| PageResult.Operation != QueryResult.Operation
+				|| PageResult.Columns != QueryResult.Columns)
+			{
+				return FMCPToolResult::Error(
+					TEXT("Trace export pagination changed its result contract between pages."),
+					TEXT("trace_query_page_inconsistent"),
+					500);
+			}
+			if (PageResult.bHasNextCursor
+				&& PageResult.NextCursor <= PageCursor)
+			{
+				return FMCPToolResult::Error(
+					TEXT("Trace export pagination returned a cursor that did not advance."),
+					TEXT("trace_query_cursor_stalled"),
+					500);
+			}
+
+			bCollectionBounded =
+				bCollectionBounded || HasCollectionBoundDiagnostic(PageResult);
+			AddUniqueDiagnostics(QueryResult, PageResult.Diagnostics);
+			for (UEAI::Trace::FTraceRow& Row : PageResult.Rows)
+			{
+				QueryResult.Rows.Add(MoveTemp(Row));
+			}
+			QueryResult.TotalRows = PageResult.TotalRows;
+			QueryResult.bHasNextCursor = PageResult.bHasNextCursor;
+			QueryResult.NextCursor = PageResult.NextCursor;
+		}
+		QueryResult.bTruncated =
+			QueryRequest.Page.Cursor > 0
+			|| QueryResult.bHasNextCursor
+			|| bCollectionBounded;
+		if (!QueryResult.bHasNextCursor)
+		{
+			QueryResult.NextCursor = 0;
+		}
+	}
+	TSharedPtr<FJsonObject> QueryData = QueryToJson(QueryResult);
+	if (CapabilityId != TEXT("production.trace.export"))
+	{
+		TSharedPtr<FJob> AnalysisJob = CreateJob(TEXT("traceAnalysisQuery"), Params);
+		TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+		Data->SetStringField(TEXT("schema"), TEXT("ue.trace-analysis-result.v1"));
+		Data->SetStringField(TEXT("traceId"), TraceId);
+		Data->SetStringField(TEXT("analysisId"), AnalysisJob->Id);
+		Data->SetNumberField(TEXT("durationSeconds"), Session.GetDurationSeconds());
+		Data->SetStringField(
+			TEXT("recordedBuildVersion"), Session.GetRecordedBuildVersion());
+		Data->SetStringField(
+			TEXT("engineVersionStatus"), Session.GetEngineVersionStatus());
+		Data->SetStringField(
+			TEXT("managedEngineMarker"), Session.GetManagedEngineMarker());
+		Data->SetObjectField(TEXT("traceArtifact"), MakeArtifactSummary(*TraceArtifact));
+		Data->SetObjectField(TEXT("query"), QueryData);
+		AnalysisJob->Result = Data;
+		FinishJob(*AnalysisJob, TEXT("succeeded"));
+		return FMCPToolResult::Ok(Data);
+	}
+
+	const FString Format = GetStringFieldOr(Params, TEXT("format"), TEXT("json"));
+	TSharedPtr<FJob> ExportJob = CreateJob(TEXT("traceExport"), Params);
+	const FString Extension = Format == TEXT("csv") ? TEXT("csv") : TEXT("json");
+	const FString ExportPath = FPaths::Combine(
+		JobDirectory(ExportJob->Id),
+		FString::Printf(TEXT("trace-%s-%s.%s"), *QueryRequest.Provider, *QueryRequest.Operation, *Extension));
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(ExportPath), true);
+	FString Contents;
+	if (Format == TEXT("csv"))
+	{
+		auto Csv = [](const FString& Value)
+		{
+			return TEXT("\"") + Value.Replace(TEXT("\""), TEXT("\"\"")) + TEXT("\"");
+		};
+		TArray<FString> Header;
+		for (const FString& Column : QueryResult.Columns)
+		{
+			Header.Add(Csv(Column));
+		}
+		Contents = FString::Join(Header, TEXT(",")) + TEXT("\n");
+		for (const UEAI::Trace::FTraceRow& Row : QueryResult.Rows)
+		{
+			TArray<FString> Cells;
+			for (const FString& Column : QueryResult.Columns)
+			{
+				const UEAI::Trace::FTraceValue* Value = Row.Fields.Find(Column);
+				FString Text;
+				if (Value)
+				{
+					switch (Value->Type)
+					{
+					case UEAI::Trace::ETraceValueType::Boolean:
+						Text = Value->BooleanValue ? TEXT("true") : TEXT("false"); break;
+					case UEAI::Trace::ETraceValueType::Integer:
+						Text = LexToString(Value->IntegerValue); break;
+					case UEAI::Trace::ETraceValueType::Number:
+						Text = LexToString(Value->NumberValue); break;
+					case UEAI::Trace::ETraceValueType::String:
+						Text = Value->StringValue; break;
+					default: break;
+					}
+				}
+				Cells.Add(Csv(Text));
+			}
+			Contents += FString::Join(Cells, TEXT(",")) + TEXT("\n");
+		}
+	}
+	else
+	{
+		const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Contents);
+		if (!FJsonSerializer::Serialize(QueryData.ToSharedRef(), Writer))
+		{
+			FinishJob(*ExportJob, TEXT("failed"), TEXT("artifact_write_failed"), TEXT("Trace JSON export serialization failed."));
+			return FMCPToolResult::Error(ExportJob->Message, ExportJob->ErrorCode, 500);
+		}
+	}
+	if (!FFileHelper::SaveStringToFile(
+			Contents,
+			*ExportPath,
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM)
+		|| !AddArtifact(
+			*ExportJob,
+			ExportPath,
+			FPaths::GetCleanFilename(ExportPath),
+			Format == TEXT("csv") ? TEXT("text/csv") : TEXT("application/json")))
+	{
+		FinishJob(*ExportJob, TEXT("failed"), TEXT("artifact_write_failed"), TEXT("Trace export artifact could not be written."));
+		return FMCPToolResult::Error(ExportJob->Message, ExportJob->ErrorCode, 500);
+	}
+	ExportJob->Result->SetStringField(TEXT("traceId"), TraceId);
+	ExportJob->Result->SetStringField(TEXT("provider"), QueryResult.Provider);
+	ExportJob->Result->SetStringField(TEXT("operation"), QueryResult.Operation);
+	ExportJob->Result->SetNumberField(TEXT("rowCount"), QueryResult.Rows.Num());
+	ExportJob->Result->SetBoolField(TEXT("truncated"), QueryResult.bTruncated);
+	ExportJob->Result->SetObjectField(TEXT("query"), QueryData);
+	FinishJob(*ExportJob, TEXT("succeeded"));
+	return FMCPToolResult::Ok(MakeJobSummary(*ExportJob, true));
+}
+
+void FProductionJobRuntime::CompleteParentTraceAnalysis(
+	FJob& AnalysisJob,
+	const bool bAnalysisSucceeded,
+	const FString& WarningCode,
+	const FString& WarningMessage)
+{
+	const FString TraceId =
+		GetStringFieldOr(AnalysisJob.Result, TEXT("traceId"));
+	const TSharedPtr<FJob>* ParentPtr = Jobs.Find(TraceId);
+	if (!ParentPtr || !ParentPtr->IsValid())
+	{
+		return;
+	}
+	FJob& Parent = **ParentPtr;
+	if (Parent.Status != TEXT("running")
+		|| Parent.Phase != TEXT("analyzing"))
+	{
+		return;
+	}
+	Parent.Result->SetStringField(
+		TEXT("analysisJobId"), AnalysisJob.Id);
+	Parent.Result->SetBoolField(
+		TEXT("analysisCompleted"), bAnalysisSucceeded);
+	const TSharedPtr<FJsonObject>* PostStopAnalysis = nullptr;
+	if (AnalysisJob.Result->TryGetObjectField(
+			TEXT("postStopAnalysis"), PostStopAnalysis)
+		&& PostStopAnalysis && PostStopAnalysis->IsValid())
+	{
+		Parent.Result->SetObjectField(
+			TEXT("postStopAnalysis"), *PostStopAnalysis);
+		bool bPartial = false;
+		if ((*PostStopAnalysis)->TryGetBoolField(TEXT("partial"), bPartial)
+			&& bPartial)
+		{
+			Parent.Result->SetBoolField(TEXT("partial"), true);
+		}
+		if ((*PostStopAnalysis)->HasTypedField<EJson::Array>(TEXT("warnings")))
+		{
+			Parent.Result->SetArrayField(
+				TEXT("analysisWarnings"),
+				(*PostStopAnalysis)->GetArrayField(TEXT("warnings")));
+		}
+	}
+	if (!bAnalysisSucceeded)
+	{
+		Parent.Result->SetBoolField(TEXT("partial"), true);
+		TArray<TSharedPtr<FJsonValue>> Warnings;
+		if (Parent.Result->HasTypedField<EJson::Array>(TEXT("warnings")))
+		{
+			Warnings = Parent.Result->GetArrayField(TEXT("warnings"));
+		}
+		TSharedPtr<FJsonObject> Warning = MakeShared<FJsonObject>();
+		Warning->SetStringField(
+			TEXT("code"),
+			WarningCode.IsEmpty()
+				? TEXT("trace_post_stop_analysis_failed") : WarningCode);
+		Warning->SetStringField(
+			TEXT("message"),
+			WarningMessage.IsEmpty()
+				? TEXT("Post-stop Trace analysis failed; the .utrace artifact is retained.")
+				: WarningMessage);
+		Warnings.Add(MakeShared<FJsonValueObject>(Warning));
+		Parent.Result->SetArrayField(TEXT("warnings"), Warnings);
+	}
+	FinishJob(Parent, TEXT("succeeded"));
+}
+
 void FProductionJobRuntime::TickTraceAnalysisJob(FJob& Job)
 {
 	if (!Job.TraceAnalysisSession.IsValid())
@@ -2512,6 +4013,11 @@ void FProductionJobRuntime::TickTraceAnalysisJob(FJob& Job)
 		FinishJob(
 			Job,
 			TEXT("failed"),
+			TEXT("trace_analysis_unavailable"),
+			TEXT("The TraceServices analysis session was lost."));
+		CompleteParentTraceAnalysis(
+			Job,
+			false,
 			TEXT("trace_analysis_unavailable"),
 			TEXT("The TraceServices analysis session was lost."));
 		return;
@@ -2524,6 +4030,11 @@ void FProductionJobRuntime::TickTraceAnalysisJob(FJob& Job)
 		FinishJob(
 			Job,
 			TEXT("failed"),
+			TEXT("trace_analysis_timeout"),
+			TEXT("TraceServices analysis exceeded its bounded timeout."));
+		CompleteParentTraceAnalysis(
+			Job,
+			false,
 			TEXT("trace_analysis_timeout"),
 			TEXT("TraceServices analysis exceeded its bounded timeout."));
 		return;
@@ -2544,6 +4055,70 @@ void FProductionJobRuntime::TickTraceAnalysisJob(FJob& Job)
 		BuildTraceProviderSummary(
 			*Job.TraceAnalysisSession,
 			Job.Input));
+	const FString AnalysisLevel =
+		GetStringFieldOr(Job.Result, TEXT("analysisLevel"), TEXT("providers"));
+	if (AnalysisLevel == TEXT("summary") || AnalysisLevel == TEXT("full"))
+	{
+		const TSharedPtr<FJsonObject>* Artifact = nullptr;
+		const FString TracePath =
+			Job.Result->TryGetObjectField(TEXT("traceArtifact"), Artifact)
+				&& Artifact && Artifact->IsValid()
+			? GetStringFieldOr(*Artifact, TEXT("path")) : FString();
+		UEAI::Trace::FTraceAnalysisSession SemanticSession;
+		FString ErrorCode;
+		FString ErrorMessage;
+		if (SemanticSession.AttachCompletedSession(
+				TracePath,
+				Job.TraceAnalysisSession,
+				ErrorCode,
+				ErrorMessage))
+		{
+			FString RegionName;
+			TArray<FString> Channels;
+			const FString TraceId =
+				GetStringFieldOr(Job.Result, TEXT("traceId"));
+			const TSharedPtr<FJob>* Parent = Jobs.Find(TraceId);
+			if (Parent && Parent->IsValid())
+			{
+				RegionName = (*Parent)->TraceRegionName;
+				GetStringFieldOr(
+					(*Parent)->Result, TEXT("channels"))
+					.ParseIntoArray(Channels, TEXT(","), true);
+			}
+			Job.Result->SetObjectField(
+				TEXT("postStopAnalysis"),
+				BuildTracePostStopAnalysis(
+					SemanticSession,
+					AnalysisLevel,
+					RegionName,
+					Channels));
+		}
+		else
+		{
+			TSharedPtr<FJsonObject> Partial = MakeShared<FJsonObject>();
+			Partial->SetStringField(
+				TEXT("schema"), TEXT("ue.trace-post-stop-analysis.v1"));
+			Partial->SetStringField(TEXT("analysisLevel"), AnalysisLevel);
+			Partial->SetBoolField(TEXT("partial"), true);
+			TSharedPtr<FJsonObject> Warning = MakeShared<FJsonObject>();
+			Warning->SetStringField(
+				TEXT("code"),
+				ErrorCode.IsEmpty()
+					? TEXT("trace_post_stop_analysis_failed") : ErrorCode);
+			Warning->SetStringField(TEXT("message"), ErrorMessage);
+			TArray<TSharedPtr<FJsonValue>> PartialWarnings;
+			PartialWarnings.Add(MakeShared<FJsonValueObject>(Warning));
+			Partial->SetArrayField(
+				TEXT("warnings"),
+				PartialWarnings);
+			TArray<TSharedPtr<FJsonValue>> EmptyValues;
+			Partial->SetArrayField(
+				TEXT("providerCoverage"), EmptyValues);
+			Partial->SetArrayField(
+				TEXT("semanticQueries"), EmptyValues);
+			Job.Result->SetObjectField(TEXT("postStopAnalysis"), Partial);
+		}
+	}
 	Job.TraceAnalysisSession.Reset();
 	if (!WriteTraceAnalysisReport(Job))
 	{
@@ -2552,9 +4127,15 @@ void FProductionJobRuntime::TickTraceAnalysisJob(FJob& Job)
 			TEXT("failed"),
 			TEXT("artifact_write_failed"),
 			TEXT("Trace analysis completed, but its bounded report artifact could not be written."));
+		CompleteParentTraceAnalysis(
+			Job,
+			false,
+			TEXT("artifact_write_failed"),
+			TEXT("Trace analysis completed, but its bounded report artifact could not be written."));
 		return;
 	}
 	FinishJob(Job, TEXT("succeeded"));
+	CompleteParentTraceAnalysis(Job, true);
 }
 
 FMCPToolResult FProductionJobRuntime::StartPerformanceRun(
@@ -4178,6 +5759,36 @@ bool FProductionJobRuntime::CanStandaloneChildReceiptOverrideTerminal(
 {
 	return ReturnCode != INDEX_NONE
 		&& (ErrorCode.IsEmpty() || ErrorCode == TEXT("process_failed"));
+}
+
+bool FProductionJobRuntime::ValidatePIENetworkTraceStart(
+	const bool bNetRequested,
+	const bool bExistingPIENetDriver,
+	const bool bRequireCompleteNetwork,
+	bool& OutPartial,
+	FString& OutWarningCode,
+	FString& OutErrorCode,
+	FString& OutErrorMessage)
+{
+	OutErrorCode.Reset();
+	OutErrorMessage.Reset();
+	OutPartial = bNetRequested && bExistingPIENetDriver;
+	OutWarningCode = OutPartial
+		? TEXT("network_session_predates_trace")
+		: FString();
+	if (!bNetRequested
+		|| !bExistingPIENetDriver
+		|| !bRequireCompleteNetwork)
+	{
+		return true;
+	}
+	OutErrorCode = TEXT("trace_network_session_predates_trace");
+	OutErrorMessage = TEXT(
+		"requireCompleteNetwork rejects a PIE network session that predates Trace. "
+		"Restart PIE, start Trace before the NetDriver is created, and then create "
+		"the connection. Without strict mode, bounded basic metadata is replayed "
+		"and the result is explicitly partial.");
+	return false;
 }
 
 FString FProductionJobRuntime::BuildHeadlessProfileArguments(

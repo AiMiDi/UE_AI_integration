@@ -305,6 +305,20 @@ FProductionRuntimeController::FProductionRuntimeController(
 			[this](const TSharedPtr<FJsonObject>& Params)
 			{
 				return CancelScenario(Params);
+			},
+			[this](FString& OutSessionId, uint64& OutGeneration)
+			{
+				const FPIEControlResult Status = PIEController.Status();
+				if (!Status.bSuccess || Status.State != TEXT("running")
+					|| Status.SessionId.IsEmpty())
+				{
+					OutSessionId.Reset();
+					OutGeneration = 0;
+					return false;
+				}
+				OutSessionId = Status.SessionId;
+				OutGeneration = Status.Generation;
+				return true;
 			}))
 {
 	IFileManager::Get().MakeDirectory(*ScenarioDirectory(), true);
@@ -404,6 +418,72 @@ FMCPToolResult FProductionRuntimeController::ExecuteProductionJobOperation(
 			TEXT("The production job runtime is unavailable."),
 			TEXT("job_runtime_unavailable"),
 			503);
+	}
+	if (CapabilityId == TEXT("production.trace.target.list"))
+	{
+		const FPIEControlResult PIE = PIEController.Status();
+		TArray<TSharedPtr<FJsonValue>> Targets;
+		TSharedPtr<FJsonObject> EditorTarget = MakeShared<FJsonObject>();
+		EditorTarget->SetStringField(TEXT("kind"), TEXT("editor"));
+		EditorTarget->SetBoolField(TEXT("available"), true);
+		EditorTarget->SetStringField(TEXT("backend"), TEXT("editor"));
+		Targets.Add(MakeShared<FJsonValueObject>(EditorTarget));
+
+		TSharedPtr<FJsonObject> PIETarget = MakeShared<FJsonObject>();
+		PIETarget->SetStringField(TEXT("kind"), TEXT("pie"));
+		PIETarget->SetBoolField(TEXT("available"), PIE.bSuccess && !PIE.SessionId.IsEmpty());
+		PIETarget->SetStringField(TEXT("backend"), TEXT("editor"));
+		PIETarget->SetStringField(TEXT("state"), PIE.State);
+		if (!PIE.SessionId.IsEmpty())
+		{
+			PIETarget->SetStringField(TEXT("sessionId"), PIE.SessionId);
+			PIETarget->SetNumberField(TEXT("generation"), static_cast<double>(PIE.Generation));
+		}
+		else
+		{
+			PIETarget->SetStringField(TEXT("reason"), TEXT("PIE is not running."));
+		}
+		Targets.Add(MakeShared<FJsonValueObject>(PIETarget));
+
+		TSharedPtr<FJsonObject> DevelopmentTarget = MakeShared<FJsonObject>();
+		DevelopmentTarget->SetStringField(TEXT("kind"), TEXT("development"));
+		DevelopmentTarget->SetBoolField(TEXT("available"), false);
+		DevelopmentTarget->SetStringField(TEXT("backend"), TEXT("localTrace"));
+		DevelopmentTarget->SetStringField(
+			TEXT("reason"),
+			TEXT("Development targets are resolved by UEAITraceWorker launch profiles."));
+		Targets.Add(MakeShared<FJsonValueObject>(DevelopmentTarget));
+
+		TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+		Data->SetStringField(TEXT("schema"), TEXT("ue.trace-targets.v1"));
+		Data->SetArrayField(TEXT("targets"), Targets);
+		return FMCPToolResult::Ok(Data);
+	}
+	if (CapabilityId == TEXT("production.trace.start") && Params.IsValid())
+	{
+		const TSharedPtr<FJsonObject>* Target = nullptr;
+		if (Params->TryGetObjectField(TEXT("target"), Target)
+			&& Target && Target->IsValid())
+		{
+			FString Kind;
+			(*Target)->TryGetStringField(TEXT("kind"), Kind);
+			if (Kind == TEXT("pie"))
+			{
+				const FPIEControlResult PIE = PIEController.Status();
+				FString SessionId;
+				double Generation = 0.0;
+				if (!(*Target)->TryGetStringField(TEXT("sessionId"), SessionId)
+					|| !(*Target)->TryGetNumberField(TEXT("generation"), Generation)
+					|| SessionId != PIE.SessionId
+					|| static_cast<uint64>(Generation) != PIE.Generation)
+				{
+					return FMCPToolResult::Error(
+						TEXT("The requested PIE trace target does not match the active PIE generation."),
+						TEXT("pie_session_stale"),
+						409);
+				}
+			}
+		}
 	}
 	if (PerformanceSuites.IsValid()
 		&& PerformanceSuites->Handles(CapabilityId))

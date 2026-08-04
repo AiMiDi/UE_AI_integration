@@ -1290,9 +1290,27 @@
       "domain": "production",
       "kind": "command",
       "description": "Start a bounded Unreal Trace file recording and return a durable trace job.",
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "editor" },
       "inputSchema": {
         "type": "object",
         "properties": {
+          "backend": { "type": "string", "enum": ["auto", "editor", "local"] },
+          "target": {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["editor", "pie", "development"] },
+              "sessionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "generation": { "type": "integer", "minimum": 1 },
+              "launchProfileId": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "map": { "type": "string", "minLength": 1, "maxLength": 512 }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
+          "preset": {
+            "type": "string",
+            "enum": ["standard", "cpu", "gpu", "memory", "loading", "network", "fullInsights"]
+          },
           "channels": {
             "type": "array",
             "maxItems": 32,
@@ -1301,9 +1319,31 @@
               "maxLength": 64
             }
           },
+          "project": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Optional exact replay of the project path approved by production.trace.launch.plan."
+          },
+          "cvars": {
+            "type": "object",
+            "description": "Optional exact replay of the CVar map approved by production.trace.launch.plan."
+          },
           "excludeTail": {
             "type": "boolean"
           },
+          "requireCompleteNetwork": {
+            "type": "boolean",
+            "description": "Reject a PIE network Trace when its NetDriver predates recording instead of returning explicitly partial replay evidence."
+          },
+          "maxDurationSeconds": { "type": "number", "minimum": 1, "maximum": 3600 },
+          "maxFileSizeMiB": { "type": "integer", "minimum": 1, "maximum": 16384 },
+          "postStop": {
+            "type": "string",
+            "enum": ["artifactOnly", "analyzeSummary", "analyzeFull"]
+          },
+          "approvePlanDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "confirmLaunch": { "type": "boolean" },
           "requestId": {
             "type": "string",
             "minLength": 1,
@@ -1333,9 +1373,11 @@
       "domain": "production",
       "kind": "query",
       "description": "Return status for an Unreal Trace recording.",
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "editor" },
       "inputSchema": {
         "type": "object",
         "properties": {
+          "backend": { "type": "string", "enum": ["auto", "editor", "local"] },
           "traceId": {
             "type": "string",
             "minLength": 1
@@ -1370,6 +1412,7 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "backend": { "type": "string", "enum": ["auto", "editor", "local"] },
           "traceId": {
             "type": "string",
             "minLength": 1
@@ -1388,6 +1431,7 @@
       "output": {
         "kind": "json"
       },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "editor" },
       "dsl": {
         "admission": "none",
         "scopeKinds": [],
@@ -1404,6 +1448,7 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "backend": { "type": "string", "enum": ["auto", "editor", "local"] },
           "traceId": {
             "type": "string",
             "minLength": 1,
@@ -1470,6 +1515,7 @@
       "output": {
         "kind": "json"
       },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
       "dsl": {
         "admission": "none",
         "scopeKinds": [],
@@ -2869,6 +2915,230 @@
         "deferCompile": false,
         "risk": "notOpen"
       }
+    },
+    {
+      "id": "production.trace.target.list",
+      "domain": "production",
+      "kind": "query",
+      "description": "List Editor, PIE, and constrained Development trace targets with backend availability and reasons.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] } }, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "editor" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.launch.plan",
+      "domain": "production",
+      "kind": "validation",
+      "description": "Resolve a constrained Development trace launch profile and return an approval digest without launching a process.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "backend": { "type": "string", "enum": ["auto", "local"] },
+          "launchProfileId": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "project": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "map": { "type": "string", "pattern": "^/Game/" },
+          "preset": { "type": "string", "enum": ["standard", "cpu", "gpu", "memory", "loading", "network", "fullInsights"] },
+          "postStop": { "type": "string", "enum": ["artifactOnly", "analyzeSummary", "analyzeFull"] },
+          "cvars": { "type": "object" },
+          "maxDurationSeconds": { "type": "number", "minimum": 1, "maximum": 3600 },
+          "maxFileSizeMiB": { "type": "integer", "minimum": 1, "maximum": 16384 }
+        },
+        "required": ["launchProfileId", "project", "map"],
+        "additionalProperties": false
+      },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.channel.list",
+      "domain": "production",
+      "kind": "query",
+      "description": "List versioned trace presets, their concrete channels, and target-specific availability.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "targetKind": { "type": "string", "enum": ["editor", "pie", "development"] } }, "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.import",
+      "domain": "production",
+      "kind": "command",
+      "description": "Hash and register a local .utrace file in the bounded Trace job store for offline analysis.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "local"] }, "tracePath": { "type": "string", "minLength": 1, "maxLength": 2048 }, "copyMode": { "type": "string", "enum": ["copy", "reference"] }, "requestId": { "type": "string", "minLength": 1, "maxLength": 128 } }, "required": ["tracePath"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.provider.list",
+      "domain": "production",
+      "kind": "query",
+      "description": "List TraceServices providers recorded in a trace, their semantic operations, and missing-channel diagnostics.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" } }, "required": ["traceId"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.timing.query",
+      "domain": "production",
+      "kind": "query",
+      "description": "Query bounded Timing Insights frames, threads, normalized timing events, timer aggregates, caller/callee trees, or raw CPU sample stack frames. A bounded-collection diagnostic means totalRows is a lower bound, not a complete count.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "operation": { "type": "string", "enum": ["frames", "threads", "events", "timers", "callers", "callees", "cpuSampling"] }, "timerId": { "type": "integer", "minimum": 0, "maximum": 4294967295, "description": "Canonical base timer id used by events, callers, or callees; metadata event ids are normalized to this id." }, "threadId": { "type": "integer", "minimum": 0, "maximum": 4294967295, "description": "CPU thread filter used by events, callers, callees, or cpuSampling." }, "includeGpu": { "type": "boolean", "description": "Include GPU timelines for events, timers, callers, or callees. Defaults to false for a thread-filtered caller/callee query and true otherwise." }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "filter": { "type": "string", "maxLength": 512 }, "cursor": { "type": "string", "pattern": "^[0-9]+$", "maxLength": 20 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["traceId", "operation"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.counter.query",
+      "domain": "production",
+      "kind": "query",
+      "description": "Query bounded counter definitions, series, or aggregates from a trace.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "operation": { "type": "string", "enum": ["list", "series", "aggregate"] }, "names": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 256 } }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "filter": { "type": "string", "maxLength": 512, "description": "Case-insensitive counter-name filter." }, "cursor": { "type": "string", "pattern": "^[0-9]+$", "maxLength": 20 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["traceId", "operation"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.memory.query",
+      "domain": "production",
+      "kind": "query",
+      "description": "Query bounded Memory Insights allocations, live allocations, tags, modules, or callstacks.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "operation": { "type": "string", "enum": ["allocations", "liveAllocations", "tags", "modules", "callstacks"] }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "filter": { "type": "string", "maxLength": 512 }, "cursor": { "type": "string", "pattern": "^[0-9]+$", "maxLength": 20 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["traceId", "operation"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.loading.query",
+      "domain": "production",
+      "kind": "query",
+      "description": "Query bounded Asset Loading packages, objects, exports, requests, or dependencies.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "operation": { "type": "string", "enum": ["packages", "objects", "exports", "requests", "dependencies"] }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "filter": { "type": "string", "maxLength": 512 }, "cursor": { "type": "string", "pattern": "^[0-9]+$", "maxLength": 20 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["traceId", "operation"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.network.query",
+      "domain": "production",
+      "kind": "query",
+      "description": "Query bounded Network Insights connections, packets, content events, or statistics.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "operation": { "type": "string", "enum": ["connections", "packets", "contentEvents", "stats"] }, "connectionId": { "type": "integer", "minimum": 0 }, "direction": { "type": "string", "enum": ["incoming", "outgoing", "both"] }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "filter": { "type": "string", "maxLength": 512, "description": "Case-insensitive provider-specific filter over connection identity, packet delivery/direction, content-event name, or statistic name." }, "cursor": { "type": "string", "pattern": "^[0-9]+$", "maxLength": 20 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["traceId", "operation"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.tasks.query",
+      "domain": "production",
+      "kind": "query",
+      "description": "Query bounded task records, relations, waits, or critical paths.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "operation": { "type": "string", "enum": ["tasks", "relations", "waiting", "criticalPath"] }, "taskId": { "type": "integer", "minimum": 0 }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "filter": { "type": "string", "maxLength": 512, "description": "Case-insensitive task debug-name filter." }, "cursor": { "type": "string", "pattern": "^[0-9]+$", "maxLength": 20 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["traceId", "operation"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.context_switches.query",
+      "domain": "production",
+      "kind": "query",
+      "description": "Query bounded CPU core, thread scheduling, and context-switch intervals.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "operation": { "type": "string", "enum": ["cores", "threads", "intervals"] }, "threadId": { "type": "integer", "minimum": 0 }, "core": { "type": "integer", "minimum": 0 }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "filter": { "type": "string", "maxLength": 512, "description": "Case-insensitive filter over thread name, thread ids, or core number before aggregation." }, "cursor": { "type": "string", "pattern": "^[0-9]+$", "maxLength": 20 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["traceId", "operation"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.log.query",
+      "domain": "production",
+      "kind": "query",
+      "description": "Query bounded trace log categories or messages.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "operation": { "type": "string", "enum": ["categories", "messages"] }, "filter": { "type": "string", "maxLength": 512 }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "cursor": { "type": "string", "pattern": "^[0-9]+$", "maxLength": 20 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["traceId", "operation"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.io.query",
+      "domain": "production",
+      "kind": "query",
+      "description": "Query bounded file activity paths, events, or aggregates.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "operation": { "type": "string", "enum": ["files", "events", "aggregate"] }, "filter": { "type": "string", "maxLength": 512 }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "cursor": { "type": "string", "pattern": "^[0-9]+$", "maxLength": 20 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["traceId", "operation"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.bookmark.query",
+      "domain": "production",
+      "kind": "query",
+      "description": "Query bounded bookmarks from a trace.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "operation": { "type": "string", "enum": ["list"] }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "filter": { "type": "string", "maxLength": 512 }, "cursor": { "type": "string", "pattern": "^[0-9]+$", "maxLength": 20 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["traceId", "operation"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.region.query",
+      "domain": "production",
+      "kind": "query",
+      "description": "Query bounded named region records and ranges from a trace.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "operation": { "type": "string", "enum": ["list", "ranges"] }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "filter": { "type": "string", "maxLength": 512 }, "cursor": { "type": "string", "pattern": "^[0-9]+$", "maxLength": 20 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["traceId", "operation"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.screenshot.query",
+      "domain": "production",
+      "kind": "query",
+      "description": "List or retrieve screenshots embedded in an Unreal Trace without opening Unreal Insights.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "operation": { "type": "string", "enum": ["list", "get"] }, "screenshotId": { "type": "string", "maxLength": 256 }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "filter": { "type": "string", "maxLength": 512, "description": "Case-insensitive screenshot-name filter; get must also match the requested interval and filter." }, "cursor": { "type": "string", "pattern": "^[0-9]+$", "maxLength": 20 }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 } }, "required": ["traceId", "operation"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.export",
+      "domain": "production",
+      "kind": "command",
+      "description": "Export one bounded semantic trace query as a normalized JSON or CSV artifact.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "editor", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "provider": { "type": "string", "minLength": 1, "maxLength": 64 }, "operation": { "type": "string", "minLength": 1, "maxLength": 64 }, "format": { "type": "string", "enum": ["json", "csv"] }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 }, "filter": { "type": "string", "maxLength": 512 }, "limit": { "type": "integer", "minimum": 1, "maximum": 100000 }, "maxBytes": { "type": "integer", "minimum": 1024, "maximum": 67108864 }, "maxCellBytes": { "type": "integer", "minimum": 256, "maximum": 1048576 }, "requestId": { "type": "string", "minLength": 1, "maxLength": 128 } }, "required": ["traceId", "provider", "operation", "format"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": true },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["editor", "localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "notOpen" }
+    },
+    {
+      "id": "production.trace.open_in_insights",
+      "domain": "production",
+      "kind": "command",
+      "description": "Open a registered trace in the matching UnrealInsights executable without launching Unreal Editor.",
+      "inputSchema": { "type": "object", "properties": { "backend": { "type": "string", "enum": ["auto", "local"] }, "traceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$" }, "view": { "type": "string", "enum": ["timing", "memory", "loading", "network", "tasks"] }, "startTimeSeconds": { "type": "number", "minimum": 0 }, "endTimeSeconds": { "type": "number", "minimum": 0 } }, "required": ["traceId"], "additionalProperties": false },
+      "traits": { "readOnly": true, "destructive": false, "expensive": false },
+      "output": { "kind": "json" },
+      "execution": { "backends": ["localTrace"], "preferred": "localTrace" },
+      "dsl": { "admission": "interactiveOnly", "scopeKinds": [], "transactionDomain": "external", "deferCompile": false, "risk": "notOpen" }
     }
   ]
 }

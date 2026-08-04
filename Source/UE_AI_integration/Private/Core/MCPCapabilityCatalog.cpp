@@ -638,6 +638,81 @@ bool ValidateDescriptor(
 
 	bValid &= ValidateSearchMetadata(Descriptor, Context, Errors);
 
+	if (Descriptor->HasField(TEXT("execution")))
+	{
+		if (!Descriptor->HasTypedField<EJson::Object>(TEXT("execution")))
+		{
+			AddError(Errors, FString::Printf(TEXT("%s.execution must be an object."), *Context));
+			bValid = false;
+		}
+		else
+		{
+			const TSharedPtr<FJsonObject> Execution =
+				Descriptor->GetObjectField(TEXT("execution"));
+			static const TSet<FString> AllowedExecutionFields = {
+				TEXT("backends"),
+				TEXT("preferred")
+			};
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Execution->Values)
+			{
+				if (!AllowedExecutionFields.Contains(Field.Key))
+				{
+					AddError(
+						Errors,
+						FString::Printf(
+							TEXT("%s.execution.%s is not supported."),
+							*Context,
+							*Field.Key));
+					bValid = false;
+				}
+			}
+			TArray<FString> Backends;
+			if (!Execution->HasTypedField<EJson::Array>(TEXT("backends")))
+			{
+				AddError(Errors, FString::Printf(TEXT("%s.execution.backends must be an array."), *Context));
+				bValid = false;
+			}
+			else
+			{
+				TSet<FString> SeenBackends;
+				for (const TSharedPtr<FJsonValue>& Value : Execution->GetArrayField(TEXT("backends")))
+				{
+					FString Backend;
+					if (!Value.IsValid() || !Value->TryGetString(Backend)
+						|| (Backend != TEXT("editor") && Backend != TEXT("localTrace"))
+						|| SeenBackends.Contains(Backend))
+					{
+						AddError(
+							Errors,
+							FString::Printf(
+								TEXT("%s.execution.backends contains an invalid or duplicate backend."),
+								*Context));
+						bValid = false;
+						continue;
+					}
+					SeenBackends.Add(Backend);
+					Backends.Add(Backend);
+				}
+				if (Backends.IsEmpty())
+				{
+					AddError(Errors, FString::Printf(TEXT("%s.execution.backends must not be empty."), *Context));
+					bValid = false;
+				}
+			}
+			FString Preferred;
+			if (!Execution->TryGetStringField(TEXT("preferred"), Preferred)
+				|| !Backends.Contains(Preferred))
+			{
+				AddError(
+					Errors,
+					FString::Printf(
+						TEXT("%s.execution.preferred must name a declared backend."),
+						*Context));
+				bValid = false;
+			}
+		}
+	}
+
 	if (Descriptor->HasField(TEXT("requires")))
 	{
 		if (!Descriptor->HasTypedField<EJson::Object>(TEXT("requires")))

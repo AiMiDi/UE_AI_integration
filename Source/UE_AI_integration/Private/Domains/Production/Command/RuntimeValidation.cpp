@@ -184,6 +184,101 @@ public:
 	using FEngineeringOperationTool::FEngineeringOperationTool;
 	FString GetCapabilityId() const override { return TEXT("production.trace.analyze"); }
 };
+class FTraceTargetListTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.target.list"); }
+};
+class FTraceLaunchPlanTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.launch.plan"); }
+};
+class FTraceChannelListTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.channel.list"); }
+};
+class FTraceImportTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.import"); }
+};
+class FTraceProviderListTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.provider.list"); }
+};
+class FTraceTimingQueryTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.timing.query"); }
+};
+class FTraceCounterQueryTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.counter.query"); }
+};
+class FTraceMemoryQueryTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.memory.query"); }
+};
+class FTraceLoadingQueryTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.loading.query"); }
+};
+class FTraceNetworkQueryTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.network.query"); }
+};
+class FTraceTasksQueryTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.tasks.query"); }
+};
+class FTraceContextSwitchesQueryTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.context_switches.query"); }
+};
+class FTraceLogQueryTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.log.query"); }
+};
+class FTraceIoQueryTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.io.query"); }
+};
+class FTraceBookmarkQueryTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.bookmark.query"); }
+};
+class FTraceRegionQueryTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.region.query"); }
+};
+class FTraceScreenshotQueryTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.screenshot.query"); }
+};
+class FTraceExportTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.export"); }
+};
+class FTraceOpenInsightsTool final : public FEngineeringOperationTool
+{
+public: using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.trace.open_in_insights"); }
+};
 class FPerformanceRunTool final : public FEngineeringOperationTool
 {
 public:
@@ -415,6 +510,25 @@ void RegisterProductionRuntimeTools(
 	Registry.Register(MakeShared<FTraceStatusTool>(Controller));
 	Registry.Register(MakeShared<FTraceStopTool>(Controller));
 	Registry.Register(MakeShared<FTraceAnalyzeTool>(Controller));
+	Registry.Register(MakeShared<FTraceTargetListTool>(Controller));
+	Registry.Register(MakeShared<FTraceLaunchPlanTool>(Controller));
+	Registry.Register(MakeShared<FTraceChannelListTool>(Controller));
+	Registry.Register(MakeShared<FTraceImportTool>(Controller));
+	Registry.Register(MakeShared<FTraceProviderListTool>(Controller));
+	Registry.Register(MakeShared<FTraceTimingQueryTool>(Controller));
+	Registry.Register(MakeShared<FTraceCounterQueryTool>(Controller));
+	Registry.Register(MakeShared<FTraceMemoryQueryTool>(Controller));
+	Registry.Register(MakeShared<FTraceLoadingQueryTool>(Controller));
+	Registry.Register(MakeShared<FTraceNetworkQueryTool>(Controller));
+	Registry.Register(MakeShared<FTraceTasksQueryTool>(Controller));
+	Registry.Register(MakeShared<FTraceContextSwitchesQueryTool>(Controller));
+	Registry.Register(MakeShared<FTraceLogQueryTool>(Controller));
+	Registry.Register(MakeShared<FTraceIoQueryTool>(Controller));
+	Registry.Register(MakeShared<FTraceBookmarkQueryTool>(Controller));
+	Registry.Register(MakeShared<FTraceRegionQueryTool>(Controller));
+	Registry.Register(MakeShared<FTraceScreenshotQueryTool>(Controller));
+	Registry.Register(MakeShared<FTraceExportTool>(Controller));
+	Registry.Register(MakeShared<FTraceOpenInsightsTool>(Controller));
 	Registry.Register(MakeShared<FPerformanceRunTool>(Controller));
 	Registry.Register(MakeShared<FPerformanceResultTool>(Controller));
 	Registry.Register(MakeShared<FPerformanceCompareTool>(Controller));

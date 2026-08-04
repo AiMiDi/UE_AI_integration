@@ -4,6 +4,8 @@
 #include "HAL/PlatformProcess.h"
 #include "Tools/MCPToolBase.h"
 
+#include <atomic>
+
 namespace TraceServices
 {
 class IAnalysisSession;
@@ -23,12 +25,14 @@ class FProductionJobRuntime
 public:
 	using FScenarioOperation =
 		TFunction<FMCPToolResult(const TSharedPtr<FJsonObject>&)>;
+	using FPIESessionSnapshot = TFunction<bool(FString&, uint64&)>;
 
 	explicit FProductionJobRuntime(
 		FScenarioOperation InStartScenario = FScenarioOperation(),
 		FScenarioOperation InGetScenarioStatus = FScenarioOperation(),
 		FScenarioOperation InGetScenarioResult = FScenarioOperation(),
-		FScenarioOperation InCancelScenario = FScenarioOperation());
+		FScenarioOperation InCancelScenario = FScenarioOperation(),
+		FPIESessionSnapshot InGetPIESession = FPIESessionSnapshot());
 	~FProductionJobRuntime();
 
 	void Tick(float DeltaTime);
@@ -71,6 +75,14 @@ public:
 	static bool CanStandaloneChildReceiptOverrideTerminal(
 		int32 ReturnCode,
 		const FString& ErrorCode);
+	static bool ValidatePIENetworkTraceStart(
+		bool bNetRequested,
+		bool bExistingPIENetDriver,
+		bool bRequireCompleteNetwork,
+		bool& OutPartial,
+		FString& OutWarningCode,
+		FString& OutErrorCode,
+		FString& OutErrorMessage);
 
 private:
 	struct FProcessLaunchSpec
@@ -177,6 +189,22 @@ private:
 		bool bScenarioMetricsObserved = false;
 		bool bOwnsTrace = false;
 		FString TraceJobId;
+		FString TraceTargetKind = TEXT("editor");
+		FString TracePIESessionId;
+		uint64 TracePIEGeneration = 0;
+		FString TraceRegionName;
+		FString TracePostStop = TEXT("artifactOnly");
+		int64 TraceMaxFileSizeBytes = 0;
+		double TraceConnectionStartedAtSeconds = 0.0;
+		double TraceMaxDurationSeconds = 120.0;
+		bool bTraceRegionStarted = false;
+		bool bTraceNetRequested = false;
+		bool bTraceNetActivated = false;
+		bool bTraceNetworkSessionPredatesRecording = false;
+		bool bTraceNetworkReplayTruncated = false;
+		int32 TraceReplayedNetDriverCount = 0;
+		int32 TraceReplayedNetConnectionCount = 0;
+		uint32 TracePreviousNetVerbosity = 0;
 	};
 
 	FMCPToolResult GetJobStatus(const TSharedPtr<FJsonObject>& Params) const;
@@ -189,6 +217,9 @@ private:
 	FMCPToolResult GetTraceStatus(const TSharedPtr<FJsonObject>& Params) const;
 	FMCPToolResult StopTrace(const TSharedPtr<FJsonObject>& Params);
 	FMCPToolResult AnalyzeTrace(const TSharedPtr<FJsonObject>& Params);
+	FMCPToolResult ExecuteTraceInsightsOperation(
+		const FString& CapabilityId,
+		const TSharedPtr<FJsonObject>& Params);
 
 	FMCPToolResult StartPerformanceRun(const TSharedPtr<FJsonObject>& Params);
 	FMCPToolResult StartStandalonePerformanceRun(
@@ -253,6 +284,17 @@ private:
 	void TerminateProcessTree(FJob& Job);
 	void TickPerformanceJob(FJob& Job);
 	void TickTraceAnalysisJob(FJob& Job);
+	void ActivateTraceRecording(FJob& Job);
+	void ReplayExistingNetworkMetadata(FJob& Job);
+	void SuspendManagedNetTrace(FJob& Job);
+	void RestorePreviousNetTrace(FJob& Job);
+	void HandleTraceConnected();
+	void RemoveTraceConnectionDelegate();
+	void CompleteParentTraceAnalysis(
+		FJob& AnalysisJob,
+		bool bAnalysisSucceeded,
+		const FString& WarningCode = FString(),
+		const FString& WarningMessage = FString());
 	void SamplePerformanceFrame(FJob& Job);
 	void BeginWindowIteration(FJob& Job, double Now);
 	void CompletePerformanceIteration(FJob& Job);
@@ -311,9 +353,12 @@ private:
 	TMap<FString, TSharedPtr<FJob>> Jobs;
 	FString ActiveHeavyJobId;
 	FString ActiveTraceJobId;
+	FDelegateHandle TraceConnectionHandle;
+	std::atomic<bool> bTraceConnected{false};
 	FScenarioOperation StartScenario;
 	FScenarioOperation GetScenarioStatus;
 	FScenarioOperation GetScenarioResult;
 	FScenarioOperation CancelScenario;
+	FPIESessionSnapshot GetPIESession;
 };
 }

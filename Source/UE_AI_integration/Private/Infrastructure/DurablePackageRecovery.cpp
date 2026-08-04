@@ -32,7 +32,7 @@ FString RecoveryRoot()
 		TEXT("UE_AI_integration/Recovery")));
 }
 
-FString StringField(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field)
+FString RecoveryStringField(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field)
 {
 	FString Value;
 	if (Object.IsValid())
@@ -253,7 +253,7 @@ bool CurrentFileMatches(
 {
 	bool bExpectedExists = false;
 	File->TryGetBoolField(ExistsField, bExpectedExists);
-	const FString Filename = StringField(File, TEXT("filename"));
+	const FString Filename = RecoveryStringField(File, TEXT("filename"));
 	const bool bExists = IFileManager::Get().FileExists(*Filename);
 	if (bExists != bExpectedExists)
 	{
@@ -265,7 +265,7 @@ bool CurrentFileMatches(
 	}
 	FString ActualHash;
 	return HashFile(Filename, ActualHash)
-		&& ActualHash == StringField(File, HashField);
+		&& ActualHash == RecoveryStringField(File, HashField);
 }
 
 bool AllFilesMatch(
@@ -323,8 +323,8 @@ bool ValidateExternalSources(
 			: nullptr;
 		FString Current;
 		if (!Source.IsValid()
-			|| !HashFile(StringField(Source, TEXT("filename")), Current)
-			|| Current != StringField(Source, TEXT("sha256")))
+			|| !HashFile(RecoveryStringField(Source, TEXT("filename")), Current)
+			|| Current != RecoveryStringField(Source, TEXT("sha256")))
 		{
 			OutError = TEXT("An external reimport source changed after recovery preparation.");
 			return false;
@@ -348,7 +348,7 @@ bool UnloadRecoveryPackages(
 	for (const TSharedPtr<FJsonValue>& Value : *Assets)
 	{
 		const TSharedPtr<FJsonObject> Asset = Value->AsObject();
-		const FString PackageName = StringField(Asset, TEXT("package"));
+		const FString PackageName = RecoveryStringField(Asset, TEXT("package"));
 		if (UPackage* Package = FindPackage(nullptr, *PackageName))
 		{
 			if (Package->IsDirty() && !bAllowDirtyOwnedPackages)
@@ -586,7 +586,7 @@ bool FDurablePackageRecovery::Seal(
 {
 	OutManifest = ReadJson(ManifestPath(ChangeSetId));
 	if (!OutManifest.IsValid()
-		|| StringField(OutManifest, TEXT("schema")) != TEXT("ue.recovery-journal.v1"))
+		|| RecoveryStringField(OutManifest, TEXT("schema")) != TEXT("ue.recovery-journal.v1"))
 	{
 		OutErrorCode = TEXT("recovery_checkpoint_corrupt");
 		OutError = TEXT("Recovery manifest is missing or invalid.");
@@ -613,7 +613,7 @@ bool FDurablePackageRecovery::Seal(
 		for (const TSharedPtr<FJsonValue>& FileValue : *Files)
 		{
 			const TSharedPtr<FJsonObject> File = FileValue->AsObject();
-			const FString Filename = StringField(File, TEXT("filename"));
+			const FString Filename = RecoveryStringField(File, TEXT("filename"));
 			const bool bExists = IFileManager::Get().FileExists(*Filename);
 			File->SetBoolField(TEXT("afterExists"), bExists);
 			if (bExists)
@@ -665,7 +665,7 @@ bool FDurablePackageRecovery::Rollback(
 		OutError = TEXT("Durable recovery record was not found.");
 		return false;
 	}
-	if (StringField(Manifest, TEXT("status")) == TEXT("rolledBack")
+	if (RecoveryStringField(Manifest, TEXT("status")) == TEXT("rolledBack")
 		|| AllFilesMatch(Manifest, TEXT("beforeExists"), TEXT("beforeSha256")))
 	{
 		TSharedRef<FJsonObject> Idempotent = MakeShared<FJsonObject>();
@@ -707,14 +707,14 @@ bool FDurablePackageRecovery::Rollback(
 		for (const TSharedPtr<FJsonValue>& FileValue : *Files)
 		{
 			const TSharedPtr<FJsonObject> File = FileValue->AsObject();
-			const FString Filename = StringField(File, TEXT("filename"));
+			const FString Filename = RecoveryStringField(File, TEXT("filename"));
 			bool bBeforeExists = false;
 			File->TryGetBoolField(TEXT("beforeExists"), bBeforeExists);
 			if (bBeforeExists)
 			{
 				if (!RestoreFileAtomically(
-						StringField(File, TEXT("snapshotFilename")),
-						StringField(File, TEXT("snapshotSha256")),
+						RecoveryStringField(File, TEXT("snapshotFilename")),
+						RecoveryStringField(File, TEXT("snapshotSha256")),
 						Filename,
 						OutError))
 				{
@@ -761,8 +761,8 @@ bool FDurablePackageRecovery::Rollback(
 	Result->SetStringField(TEXT("requestId"), RequestId);
 	Result->SetStringField(TEXT("status"), TEXT("rolledBack"));
 	Result->SetBoolField(TEXT("rollbackVerified"), true);
-	Result->SetStringField(TEXT("beforeHash"), StringField(Manifest, TEXT("beforeHash")));
-	Result->SetStringField(TEXT("afterHash"), StringField(Manifest, TEXT("afterHash")));
+	Result->SetStringField(TEXT("beforeHash"), RecoveryStringField(Manifest, TEXT("beforeHash")));
+	Result->SetStringField(TEXT("afterHash"), RecoveryStringField(Manifest, TEXT("afterHash")));
 	OutResult = Result;
 	return true;
 }
