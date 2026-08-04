@@ -1,6 +1,6 @@
 {
   "name": "UE-AI-CLI",
-  "description": "UE_AI_integration 是一个面向 Unreal Editor 的 MCP 集成插件，通过单个 Editor Module 和 TypeScript stdio bridge，让 Codex CLI、Claude Code 等客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与生产流程。注意：该项目包含超过 100 个源文件；若需更快分析，可考虑限定到子目录。",
+  "description": "UE_AI_integration 是面向 Unreal Engine 工程的 MCP 集成插件，通过 Editor 控制模块、Development Trace Runtime、离线 Trace Worker 和 TypeScript stdio bridge，使 Codex CLI、Claude Code 等客户端能够查询或修改 Blueprint、场景、内容资产、动画、AI 与生产流程，并可在 Editor 关闭后分析 .utrace。注意：该项目包含超过 100 个源文件；若需更快分析，可考虑限定到子目录。",
   "languages": [
     "batch",
     "c",
@@ -12,12 +12,14 @@
     "json",
     "markdown",
     "mit",
+    "powershell",
     "python",
     "shell",
     "txt",
     "typescript",
     "unknown",
     "uplugin",
+    "uproject",
     "yaml"
   ],
   "frameworks": [],
@@ -49,7 +51,7 @@
     {
       "path": "CLI/CMakeLists.txt",
       "language": "txt",
-      "sizeLines": 234,
+      "sizeLines": 314,
       "fileCategory": "docs"
     },
     {
@@ -83,15 +85,21 @@
       "fileCategory": "code"
     },
     {
+      "path": "CLI/include/UETraceWorker/TraceWorkerClient.h",
+      "language": "c",
+      "sizeLines": 86,
+      "fileCategory": "code"
+    },
+    {
       "path": "CLI/src/CapabilityCatalog.cpp",
       "language": "cpp",
-      "sizeLines": 442,
+      "sizeLines": 510,
       "fileCategory": "code"
     },
     {
       "path": "CLI/src/CommandCli.cpp",
       "language": "cpp",
-      "sizeLines": 3787,
+      "sizeLines": 4798,
       "fileCategory": "code"
     },
     {
@@ -110,6 +118,12 @@
       "path": "CLI/src/SkillCatalog.cpp",
       "language": "cpp",
       "sizeLines": 1011,
+      "fileCategory": "code"
+    },
+    {
+      "path": "CLI/src/TraceWorkerClient.cpp",
+      "language": "cpp",
+      "sizeLines": 1767,
       "fileCategory": "code"
     },
     {
@@ -161,6 +175,24 @@
       "fileCategory": "code"
     },
     {
+      "path": "CLI/tests/trace_cli_routing.py",
+      "language": "python",
+      "sizeLines": 324,
+      "fileCategory": "code"
+    },
+    {
+      "path": "CLI/tests/TraceWorkerClientTests.cpp",
+      "language": "cpp",
+      "sizeLines": 293,
+      "fileCategory": "code"
+    },
+    {
+      "path": "CLI/tests/TraceWorkerFixture.cpp",
+      "language": "cpp",
+      "sizeLines": 534,
+      "fileCategory": "code"
+    },
+    {
       "path": "CMakeLists.txt",
       "language": "txt",
       "sizeLines": 32,
@@ -169,7 +201,7 @@
     {
       "path": "Config/FilterPlugin.ini",
       "language": "config",
-      "sizeLines": 34,
+      "sizeLines": 51,
       "fileCategory": "config"
     },
     {
@@ -193,7 +225,7 @@
     {
       "path": "docs/UE_AGENT_SKILLS.md",
       "language": "markdown",
-      "sizeLines": 173,
+      "sizeLines": 176,
       "fileCategory": "docs"
     },
     {
@@ -205,19 +237,25 @@
     {
       "path": "docs/UE_ENGINEERING_COPILOT.md",
       "language": "markdown",
-      "sizeLines": 262,
+      "sizeLines": 287,
       "fileCategory": "docs"
     },
     {
       "path": "docs/UE_LANDSCAPE_WATER.md",
       "language": "markdown",
-      "sizeLines": 150,
+      "sizeLines": 154,
       "fileCategory": "docs"
     },
     {
       "path": "docs/UE_SHORT_CLI.md",
       "language": "markdown",
-      "sizeLines": 214,
+      "sizeLines": 259,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/UE_TRACE_INSIGHTS.md",
+      "language": "markdown",
+      "sizeLines": 299,
       "fileCategory": "docs"
     },
     {
@@ -241,7 +279,7 @@
     {
       "path": "MCP/src/__tests__/capability-catalog.test.ts",
       "language": "typescript",
-      "sizeLines": 379,
+      "sizeLines": 385,
       "fileCategory": "code"
     },
     {
@@ -259,13 +297,19 @@
     {
       "path": "MCP/src/__tests__/skill-catalog.test.ts",
       "language": "typescript",
-      "sizeLines": 454,
+      "sizeLines": 457,
+      "fileCategory": "code"
+    },
+    {
+      "path": "MCP/src/__tests__/trace-worker.test.ts",
+      "language": "typescript",
+      "sizeLines": 856,
       "fileCategory": "code"
     },
     {
       "path": "MCP/src/capability-catalog.ts",
       "language": "typescript",
-      "sizeLines": 617,
+      "sizeLines": 689,
       "fileCategory": "code"
     },
     {
@@ -283,7 +327,7 @@
     {
       "path": "MCP/src/domain-router.ts",
       "language": "typescript",
-      "sizeLines": 87,
+      "sizeLines": 259,
       "fileCategory": "code"
     },
     {
@@ -301,7 +345,7 @@
     {
       "path": "MCP/src/mcp-server.ts",
       "language": "typescript",
-      "sizeLines": 596,
+      "sizeLines": 614,
       "fileCategory": "code"
     },
     {
@@ -314,6 +358,12 @@
       "path": "MCP/src/skill-router.ts",
       "language": "typescript",
       "sizeLines": 343,
+      "fileCategory": "code"
+    },
+    {
+      "path": "MCP/src/trace-worker.ts",
+      "language": "typescript",
+      "sizeLines": 1522,
       "fileCategory": "code"
     },
     {
@@ -335,15 +385,27 @@
       "fileCategory": "config"
     },
     {
+      "path": "Programs/UEAITraceWorker/Source/UEAITraceWorker.Target.cs",
+      "language": "csharp",
+      "sizeLines": 49,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Programs/UEAITraceWorker/UEAITraceWorker.uproject",
+      "language": "uproject",
+      "sizeLines": 12,
+      "fileCategory": "code"
+    },
+    {
       "path": "README_EN.md",
       "language": "markdown",
-      "sizeLines": 431,
+      "sizeLines": 479,
       "fileCategory": "docs"
     },
     {
       "path": "README.md",
       "language": "markdown",
-      "sizeLines": 384,
+      "sizeLines": 427,
       "fileCategory": "docs"
     },
     {
@@ -361,25 +423,25 @@
     {
       "path": "Resources/Capabilities/blueprint.json",
       "language": "json",
-      "sizeLines": 3944,
+      "sizeLines": 4039,
       "fileCategory": "config"
     },
     {
       "path": "Resources/Capabilities/content.json",
       "language": "json",
-      "sizeLines": 4074,
+      "sizeLines": 4134,
       "fileCategory": "config"
     },
     {
       "path": "Resources/Capabilities/production.json",
       "language": "json",
-      "sizeLines": 2620,
+      "sizeLines": 3144,
       "fileCategory": "config"
     },
     {
       "path": "Resources/Capabilities/scene.json",
       "language": "json",
-      "sizeLines": 3312,
+      "sizeLines": 3615,
       "fileCategory": "config"
     },
     {
@@ -431,15 +493,99 @@
       "fileCategory": "config"
     },
     {
+      "path": "Resources/PerformanceSuites/d5.json",
+      "language": "json",
+      "sizeLines": 75,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/PerformanceSuites/portable.json",
+      "language": "json",
+      "sizeLines": 174,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/Python/restricted_inspect.py",
+      "language": "python",
+      "sizeLines": 83,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Resources/Trace/insights-actions.5.3.json",
+      "language": "json",
+      "sizeLines": 78,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/Trace/insights-actions.5.4.json",
+      "language": "json",
+      "sizeLines": 1,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/Trace/insights-actions.5.5.json",
+      "language": "json",
+      "sizeLines": 1,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/Trace/insights-actions.5.6.json",
+      "language": "json",
+      "sizeLines": 1,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/Trace/insights-actions.5.7.json",
+      "language": "json",
+      "sizeLines": 1,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/Trace/launch-profiles.json",
+      "language": "json",
+      "sizeLines": 32,
+      "fileCategory": "config"
+    },
+    {
+      "path": "Resources/Trace/worker-protocol.v1.json",
+      "language": "json",
+      "sizeLines": 32,
+      "fileCategory": "config"
+    },
+    {
       "path": "scripts/build_plugin.bat",
       "language": "batch",
-      "sizeLines": 124,
+      "sizeLines": 167,
       "fileCategory": "script"
     },
     {
       "path": "scripts/build_plugin.sh",
       "language": "shell",
-      "sizeLines": 112,
+      "sizeLines": 152,
+      "fileCategory": "script"
+    },
+    {
+      "path": "scripts/build_trace_worker.bat",
+      "language": "batch",
+      "sizeLines": 6,
+      "fileCategory": "script"
+    },
+    {
+      "path": "scripts/build_trace_worker.ps1",
+      "language": "powershell",
+      "sizeLines": 256,
+      "fileCategory": "script"
+    },
+    {
+      "path": "scripts/build_trace_worker.sh",
+      "language": "shell",
+      "sizeLines": 244,
+      "fileCategory": "script"
+    },
+    {
+      "path": "scripts/install_plugin.ps1",
+      "language": "powershell",
+      "sizeLines": 558,
       "fileCategory": "script"
     },
     {
@@ -449,9 +595,33 @@
       "fileCategory": "script"
     },
     {
+      "path": "scripts/test_development_trace_e2e.ps1",
+      "language": "powershell",
+      "sizeLines": 564,
+      "fileCategory": "script"
+    },
+    {
+      "path": "scripts/test_install_plugin_preflight.ps1",
+      "language": "powershell",
+      "sizeLines": 366,
+      "fileCategory": "script"
+    },
+    {
+      "path": "scripts/test_trace_semantic_golden.ps1",
+      "language": "powershell",
+      "sizeLines": 437,
+      "fileCategory": "script"
+    },
+    {
+      "path": "scripts/test_trace_worker_security.ps1",
+      "language": "powershell",
+      "sizeLines": 706,
+      "fileCategory": "script"
+    },
+    {
       "path": "scripts/validate_capabilities.mjs",
       "language": "javascript",
-      "sizeLines": 486,
+      "sizeLines": 745,
       "fileCategory": "code"
     },
     {
@@ -488,6 +658,30 @@
       "path": "skills/ue-asset-migration/SKILL.md",
       "language": "markdown",
       "sizeLines": 49,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "skills/ue-blueprint-buildgraph/agents/openai.yaml",
+      "language": "yaml",
+      "sizeLines": 4,
+      "fileCategory": "config"
+    },
+    {
+      "path": "skills/ue-blueprint-buildgraph/references/buildgraph-recipe.md",
+      "language": "markdown",
+      "sizeLines": 41,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "skills/ue-blueprint-buildgraph/skill.json",
+      "language": "json",
+      "sizeLines": 96,
+      "fileCategory": "config"
+    },
+    {
+      "path": "skills/ue-blueprint-buildgraph/SKILL.md",
+      "language": "markdown",
+      "sizeLines": 37,
       "fileCategory": "docs"
     },
     {
@@ -587,6 +781,54 @@
       "fileCategory": "docs"
     },
     {
+      "path": "skills/ue-render-debug-capture/agents/openai.yaml",
+      "language": "yaml",
+      "sizeLines": 5,
+      "fileCategory": "config"
+    },
+    {
+      "path": "skills/ue-render-debug-capture/references/render-debug-evidence.md",
+      "language": "markdown",
+      "sizeLines": 35,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "skills/ue-render-debug-capture/skill.json",
+      "language": "json",
+      "sizeLines": 121,
+      "fileCategory": "config"
+    },
+    {
+      "path": "skills/ue-render-debug-capture/SKILL.md",
+      "language": "markdown",
+      "sizeLines": 38,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "skills/ue-trace-insights/agents/openai.yaml",
+      "language": "yaml",
+      "sizeLines": 5,
+      "fileCategory": "config"
+    },
+    {
+      "path": "skills/ue-trace-insights/references/trace-insights-workflow.md",
+      "language": "markdown",
+      "sizeLines": 55,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "skills/ue-trace-insights/skill.json",
+      "language": "json",
+      "sizeLines": 260,
+      "fileCategory": "config"
+    },
+    {
+      "path": "skills/ue-trace-insights/SKILL.md",
+      "language": "markdown",
+      "sizeLines": 40,
+      "fileCategory": "docs"
+    },
+    {
       "path": "skills/ue-umg-authoring/agents/openai.yaml",
       "language": "yaml",
       "sizeLines": 4,
@@ -637,7 +879,7 @@
     {
       "path": "Source/UE_AI_integration/Private/Core/MCPCapabilityCatalog.cpp",
       "language": "cpp",
-      "sizeLines": 886,
+      "sizeLines": 964,
       "fileCategory": "code"
     },
     {
@@ -655,19 +897,19 @@
     {
       "path": "Source/UE_AI_integration/Private/Core/MCPExecutor.cpp",
       "language": "cpp",
-      "sizeLines": 230,
+      "sizeLines": 416,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Private/Core/MCPExecutor.h",
       "language": "c",
-      "sizeLines": 31,
+      "sizeLines": 60,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Private/Core/MCPToolRegistry.cpp",
       "language": "cpp",
-      "sizeLines": 238,
+      "sizeLines": 274,
       "fileCategory": "code"
     },
     {
@@ -749,6 +991,12 @@
       "fileCategory": "code"
     },
     {
+      "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/BlueprintBuildGraph.cpp",
+      "language": "cpp",
+      "sizeLines": 854,
+      "fileCategory": "code"
+    },
+    {
       "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/BlueprintDebug.cpp",
       "language": "cpp",
       "sizeLines": 154,
@@ -805,7 +1053,7 @@
     {
       "path": "Source/UE_AI_integration/Private/Domains/Blueprint/Query/BlueprintAnalysis.cpp",
       "language": "cpp",
-      "sizeLines": 1860,
+      "sizeLines": 1900,
       "fileCategory": "code"
     },
     {
@@ -859,13 +1107,13 @@
     {
       "path": "Source/UE_AI_integration/Private/Domains/Content/Command/Asset_Change.cpp",
       "language": "cpp",
-      "sizeLines": 1290,
+      "sizeLines": 1490,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Private/Domains/Content/Command/Asset_Settings.cpp",
       "language": "cpp",
-      "sizeLines": 1505,
+      "sizeLines": 1654,
       "fileCategory": "code"
     },
     {
@@ -883,7 +1131,7 @@
     {
       "path": "Source/UE_AI_integration/Private/Domains/Content/Command/Niagara.cpp",
       "language": "cpp",
-      "sizeLines": 366,
+      "sizeLines": 410,
       "fileCategory": "code"
     },
     {
@@ -937,13 +1185,13 @@
     {
       "path": "Source/UE_AI_integration/Private/Domains/Production/Command/RuntimeValidation.cpp",
       "language": "cpp",
-      "sizeLines": 363,
+      "sizeLines": 569,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Private/Domains/Production/Command/Sequencer.cpp",
       "language": "cpp",
-      "sizeLines": 569,
+      "sizeLines": 563,
       "fileCategory": "code"
     },
     {
@@ -979,7 +1227,7 @@
     {
       "path": "Source/UE_AI_integration/Private/Domains/Scene/Command/PIE.cpp",
       "language": "cpp",
-      "sizeLines": 169,
+      "sizeLines": 173,
       "fileCategory": "code"
     },
     {
@@ -1019,6 +1267,12 @@
       "fileCategory": "code"
     },
     {
+      "path": "Source/UE_AI_integration/Private/Domains/Scene/Query/ViewportVisualization.cpp",
+      "language": "cpp",
+      "sizeLines": 3457,
+      "fileCategory": "code"
+    },
+    {
       "path": "Source/UE_AI_integration/Private/Domains/Scene/Validation/LandscapeWater.cpp",
       "language": "cpp",
       "sizeLines": 50,
@@ -1055,6 +1309,18 @@
       "fileCategory": "code"
     },
     {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/DurablePackageRecovery.cpp",
+      "language": "cpp",
+      "sizeLines": 769,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/DurablePackageRecovery.h",
+      "language": "c",
+      "sizeLines": 57,
+      "fileCategory": "code"
+    },
+    {
       "path": "Source/UE_AI_integration/Private/Infrastructure/EngineeringContractUtils.cpp",
       "language": "cpp",
       "sizeLines": 305,
@@ -1069,13 +1335,13 @@
     {
       "path": "Source/UE_AI_integration/Private/Infrastructure/LandscapeWaterService.cpp",
       "language": "cpp",
-      "sizeLines": 5927,
+      "sizeLines": 6510,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Private/Infrastructure/LandscapeWaterService.h",
       "language": "c",
-      "sizeLines": 68,
+      "sizeLines": 70,
       "fileCategory": "code"
     },
     {
@@ -1091,6 +1357,18 @@
       "fileCategory": "code"
     },
     {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/OptionalFeatureAvailability.cpp",
+      "language": "cpp",
+      "sizeLines": 166,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/OptionalFeatureAvailability.h",
+      "language": "c",
+      "sizeLines": 17,
+      "fileCategory": "code"
+    },
+    {
       "path": "Source/UE_AI_integration/Private/Infrastructure/PerformanceRegressionService.cpp",
       "language": "cpp",
       "sizeLines": 3424,
@@ -1100,6 +1378,18 @@
       "path": "Source/UE_AI_integration/Private/Infrastructure/PerformanceRegressionService.h",
       "language": "c",
       "sizeLines": 128,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/PerformanceSuiteService.cpp",
+      "language": "cpp",
+      "sizeLines": 1300,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/PerformanceSuiteService.h",
+      "language": "c",
+      "sizeLines": 116,
       "fileCategory": "code"
     },
     {
@@ -1117,25 +1407,49 @@
     {
       "path": "Source/UE_AI_integration/Private/Infrastructure/ProductionJobRuntime.cpp",
       "language": "cpp",
-      "sizeLines": 7235,
+      "sizeLines": 8846,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Private/Infrastructure/ProductionJobRuntime.h",
       "language": "c",
-      "sizeLines": 319,
+      "sizeLines": 364,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Private/Infrastructure/ProductionRuntimeController.cpp",
       "language": "cpp",
-      "sizeLines": 2221,
+      "sizeLines": 2366,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Private/Infrastructure/ProductionRuntimeController.h",
       "language": "c",
-      "sizeLines": 161,
+      "sizeLines": 167,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/RecoveryJournalService.cpp",
+      "language": "cpp",
+      "sizeLines": 443,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/RecoveryJournalService.h",
+      "language": "c",
+      "sizeLines": 27,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/ReflectionInspectService.cpp",
+      "language": "cpp",
+      "sizeLines": 523,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Infrastructure/ReflectionInspectService.h",
+      "language": "c",
+      "sizeLines": 24,
       "fileCategory": "code"
     },
     {
@@ -1205,9 +1519,21 @@
       "fileCategory": "code"
     },
     {
+      "path": "Source/UE_AI_integration/Private/Tests/BlueprintAnalysisCorpusTests.cpp",
+      "language": "cpp",
+      "sizeLines": 1298,
+      "fileCategory": "code"
+    },
+    {
       "path": "Source/UE_AI_integration/Private/Tests/BlueprintAnalysisTests.cpp",
       "language": "cpp",
       "sizeLines": 459,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Tests/BlueprintBuildGraphTests.cpp",
+      "language": "cpp",
+      "sizeLines": 303,
       "fileCategory": "code"
     },
     {
@@ -1249,19 +1575,25 @@
     {
       "path": "Source/UE_AI_integration/Private/Tests/ContentAssetSettingsTests.cpp",
       "language": "cpp",
-      "sizeLines": 421,
+      "sizeLines": 423,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Tests/DurablePackageRecoveryTests.cpp",
+      "language": "cpp",
+      "sizeLines": 330,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Private/Tests/LandscapeWaterContractTests.cpp",
       "language": "cpp",
-      "sizeLines": 2673,
+      "sizeLines": 2742,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Private/Tests/MCPExecutorTests.cpp",
       "language": "cpp",
-      "sizeLines": 244,
+      "sizeLines": 269,
       "fileCategory": "code"
     },
     {
@@ -1279,13 +1611,25 @@
     {
       "path": "Source/UE_AI_integration/Private/Tests/PerformanceRegressionTests.cpp",
       "language": "cpp",
-      "sizeLines": 988,
+      "sizeLines": 1026,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Tests/PerformanceSuiteTests.cpp",
+      "language": "cpp",
+      "sizeLines": 243,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Private/Tests/ProductionJobRuntimeTests.cpp",
       "language": "cpp",
-      "sizeLines": 1024,
+      "sizeLines": 1488,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Tests/ReflectionInspectTests.cpp",
+      "language": "cpp",
+      "sizeLines": 166,
       "fileCategory": "code"
     },
     {
@@ -1301,9 +1645,21 @@
       "fileCategory": "code"
     },
     {
+      "path": "Source/UE_AI_integration/Private/Tests/TraceSemanticGoldenTests.cpp",
+      "language": "cpp",
+      "sizeLines": 508,
+      "fileCategory": "code"
+    },
+    {
       "path": "Source/UE_AI_integration/Private/Tests/UEWorkflowRuntimeTests.cpp",
       "language": "cpp",
-      "sizeLines": 3117,
+      "sizeLines": 3164,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UE_AI_integration/Private/Tests/ViewportVisualizationTests.cpp",
+      "language": "cpp",
+      "sizeLines": 2007,
       "fileCategory": "code"
     },
     {
@@ -1327,7 +1683,7 @@
     {
       "path": "Source/UE_AI_integration/Private/Transport/UEAIIntegrationServer.cpp",
       "language": "cpp",
-      "sizeLines": 1806,
+      "sizeLines": 1772,
       "fileCategory": "code"
     },
     {
@@ -1339,7 +1695,7 @@
     {
       "path": "Source/UE_AI_integration/Private/UEAIIntegrationSubsystem.cpp",
       "language": "cpp",
-      "sizeLines": 318,
+      "sizeLines": 320,
       "fileCategory": "code"
     },
     {
@@ -1363,25 +1719,25 @@
     {
       "path": "Source/UE_AI_integration/Private/Workflow/UEWorkflowRuntime.cpp",
       "language": "cpp",
-      "sizeLines": 7237,
+      "sizeLines": 7870,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Private/Workflow/UEWorkflowRuntime.h",
       "language": "c",
-      "sizeLines": 257,
+      "sizeLines": 269,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Public/Tools/MCPToolBase.h",
       "language": "c",
-      "sizeLines": 55,
+      "sizeLines": 79,
       "fileCategory": "code"
     },
     {
       "path": "Source/UE_AI_integration/Public/Tools/MCPToolRegistry.h",
       "language": "c",
-      "sizeLines": 73,
+      "sizeLines": 86,
       "fileCategory": "code"
     },
     {
@@ -1399,7 +1755,7 @@
     {
       "path": "Source/UE_AI_integration/Public/UEAIIntegrationServer.h",
       "language": "c",
-      "sizeLines": 157,
+      "sizeLines": 162,
       "fileCategory": "code"
     },
     {
@@ -1411,14 +1767,188 @@
     {
       "path": "Source/UE_AI_integration/UE_AI_integration.Build.cs",
       "language": "csharp",
-      "sizeLines": 130,
+      "sizeLines": 196,
       "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceAnalysisCore/Private/Tests/TraceAnalysisCoreContractTests.cpp",
+      "language": "cpp",
+      "sizeLines": 65,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceAnalysisCore/Private/TraceAnalysisContracts.cpp",
+      "language": "cpp",
+      "sizeLines": 117,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceAnalysisCore/Private/TraceAnalysisService.cpp",
+      "language": "cpp",
+      "sizeLines": 5077,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceAnalysisCore/Private/UEAITraceAnalysisCoreModule.cpp",
+      "language": "cpp",
+      "sizeLines": 8,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceAnalysisCore/Public/TraceAnalysisContracts.h",
+      "language": "c",
+      "sizeLines": 141,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceAnalysisCore/Public/TraceAnalysisService.h",
+      "language": "c",
+      "sizeLines": 71,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceAnalysisCore/UEAITraceAnalysisCore.Build.cs",
+      "language": "csharp",
+      "sizeLines": 18,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceRuntime/Private/TraceRuntimeController.cpp",
+      "language": "cpp",
+      "sizeLines": 1045,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceRuntime/Private/TraceRuntimeController.h",
+      "language": "c",
+      "sizeLines": 94,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceRuntime/Private/UEAITraceRuntimeModule.cpp",
+      "language": "cpp",
+      "sizeLines": 46,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceRuntime/UEAITraceRuntime.Build.cs",
+      "language": "csharp",
+      "sizeLines": 30,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/TraceWorkerCommandLine.h",
+      "language": "c",
+      "sizeLines": 28,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/TraceWorkerFixture.cpp",
+      "language": "cpp",
+      "sizeLines": 256,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/TraceWorkerFixture.h",
+      "language": "c",
+      "sizeLines": 13,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/TraceWorkerLaunch.cpp",
+      "language": "cpp",
+      "sizeLines": 3242,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/TraceWorkerLaunch.h",
+      "language": "c",
+      "sizeLines": 225,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/TraceWorkerProtocol.cpp",
+      "language": "cpp",
+      "sizeLines": 1778,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/TraceWorkerProtocol.h",
+      "language": "c",
+      "sizeLines": 29,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/TraceWorkerResidentServer.cpp",
+      "language": "cpp",
+      "sizeLines": 781,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/TraceWorkerResidentServer.h",
+      "language": "c",
+      "sizeLines": 13,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/TraceWorkerStore.cpp",
+      "language": "cpp",
+      "sizeLines": 984,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/TraceWorkerStore.h",
+      "language": "c",
+      "sizeLines": 105,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/UEAITraceWorkerMain.cpp",
+      "language": "cpp",
+      "sizeLines": 291,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/Private/UEAITraceWorkerPrivatePCH.h",
+      "language": "c",
+      "sizeLines": 4,
+      "fileCategory": "code"
+    },
+    {
+      "path": "Source/UEAITraceWorker/UEAITraceWorker.Build.cs",
+      "language": "csharp",
+      "sizeLines": 185,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/Corpus/BlueprintAnalysis/d5-overlay.json",
+      "language": "json",
+      "sizeLines": 46,
+      "fileCategory": "config"
+    },
+    {
+      "path": "tests/Corpus/BlueprintAnalysis/portable.json",
+      "language": "json",
+      "sizeLines": 54,
+      "fileCategory": "config"
     },
     {
       "path": "tests/mcp_client.py",
       "language": "python",
       "sizeLines": 168,
       "fileCategory": "code"
+    },
+    {
+      "path": "tests/process/workflow-v2-recovery.fixture.json",
+      "language": "json",
+      "sizeLines": 39,
+      "fileCategory": "config"
+    },
+    {
+      "path": "tests/process/WorkflowRecovery.E2E.ps1",
+      "language": "powershell",
+      "sizeLines": 287,
+      "fileCategory": "script"
     },
     {
       "path": "tests/test_e2e.py",
@@ -1459,7 +1989,7 @@
     {
       "path": "UE_AI_integration.uplugin",
       "language": "uplugin",
-      "sizeLines": 34,
+      "sizeLines": 55,
       "fileCategory": "code"
     },
     {
@@ -1471,7 +2001,7 @@
     {
       "path": "Workflow/Contracts/admission.v1.json",
       "language": "json",
-      "sizeLines": 1125,
+      "sizeLines": 1158,
       "fileCategory": "config"
     },
     {
@@ -1525,7 +2055,7 @@
     {
       "path": "Workflow/src/WorkflowCore.cpp",
       "language": "cpp",
-      "sizeLines": 4676,
+      "sizeLines": 4677,
       "fileCategory": "code"
     },
     {
@@ -1549,7 +2079,7 @@
     {
       "path": "Workflow/tests/WorkflowCoreTests.cpp",
       "language": "cpp",
-      "sizeLines": 1039,
+      "sizeLines": 1083,
       "fileCategory": "code"
     },
     {
@@ -1565,8 +2095,8 @@
       "fileCategory": "code"
     }
   ],
-  "totalFiles": 257,
-  "filteredByIgnore": 8,
+  "totalFiles": 345,
+  "filteredByIgnore": 68,
   "estimatedComplexity": "large",
   "importMap": {
     ".claude-plugin/plugin.json": [],
@@ -1579,11 +2109,13 @@
     "CLI/include/UECommandCli/CapabilityCatalog.h": [],
     "CLI/include/UECommandCli/CommandCli.h": [],
     "CLI/include/UECommandCli/SkillCatalog.h": [],
+    "CLI/include/UETraceWorker/TraceWorkerClient.h": [],
     "CLI/src/CapabilityCatalog.cpp": [],
     "CLI/src/CommandCli.cpp": [],
     "CLI/src/main.cpp": [],
     "CLI/src/short_main.cpp": [],
     "CLI/src/SkillCatalog.cpp": [],
+    "CLI/src/TraceWorkerClient.cpp": [],
     "CLI/src/UEApiClient.cpp": [],
     "CLI/src/Utf8Console.cpp": [],
     "CLI/tests/ApprovalSmoke.cmake": [],
@@ -1592,6 +2124,9 @@
     "CLI/tests/InstalledSmoke.cmake": [],
     "CLI/tests/PackagedLayoutSmoke.cmake": [],
     "CLI/tests/short_cli_http_integration.py": [],
+    "CLI/tests/trace_cli_routing.py": [],
+    "CLI/tests/TraceWorkerClientTests.cpp": [],
+    "CLI/tests/TraceWorkerFixture.cpp": [],
     "CMakeLists.txt": [],
     "Config/FilterPlugin.ini": [],
     "docs/CAPABILITY_SEARCH_AND_UNICODE.md": [],
@@ -1602,6 +2137,7 @@
     "docs/UE_ENGINEERING_COPILOT.md": [],
     "docs/UE_LANDSCAPE_WATER.md": [],
     "docs/UE_SHORT_CLI.md": [],
+    "docs/UE_TRACE_INSIGHTS.md": [],
     "docs/UE_WORKFLOW_DSL.md": [],
     "MCP/.mcp.json": [],
     "MCP/package.json": [],
@@ -1629,6 +2165,13 @@
       "MCP/src/skill-catalog.ts",
       "MCP/src/skill-router.ts"
     ],
+    "MCP/src/__tests__/trace-worker.test.ts": [
+      "MCP/src/capability-catalog.ts",
+      "MCP/src/domain-router.ts",
+      "MCP/src/mcp-server.ts",
+      "MCP/src/trace-worker.ts",
+      "MCP/src/ue-bridge.ts"
+    ],
     "MCP/src/capability-catalog.ts": [],
     "MCP/src/capability-search.ts": [
       "MCP/src/capability-catalog.ts"
@@ -1655,6 +2198,7 @@
       "MCP/src/helpers.ts",
       "MCP/src/skill-catalog.ts",
       "MCP/src/skill-router.ts",
+      "MCP/src/trace-worker.ts",
       "MCP/src/ue-bridge.ts",
       "MCP/src/workflow-router.ts"
     ],
@@ -1667,6 +2211,9 @@
       "MCP/src/skill-catalog.ts",
       "MCP/src/ue-bridge.ts"
     ],
+    "MCP/src/trace-worker.ts": [
+      "MCP/src/ue-bridge.ts"
+    ],
     "MCP/src/ue-bridge.ts": [
       "MCP/src/capability-catalog.ts",
       "MCP/src/capability-search.ts"
@@ -1676,6 +2223,8 @@
       "MCP/src/ue-bridge.ts"
     ],
     "MCP/tsconfig.json": [],
+    "Programs/UEAITraceWorker/Source/UEAITraceWorker.Target.cs": [],
+    "Programs/UEAITraceWorker/UEAITraceWorker.uproject": [],
     "README_EN.md": [],
     "README.md": [],
     "Resources/Capabilities/ai.json": [],
@@ -1692,9 +2241,27 @@
     "Resources/Contracts/ue.change-plan.v1.schema.json": [],
     "Resources/Contracts/ue.finding.v1.schema.json": [],
     "Resources/Contracts/ue.job.v1.schema.json": [],
+    "Resources/PerformanceSuites/d5.json": [],
+    "Resources/PerformanceSuites/portable.json": [],
+    "Resources/Python/restricted_inspect.py": [],
+    "Resources/Trace/insights-actions.5.3.json": [],
+    "Resources/Trace/insights-actions.5.4.json": [],
+    "Resources/Trace/insights-actions.5.5.json": [],
+    "Resources/Trace/insights-actions.5.6.json": [],
+    "Resources/Trace/insights-actions.5.7.json": [],
+    "Resources/Trace/launch-profiles.json": [],
+    "Resources/Trace/worker-protocol.v1.json": [],
     "scripts/build_plugin.bat": [],
     "scripts/build_plugin.sh": [],
+    "scripts/build_trace_worker.bat": [],
+    "scripts/build_trace_worker.ps1": [],
+    "scripts/build_trace_worker.sh": [],
+    "scripts/install_plugin.ps1": [],
     "scripts/setup.sh": [],
+    "scripts/test_development_trace_e2e.ps1": [],
+    "scripts/test_install_plugin_preflight.ps1": [],
+    "scripts/test_trace_semantic_golden.ps1": [],
+    "scripts/test_trace_worker_security.ps1": [],
     "scripts/validate_capabilities.mjs": [],
     "scripts/validate_skills.mjs": [],
     "skills/setup-ue5/SKILL.md": [],
@@ -1702,6 +2269,10 @@
     "skills/ue-asset-migration/references/asset-change-recipe.md": [],
     "skills/ue-asset-migration/skill.json": [],
     "skills/ue-asset-migration/SKILL.md": [],
+    "skills/ue-blueprint-buildgraph/agents/openai.yaml": [],
+    "skills/ue-blueprint-buildgraph/references/buildgraph-recipe.md": [],
+    "skills/ue-blueprint-buildgraph/skill.json": [],
+    "skills/ue-blueprint-buildgraph/SKILL.md": [],
     "skills/ue-blueprint-diagnose/agents/openai.yaml": [],
     "skills/ue-blueprint-diagnose/references/diagnosis-recipe.md": [],
     "skills/ue-blueprint-diagnose/skill.json": [],
@@ -1718,6 +2289,14 @@
     "skills/ue-performance-regression/references/performance-recipe.md": [],
     "skills/ue-performance-regression/skill.json": [],
     "skills/ue-performance-regression/SKILL.md": [],
+    "skills/ue-render-debug-capture/agents/openai.yaml": [],
+    "skills/ue-render-debug-capture/references/render-debug-evidence.md": [],
+    "skills/ue-render-debug-capture/skill.json": [],
+    "skills/ue-render-debug-capture/SKILL.md": [],
+    "skills/ue-trace-insights/agents/openai.yaml": [],
+    "skills/ue-trace-insights/references/trace-insights-workflow.md": [],
+    "skills/ue-trace-insights/skill.json": [],
+    "skills/ue-trace-insights/SKILL.md": [],
     "skills/ue-umg-authoring/agents/openai.yaml": [],
     "skills/ue-umg-authoring/references/umg-recipe.md": [],
     "skills/ue-umg-authoring/skill.json": [],
@@ -1747,6 +2326,7 @@
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Graphs.cpp": [],
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Mutation.cpp": [],
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/BlueprintAssetLifecycle.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Blueprint/Command/BlueprintBuildGraph.cpp": [],
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/BlueprintDebug.cpp": [],
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/BlueprintEditorLayout.cpp": [],
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/BlueprintLayoutOrganize.cpp": [],
@@ -1792,26 +2372,37 @@
     "Source/UE_AI_integration/Private/Domains/Scene/Query/LandscapeWater.cpp": [],
     "Source/UE_AI_integration/Private/Domains/Scene/Query/Runtime.cpp": [],
     "Source/UE_AI_integration/Private/Domains/Scene/Query/Viewport.cpp": [],
+    "Source/UE_AI_integration/Private/Domains/Scene/Query/ViewportVisualization.cpp": [],
     "Source/UE_AI_integration/Private/Domains/Scene/Validation/LandscapeWater.cpp": [],
     "Source/UE_AI_integration/Private/Infrastructure/ClientActivityService.cpp": [],
     "Source/UE_AI_integration/Private/Infrastructure/ClientActivityService.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/Compatibility/UEVersionCompat.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/DomainChangePlan.cpp": [],
     "Source/UE_AI_integration/Private/Infrastructure/DomainChangePlan.h": [],
+    "Source/UE_AI_integration/Private/Infrastructure/DurablePackageRecovery.cpp": [],
+    "Source/UE_AI_integration/Private/Infrastructure/DurablePackageRecovery.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/EngineeringContractUtils.cpp": [],
     "Source/UE_AI_integration/Private/Infrastructure/EngineeringContractUtils.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/LandscapeWaterService.cpp": [],
     "Source/UE_AI_integration/Private/Infrastructure/LandscapeWaterService.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/MaterialAssetHelpers.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/MCPToolHelpers.h": [],
+    "Source/UE_AI_integration/Private/Infrastructure/OptionalFeatureAvailability.cpp": [],
+    "Source/UE_AI_integration/Private/Infrastructure/OptionalFeatureAvailability.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/PerformanceRegressionService.cpp": [],
     "Source/UE_AI_integration/Private/Infrastructure/PerformanceRegressionService.h": [],
+    "Source/UE_AI_integration/Private/Infrastructure/PerformanceSuiteService.cpp": [],
+    "Source/UE_AI_integration/Private/Infrastructure/PerformanceSuiteService.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/PIESessionController.cpp": [],
     "Source/UE_AI_integration/Private/Infrastructure/PIESessionController.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/ProductionJobRuntime.cpp": [],
     "Source/UE_AI_integration/Private/Infrastructure/ProductionJobRuntime.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/ProductionRuntimeController.cpp": [],
     "Source/UE_AI_integration/Private/Infrastructure/ProductionRuntimeController.h": [],
+    "Source/UE_AI_integration/Private/Infrastructure/RecoveryJournalService.cpp": [],
+    "Source/UE_AI_integration/Private/Infrastructure/RecoveryJournalService.h": [],
+    "Source/UE_AI_integration/Private/Infrastructure/ReflectionInspectService.cpp": [],
+    "Source/UE_AI_integration/Private/Infrastructure/ReflectionInspectService.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/Runtime/BlueprintDebugService.cpp": [],
     "Source/UE_AI_integration/Private/Infrastructure/Runtime/BlueprintDebugService.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/Runtime/RuntimeSceneService.cpp": [],
@@ -1823,7 +2414,9 @@
     "Source/UE_AI_integration/Private/Infrastructure/Sha256.h": [],
     "Source/UE_AI_integration/Private/Infrastructure/StandalonePerformanceController.cpp": [],
     "Source/UE_AI_integration/Private/Infrastructure/StandalonePerformanceController.h": [],
+    "Source/UE_AI_integration/Private/Tests/BlueprintAnalysisCorpusTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/BlueprintAnalysisTests.cpp": [],
+    "Source/UE_AI_integration/Private/Tests/BlueprintBuildGraphTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/BlueprintContentContractTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/BlueprintDebugPIEHttpTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/BlueprintDebugRuntimeTests.cpp": [],
@@ -1831,15 +2424,20 @@
     "Source/UE_AI_integration/Private/Tests/CapabilitySearchTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/ClientActivityServiceTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/ContentAssetSettingsTests.cpp": [],
+    "Source/UE_AI_integration/Private/Tests/DurablePackageRecoveryTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/LandscapeWaterContractTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/MCPExecutorTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/MCPHttpContractTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/MCPRegistryTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/PerformanceRegressionTests.cpp": [],
+    "Source/UE_AI_integration/Private/Tests/PerformanceSuiteTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/ProductionJobRuntimeTests.cpp": [],
+    "Source/UE_AI_integration/Private/Tests/ReflectionInspectTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/RuntimeSessionTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/SceneAnimationAIContractTests.cpp": [],
+    "Source/UE_AI_integration/Private/Tests/TraceSemanticGoldenTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/UEWorkflowRuntimeTests.cpp": [],
+    "Source/UE_AI_integration/Private/Tests/ViewportVisualizationTests.cpp": [],
     "Source/UE_AI_integration/Private/Tests/WidgetEventBindingTests.cpp": [],
     "Source/UE_AI_integration/Private/Transport/MCPHttpContract.cpp": [],
     "Source/UE_AI_integration/Private/Transport/MCPHttpContract.h": [],
@@ -1869,7 +2467,63 @@
       "Source/UE_AI_integration/Public/UEAIIntegrationServer.h"
     ],
     "Source/UE_AI_integration/UE_AI_integration.Build.cs": [],
+    "Source/UEAITraceAnalysisCore/Private/Tests/TraceAnalysisCoreContractTests.cpp": [],
+    "Source/UEAITraceAnalysisCore/Private/TraceAnalysisContracts.cpp": [],
+    "Source/UEAITraceAnalysisCore/Private/TraceAnalysisService.cpp": [],
+    "Source/UEAITraceAnalysisCore/Private/UEAITraceAnalysisCoreModule.cpp": [],
+    "Source/UEAITraceAnalysisCore/Public/TraceAnalysisContracts.h": [],
+    "Source/UEAITraceAnalysisCore/Public/TraceAnalysisService.h": [
+      "Source/UEAITraceAnalysisCore/Public/TraceAnalysisContracts.h"
+    ],
+    "Source/UEAITraceAnalysisCore/UEAITraceAnalysisCore.Build.cs": [],
+    "Source/UEAITraceRuntime/Private/TraceRuntimeController.cpp": [
+      "Source/UEAITraceRuntime/Private/TraceRuntimeController.h"
+    ],
+    "Source/UEAITraceRuntime/Private/TraceRuntimeController.h": [],
+    "Source/UEAITraceRuntime/Private/UEAITraceRuntimeModule.cpp": [],
+    "Source/UEAITraceRuntime/UEAITraceRuntime.Build.cs": [],
+    "Source/UEAITraceWorker/Private/TraceWorkerCommandLine.h": [],
+    "Source/UEAITraceWorker/Private/TraceWorkerFixture.cpp": [
+      "Source/UEAITraceWorker/Private/TraceWorkerFixture.h"
+    ],
+    "Source/UEAITraceWorker/Private/TraceWorkerFixture.h": [],
+    "Source/UEAITraceWorker/Private/TraceWorkerLaunch.cpp": [
+      "Source/UEAITraceWorker/Private/TraceWorkerCommandLine.h",
+      "Source/UEAITraceWorker/Private/TraceWorkerLaunch.h",
+      "Source/UEAITraceWorker/Private/TraceWorkerStore.h"
+    ],
+    "Source/UEAITraceWorker/Private/TraceWorkerLaunch.h": [],
+    "Source/UEAITraceWorker/Private/TraceWorkerProtocol.cpp": [
+      "Source/UEAITraceWorker/Private/TraceWorkerCommandLine.h",
+      "Source/UEAITraceWorker/Private/TraceWorkerLaunch.h",
+      "Source/UEAITraceWorker/Private/TraceWorkerProtocol.h",
+      "Source/UEAITraceWorker/Private/TraceWorkerStore.h"
+    ],
+    "Source/UEAITraceWorker/Private/TraceWorkerProtocol.h": [],
+    "Source/UEAITraceWorker/Private/TraceWorkerResidentServer.cpp": [
+      "Source/UEAITraceWorker/Private/TraceWorkerCommandLine.h",
+      "Source/UEAITraceWorker/Private/TraceWorkerProtocol.h",
+      "Source/UEAITraceWorker/Private/TraceWorkerResidentServer.h"
+    ],
+    "Source/UEAITraceWorker/Private/TraceWorkerResidentServer.h": [],
+    "Source/UEAITraceWorker/Private/TraceWorkerStore.cpp": [
+      "Source/UEAITraceWorker/Private/TraceWorkerCommandLine.h",
+      "Source/UEAITraceWorker/Private/TraceWorkerStore.h"
+    ],
+    "Source/UEAITraceWorker/Private/TraceWorkerStore.h": [],
+    "Source/UEAITraceWorker/Private/UEAITraceWorkerMain.cpp": [
+      "Source/UEAITraceWorker/Private/TraceWorkerCommandLine.h",
+      "Source/UEAITraceWorker/Private/TraceWorkerFixture.h",
+      "Source/UEAITraceWorker/Private/TraceWorkerProtocol.h",
+      "Source/UEAITraceWorker/Private/TraceWorkerResidentServer.h"
+    ],
+    "Source/UEAITraceWorker/Private/UEAITraceWorkerPrivatePCH.h": [],
+    "Source/UEAITraceWorker/UEAITraceWorker.Build.cs": [],
+    "tests/Corpus/BlueprintAnalysis/d5-overlay.json": [],
+    "tests/Corpus/BlueprintAnalysis/portable.json": [],
     "tests/mcp_client.py": [],
+    "tests/process/workflow-v2-recovery.fixture.json": [],
+    "tests/process/WorkflowRecovery.E2E.ps1": [],
     "tests/test_e2e.py": [
       "tests/mcp_client.py"
     ],
