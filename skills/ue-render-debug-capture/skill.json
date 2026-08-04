@@ -1,0 +1,121 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-render-debug-capture",
+  "version": "1.0.0",
+  "title": "UE Render Debug Capture",
+  "description": "Capture and verify Editor or PIE rendering debug views with availability, state restoration, bounded analysis, and compatible pixel diffs.",
+  "domains": ["scene"],
+  "risk": "readOnly",
+  "triggers": [
+    "render debug view",
+    "buffer visualization",
+    "ray tracing debug",
+    "nanite visualization",
+    "lumen visualization",
+    "viewport screenshot compare",
+    "渲染调试视图",
+    "缓冲区可视化"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.3"
+    },
+    "capabilities": [
+      "scene.viewport.visualization.list",
+      "scene.viewport.visualization.capture",
+      "scene.viewport.visualization.compare",
+      "scene.viewport.visualization.analyze"
+    ],
+    "optionalCapabilities": []
+  },
+  "recipes": [
+    {
+      "id": "capture-and-compare",
+      "title": "Capture and compare one rendering debug view",
+      "description": "Resolve a live visualization mode, capture one exact viewport with restoration evidence, analyze it, and compare it with a compatible baseline when supplied.",
+      "risk": "readOnly",
+      "inputs": [
+        {
+          "name": "target",
+          "type": "object",
+          "required": true,
+          "description": "Exact Editor Level Viewport or PIE session and generation target."
+        },
+        {
+          "name": "mode",
+          "type": "string",
+          "required": true,
+          "description": "Visualization mode ID returned by live mode discovery."
+        },
+        {
+          "name": "baselineCaptureId",
+          "type": "string",
+          "required": false,
+          "description": "Compatible persisted capture used for an optional pixel comparison."
+        }
+      ],
+      "steps": [
+        {
+          "id": "discover-mode",
+          "phase": "discover",
+          "purpose": "Resolve live mode availability from the current Engine, RHI, optional modules, and exact viewport target.",
+          "operations": [
+            "scene.viewport.visualization.list"
+          ]
+        },
+        {
+          "id": "capture-viewport",
+          "phase": "execute",
+          "purpose": "Temporarily apply the selected mode, capture only the exact viewport, and restore the original view state on every exit path.",
+          "operations": [
+            "scene.viewport.visualization.capture"
+          ]
+        },
+        {
+          "id": "analyze-capture",
+          "phase": "verify",
+          "purpose": "Read bounded mode-aware pixel, luminance, coverage, histogram, and regional evidence from the persisted capture.",
+          "operations": [
+            "scene.viewport.visualization.analyze"
+          ]
+        },
+        {
+          "id": "compare-compatible-captures",
+          "phase": "verify",
+          "purpose": "When a baseline exists, verify render-fingerprint compatibility and produce bounded changed-pixel and diff-image evidence.",
+          "operations": [
+            "scene.viewport.visualization.compare"
+          ],
+          "optional": true
+        }
+      ],
+      "result": {
+        "summary": "Exact viewport debug-view evidence with restoration, bounded analysis, and optional compatible visual diff.",
+        "evidence": [
+          "live availability and reason",
+          "target viewport and PIE generation identity",
+          "lossless capture ID, image hash, and render fingerprint",
+          "view-state restoration status",
+          "bounded mode-aware statistics and regions",
+          "comparison compatibility, changed-pixel ratio, and diff capture ID"
+        ],
+        "success": [
+          "the selected mode was reported available for the exact target",
+          "the capture came from the requested viewport rather than a desktop or unrelated window",
+          "original view mode, flags, camera, exposure, selection, and transform were restored",
+          "analysis remained bounded and did not claim raw GBuffer or RDG texture values",
+          "incompatible fingerprints produced an inconclusive comparison"
+        ]
+      }
+    }
+  ],
+  "resources": [
+    {
+      "path": "references/render-debug-evidence.md",
+      "description": "Visualization availability, viewport targeting, state restoration, image-format, and analysis boundaries."
+    }
+  ]
+}
+

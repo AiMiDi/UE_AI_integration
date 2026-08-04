@@ -1,0 +1,5 @@
+interface:
+  display_name: "UE Render Debug Capture"
+  short_description: "Capture and compare trustworthy UE viewport debug views."
+  default_prompt: "Use $ue-render-debug-capture to capture this UE rendering debug view, verify restoration, analyze bounded evidence, and compare it with a compatible baseline."
+

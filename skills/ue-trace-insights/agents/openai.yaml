@@ -1,0 +1,5 @@
+interface:
+  display_name: "UE Trace Insights"
+  short_description: "Record UE traces and analyze them offline with TraceServices."
+  default_prompt: "Use $ue-trace-insights to record or import this Unreal trace, inspect provider availability, run bounded semantic queries, and export evidence without UI automation."
+

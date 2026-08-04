@@ -30,8 +30,11 @@ Workflow 的 plan digest、事务、readback 和 rollback。
 | Skill ID | 默认用途 | 主要闭环 |
 |---|---|---|
 | `ue-blueprint-diagnose` | 单 Blueprint 诊断 | scoped scan → graph/call/reference evidence → compile validate → optional runtime correlate |
+| `ue-blueprint-buildgraph` | 声明式 Blueprint Graph 构建 | definition → validate/plan → approved Workflow → managed-node/diff/layout evidence |
 | `ue-blueprint-graph-organize` | Blueprint Graph 原子排版 | exact geometry → dry-run/digest → Workflow → structural/layout/image evidence |
 | `ue-performance-regression` | Before/After 性能门禁 | context → durable runs → poll/result → fingerprint compare → optional Trace |
+| `ue-render-debug-capture` | Editor/PIE 渲染调试视图 | live availability → exact Viewport PNG → restore → bounded analysis/compatible diff |
+| `ue-trace-insights` | Trace 录制与离线分析 | target/channels → bounded capture or import → provider discovery → semantic query/export |
 | `ue-umg-authoring` | Widget Blueprint 连续编辑 | hierarchy baseline → short op/Workflow → hierarchy/binding/compile/dirty readback |
 | `ue-asset-migration` | 资产移动与重构 | dependency audit → plan → exact digest execute → graph/diff readback → optional rollback |
 | `ue-world-partition-validate` | 大世界只读验证 | applicability → cells/sources/audit → Data Layer/HLOD/PCG evidence |

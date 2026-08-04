@@ -2,16 +2,18 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-`UE_AI_integration` 是一个面向 Unreal Editor 的 MCP 集成插件。它通过单个
-Editor Module 和 TypeScript stdio bridge，让 Codex CLI、Claude Code 等
-MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与生产流程。
+`UE_AI_integration` 是一个面向 Unreal Engine 工程的 MCP 集成插件。它通过
+Editor 控制模块、Development Trace Runtime、离线 Trace Worker 和 TypeScript
+stdio bridge，让 Codex CLI、Claude Code 等 MCP 客户端查询或修改 Blueprint、
+场景、内容资产、动画、AI 与生产流程，并在 Editor 关闭后分析 `.utrace`。
 
-当前插件版本为 `0.8.0`，以 Unreal Engine 5.3 为实际构建基线；UE
+当前插件版本为 `0.9.0`，以 Unreal Engine 5.3 为实际构建基线；UE
 5.4–5.7 的差异集中在兼容层，但尚未全部完成本地编译验证。
 
 ## 核心特性
 
-- 当前发布快照包含 358 项 manifest 驱动的 Editor 与 PIE Runtime 能力；
+- 当前发布快照包含 381 项 manifest 驱动的 Editor、PIE、Development 与本地
+  Trace 能力；
   服务启动时从 manifest 动态计算数量。
 - 十二个稳定的 MCP 工具，不把全部能力直接展开成工具列表。
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
@@ -19,7 +21,9 @@ MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与
 - Blueprint/UMG 写入返回编译、保存、重载和读回验证证据。
 - 统一的 HTTP envelope、状态码和参数错误模型。
 - 查询、命令与校验分层，所有 UObject 操作进入 Game Thread 队列。
-- MCP 只连接已经运行的 Unreal Editor，不负责启动或关闭 Editor。
+- MCP 的 Editor backend 只连接已经运行的 Unreal Editor，不负责启动或关闭
+  Editor；localTrace backend 可按需启动 Worker，并只通过已审批 Launch Profile
+  启动其持有的 Development Game 子进程。
 - 默认监听 `127.0.0.1:9847`；启动 Editor、CLI 与 MCP 时可通过同一个
   `UE_PORT` 覆盖端口。
 - [UE Workflow DSL/CLI](docs/UE_WORKFLOW_DSL.md) 的 v1 保留单资产连续编辑，
@@ -54,27 +58,32 @@ MCP 客户端查询或修改 Blueprint、场景、内容资产、动画、AI 与
   recovery 查询、冲突检查和测试专用的真实进程 fault marker。
 - 0.8.0 增加声明式 Blueprint BuildGraph、只读 UE 反射发现，以及只对
   不可变 JSON 工作的隔离受限 Python；不开放 `unreal` 模块或写入入口。
+- 0.8.1 增加 Editor/PIE 调试视图的实时可用性、指定 Viewport 无损 PNG、
+  状态恢复、渲染指纹比较和有界语义分析；它不是任意 GBuffer/RDG Texture
+  导出。详见 [渲染调试证据与离线 Insights](docs/UE_TRACE_INSIGHTS.md)。
+- 0.9.0 将 Trace 分成 Editor/PIE/Development 录制端与独立
+  `UEAITraceWorker` 分析端；Timing、Counter、Memory、Loading、Network 等
+  通过 TraceServices 语义 API 查询，不依赖鼠标操作 Unreal Insights UI。
 - [UE 短操作 CLI](docs/UE_SHORT_CLI.md) 以 manifest capability ID 作为首参数，
   默认用本地 schema 单次调用 `/api/execute`，`--live-schema` 可强制在线校验，
   `ue shell` 可复用目录与连接；`ue-workflow` 只保留 DSL。
-- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) 提供八个已验证领域 Skill 和
+- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) 提供十个已验证领域 Skill 和
   capability recipe，形成 Load → Discover → Execute → See Results 闭环，
   但不新增任意脚本执行器。
 
 ## 架构
 
 ```text
-MCP client
-    │ stdio
-    ▼
-TypeScript MCP bridge
-    │ HTTP :9847 (/api)
-    ▼
-UE_AI_integration Editor Module
-    ├── Core            manifest、registry、validation、executor
-    ├── Transport       HTTP envelope、状态码、Game Thread 队列
-    ├── Domains         Blueprint、Scene、Content、Animation、AI、Production
-    └── Infrastructure  资产解析、序列化、保存、编译、快照、PIE 生命周期、UE 兼容层
+MCP client / ue CLI
+        │
+        ├── HTTP :9847 ──► UE_AI_integration Editor Module
+        │                    ├── Core / Transport / Domains
+        │                    └── Editor/PIE Trace recorder
+        │
+        └── local IPC ───► UEAITraceWorker Program
+                             └── UEAITraceAnalysisCore / TraceServices
+
+Development Game Target ──► UEAITraceRuntime（非 Shipping，仅受约束录制）
 ```
 
 `Resources/Capabilities/*.json` 是 C++ 插件与 TypeScript bridge 共享的能力
@@ -83,11 +92,11 @@ UE_AI_integration Editor Module
 | Domain | 数量 | 能力范围 |
 |---|---:|---|
 | Blueprint | 86 | 资产生命周期、Graph 几何/排版/截图、声明式 BuildGraph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
-| Scene | 93 | Actor、PIE Runtime、可信输入/等待/截图、World Partition、Data Layer、HLOD、PCG、渲染诊断、Landscape/Water |
+| Scene | 97 | Actor、PIE Runtime、可信输入/等待/截图、Viewport 调试视图证据、World Partition、Data Layer、HLOD、PCG、渲染诊断、Landscape/Water |
 | Content | 80 | 资产查询/依赖/审计、安全导入/重导入、Static Mesh/Texture 配置、Material、Niagara、UMG 与事件 Handler 验证 |
 | Animation | 19 | AnimBlueprint、状态机与 BlendSpace 的创建、读取、校验和 Diff |
 | AI | 17 | Behavior Tree 与 Blackboard 的创建、读取、引用、校验和 Diff |
-| Production | 63 | Durable Job、性能标准 suite、恢复管理、Trace、反射/受限 Python、测试、Cook/Package、Source Control、DDC、Epic BuildGraph |
+| Production | 82 | Durable Job、性能标准 suite、恢复管理、Editor/Development Trace 录制、离线 TraceServices 查询、反射/受限 Python、测试、Cook/Package、Source Control、DDC、Epic BuildGraph |
 
 ## 环境要求
 
@@ -98,7 +107,7 @@ UE_AI_integration Editor Module
 
 ## 安装 UE 插件
 
-将仓库放到工程插件目录：
+源码开发或首次源码安装时，可将仓库放到工程插件目录：
 
 ```text
 YourProject/
@@ -109,6 +118,25 @@ YourProject/
         ├── Resources/
         └── MCP/
 ```
+
+替换已经打包的 Win64 插件时，先在工程外生成 staging，再使用仓库提供的安装器；
+不要直接覆盖活动插件目录：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\install_plugin.ps1 `
+  -StagingPluginRoot 'E:\Staging\UE_AI_integration' `
+  -InstallPluginRoot 'D:\Path\To\YourProject\Plugins\UE_AI_integration' `
+  -EngineVersion '5.3'
+```
+
+安装器会拒绝仍在运行的 Unreal Editor，核对插件 DLL/PDB、Trace Worker bundle、
+版本与 contract digest，并通过项目 `.uproject` 的精确 `EngineAssociation` 或显式
+`-EngineRoot` 核对 Engine major/minor 与 Unreal Insights。解析到无效或不匹配的
+Engine 时不会回退到其他安装。安装器还会拒绝包含
+`Tools/UEAITraceWorker/Saved` 运行产物的包，逐文件验证 staging/激活目录哈希，并把
+旧插件备份到工程外后再原子激活。可先附加 `-PreflightOnly` 只做校验。手工复制仅
+适用于没有加载二进制的源码开发初次安装，不是正式替换流程。
 
 构建 TypeScript bridge：
 
@@ -137,8 +165,7 @@ Level Editor 右下角会显示 `UE AI · N` 状态入口。绿色表示服务�
 启用状态和端口保存在项目用户级 Editor 配置中；`UE_PORT` 仍具有最高优先级。
 禁用服务会立即清空在线调用方，但保留本次 Editor 会话的元数据执行历史。
 
-不要覆盖正在加载的插件 DLL。替换已有安装时，应先关闭 Unreal Editor，
-替换插件目录，再重新启动 Editor。
+不要覆盖正在加载的插件 DLL。正式替换完成并通过安装器校验后，再重新启动 Editor。
 
 ## 配置 Codex CLI
 
@@ -218,6 +245,9 @@ ue blueprint.asset.get --name /Game/UI/WBP_Login
 ue scene.actor.spawn --type PointLight --name KeyLight --location '[0,0,300]'
 ue production.job.status --job-id job-123
 ue skills --query blueprint
+ue trace doctor
+ue trace import --trace-path D:\Traces\sample.utrace --backend local
+ue trace query timing --trace-id trace-local-... --operation frames --limit 100
 ue shell
 ```
 
@@ -226,7 +256,9 @@ ue shell
 Editor 获取单项完整 schema，适合诊断 contract 漂移或强制校验 availability。
 `ue shell` 启动后加载一次目录并复用 HTTP keep-alive 连接，普通调用仍立即
 退出。长任务只启动 Job 并立即返回 `jobId`，不会自动等待；复杂连续资产编辑
-仍使用 `ue-workflow`。
+仍使用 `ue-workflow`。`ue trace` 对 manifest 声明为 `localTrace` 的能力可在
+Editor 关闭时调用；录制目标、路径边界与 Provider 适配矩阵见
+[渲染调试证据与离线 Insights](docs/UE_TRACE_INSIGHTS.md)。
 
 Workflow CLI 使用离线/在线目录查询合同：
 
@@ -368,6 +400,10 @@ Linux 或 macOS 在对应宿主机上构建插件和原生 CLI：
 ```bash
 bash scripts/build_plugin.sh /path/to/UnrealEngine ../UE_AI_integration-BuiltPlugin
 ```
+
+两个入口默认执行 manifest/Skill、MCP、BuildPlugin、Trace Worker 和 CLI 打包，
+但不会把“能打包”表述成完整发布验收。设置 `UEAI_RUN_PORTABLE_TESTS=1` 可额外构建并
+运行 portable CTest；UE Automation 仍必须在独立验证工程中显式执行。
 
 `BuildPlugin` 包保留根 `CMakeLists.txt`、`CLI` 与 `Workflow` 源码。
 `CLI/bin` 中的预编译程序只适用于执行打包脚本的宿主平台；把包复制到另一平台后，

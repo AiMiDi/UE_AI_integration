@@ -162,6 +162,35 @@ function validateCamelCaseProperties(schema, location) {
   }
 }
 
+function validateExecutionMetadata(execution, location) {
+  if (!isPlainObject(execution)) {
+    fail(`${location} must be an object`);
+    return;
+  }
+  const allowedFields = new Set(["backends", "preferred"]);
+  for (const field of Object.keys(execution)) {
+    if (!allowedFields.has(field)) {
+      fail(`${location}.${field} is not supported`);
+    }
+  }
+  const validBackends = new Set(["editor", "localTrace"]);
+  if (
+    !Array.isArray(execution.backends) ||
+    execution.backends.length === 0 ||
+    execution.backends.some((backend) => !validBackends.has(backend)) ||
+    new Set(execution.backends).size !== execution.backends.length
+  ) {
+    fail(`${location}.backends must contain unique editor/localTrace values`);
+    return;
+  }
+  if (
+    typeof execution.preferred !== "string" ||
+    !execution.backends.includes(execution.preferred)
+  ) {
+    fail(`${location}.preferred must be one of the declared backends`);
+  }
+}
+
 function listFilesRecursive(directory, predicate) {
   if (!fs.existsSync(directory)) return [];
   const results = [];
@@ -245,6 +274,9 @@ for (const [domain, baselineCount] of Object.entries(baselineCounts)) {
     }
     if (capability.search !== undefined) {
       validateSearchMetadata(capability.search, `${location}.search`);
+    }
+    if (capability.execution !== undefined) {
+      validateExecutionMetadata(capability.execution, `${location}.execution`);
     }
     if (!isPlainObject(capability.inputSchema)) {
       fail(`${location}.inputSchema must be an object`);
@@ -362,6 +394,38 @@ if (manifestTotal < baselineCapabilityTotal || manifestIds.size !== manifestTota
     `Manifest catalog must preserve at least ${baselineCapabilityTotal} unique capabilities; total=${manifestTotal}, unique=${manifestIds.size}`
   );
 }
+try {
+  const descriptor = JSON.parse(
+    fs.readFileSync(path.join(projectRoot, "UE_AI_integration.uplugin"), "utf8")
+  );
+  const mcpPackage = JSON.parse(
+    fs.readFileSync(path.join(projectRoot, "MCP", "package.json"), "utf8")
+  );
+  const claudePlugin = JSON.parse(
+    fs.readFileSync(path.join(projectRoot, ".claude-plugin", "plugin.json"), "utf8")
+  );
+  const setupSkill = fs.readFileSync(
+    path.join(projectRoot, "skills", "setup-ue5", "SKILL.md"),
+    "utf8"
+  );
+  if (
+    typeof descriptor.VersionName !== "string" ||
+    descriptor.VersionName !== mcpPackage.version ||
+    descriptor.VersionName !== claudePlugin.version
+  ) {
+    fail("UE descriptor, MCP package, and Claude plugin versions must match");
+  }
+  if (!claudePlugin.description.includes(`${manifestTotal} manifest-driven capabilities`)) {
+    fail("Claude plugin description must contain the manifest-derived capability count");
+  }
+  if (
+    !setupSkill.includes(`Release ${descriptor.VersionName} currently ships ${manifestTotal} capabilities`)
+  ) {
+    fail("setup-ue5 release guidance must match the current version and capability count");
+  }
+} catch (error) {
+  fail(`Release metadata could not be validated: ${error.message}`);
+}
 for (const id of addedCapabilityIds) {
   if (!manifestIds.has(id)) fail(`Missing 0.3.0 capability ID: ${id}`);
 }
@@ -457,6 +521,200 @@ if (missingFromHandlers.length > 0) {
 }
 if (missingFromManifests.length > 0) {
   fail(`Handler-only IDs: ${missingFromManifests.join(", ")}`);
+}
+
+// Keep the semantic API surface aligned with the Unreal Insights panels it
+// replaces. This file is shipped with the Worker, so a stale mapping would
+// otherwise make a capability appear supported while its panel/operations are
+// undiscoverable (or vice versa).
+const insightsMappingVersions = ["5.3", "5.4", "5.5", "5.6", "5.7"];
+const traceWorkerProtocolPath = path.join(
+  projectRoot,
+  "Resources",
+  "Trace",
+  "worker-protocol.v1.json"
+);
+if (!fs.existsSync(traceWorkerProtocolPath)) {
+  fail("Missing Resources/Trace/worker-protocol.v1.json");
+} else {
+  const protocol = JSON.parse(
+    fs.readFileSync(traceWorkerProtocolPath, "utf8")
+  );
+  if (
+    protocol.schema !== "ue.trace-worker-protocol.v1" ||
+    protocol.protocolVersion !== 1 ||
+    protocol.requestSchema !== "ue.trace-worker-request.v1" ||
+    protocol.responseSchema !== "ue.trace-worker-response.v1" ||
+    protocol.frame?.lengthPrefix !== "uint32-little-endian" ||
+    protocol.frame?.maximumBytes !== 4 * 1024 * 1024 ||
+    protocol.frame?.requestsPerConnection !== 1 ||
+    protocol.residentService?.tcp !== false ||
+    protocol.residentService?.defaultIdleSeconds !== 600 ||
+    protocol.residentService?.maximumConcurrentConnections !== 2 ||
+    protocol.residentService?.maximumConcurrentAnalyses !== 1 ||
+    protocol.residentService?.analysisSessionCacheCapacity !== 2 ||
+    protocol.residentService?.analysisSessionPolicy !== "sha256-lru"
+  ) {
+    fail("Trace Worker protocol manifest does not match the bounded v1 IPC contract");
+  }
+}
+const expectedInsightsCapabilities = new Set([
+  "production.trace.timing.query",
+  "production.trace.counter.query",
+  "production.trace.memory.query",
+  "production.trace.loading.query",
+  "production.trace.network.query",
+  "production.trace.tasks.query",
+  "production.trace.context_switches.query",
+  "production.trace.io.query",
+  "production.trace.log.query",
+  "production.trace.bookmark.query",
+  "production.trace.region.query",
+  "production.trace.screenshot.query"
+]);
+const boundedTraceQueryProperties = [
+  "startTimeSeconds",
+  "endTimeSeconds",
+  "filter",
+  "cursor",
+  "limit"
+];
+const traceIdPattern = "^[A-Za-z0-9][A-Za-z0-9-]{0,127}$";
+const traceCursorPattern = "^[0-9]+$";
+for (const capabilityId of expectedInsightsCapabilities) {
+  const capability = manifestById.get(capabilityId);
+  const properties = capability?.inputSchema?.properties;
+  if (!isPlainObject(properties)) {
+    fail(`${capabilityId} must expose an object input schema`);
+    continue;
+  }
+  for (const property of boundedTraceQueryProperties) {
+    if (!Object.hasOwn(properties, property)) {
+      fail(`${capabilityId} must expose bounded query property ${property}`);
+    }
+  }
+  const traceId = properties.traceId;
+  if (
+    !isPlainObject(traceId) ||
+    traceId.type !== "string" ||
+    traceId.minLength !== 1 ||
+    traceId.maxLength !== 128 ||
+    traceId.pattern !== traceIdPattern
+  ) {
+    fail(`${capabilityId}.traceId must use the bounded safe-id contract`);
+  }
+  const cursor = properties.cursor;
+  if (
+    !isPlainObject(cursor) ||
+    cursor.type !== "string" ||
+    cursor.maxLength !== 20 ||
+    cursor.pattern !== traceCursorPattern
+  ) {
+    fail(`${capabilityId}.cursor must be a decimal uint64 string`);
+  }
+}
+for (const capabilityId of [
+  "production.trace.provider.list",
+  "production.trace.export",
+  "production.trace.open_in_insights"
+]) {
+  const traceId = manifestById.get(capabilityId)?.inputSchema?.properties?.traceId;
+  if (
+    !isPlainObject(traceId) ||
+    traceId.type !== "string" ||
+    traceId.minLength !== 1 ||
+    traceId.maxLength !== 128 ||
+    traceId.pattern !== traceIdPattern
+  ) {
+    fail(`${capabilityId}.traceId must use the bounded safe-id contract`);
+  }
+}
+for (const insightsVersion of insightsMappingVersions) {
+  const insightsMappingPath = path.join(
+    projectRoot,
+    "Resources",
+    "Trace",
+    `insights-actions.${insightsVersion}.json`
+  );
+  if (!fs.existsSync(insightsMappingPath)) {
+    fail(`Missing Resources/Trace/insights-actions.${insightsVersion}.json`);
+    continue;
+  }
+  try {
+    const mapping = JSON.parse(fs.readFileSync(insightsMappingPath, "utf8"));
+    if (
+      mapping.schema !== "ue.trace-insights-actions.v1" ||
+      mapping.engineVersion !== insightsVersion ||
+      !Array.isArray(mapping.panels)
+    ) {
+      fail(`Insights action mapping must use the ${insightsVersion} ue.trace-insights-actions.v1 contract`);
+    } else {
+      const mapped = new Set();
+      const panelIds = new Set();
+      for (const [index, panel] of mapping.panels.entries()) {
+        const location = `insights-actions.${insightsVersion}.json panels[${index}]`;
+        if (
+          !isPlainObject(panel) ||
+          typeof panel.id !== "string" || panel.id.length === 0 ||
+          typeof panel.provider !== "string" || panel.provider.length === 0 ||
+          typeof panel.capability !== "string" ||
+          !Array.isArray(panel.operations) || panel.operations.length === 0 ||
+          panel.operations.some((operation) =>
+            typeof operation !== "string" || operation.length === 0)
+        ) {
+          fail(`${location} is invalid`);
+          continue;
+        }
+        if (panelIds.has(panel.id)) fail(`${location}.id is duplicated`);
+        panelIds.add(panel.id);
+        if (mapped.has(panel.capability)) {
+          fail(`${location}.capability is duplicated: ${panel.capability}`);
+        }
+        mapped.add(panel.capability);
+        const capability = manifestById.get(panel.capability);
+        if (!capability) {
+          fail(`${location}.capability is not in the manifest: ${panel.capability}`);
+        } else if (!capability.execution?.backends?.includes("localTrace")) {
+          fail(`${panel.capability} must declare the localTrace backend`);
+        } else {
+          const operationEnum =
+            capability.inputSchema?.properties?.operation?.enum;
+          if (Array.isArray(operationEnum)) {
+            const declared = new Set(operationEnum);
+            const mappedOperations = new Set(panel.operations);
+            const missingOperations = operationEnum.filter(
+              (operation) => !mappedOperations.has(operation)
+            );
+            const unknownOperations = panel.operations.filter(
+              (operation) => !declared.has(operation)
+            );
+            if (missingOperations.length > 0 || unknownOperations.length > 0) {
+              fail(
+                `${location}.operations must exactly match ${panel.capability} operation enum; ` +
+                `missing=${missingOperations.join(",") || "none"}, ` +
+                `unknown=${unknownOperations.join(",") || "none"}`
+              );
+            }
+          }
+        }
+        if (new Set(panel.operations).size !== panel.operations.length) {
+          fail(`${location}.operations contains duplicates`);
+        }
+      }
+      const missingMappings = [...expectedInsightsCapabilities]
+        .filter((id) => !mapped.has(id));
+      const unexpectedMappings = [...mapped]
+        .filter((id) => !expectedInsightsCapabilities.has(id));
+      if (missingMappings.length > 0) {
+        fail(`Insights action mapping is missing: ${missingMappings.join(", ")}`);
+      }
+      if (unexpectedMappings.length > 0) {
+        fail(`Insights action mapping has unexpected capabilities: ${unexpectedMappings.join(", ")}`);
+      }
+    }
+  } catch (error) {
+    fail(`Insights action mapping is not valid JSON: ${error.message}`);
+  }
 }
 
 if (errors.length > 0) {

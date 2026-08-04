@@ -5,6 +5,8 @@
 #   bash scripts/build_plugin.sh <engine_path> [output_path]
 #
 # UE_ENGINE_ROOT may be used instead of the first positional argument.
+# Set UEAI_RUN_PORTABLE_TESTS=1 to build and run the portable CTest suite.
+# This packaging entry point never runs UE Automation.
 
 set -euo pipefail
 
@@ -12,6 +14,14 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 plugin_root="$(cd -- "${script_dir}/.." && pwd)"
 engine_path="${1:-${UE_ENGINE_ROOT:-}}"
 output_path="${2:-$(cd -- "${plugin_root}/.." && pwd)/UE_AI_integration-BuiltPlugin}"
+mkdir -p -- "$(dirname -- "${output_path}")"
+output_path="$(cd -- "$(dirname -- "${output_path}")" && pwd)/$(basename -- "${output_path}")"
+case "${output_path}" in
+    "${plugin_root}"|"${plugin_root}"/*)
+        echo "ERROR: BuildPlugin output must be outside the plugin source tree." >&2
+        exit 2
+        ;;
+esac
 
 case "$(uname -s)" in
     Linux)
@@ -68,7 +78,7 @@ trap cleanup EXIT
 
 echo
 echo "========================================"
-echo " Building UE_AI_integration Plugin"
+echo " Packaging UE_AI_integration Plugin"
 echo "========================================"
 echo " Engine:   ${engine_path}"
 echo " Platform: ${target_platform}"
@@ -80,6 +90,13 @@ echo
 node "${plugin_root}/scripts/validate_capabilities.mjs"
 node "${plugin_root}/scripts/validate_skills.mjs"
 
+echo
+echo "Building and testing the MCP bridge from current TypeScript sources..."
+npm ci --prefix "${plugin_root}/MCP"
+npm run build --prefix "${plugin_root}/MCP"
+npm test --prefix "${plugin_root}/MCP"
+npm audit --omit=dev --prefix "${plugin_root}/MCP"
+
 "${uat}" BuildPlugin \
     "-Plugin=${plugin_path}" \
     "-Package=${output_path}" \
@@ -87,26 +104,49 @@ node "${plugin_root}/scripts/validate_skills.mjs"
     -Rocket
 
 echo
+echo "Building and staging UEAITraceWorker..."
+bash "${plugin_root}/scripts/build_trace_worker.sh" \
+    "${engine_path}" \
+    "${plugin_root}" \
+    "${output_path}"
+
+echo
 echo "Restoring packaged MCP production dependencies..."
 npm ci --omit=dev --prefix "${output_path}/MCP"
 
 echo
-echo "Building and packaging native ue and ue-workflow CLIs..."
+cli_tests="OFF"
+if [[ "${UEAI_RUN_PORTABLE_TESTS:-0}" == "1" ]]; then
+    cli_tests="ON"
+fi
+echo "Building and packaging native ue and ue-workflow CLIs (portable tests: ${cli_tests})..."
 cmake \
     -S "${plugin_root}" \
     -B "${cli_build_dir}" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DUE_WORKFLOW_BUILD_TESTS=OFF \
+    "-DUE_WORKFLOW_BUILD_TESTS=${cli_tests}" \
     -DUE_WORKFLOW_BUILD_CLI=ON
-cmake --build "${cli_build_dir}" --config Release --target ue ue-workflow
+if [[ "${cli_tests}" == "ON" ]]; then
+    cmake --build "${cli_build_dir}" --config Release
+    ctest --test-dir "${cli_build_dir}" -C Release --output-on-failure
+else
+    cmake --build "${cli_build_dir}" --config Release --target ue ue-workflow
+fi
 cmake --install "${cli_build_dir}" --config Release --prefix "${output_path}/CLI"
 
 echo
 echo "========================================"
-echo " BUILD SUCCESSFUL"
+echo " PACKAGE BUILD SUCCESSFUL"
 echo "========================================"
 echo
 echo "Plugin built to: ${output_path}"
 echo "Native CLIs:"
 echo "  ${output_path}/CLI/bin/ue"
 echo "  ${output_path}/CLI/bin/ue-workflow"
+if [[ "${cli_tests}" == "ON" ]]; then
+    echo "Portable CTest gate: PASSED"
+else
+    echo "Portable CTest gate: NOT RUN (set UEAI_RUN_PORTABLE_TESTS=1 to enable)"
+fi
+echo "UE Automation: NOT RUN by this packaging entry point."
+echo "A successful package build is not, by itself, release qualification."

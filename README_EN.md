@@ -2,20 +2,22 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-`UE_AI_integration` is an MCP integration plugin for Unreal Editor. It combines
-a single Editor Module with a TypeScript stdio bridge so MCP clients such as
-Codex CLI and Claude Code can inspect or modify Blueprints, scenes, content
-assets, animation, AI, and production workflows.
+`UE_AI_integration` is an MCP integration plugin for Unreal Engine projects. It
+combines an Editor control module, a Development trace runtime, an offline Trace
+Worker, and a TypeScript stdio bridge so MCP clients such as Codex CLI and
+Claude Code can inspect or modify Blueprints, scenes, content assets, animation,
+AI, and production workflows, then analyze `.utrace` files with the Editor
+closed.
 
-The current plugin version is `0.8.0`. Unreal Engine 5.3 is the verified build
+The current plugin version is `0.9.0`. Unreal Engine 5.3 is the verified build
 baseline. Differences for UE 5.4–5.7 are isolated in the compatibility layer,
 but those versions have not all been compiled locally.
 
 ## Highlights
 
-- The current release snapshot contains 358 manifest-driven Editor and PIE
-  runtime capabilities; the service derives the count from the manifests at
-  startup.
+- The current release snapshot contains 381 manifest-driven Editor, PIE,
+  Development, and local Trace capabilities; the service derives the count from
+  the manifests at startup.
 - Twelve stable MCP tools instead of exposing every capability as a tool.
 - Six domain routers: Blueprint, Scene, Content, Animation, AI, and Production.
 - Dedicated PIE lifecycle, runtime object/widget/delegate, real input, and
@@ -24,8 +26,10 @@ but those versions have not all been compiled locally.
 - A consistent HTTP envelope, status-code policy, and parameter error model.
 - Query, command, and validation layers, with all UObject operations queued onto
   the Game Thread.
-- The MCP bridge only connects to an already-running Unreal Editor. It never
-  starts or terminates the Editor.
+- The MCP bridge's Editor backend only connects to an already-running Unreal
+  Editor and never starts or terminates it. The localTrace backend may start the
+  Worker and a Worker-owned Development Game child only through an approved
+  launch profile.
 - The server listens on `127.0.0.1:9847` by default. The Editor, CLI, and MCP
   bridge use the same `UE_PORT` environment override.
 - [UE Workflow DSL/CLI](docs/UE_WORKFLOW_DSL.md) keeps the v1 single-asset
@@ -71,29 +75,35 @@ but those versions have not all been compiled locally.
   bounded recovery discovery and test-only real-process fault markers.
 - 0.8.0 adds declarative Blueprint BuildGraph, read-only UE reflection, and an
   isolated restricted Python evaluator over immutable JSON only.
+- 0.8.1 adds live availability, exact-viewport lossless PNG capture, state
+  restoration, render-fingerprint comparison, and bounded semantic analysis for
+  Editor/PIE debug views. It does not export arbitrary GBuffer/RDG textures. See
+  [Rendering Debug Evidence and Offline Insights](docs/UE_TRACE_INSIGHTS.md).
+- 0.9.0 separates Editor/PIE/Development recording from the independent
+  `UEAITraceWorker`. Timing, Counter, Memory, Loading, Network, and other
+  providers use TraceServices semantic APIs rather than mouse automation of the
+  Unreal Insights UI.
 - The [short-operation CLI](docs/UE_SHORT_CLI.md) takes a manifest capability ID
   as its first argument. It uses the local schema for one `/api/execute` call by
   default, supports forced live validation with `--live-schema`, and reuses the
   catalog and connection in `ue shell`; `ue-workflow` contains only DSL commands.
-- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) ships eight validated domain Skills
+- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) ships ten validated domain Skills
   and capability recipes for a Load → Discover → Execute → See Results loop
   without adding a generic script executor.
 
 ## Architecture
 
 ```text
-MCP client
-    │ stdio
-    ▼
-TypeScript MCP bridge
-    │ HTTP :9847 (/api)
-    ▼
-UE_AI_integration Editor Module
-    ├── Core            manifest, registry, validation, executor
-    ├── Transport       HTTP envelope, status codes, Game Thread queue
-    ├── Domains         Blueprint, Scene, Content, Animation, AI, Production
-    └── Infrastructure  asset lookup, serialization, persistence, compilation,
-                        snapshots, PIE lifecycle, UE compatibility
+MCP client / ue CLI
+        │
+        ├── HTTP :9847 ──► UE_AI_integration Editor Module
+        │                    ├── Core / Transport / Domains
+        │                    └── Editor/PIE trace recorder
+        │
+        └── local IPC ───► UEAITraceWorker Program
+                             └── UEAITraceAnalysisCore / TraceServices
+
+Development Game Target ──► UEAITraceRuntime (non-Shipping, bounded recording)
 ```
 
 `Resources/Capabilities/*.json` is the shared capability metadata source for
@@ -103,11 +113,11 @@ manifests and does not infer categories from operation names.
 | Domain | Count | Scope |
 |---|---:|---|
 | Blueprint | 86 | Asset lifecycle, Graph geometry/layout/capture, declarative BuildGraph, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
-| Scene | 93 | Actors, PIE runtime, trusted input/waits/capture, World Partition, Data Layers, HLOD, PCG, rendering diagnostics, Landscape/Water |
+| Scene | 97 | Actors, PIE runtime, trusted input/waits/capture, viewport debug-view evidence, World Partition, Data Layers, HLOD, PCG, rendering diagnostics, Landscape/Water |
 | Content | 80 | Asset query/dependency/audit, safe import/reimport, Static Mesh and Texture settings, materials, Niagara, UMG, and event-handler verification |
 | Animation | 19 | Animation Blueprint, state machine, and BlendSpace authoring, inspection, validation, and diff |
 | AI | 17 | Behavior Tree and Blackboard authoring, inspection, references, validation, and diff |
-| Production | 63 | Durable jobs, performance suites, recovery management, trace, reflection/restricted Python, tests, cook/package, source control, DDC, and Epic BuildGraph |
+| Production | 82 | Durable jobs, performance suites, recovery management, Editor/Development recording, offline TraceServices queries, reflection/restricted Python, tests, cook/package, source control, DDC, and Epic BuildGraph |
 
 ## Requirements
 
@@ -118,7 +128,8 @@ manifests and does not infer categories from operation names.
 
 ## Install the Unreal Plugin
 
-Place the repository under the project's plugin directory:
+For source development or a first source installation, place the repository
+under the project's plugin directory:
 
 ```text
 YourProject/
@@ -129,6 +140,25 @@ YourProject/
         ├── Resources/
         └── MCP/
 ```
+
+When replacing a packaged Win64 plugin, build into staging outside the project
+and use the repository installer instead of overwriting the active directory:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\install_plugin.ps1 `
+  -StagingPluginRoot 'E:\Staging\UE_AI_integration' `
+  -InstallPluginRoot 'D:\Path\To\YourProject\Plugins\UE_AI_integration' `
+  -EngineVersion '5.3'
+```
+
+The installer refuses to run while Unreal Editor is active, verifies plugin
+DLL/PDB files, the Trace Worker bundle, versions and contract digests, compares
+the complete staging/activated file trees by hash, backs up the old plugin
+outside the project, and then atomically activates the package. Add
+`-PreflightOnly` to validate without installing. Manual copying is only for a
+first source-development setup with no loaded binaries; it is not the release
+replacement path.
 
 Build and test the TypeScript bridge:
 
@@ -165,8 +195,8 @@ still has highest precedence. Disabling the service clears caller presence
 immediately while retaining metadata-only activity for the current Editor
 session.
 
-Do not overwrite a loaded plugin DLL. When replacing an existing installation,
-close Unreal Editor, replace the plugin directory, and then restart the Editor.
+Do not overwrite a loaded plugin DLL. Restart the Editor only after the installer
+has activated and verified the replacement.
 
 ## Configure Codex CLI
 
@@ -249,6 +279,9 @@ ue blueprint.asset.get --name /Game/UI/WBP_Login
 ue scene.actor.spawn --type PointLight --name KeyLight --location '[0,0,300]'
 ue production.job.status --job-id job-123
 ue skills --query blueprint
+ue trace doctor
+ue trace import --trace-path D:\Traces\sample.utrace --backend local
+ue trace query timing --trace-id trace-local-... --operation frames --limit 100
 ue shell
 ```
 
@@ -259,7 +292,10 @@ diagnose contract drift or force an availability check. `ue shell` loads the
 catalog once and reuses an HTTP keep-alive connection, while ordinary commands
 still exit immediately. Starting a durable job returns its `jobId` immediately;
 the CLI never waits automatically. Deterministic multi-step asset edits remain
-in `ue-workflow`.
+in `ue-workflow`. `ue trace` can invoke manifest-declared `localTrace`
+capabilities while the Editor is closed; see
+[Rendering Debug Evidence and Offline Insights](docs/UE_TRACE_INSIGHTS.md) for
+recording targets, path boundaries, and the provider-adapter matrix.
 
 The Workflow CLI uses the offline/online catalog query contract:
 
@@ -411,6 +447,12 @@ On Linux or macOS, build the plugin and native CLIs on the corresponding host:
 ```bash
 bash scripts/build_plugin.sh /path/to/UnrealEngine ../UE_AI_integration-BuiltPlugin
 ```
+
+Both entry points run manifest/Skill validation, MCP checks, BuildPlugin, Trace
+Worker staging, and CLI packaging by default, but package success is not
+reported as complete release qualification. Set `UEAI_RUN_PORTABLE_TESTS=1` to
+also build and run portable CTest. UE Automation must still be run explicitly
+in an isolated validation project.
 
 The `BuildPlugin` package retains the root `CMakeLists.txt` plus the `CLI` and
 `Workflow` sources. Prebuilt programs under `CLI/bin` target only the host that

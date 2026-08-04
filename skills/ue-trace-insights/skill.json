@@ -1,0 +1,260 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-trace-insights",
+  "version": "1.0.0",
+  "title": "UE Trace Insights",
+  "description": "Record bounded Unreal traces and query registered .utrace evidence through an Engine-matched offline TraceServices Worker.",
+  "domains": ["production"],
+  "risk": "mixed",
+  "triggers": [
+    "unreal trace",
+    "utrace analysis",
+    "unreal insights",
+    "timing insights",
+    "memory insights",
+    "asset loading trace",
+    "network insights",
+    "离线 trace 分析",
+    "性能追踪"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.3"
+    },
+    "capabilities": [
+      "production.trace.target.list",
+      "production.trace.channel.list",
+      "production.trace.launch.plan",
+      "production.trace.start",
+      "production.trace.status",
+      "production.trace.stop",
+      "production.trace.import",
+      "production.trace.analyze",
+      "production.trace.provider.list",
+      "production.trace.timing.query",
+      "production.trace.counter.query",
+      "production.trace.log.query",
+      "production.trace.bookmark.query",
+      "production.trace.region.query",
+      "production.trace.export",
+      "production.job.status",
+      "production.job.result.get",
+      "production.job.artifact.get"
+    ],
+    "optionalCapabilities": [
+      "production.trace.memory.query",
+      "production.trace.loading.query",
+      "production.trace.network.query",
+      "production.trace.tasks.query",
+      "production.trace.context_switches.query",
+      "production.trace.io.query",
+      "production.trace.screenshot.query",
+      "production.trace.open_in_insights"
+    ]
+  },
+  "recipes": [
+    {
+      "id": "record-and-analyze",
+      "title": "Record and analyze an Editor, PIE, or Development trace",
+      "description": "Resolve a bounded target and preset, record with explicit lifecycle evidence, then analyze only the target Region through semantic providers.",
+      "risk": "safeWrite",
+      "inputs": [
+        {
+          "name": "target",
+          "type": "object",
+          "required": true,
+          "description": "Editor, exact PIE session/generation, or versioned Development launch profile target."
+        },
+        {
+          "name": "preset",
+          "type": "string",
+          "required": true,
+          "description": "Versioned trace preset selected from live channel discovery."
+        },
+        {
+          "name": "queryRange",
+          "type": "object",
+          "required": false,
+          "description": "Optional bounded time range inside the recorded target Region."
+        }
+      ],
+      "steps": [
+        {
+          "id": "discover-target-and-channels",
+          "phase": "discover",
+          "purpose": "Resolve target, backend, preset channels, limits, and live availability before recording.",
+          "operations": [
+            "production.trace.target.list",
+            "production.trace.channel.list"
+          ]
+        },
+        {
+          "id": "plan-development-launch",
+          "phase": "discover",
+          "purpose": "For Development only, resolve the versioned executable, hashes, map, fixed arguments, allowed CVars, bounds, and exact approval digest.",
+          "operations": [
+            "production.trace.launch.plan"
+          ],
+          "optional": true
+        },
+        {
+          "id": "record-and-finalize",
+          "phase": "execute",
+          "purpose": "Start the bounded capture, observe lifecycle progress, stop it gracefully, and preserve partial trace/log evidence after a child crash.",
+          "operations": [
+            "production.trace.start",
+            "production.trace.status",
+            "production.trace.stop",
+            "production.job.status"
+          ]
+        },
+        {
+          "id": "semantic-readback",
+          "phase": "verify",
+          "purpose": "Inspect recorded providers and query the marked target Region using bounded Timing, Counter, Log, Bookmark, and Region semantics.",
+          "operations": [
+            "production.trace.provider.list",
+            "production.trace.timing.query",
+            "production.trace.counter.query",
+            "production.trace.log.query",
+            "production.trace.bookmark.query",
+            "production.trace.region.query"
+          ]
+        },
+        {
+          "id": "export-evidence",
+          "phase": "verify",
+          "purpose": "Export normalized bounded query evidence and retrieve only the required job-owned artifacts.",
+          "operations": [
+            "production.trace.export",
+            "production.job.result.get",
+            "production.job.artifact.get"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Bounded target trace with Engine-matched semantic query and export evidence.",
+        "evidence": [
+          "target and backend selection",
+          "Development launch plan digest when applicable",
+          "trace and job IDs, lifecycle phases, SHA-256, log, and partial status",
+          "PIE begin/end Region and Bookmark when applicable",
+          "provider availability and missing-channel diagnostics",
+          "bounded semantic query pages and normalized export artifact IDs"
+        ],
+        "success": [
+          "the recording target and preset were live and bounded",
+          "Development launch used the exact approved versioned profile",
+          "the trace finalized or retained explicit partial evidence after a crash",
+          "queries defaulted to the recorded target Region and were cursor bounded",
+          "missing providers remained explicit rather than silently changing backend"
+        ]
+      }
+    },
+    {
+      "id": "analyze-existing-trace",
+      "title": "Analyze an existing trace without Unreal Editor",
+      "description": "Register an allowed .utrace file, analyze it in the local Worker, query available providers, export normalized evidence, and optionally open the same file in Unreal Insights.",
+      "risk": "readOnly",
+      "inputs": [
+        {
+          "name": "tracePath",
+          "type": "string",
+          "required": true,
+          "description": "Allowed local .utrace path to import into the Worker store."
+        },
+        {
+          "name": "providerQueries",
+          "type": "array",
+          "required": true,
+          "description": "Bounded provider queries with explicit ranges, filters, sorting, cursor, and limit."
+        }
+      ],
+      "steps": [
+        {
+          "id": "discover-offline-contract",
+          "phase": "discover",
+          "purpose": "Read versioned trace channel and backend contracts without depending on a running Editor.",
+          "operations": [
+            "production.trace.channel.list"
+          ]
+        },
+        {
+          "id": "register-and-analyze",
+          "phase": "execute",
+          "purpose": "Copy and hash the allowed trace into the Worker store, then initialize bounded TraceServices analysis under the registered trace ID.",
+          "operations": [
+            "production.trace.import",
+            "production.trace.analyze"
+          ]
+        },
+        {
+          "id": "query-core-providers",
+          "phase": "verify",
+          "purpose": "List recorded providers and query bounded Timing, Counter, Log, Bookmark, and Region evidence using stable pagination.",
+          "operations": [
+            "production.trace.provider.list",
+            "production.trace.timing.query",
+            "production.trace.counter.query",
+            "production.trace.log.query",
+            "production.trace.bookmark.query",
+            "production.trace.region.query"
+          ]
+        },
+        {
+          "id": "query-optional-providers",
+          "phase": "verify",
+          "purpose": "Query Memory, Loading, Network, Tasks, context switches, File IO, or embedded screenshots only when provider discovery reports the operation available.",
+          "operations": [
+            "production.trace.memory.query",
+            "production.trace.loading.query",
+            "production.trace.network.query",
+            "production.trace.tasks.query",
+            "production.trace.context_switches.query",
+            "production.trace.io.query",
+            "production.trace.screenshot.query"
+          ],
+          "optional": true
+        },
+        {
+          "id": "export-or-open",
+          "phase": "verify",
+          "purpose": "Export normalized JSON/CSV and optionally open the matching Unreal Insights executable without mouse automation.",
+          "operations": [
+            "production.trace.export",
+            "production.trace.open_in_insights"
+          ],
+          "optional": true
+        }
+      ],
+      "result": {
+        "summary": "Editor-independent trace registration and bounded provider evidence from the Engine-matched local Worker.",
+        "evidence": [
+          "registered trace ID and SHA-256",
+          "Worker, Engine, protocol, and contract handshake",
+          "provider availability and missing channels",
+          "bounded query range, filter, stable order, cursor, and limit",
+          "normalized JSON/CSV artifact IDs",
+          "Insights path and viewApplied result when opened"
+        ],
+        "success": [
+          "no Unreal Editor process was required for import, query, or export",
+          "the trace and Worker Engine minor versions matched",
+          "the imported path satisfied the allowed-root policy",
+          "all event queries remained bounded and stable",
+          "unsupported providers returned explicit availability evidence",
+          "Unreal Insights visualization was not used as the structured-data backend"
+        ]
+      }
+    }
+  ],
+  "resources": [
+    {
+      "path": "references/trace-insights-workflow.md",
+      "description": "Recording target, offline Worker, provider-query, path, version, and Insights visualization boundaries."
+    }
+  ]
+}
+

@@ -1,7 +1,9 @@
 # UE 短操作 CLI
 
-`ue` 是连接运行中 Unreal Editor 的轻量短操作 CLI。它把随 CLI 分发的
-manifest capability 动态映射为传统命令行，首参数就是完整 capability ID：
+`ue` 是轻量短操作 CLI。普通能力连接运行中的 Unreal Editor；manifest 声明
+`localTrace` 的 `.utrace` import/query/export/open 可由 Engine 匹配的本地 Worker
+在 Editor 关闭时执行。CLI 把随包分发的 capability 动态映射为传统命令行，
+首参数就是完整 capability ID：
 
 ```powershell
 ue blueprint.asset.get --name /Game/UI/WBP_Login
@@ -19,6 +21,12 @@ ue production.job.status --job-id job-123
 ue status
 ue capabilities [filters]
 ue skills [filters]
+ue trace doctor
+ue trace target list
+ue trace start|status|stop
+ue trace import|analyze|providers
+ue trace query <provider>
+ue trace export|open
 ue help <capability>
 ue <capability> --help
 ue <capability> [capability parameters]
@@ -88,8 +96,36 @@ ue> exit
 `skills` 始终读取本地包；即使 shell 以 `--live-schema` 启动，它也不会连接
 Editor。显式输入 `skills --live-schema` 仍会作为无效组合拒绝。
 
-普通 `ue <capability>` 仍是一条命令执行后立即退出。CLI 不复制 UE handler，
-也不提供本地 UE 执行；插件始终是 Game Thread 调度与执行结果的唯一权威来源。
+普通 `ue <capability>` 仍是一条命令执行后立即退出。CLI 不复制 UE handler；
+Editor capability 仍以 Game Thread 调度和 Editor 结果为唯一权威，本地 Trace
+能力则以 `UEAITraceWorker + UEAITraceAnalysisCore` 为唯一权威。
+
+## Trace 快捷命令与后端
+
+`ue trace` 是 `production.trace.*` capability 的稳定快捷语法：
+
+```powershell
+ue trace doctor
+ue trace target list
+ue trace import --trace-path D:\Traces\sample.utrace --backend local
+ue trace providers --trace-id trace-local-...
+ue trace query timing --trace-id trace-local-... --operation frames --limit 100
+ue trace export --trace-id trace-local-... --provider timing --operation timers --format json
+ue trace open --trace-id trace-local-... --view timing
+```
+
+`backend=auto|editor|local` 仍由 capability manifest 校验。Editor/PIE start 固定
+走 Editor，Development start 固定走受约束本地 Launch Profile；带本地 Trace/
+Analysis/Launch ID 命名空间的 status、query 和 Job 操作回到 Worker。显式选择的
+后端失败时不静默切换。
+
+Worker 使用当前用户专属本地 IPC，不监听 TCP/HTTP；按需启动，握手验证 Engine
+版本、协议和 contract digest。CLI 会优先使用显式 Engine、环境变量或已安装项目
+`.uproject` 的精确 `EngineAssociation`，验证 `Build.version` 的 major/minor 后以
+`-EngineDir` 传给 Worker；已声明但无效或不匹配的来源不会静默回退。所有 Worker
+启动固定带 `-NoLog -NoDefaultLog -SaveToUserDir`。完整路径解析顺序、允许读取的目录、Provider 适配矩阵以及
+“不操作 Insights UI”的边界见
+[渲染调试证据与离线 Unreal Insights](UE_TRACE_INSIGHTS.md)。
 
 ## 调用方会话
 
@@ -172,8 +208,8 @@ stderr，并带第一条 validation error。
 |---:|---|
 | 0 | 成功 |
 | 2 | 参数、schema 或 capability ID 错误 |
-| 4 | Editor 不可达、超时或 capability unavailable |
-| 5 | Editor 已接收但 operation 执行失败 |
+| 4 | Editor/Worker 不可达、超时或 capability unavailable |
+| 5 | Editor/Worker 已接收但 operation 执行失败 |
 
 `--output` 支持 Base64 与 `ue.artifact.v1` 分块结果，校验连续 offset、
 `sizeBytes`、EOF 和 SHA-256 后再原子替换目标文件。未指定输出路径时默认摘要
@@ -204,6 +240,15 @@ Resources/Capabilities/*.json
 skills/*/SKILL.md
 skills/*/skill.json
 ```
+
+完整插件 staging 还包含与 Engine 次版本匹配的
+`Tools/Trace/<platform>/<engineVersion>/UEAITraceWorker(.exe)`、Trace 协议
+manifest 和 Insights Action Mapping。普通跨平台 CMake CLI 安装不假定存在 UE
+源码树，因此不会凭空生成 Worker。
+
+正式 staging 的 Worker 验证使用 `-NoLog -NoDefaultLog -SaveToUserDir`，并要求匹配 Engine 中存在同次版本
+Unreal Insights。`Tools/UEAITraceWorker/Saved` 是运行时生成物；若它出现在 staging
+或安装目录，安装前置检查会拒绝该包。
 
 通过 `scripts/build_plugin.bat` 或 `scripts/build_plugin.sh` 生成的
 source-capable 插件包还保留根 `CMakeLists.txt`、`CLI` 与 `Workflow` 源码，

@@ -11,8 +11,9 @@
 - `ue <capability>` 在线获取精确 schema 后通过同一 `/api/execute` 合同调用
   Editor，因此短操作 CLI 的能力范围与领域 MCP 相同；它不经过 Workflow DSL。
 - `ue-workflow validate` 与非执行型 Core plan 可离线运行；用于审批执行的计划
-  必须由 `plan --connect` 绑定 Editor 资产基线。`execute`、`ue` 单次 capability
-  和 Job 都要求连接 Editor。
+  必须由 `plan --connect` 绑定 Editor 资产基线。Workflow、普通 `ue` capability
+  和 Editor Job 要求连接 Editor；manifest 声明 `localTrace` 的 Trace
+  import/query/export/open 可由 `UEAITraceWorker` 在 Editor 关闭时执行。
 - UE Workflow 只接纳 manifest 中声明为 `editStep` 的确定资产连续编辑；v1
   为单 scope，v2 最多为 16 个具名 scope。
   Trace、性能、测试、Blueprint 分析、Cook/Package、Source Control、
@@ -21,6 +22,8 @@
 ## 1. Trace 与窗口性能证据
 
 - `production.trace.start/status/stop/analyze`
+- `production.trace.target.list/channel.list/launch.plan/import/provider.list`
+- `production.trace.*.query/export/open_in_insights`
 - `production.performance.run/result.get/compare/diagnose/report.generate`
 - `performance.run` 支持 `mode=window|scenario`、warmup、采样窗口、
   `repeatCount`、帧预算和可选自动 Trace。
@@ -59,10 +62,12 @@ Launcher 或项目服务的启动守卫，覆盖不会写回工程配置。两�
 runtime fingerprint；`minimal` 不等价于完整游戏启动，也不能与 `project`
 结果作为同一环境直接比较。
 
-插件仍只有一个模块；其 host type 为 `DeveloperTool`，并通过
-`TargetAllowList=["Editor"]` 限定只编入 Unreal Editor target。这样同一模块中的
-最小 Standalone 控制器可在 `UnrealEditor -game` 子进程加载，同时不会进入项目
-Game target；子进程参数存在时不会创建 Editor Subsystem、HTTP 服务或状态栏 UI。
+0.9.0 把 Trace 拆为三个编译边界：`UE_AI_integration` 的 Editor 控制与录制、
+不依赖 UnrealEd/Slate 的 `UEAITraceAnalysisCore`，以及只进入 Development/
+DebugGame Game Target 的 `UEAITraceRuntime`。独立 `UEAITraceWorker` Program 复用
+同一 Core 做离线 TraceServices 查询；Runtime 不启动 HTTP/MCP/UI，Shipping
+通过模块描述和编译宏排除。详细边界见
+[渲染调试证据与离线 Insights](UE_TRACE_INSIGHTS.md)。
 
 `performance.diagnose` 将现有 run/compare/Trace 证据投影为
 `cpuBound`、`gpuBound`、`mixed`、`frameLimited` 或 `inconclusive`，并返回最差帧、
@@ -87,15 +92,18 @@ interval/aggregate 证据和下一步建议；Artifact 只以转义后的不透�
 测试，不会启动 `UnrealEditor -game`，也不构成真实 Standalone E2E 证据。发布
 门禁仍需在实际工程中启动子进程并核对 CSV、日志、Trace 与最终 artifact。
 
-`trace.analyze` 使用 UE 5.3 TraceServices 读取 Frame、Timing、Counter 等
-provider，返回受约束的 CPU scope、Counter、Game/Render/RHI/GPU 聚合和 artifact
-引用。`traceId` 可以是成功的独立 Trace Job，也可以是成功的 Standalone
-performance run ID；后一种情况只有在该 run 自己登记了
-`application/x-unreal-trace` 的 `.utrace` artifact 时才会接受。传给
+`trace.analyze` 与离线 query 使用 UE 5.3 TraceServices。`traceId` 可以是成功的
+独立 Trace Job、成功的 Standalone performance run ID，或 Worker Store 中已
+hash 登记的 import；Performance run 只有在自己登记了
+`application/x-unreal-trace` artifact 时才会接受。传给
 `performance.diagnose` 的 analysis job 还必须来自同一 performance run 的
-Trace，否则返回 provenance mismatch。它不返回原始事件洪流，也不宣称代替
-Unreal Insights 的完整交互式 Timing、Memory、Network 或 Asset Loading 分析
-界面。
+Trace，否则返回 provenance mismatch。
+
+`production.trace.provider.list` 是 Provider 可用性的权威，分别报告是否录制、
+缺失 Channel、已启用 semantic adapter 和对应 Insights Panel。所有 query 使用
+时间范围、过滤、稳定排序、cursor 与 limit，不返回原始事件洪流；尚未适配的
+Provider 返回 `trace_query_unsupported`，不能用空结果伪装成功。Unreal Insights
+只负责可视化打开，结构化结果不依赖其 UI，也不做鼠标自动化。
 
 `performance.compare` 可同时检查多个指标阈值；环境指纹不兼容时返回
 `inconclusive`，证据兼容时返回结构化 `pass` 或 `regression`。每次比较生成
@@ -202,9 +210,16 @@ HLOD 是长任务，不进入资产 Workflow；PCG 只在可用插件/模块满�
 - `scene.render.feature.audit`
 - `scene.render.memory.sample`
 - `scene.render.settings.plan/execute/rollback`
+- `scene.viewport.visualization.list/capture/compare/analyze`
 
 写入仅覆盖 allowlist 内的 Session CVar，带精确 digest 和读回；不会静默修改
 项目 DefaultEngine.ini 或平台配置。
+
+Viewport Visualization 从真实 Engine/RHI/插件状态枚举 View Mode、Buffer、
+Ray Tracing Debug、Nanite、Lumen、Virtual Shadow Map、GPU Skin Cache、
+Strata/Substrate 与 Groom。Capture 只读指定 Editor/PIE `FViewport`，等待渲染并
+在所有路径恢复原状态；输出是 8-bit 调试视图 PNG 证据，不是任意 GBuffer/RDG
+Texture 导出。指纹不兼容的比较返回 `inconclusive`。
 
 ## 9. Animation 与 AI 只读闭环
 
