@@ -752,10 +752,109 @@ bool FBlueprintEditorNativeLayoutCommandsTest::RunTest(
           TEXT("Inconclusive layout validity is null"),
           StoredValidation.Data->HasTypedField<EJson::Null>(
               TEXT("valid")));
+      const TSharedPtr<FJsonObject> StoredFingerprint =
+          StoredValidation.Data->GetObjectField(
+              TEXT("geometryFingerprint"));
+      TestFalse(TEXT("Stored geometry fingerprint is explicitly non-exact"),
+                StoredFingerprint->GetBoolField(TEXT("exact")));
+      TestEqual(TEXT("Stored geometry fingerprint identifies its source"),
+                StoredFingerprint->GetStringField(TEXT("geometrySource")),
+                FString(TEXT("stored")));
     }
 
     const int32 SavedSecondX = Second->NodePosX;
     const int32 SavedSecondY = Second->NodePosY;
+    if (ConcreteBlueprintEditor.IsValid()) {
+      const TSharedPtr<SGraphEditor> GapEditor =
+          ConcreteBlueprintEditor->OpenGraphAndBringToFront(Graph, false);
+      if (GapEditor.IsValid()) {
+        UEAIIntegration::BlueprintGraph::RefreshGraphEditorLayout(GapEditor);
+        FSlateRect FirstBounds;
+        FSlateRect SecondBounds;
+        if (GapEditor->GetBoundsForNode(First, FirstBounds, 0.0f) &&
+            GapEditor->GetBoundsForNode(Second, SecondBounds, 0.0f)) {
+          Second->NodePosX += FMath::RoundToInt(
+              FirstBounds.Right + 8.0 - SecondBounds.Left);
+          Second->NodePosY +=
+              FMath::RoundToInt(FirstBounds.Top - SecondBounds.Top);
+          Graph->NotifyGraphChanged();
+          UEAIIntegration::BlueprintGraph::RefreshGraphEditorLayout(
+              GapEditor);
+          TSharedPtr<FJsonObject> GapParams =
+              MakeSelectionParams(BlueprintPath, GraphName, {First, Second});
+          GapParams->SetStringField(TEXT("geometryMode"), TEXT("editor"));
+          GapParams->SetNumberField(TEXT("minHorizontalGap"), 64.0);
+          GapParams->SetNumberField(TEXT("tolerance"), 2.0);
+          const FMCPToolResult GapValidation = Registry.ExecuteTool(
+              TEXT("blueprint.layout.validate"), GapParams);
+          TestTrue(TEXT("Horizontal gap validation succeeds"),
+                   GapValidation.bSuccess);
+          TSharedPtr<FJsonObject> GapDiagnostic;
+          if (GapValidation.bSuccess) {
+            for (const TSharedPtr<FJsonValue> &Value :
+                 GapValidation.Data->GetArrayField(TEXT("diagnostics"))) {
+              if (Value->AsObject()->GetStringField(TEXT("rule")) ==
+                  TEXT("horizontal_gap")) {
+                GapDiagnostic = Value->AsObject();
+                break;
+              }
+            }
+          }
+          TestTrue(TEXT("Horizontal gap diagnostic is returned"),
+                   GapDiagnostic.IsValid());
+          if (GapDiagnostic.IsValid()) {
+            TestTrue(TEXT("Gap diagnostic returns both bounds"),
+                     GapDiagnostic->HasTypedField<EJson::Object>(
+                         TEXT("leftBounds")) &&
+                         GapDiagnostic->HasTypedField<EJson::Object>(
+                             TEXT("rightBounds")));
+            TestTrue(TEXT("Gap diagnostic returns measured distance"),
+                     FMath::IsNearlyEqual(
+                         GapDiagnostic->GetNumberField(TEXT("measuredGap")),
+                         8.0, 1.0));
+            TestEqual(TEXT("Gap diagnostic returns required distance"),
+                      GapDiagnostic->GetNumberField(TEXT("requiredGap")),
+                      64.0);
+            TestEqual(TEXT("Gap diagnostic binds tolerance"),
+                      GapDiagnostic->GetNumberField(TEXT("tolerance")),
+                      2.0);
+            const TSharedPtr<FJsonObject> GapFingerprint =
+                GapDiagnostic->GetObjectField(TEXT("geometryFingerprint"));
+            TestTrue(TEXT("Gap diagnostic binds settled geometry"),
+                     GapFingerprint->GetBoolField(TEXT("exact")) &&
+                         GapFingerprint->GetStringField(TEXT("boundsHash"))
+                             .StartsWith(TEXT("sha256:")));
+          }
+          GapParams->SetBoolField(TEXT("strictWarnings"), true);
+          const FMCPToolResult StrictGapValidation = Registry.ExecuteTool(
+              TEXT("blueprint.layout.validate"), GapParams);
+          TestTrue(TEXT("Strict warning validation returns evidence"),
+                   StrictGapValidation.bSuccess);
+          if (StrictGapValidation.bSuccess) {
+            TestEqual(TEXT("Strict warning makes validation invalid"),
+                      StrictGapValidation.Data->GetStringField(
+                          TEXT("conclusion")),
+                      FString(TEXT("invalid")));
+            TestTrue(TEXT("Strict warning failure is explicit in summary"),
+                     StrictGapValidation.Data
+                         ->GetObjectField(TEXT("validationSummary"))
+                         ->GetBoolField(TEXT("failedByWarnings")));
+            TestEqual(
+                TEXT("Strict mode preserves the original warning severity"),
+                StrictGapValidation.Data->GetArrayField(TEXT("diagnostics"))[0]
+                    ->AsObject()
+                    ->GetStringField(TEXT("severity")),
+                FString(TEXT("warning")));
+          }
+        } else {
+          AddError(TEXT("Could not capture the horizontal gap fixture."));
+        }
+      }
+    }
+    Second->NodePosX = SavedSecondX;
+    Second->NodePosY = SavedSecondY;
+    Graph->NotifyGraphChanged();
+
     Second->NodePosX = First->NodePosX;
     Second->NodePosY = First->NodePosY;
     Graph->NotifyGraphChanged();
@@ -768,6 +867,7 @@ bool FBlueprintEditorNativeLayoutCommandsTest::RunTest(
     const FMCPToolResult OverlapValidation = Registry.ExecuteTool(
         TEXT("blueprint.layout.validate"), LayoutValidateParams);
     bool bFoundOverlapDiagnostic = false;
+    TSharedPtr<FJsonObject> OverlapDiagnostic;
     if (OverlapValidation.bSuccess) {
       for (const TSharedPtr<FJsonValue> &Diagnostic :
            OverlapValidation.Data->GetArrayField(TEXT("diagnostics"))) {
@@ -775,12 +875,28 @@ bool FBlueprintEditorNativeLayoutCommandsTest::RunTest(
             Diagnostic->AsObject()->GetStringField(TEXT("rule")) ==
             TEXT("node_overlap");
         if (bFoundOverlapDiagnostic) {
+          OverlapDiagnostic = Diagnostic->AsObject();
           break;
         }
       }
     }
     TestTrue(TEXT("Layout validation reports a real node overlap"),
              OverlapValidation.bSuccess && bFoundOverlapDiagnostic);
+    if (OverlapDiagnostic.IsValid()) {
+      TestTrue(TEXT("Overlap diagnostic reports penetration depth"),
+               OverlapDiagnostic->GetNumberField(TEXT("measuredGap")) < 0.0);
+      TestEqual(TEXT("Overlap diagnostic target is zero separation"),
+                OverlapDiagnostic->GetNumberField(TEXT("requiredGap")),
+                0.0);
+      TestTrue(TEXT("Overlap diagnostic reports both overlap dimensions"),
+               OverlapDiagnostic->GetNumberField(TEXT("overlapWidth")) > 0.0 &&
+                   OverlapDiagnostic->GetNumberField(TEXT("overlapHeight")) >
+                       0.0);
+      TestTrue(TEXT("Overlap diagnostic reports both node IDs"),
+               !OverlapDiagnostic->GetStringField(TEXT("leftNodeId")).IsEmpty() &&
+                   !OverlapDiagnostic->GetStringField(TEXT("rightNodeId"))
+                        .IsEmpty());
+    }
     Second->NodePosX = SavedSecondX;
     Second->NodePosY = SavedSecondY;
     Graph->NotifyGraphChanged();
