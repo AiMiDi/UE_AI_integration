@@ -16,7 +16,7 @@ public class UE_AI_integration : ModuleRules
 		PrivateIncludePaths.Add(
 			Path.Combine(ModuleDirectory, "..", "..", "Workflow", "ThirdParty"));
 
-		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"0.8.0\"");
+		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"0.9.0\"");
 
 		bool bWithNiagara = IsOptionalFeatureEnabled(Target, "Niagara");
 		bool bWithWater = IsOptionalFeatureEnabled(Target, "Water");
@@ -44,6 +44,9 @@ public class UE_AI_integration : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
+			// Shared, UI-independent TraceServices semantic query layer.
+			"UEAITraceAnalysisCore",
+
 			// Asset system
 			"AssetRegistry",
 			"AssetTools",
@@ -102,6 +105,10 @@ public class UE_AI_integration : ModuleRules
 
 			// Bounded .utrace provider analysis
 			"TraceServices",
+			// Re-arm Net Trace after the managed file transport connects.
+			"NetCore",
+			// Low-level writer drain after FTraceAuxiliary::Stop.
+			"TraceLog",
 
 			// Cross-version SHA-256 implementation
 			"SSL"

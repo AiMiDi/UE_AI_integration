@@ -1,0 +1,32 @@
+{
+  "schema": "ue.trace-launch-profiles.v1",
+  "profiles": [
+    {
+      "id": "projectDevelopment",
+      "executableKind": "projectDevelopment",
+      "configurations": ["Development", "DebugGame"],
+      "allowedMaps": ["/Game/*"],
+      "fixedArguments": ["-NoSplash", "-NoSound"],
+      "allowedCvars": [
+        "r.VSync",
+        "t.MaxFPS",
+        "r.ScreenPercentage",
+        "sg.ViewDistanceQuality",
+        "sg.AntiAliasingQuality",
+        "sg.ShadowQuality",
+        "sg.GlobalIlluminationQuality",
+        "sg.ReflectionQuality",
+        "sg.PostProcessQuality",
+        "sg.TextureQuality",
+        "sg.EffectsQuality",
+        "sg.FoliageQuality",
+        "sg.ShadingQuality"
+      ],
+      "maxDurationSeconds": 3600,
+      "maxFileSizeMiB": 16384,
+      "startupTimeoutSeconds": 180,
+      "shutdownTimeoutSeconds": 60,
+      "allowForcedTermination": true
+    }
+  ]
+}

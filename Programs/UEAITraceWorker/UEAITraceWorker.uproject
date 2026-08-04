@@ -1,0 +1,12 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.3",
+  "Category": "Programs",
+  "Description": "Build host template for the headless UEAI TraceServices worker.",
+  "Plugins": [
+    {
+      "Name": "UE_AI_integration",
+      "Enabled": true
+    }
+  ]
+}
