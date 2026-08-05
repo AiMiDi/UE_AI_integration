@@ -87,7 +87,10 @@ if %ERRORLEVEL% neq 0 (
     call npm run build --prefix "%PLUGIN_ROOT%\MCP"
 )
 if %ERRORLEVEL% neq 0 exit /b 1
-call npm test --prefix "%PLUGIN_ROOT%\MCP"
+REM The release gate compiled dist immediately above. Avoid invoking npm test's
+REM pretest hook and rewriting the same files while Windows scanners still hold
+REM short-lived handles to the freshly generated output.
+call npm run test:compiled --prefix "%PLUGIN_ROOT%\MCP"
 if %ERRORLEVEL% neq 0 exit /b 1
 call npm audit --omit=dev --prefix "%PLUGIN_ROOT%\MCP"
 if %ERRORLEVEL% neq 0 exit /b 1
