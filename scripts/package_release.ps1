@@ -50,6 +50,7 @@ $required = @(
     'CLI/bin/ue-workflow.exe',
     'MCP/package.json',
     'MCP/dist/index.js',
+    'MCP/dist/local-capability-cli.js',
     'Resources/Capabilities/blueprint.json',
     'Resources/Capabilities/production.json',
     'Workflow/Contracts/contract-set.v1.json',

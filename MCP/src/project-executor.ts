@@ -79,6 +79,35 @@ function sha256(value: string): string {
   return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
 }
 
+function sensitiveConfigKey(key: string): boolean {
+  const words = key
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[^a-z0-9]+/i)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+  const normalized = words.join("");
+  return words.some((word) => ["key", "token", "secret", "password", "credential"].includes(word))
+    || normalized.includes("privateexponent");
+}
+
+type ConfigValue = {
+  value: string;
+  source: string;
+  present?: true;
+  valueDigest?: string;
+};
+
+function publicConfigValue(key: string, value: string, source: string): ConfigValue {
+  if (!sensitiveConfigKey(key)) return { value, source };
+  return {
+    value: "<redacted>",
+    present: true,
+    valueDigest: sha256(value),
+    source,
+  };
+}
+
 export class LocalProjectExecutor implements CapabilityExecutor {
   async execute(id: string, params: JsonObject = {}): Promise<UEExecuteData> {
     const root = projectRoot(params);
@@ -104,12 +133,14 @@ export class LocalProjectExecutor implements CapabilityExecutor {
         : (existsSync(configDirectory) ? readdirSync(configDirectory, { withFileTypes: true }) : [])
             .filter((entry) => entry.isFile() && extname(entry.name).toLowerCase() === ".ini")
             .map((entry) => resolve(configDirectory, entry.name)).sort();
-      const merged: Record<string, Record<string, { value: string; source: string }>> = {};
+      const merged: Record<string, Record<string, ConfigValue>> = {};
       for (const file of files) {
         if (extname(file).toLowerCase() !== ".ini") continue;
         for (const [section, values] of Object.entries(parseIni(boundedText(file)))) {
           merged[section] ??= {};
-          for (const [key, value] of Object.entries(values)) merged[section]![key] = { value, source: relative(root, file) };
+          for (const [key, value] of Object.entries(values)) {
+            merged[section]![key] = publicConfigValue(key, value, relative(root, file));
+          }
         }
       }
       return { schema: "ue.local-project-config.v1", projectRoot: root, files: files.map((file) => relative(root, file)), merged };

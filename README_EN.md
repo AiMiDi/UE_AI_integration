@@ -87,7 +87,7 @@ but those versions have not all been compiled locally.
   as its first argument. It uses the local schema for one `/api/execute` call by
   default, supports forced live validation with `--live-schema`, and reuses the
   catalog and connection in `ue shell`; `ue-workflow` contains only DSL commands.
-- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) ships ten validated domain Skills
+- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) ships eleven validated domain Skills
   and capability recipes for a Load → Discover → Execute → See Results loop
   without adding a generic script executor.
 
@@ -112,12 +112,12 @@ manifests and does not infer categories from operation names.
 
 | Domain | Count | Scope |
 |---|---:|---|
-| Blueprint | 86 | Asset lifecycle, Graph geometry/layout/capture, declarative BuildGraph, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
+| Blueprint | 87 | Asset lifecycle, Graph geometry/layout/capture, declarative BuildGraph, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
 | Scene | 97 | Actors, PIE runtime, trusted input/waits/capture, viewport debug-view evidence, World Partition, Data Layers, HLOD, PCG, rendering diagnostics, Landscape/Water |
 | Content | 80 | Asset query/dependency/audit, safe import/reimport, Static Mesh and Texture settings, materials, Niagara, UMG, and event-handler verification |
 | Animation | 19 | Animation Blueprint, state machine, and BlendSpace authoring, inspection, validation, and diff |
 | AI | 17 | Behavior Tree and Blackboard authoring, inspection, references, validation, and diff |
-| Production | 82 | Durable jobs, performance suites, recovery management, Editor/Development recording, offline TraceServices queries, reflection/restricted Python, tests, cook/package, source control, DDC, and Epic BuildGraph |
+| Production | 110 | Durable jobs, Recipe/SAL, lease coordination, performance suites, recovery, Editor/Development Trace, offline project and asset queries, the restricted Runtime Bridge, tests, cook/package, source control, DDC, and Epic BuildGraph |
 
 ## Requirements
 

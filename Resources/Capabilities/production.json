@@ -2114,7 +2114,7 @@
       "id": "production.project.config.get",
       "domain": "production",
       "kind": "query",
-      "description": "Resolve bounded project .ini configuration values with source provenance.",
+      "description": "Resolve bounded project .ini configuration values with source provenance; credential-bearing values are always redacted and represented only by presence and SHA-256 digest metadata.",
       "inputSchema": {
         "type": "object",
         "properties": {

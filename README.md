@@ -67,7 +67,7 @@ stdio bridge，让 Codex CLI、Claude Code 等 MCP 客户端查询或修改 Blue
 - [UE 短操作 CLI](docs/UE_SHORT_CLI.md) 以 manifest capability ID 作为首参数，
   默认用本地 schema 单次调用 `/api/execute`，`--live-schema` 可强制在线校验，
   `ue shell` 可复用目录与连接；`ue-workflow` 只保留 DSL。
-- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) 提供十个已验证领域 Skill 和
+- [UE Agent Skills](docs/UE_AGENT_SKILLS.md) 提供十一个已验证领域 Skill 和
   capability recipe，形成 Load → Discover → Execute → See Results 闭环，
   但不新增任意脚本执行器。
 
@@ -91,12 +91,12 @@ Development Game Target ──► UEAITraceRuntime（非 Shipping，仅受约束
 
 | Domain | 数量 | 能力范围 |
 |---|---:|---|
-| Blueprint | 86 | 资产生命周期、Graph 几何/排版/截图、声明式 BuildGraph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
+| Blueprint | 87 | 资产生命周期、Graph 几何/排版/截图、声明式 BuildGraph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
 | Scene | 97 | Actor、PIE Runtime、可信输入/等待/截图、Viewport 调试视图证据、World Partition、Data Layer、HLOD、PCG、渲染诊断、Landscape/Water |
 | Content | 80 | 资产查询/依赖/审计、安全导入/重导入、Static Mesh/Texture 配置、Material、Niagara、UMG 与事件 Handler 验证 |
 | Animation | 19 | AnimBlueprint、状态机与 BlendSpace 的创建、读取、校验和 Diff |
 | AI | 17 | Behavior Tree 与 Blackboard 的创建、读取、引用、校验和 Diff |
-| Production | 82 | Durable Job、性能标准 suite、恢复管理、Editor/Development Trace 录制、离线 TraceServices 查询、反射/受限 Python、测试、Cook/Package、Source Control、DDC、Epic BuildGraph |
+| Production | 110 | Durable Job、Recipe/SAL、租约协调、性能标准 suite、恢复管理、Editor/Development Trace、离线工程与资产查询、受限 Runtime Bridge、测试、Cook/Package、Source Control、DDC、Epic BuildGraph |
 
 ## 环境要求
 

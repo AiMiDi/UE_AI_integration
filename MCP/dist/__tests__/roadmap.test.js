@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -128,6 +129,48 @@ test("keeps offline project/config reads inside the explicit project root", asyn
     const config = await executor.execute("production.project.config.get", { projectRoot: root });
     assert.ok(config.merged["/Script/Engine.Engine"]);
     await assert.rejects(executor.execute("production.project.config.get", { projectRoot: root, files: ["../outside.ini"] }), (error) => error instanceof UEApiError && error.code === "path_outside_allowed_root");
+});
+test("redacts credential-bearing project config values", async () => {
+    const root = fixtureProject();
+    const secrets = {
+        encryptionKey: "base64-encryption-material",
+        privateExponent: "private-rsa-exponent",
+        androidToken: "android-file-server-token",
+        clientSecret: "oauth-client-secret",
+        password: "database-password",
+        credential: "provider-credential",
+    };
+    writeFileSync(join(root, "Config", "DefaultCrypto.ini"), [
+        "[/Script/CryptoKeys.CryptoKeysSettings]",
+        `EncryptionKey=${secrets.encryptionKey}`,
+        `SigningPrivateExponent=${secrets.privateExponent}`,
+        "Enabled=True",
+    ].join("\n"));
+    writeFileSync(join(root, "Config", "DefaultAndroidFileServer.ini"), [
+        "[/Script/AndroidFileServerEditor.AndroidFileServerRuntimeSettings]",
+        `SecurityToken=${secrets.androidToken}`,
+        "ConnectionType=USBOnly",
+    ].join("\n"));
+    writeFileSync(join(root, "Config", "DefaultOAuth.ini"), [
+        "[OAuth]",
+        `ClientSecret=${secrets.clientSecret}`,
+        `Password=${secrets.password}`,
+        `ProviderCredential=${secrets.credential}`,
+        "Endpoint=https://auth.example.invalid",
+    ].join("\n"));
+    const result = await new LocalProjectExecutor().execute("production.project.config.get", { projectRoot: root });
+    const serialized = JSON.stringify(result);
+    for (const secret of Object.values(secrets))
+        assert.equal(serialized.includes(secret), false);
+    const crypto = result.merged["/Script/CryptoKeys.CryptoKeysSettings"];
+    assert.deepEqual(crypto.EncryptionKey, {
+        value: "<redacted>",
+        present: true,
+        valueDigest: `sha256:${createHash("sha256").update(secrets.encryptionKey).digest("hex")}`,
+        source: join("Config", "DefaultCrypto.ini"),
+    });
+    assert.equal(crypto.Enabled?.value, "True");
+    assert.equal(result.merged.OAuth?.Endpoint?.value, "https://auth.example.invalid");
 });
 test("runs UE package header reads in the isolated Asset Worker", async () => {
     const root = fixtureProject();

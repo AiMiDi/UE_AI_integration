@@ -98,7 +98,14 @@ Editor。显式输入 `skills --live-schema` 仍会作为无效组合拒绝。
 
 普通 `ue <capability>` 仍是一条命令执行后立即退出。CLI 不复制 UE handler；
 Editor capability 仍以 Game Thread 调度和 Editor 结果为唯一权威，本地 Trace
-能力则以 `UEAITraceWorker + UEAITraceAnalysisCore` 为唯一权威。
+能力则以 `UEAITraceWorker + UEAITraceAnalysisCore` 为唯一权威。manifest 声明为
+`localProject`、`localAsset`、`localRecipe`、`localSal` 或
+`developmentRuntime` 的能力由 CLI 调用与 MCP 相同的受限 executor；因此离线
+路径边界、敏感配置脱敏、Recipe 审批和 Runtime attach 合同不会形成第二套实现。
+
+`backend=auto|editor|local` 是调用方选择语义；成功 envelope 的
+`meta.executionBackend` 会返回实际的精确 backend 名称。全局 `--output` 不用于
+本地 backend，artifact 必须使用能力自身声明的输出参数。
 
 ## Trace 快捷命令与后端
 

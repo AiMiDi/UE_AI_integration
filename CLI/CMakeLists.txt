@@ -274,6 +274,13 @@ if(UE_WORKFLOW_BUILD_TESTS AND BUILD_TESTING)
                 --cli "$<TARGET_FILE:ue>"
         )
         add_test(
+            NAME ue_cli_local_backends
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/local_backend_cli.py"
+                --cli "$<TARGET_FILE:ue>"
+                --source-root "${CMAKE_SOURCE_DIR}"
+        )
+        add_test(
             NAME ue_workflow_cli_http_integration
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_http_integration.py"

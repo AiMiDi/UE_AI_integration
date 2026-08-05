@@ -92,6 +92,11 @@ enum class ExecutionBackend
 {
     Editor,
     LocalTrace,
+    LocalProject,
+    LocalAsset,
+    LocalRecipe,
+    LocalSal,
+    DevelopmentRuntime,
 };
 
 struct BackendDecision
@@ -103,6 +108,44 @@ struct BackendDecision
     std::string message;
     bool allow_local_fallback = false;
 };
+
+const char* BackendName(const ExecutionBackend backend)
+{
+    switch (backend)
+    {
+    case ExecutionBackend::Editor: return "editor";
+    case ExecutionBackend::LocalTrace: return "localTrace";
+    case ExecutionBackend::LocalProject: return "localProject";
+    case ExecutionBackend::LocalAsset: return "localAsset";
+    case ExecutionBackend::LocalRecipe: return "localRecipe";
+    case ExecutionBackend::LocalSal: return "localSal";
+    case ExecutionBackend::DevelopmentRuntime:
+        return "developmentRuntime";
+    }
+    return "editor";
+}
+
+std::optional<ExecutionBackend> ParseExecutionBackend(
+    const std::string& value)
+{
+    if (value == "editor") return ExecutionBackend::Editor;
+    if (value == "localTrace") return ExecutionBackend::LocalTrace;
+    if (value == "localProject") return ExecutionBackend::LocalProject;
+    if (value == "localAsset") return ExecutionBackend::LocalAsset;
+    if (value == "localRecipe") return ExecutionBackend::LocalRecipe;
+    if (value == "localSal") return ExecutionBackend::LocalSal;
+    if (value == "developmentRuntime")
+    {
+        return ExecutionBackend::DevelopmentRuntime;
+    }
+    return std::nullopt;
+}
+
+bool IsNodeLocalBackend(const ExecutionBackend backend)
+{
+    return backend != ExecutionBackend::Editor
+        && backend != ExecutionBackend::LocalTrace;
+}
 
 struct ExplicitTraceImport
 {
@@ -2551,6 +2594,68 @@ ParsedEnvelope ParseWorkerEnvelope(
     };
 }
 
+ParsedEnvelope ParseLocalCapabilityEnvelope(
+    const LocalCapabilityCliResult& response,
+    const std::string& expected_backend,
+    const std::string& expected_request_id)
+{
+    if (response.envelope.empty())
+    {
+        return {
+            false,
+            json(),
+            response.exit_code == kExitUnavailable
+                ? "local_backend_unavailable"
+                : "local_backend_adapter_failed",
+            response.error.empty()
+                ? "Local capability adapter returned no response."
+                : response.error,
+        };
+    }
+    auto envelope = json::parse(
+        response.envelope,
+        nullptr,
+        false,
+        true);
+    const auto meta = envelope.is_object()
+        ? envelope.value("meta", json::object())
+        : json::object();
+    const bool request_matches = expected_request_id.empty()
+        || (meta.is_object()
+            && meta.value("requestId", std::string{})
+                == expected_request_id);
+    if (!envelope.is_object()
+        || !envelope.contains("ok")
+        || !envelope["ok"].is_boolean()
+        || !meta.is_object()
+        || meta.value("executionBackend", std::string{})
+            != expected_backend
+        || !request_matches)
+    {
+        return {
+            false,
+            json(),
+            "local_backend_invalid_response",
+            "Local capability adapter returned an invalid or uncorrelated JSON response envelope.",
+        };
+    }
+    if (response.exit_code == 0 && envelope.value("ok", false))
+    {
+        return { true, std::move(envelope), {}, {} };
+    }
+    const auto error = envelope.value("error", json::object());
+    return {
+        false,
+        std::move(envelope),
+        error.value("code", "local_backend_failed"),
+        error.value(
+            "message",
+            response.error.empty()
+                ? "Local capability backend rejected the request."
+                : response.error),
+    };
+}
+
 BackendDecision ChooseBackend(
     const std::string& capability,
     const json& descriptor,
@@ -2562,12 +2667,43 @@ BackendDecision ChooseBackend(
     const auto backends = has_execution
         ? execution->value("backends", json::array())
         : json::array({ "editor", "localTrace" });
-    const bool supports_editor =
-        std::find(backends.begin(), backends.end(), "editor")
-        != backends.end();
-    const bool supports_local =
-        std::find(backends.begin(), backends.end(), "localTrace")
-        != backends.end();
+    const auto supports = [&backends](const ExecutionBackend backend)
+    {
+        return std::find(
+            backends.begin(),
+            backends.end(),
+            BackendName(backend)) != backends.end();
+    };
+    const bool supports_editor = supports(ExecutionBackend::Editor);
+    const bool supports_local_trace =
+        supports(ExecutionBackend::LocalTrace);
+    const auto preferred_backend = has_execution
+        ? ParseExecutionBackend(execution->value("preferred", "editor"))
+        : std::optional<ExecutionBackend>(ExecutionBackend::Editor);
+    std::optional<ExecutionBackend> declared_local;
+    if (preferred_backend
+        && *preferred_backend != ExecutionBackend::Editor
+        && supports(*preferred_backend))
+    {
+        declared_local = preferred_backend;
+    }
+    if (!declared_local)
+    {
+        for (const auto candidate : {
+                 ExecutionBackend::LocalTrace,
+                 ExecutionBackend::LocalProject,
+                 ExecutionBackend::LocalAsset,
+                 ExecutionBackend::LocalRecipe,
+                 ExecutionBackend::LocalSal,
+                 ExecutionBackend::DevelopmentRuntime })
+        {
+            if (supports(candidate))
+            {
+                declared_local = candidate;
+                break;
+            }
+        }
+    }
     const std::string requested = params.value("backend", "auto");
     if (requested != "auto"
         && requested != "editor"
@@ -2661,7 +2797,8 @@ BackendDecision ChooseBackend(
                 false, *forced, false, "execution_backend_unsupported",
                 "This capability does not support the Editor backend." };
         }
-        if (*forced == ExecutionBackend::LocalTrace && !supports_local)
+        if (*forced == ExecutionBackend::LocalTrace
+            && !supports_local_trace)
         {
             return {
                 false, *forced, false, "execution_backend_unsupported",
@@ -2688,25 +2825,26 @@ BackendDecision ChooseBackend(
     }
     if (requested == "local")
     {
-        return supports_local
+        return declared_local
             ? BackendDecision{
-                true, ExecutionBackend::LocalTrace, false, {}, {} }
+                true, *declared_local, false, {}, {} }
             : BackendDecision{
                 false,
                 ExecutionBackend::LocalTrace,
                 false,
                 "execution_backend_unsupported",
-                "This capability does not support the local Trace backend.",
+                "This capability does not support a local backend.",
             };
     }
-    const std::string preferred =
-        execution->value("preferred", "editor");
-    if (preferred == "localTrace" && supports_local)
+    if (preferred_backend
+        && *preferred_backend != ExecutionBackend::Editor
+        && supports(*preferred_backend))
     {
         return {
             true,
-            ExecutionBackend::LocalTrace,
-            supports_editor,
+            *preferred_backend,
+            *preferred_backend == ExecutionBackend::LocalTrace
+                && supports_editor,
             {},
             {},
         };
@@ -2715,12 +2853,12 @@ BackendDecision ChooseBackend(
     {
         BackendDecision decision{
             true, ExecutionBackend::Editor, false, {}, {} };
-        decision.allow_local_fallback = supports_local;
+        decision.allow_local_fallback = supports_local_trace;
         return decision;
     }
-    if (supports_local)
+    if (declared_local)
     {
-        return { true, ExecutionBackend::LocalTrace, false, {}, {} };
+        return { true, *declared_local, false, {}, {} };
     }
     return {
         false,
@@ -4498,6 +4636,7 @@ int RunMcpSurfaceStatus(
 
 int ExecuteOptions(
     const Options& options,
+    const std::filesystem::path& executable,
     const CapabilityCatalog* catalog,
     const SkillCatalog* skill_catalog,
     ue::api::Client& client,
@@ -4944,13 +5083,17 @@ int ExecuteOptions(
             output,
             error);
     }
+    ExecutionBackend selected_backend = backend.backend;
     bool used_local_trace =
-        backend.backend == ExecutionBackend::LocalTrace;
+        selected_backend == ExecutionBackend::LocalTrace;
+    const bool used_node_local = IsNodeLocalBackend(selected_backend);
     const bool temporary_import_grant = explicit_trace_import
         && conversion.params.value("copyMode", std::string("copy"))
             == "copy";
-    ParsedEnvelope response = used_local_trace
-        ? (temporary_import_grant
+    ParsedEnvelope response;
+    if (used_local_trace)
+    {
+        response = temporary_import_grant
             ? InvokeTraceWorkerImport(
                 trace_worker,
                 capability,
@@ -4962,14 +5105,32 @@ int ExecuteOptions(
                 "execute",
                 capability,
                 conversion.params,
-                request_id))
-        : ParseEnvelope(client.Post("/api/execute", request.dump()));
+                request_id);
+    }
+    else if (used_node_local)
+    {
+        response = ParseLocalCapabilityEnvelope(
+            RunLocalCapabilityCliAdapter(
+                capability,
+                BackendName(selected_backend),
+                conversion.params.dump(),
+                request_id,
+                executable),
+            BackendName(selected_backend),
+            request_id);
+    }
+    else
+    {
+        response = ParseEnvelope(
+            client.Post("/api/execute", request.dump()));
+    }
     if (!response.ok
         && used_local_trace
         && !temporary_import_grant
         && backend.allow_editor_fallback
         && response.code == "trace_worker_unavailable")
     {
+        selected_backend = ExecutionBackend::Editor;
         used_local_trace = false;
         response = ParseEnvelope(
             client.Post("/api/execute", request.dump()));
@@ -4979,6 +5140,7 @@ int ExecuteOptions(
         && backend.allow_local_fallback
         && response.code == "editor_unreachable")
     {
+        selected_backend = ExecutionBackend::LocalTrace;
         used_local_trace = true;
         response = temporary_import_grant
             ? InvokeTraceWorkerImport(
@@ -5001,24 +5163,25 @@ int ExecuteOptions(
             options.json_output,
             response.code == "editor_unreachable"
                 || response.code == "trace_worker_unavailable"
+                || response.code == "local_backend_unavailable"
                 ? kExitUnavailable
                 : kExitExecution,
             output,
             error);
     }
     response.value["meta"]["executionBackend"] =
-        used_local_trace ? "localTrace" : "editor";
+        BackendName(selected_backend);
     if (!options.output_path.empty())
     {
-        if (used_local_trace)
+        if (selected_backend != ExecutionBackend::Editor)
         {
             return PrintFailure(
                 {
                     false,
                     response.value,
                     "local_output_option_unsupported",
-                    "Use production.trace.export output parameters instead "
-                    "of the global --output option with local Trace.",
+                    "Use capability-specific artifact/output parameters "
+                    "instead of the global --output option with a local backend.",
                 },
                 options.json_output,
                 kExitUsage,
@@ -5115,6 +5278,7 @@ bool Tokenize(
 
 int RunShell(
     const Options& base,
+    const std::filesystem::path& executable,
     const CapabilityCatalog* catalog,
     const SkillCatalog* skill_catalog,
     ue::api::Client& client,
@@ -5248,6 +5412,7 @@ int RunShell(
             base.json_output || command.json_output;
         (void)ExecuteOptions(
             command,
+            executable,
             catalog,
             skill_catalog,
             client,
@@ -5504,6 +5669,7 @@ int Run(
     {
         return RunShell(
             options,
+            executable,
             catalog ? &*catalog : nullptr,
             skill_catalog ? &*skill_catalog : nullptr,
             client,
@@ -5514,6 +5680,7 @@ int Run(
     }
     return ExecuteOptions(
         options,
+        executable,
         catalog ? &*catalog : nullptr,
         skill_catalog ? &*skill_catalog : nullptr,
         client,

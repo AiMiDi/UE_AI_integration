@@ -42,6 +42,7 @@ try {
         'CLI/bin/ue-workflow.exe',
         'MCP/package.json',
         'MCP/dist/index.js',
+        'MCP/dist/local-capability-cli.js',
         'Resources/Capabilities/blueprint.json',
         'Resources/Capabilities/production.json',
         'Workflow/Contracts/contract-set.v1.json',
@@ -103,6 +104,33 @@ try {
     $skills = Invoke-JsonCommand $ue @('skills', '--limit', '1', '--json')
     Assert-Condition ($skills.ok -eq $true) 'Packaged Skills query failed.'
 
+    $offlineFixture = Join-Path $extractRoot 'offline-project'
+    $offlineConfig = Join-Path $offlineFixture 'Config'
+    New-Item -ItemType Directory -Path $offlineConfig -Force | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $offlineFixture 'Fixture.uproject'),
+        '{"EngineAssociation":"5.3","Plugins":[]}',
+        [Text.UTF8Encoding]::new($false))
+    $offlineSecret = 'release-smoke-must-not-leak-token'
+    [IO.File]::WriteAllText(
+        (Join-Path $offlineConfig 'DefaultEngine.ini'),
+        "[Online]`nApiToken=$offlineSecret`nEndpoint=https://example.invalid`n",
+        [Text.UTF8Encoding]::new($false))
+    $offlineParams = Join-Path $extractRoot 'offline-params.json'
+    [IO.File]::WriteAllText(
+        $offlineParams,
+        (@{ projectRoot = $offlineFixture } | ConvertTo-Json -Compress),
+        [Text.UTF8Encoding]::new($false))
+    $offline = Invoke-JsonCommand $ue @(
+        'production.project.config.get',
+        '--params-file', $offlineParams,
+        '--json')
+    Assert-Condition ($offline.ok -eq $true) 'Packaged localProject CLI query failed.'
+    Assert-Condition ($offline.meta.executionBackend -eq 'localProject') 'Packaged CLI did not select localProject.'
+    $offlineJson = $offline | ConvertTo-Json -Depth 20 -Compress
+    Assert-Condition (-not $offlineJson.Contains($offlineSecret)) 'Packaged localProject CLI leaked a sensitive .ini value.'
+    Assert-Condition ($offline.data.merged.Online.ApiToken.value -eq '<redacted>') 'Packaged localProject CLI did not redact ApiToken.'
+
     $node = Get-Command node -ErrorAction Stop
     $mcpSmoke = Join-Path $bundleRoot 'scripts/mcp_stdio_smoke.mjs'
     $mcpOutput = & $node.Source $mcpSmoke $bundleRoot 2>&1
@@ -138,6 +166,7 @@ try {
         version = $descriptor.VersionName
         fileCount = $manifest.files.Count
         mcpToolCount = $mcp.toolCount
+        localProjectCliChecked = $true
         workerChecked = [bool]$EngineRoot
         editorChecked = [bool]$EditorEndpoint
         testToolsChecked = [bool]$EditorEndpoint

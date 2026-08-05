@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <random>
 #include <string>
@@ -114,6 +115,46 @@ std::filesystem::path LocateSalCli(
     return {};
 }
 
+std::filesystem::path LocateLocalCapabilityCli(
+    const std::filesystem::path& executable)
+{
+    std::vector<std::filesystem::path> candidates;
+    if (const auto configured = Environment("UE_LOCAL_CAPABILITY_CLI"))
+    {
+        candidates.emplace_back(*configured);
+    }
+    std::error_code error;
+    const auto absolute_executable =
+        std::filesystem::absolute(executable, error);
+    if (!error && !absolute_executable.empty())
+    {
+        const auto bin = absolute_executable.parent_path();
+        candidates.push_back(
+            bin.parent_path().parent_path()
+                / "MCP" / "dist" / "local-capability-cli.js");
+    }
+    if (std::string(UE_CLI_SOURCE_ROOT).size() > 0)
+    {
+        candidates.push_back(
+            std::filesystem::path(UE_CLI_SOURCE_ROOT)
+                / "MCP" / "dist" / "local-capability-cli.js");
+    }
+    candidates.push_back(
+        std::filesystem::current_path()
+            / "MCP" / "dist" / "local-capability-cli.js");
+    for (auto candidate : candidates)
+    {
+        candidate = std::filesystem::absolute(candidate, error)
+            .lexically_normal();
+        if (!error && std::filesystem::is_regular_file(candidate, error))
+        {
+            return candidate;
+        }
+        error.clear();
+    }
+    return {};
+}
+
 std::string Quote(const std::filesystem::path& path)
 {
     std::string escaped = "\"";
@@ -204,6 +245,107 @@ int RunSalCliAdapter(
 #else
     return WIFEXITED(raw_exit) ? WEXITSTATUS(raw_exit) : 5;
 #endif
+}
+
+LocalCapabilityCliResult RunLocalCapabilityCliAdapter(
+    const std::string& capability,
+    const std::string& backend,
+    const std::string& params_json,
+    const std::string& request_id,
+    const std::filesystem::path& executable)
+{
+    LocalCapabilityCliResult result;
+    const auto script = LocateLocalCapabilityCli(executable);
+    if (script.empty())
+    {
+        result.exit_code = 4;
+        result.error =
+            "The packaged MCP/dist/local-capability-cli.js file is missing.";
+        return result;
+    }
+    auto params = nlohmann::json::parse(
+        params_json,
+        nullptr,
+        false,
+        true);
+    if (!params.is_object())
+    {
+        result.error = "Local capability params must be a JSON object.";
+        return result;
+    }
+    const auto stamp = std::chrono::steady_clock::now()
+        .time_since_epoch().count();
+    std::mt19937_64 random(
+        static_cast<std::mt19937_64::result_type>(stamp));
+    const std::string nonce = std::to_string(stamp) + "-"
+        + std::to_string(random());
+    const auto temporary = std::filesystem::temp_directory_path();
+    const auto args_file = temporary
+        / ("ue-local-capability-args-" + nonce + ".json");
+    const auto result_file = temporary
+        / ("ue-local-capability-result-" + nonce + ".json");
+    {
+        std::ofstream stream(
+            args_file,
+            std::ios::binary | std::ios::trunc);
+        if (!stream)
+        {
+            result.error =
+                "Local capability adapter could not create its bounded args file.";
+            return result;
+        }
+        stream << nlohmann::json({
+            { "capability", capability },
+            { "backend", backend },
+            { "params", std::move(params) },
+            { "requestId", request_id },
+        }).dump() << '\n';
+    }
+    const std::string command =
+        "node " + Quote(script)
+        + " --args-file " + Quote(args_file)
+        + " --result-file " + Quote(result_file);
+    const int raw_exit = std::system(command.c_str());
+    {
+        std::ifstream stream(result_file, std::ios::binary);
+        if (stream)
+        {
+            stream.seekg(0, std::ios::end);
+            const auto size = stream.tellg();
+            if (size >= 0 && size <= 8 * 1024 * 1024)
+            {
+                stream.seekg(0, std::ios::beg);
+                result.envelope.assign(
+                    std::istreambuf_iterator<char>(stream),
+                    std::istreambuf_iterator<char>());
+            }
+            else
+            {
+                result.error =
+                    "Local capability adapter response exceeded 8 MiB.";
+            }
+        }
+    }
+    std::error_code ignored;
+    std::filesystem::remove(args_file, ignored);
+    std::filesystem::remove(result_file, ignored);
+    if (raw_exit == -1)
+    {
+        result.exit_code = 4;
+        result.error = "Local capability adapter could not launch Node.js.";
+        return result;
+    }
+#if defined(_WIN32)
+    result.exit_code = raw_exit;
+#else
+    result.exit_code = WIFEXITED(raw_exit) ? WEXITSTATUS(raw_exit) : 5;
+#endif
+    if (result.envelope.empty() && result.error.empty())
+    {
+        result.error =
+            "Local capability adapter did not produce a response envelope.";
+    }
+    return result;
 }
 
 } // namespace ue::command
