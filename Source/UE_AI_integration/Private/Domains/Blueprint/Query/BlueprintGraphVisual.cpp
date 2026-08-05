@@ -521,8 +521,10 @@ TSharedRef<FJsonObject> BuildCaptureMetadataResult(
 	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 	for (const TCHAR* Field : {
 		TEXT("schema"), TEXT("captureId"), TEXT("blueprint"), TEXT("graph"),
-		TEXT("graphHash"), TEXT("format"), TEXT("mimeType"), TEXT("width"),
-		TEXT("height"), TEXT("renderFingerprint") })
+		TEXT("graphHash"), TEXT("scope"), TEXT("format"), TEXT("mimeType"),
+		TEXT("width"), TEXT("height"), TEXT("captureProvider"),
+		TEXT("capturedNodeIds"), TEXT("selectionPolicy"),
+		TEXT("renderFingerprint") })
 	{
 		if (const TSharedPtr<FJsonValue>* Value = Metadata->Values.Find(Field))
 		{

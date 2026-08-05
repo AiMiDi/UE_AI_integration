@@ -817,21 +817,34 @@ bool AvoidCommentOverlaps(
 			return LeftKey == RightKey ? Left.Id < Right.Id : LeftKey < RightKey;
 		});
 
-	TArray<UEdGraphNode_Comment*> FixedComments;
+	TSet<FGuid> MovableNodeIds = MovableCommentIds;
+	for (const FLayoutGroup* Group : MovableGroups)
+	{
+		MovableNodeIds.Append(Group->NodeIds);
+	}
+	FContext GeometryContext;
+	GeometryContext.Graph = Graph;
+	GeometryContext.GraphEditor = Editor;
+	TArray<FNodeBounds> FixedObstacles;
 	for (UEdGraphNode* Node : Graph->Nodes)
 	{
-		UEdGraphNode_Comment* Comment = Cast<UEdGraphNode_Comment>(Node);
-		if (Comment && !MovableCommentIds.Contains(Comment->NodeGuid))
+		if (!Node || MovableNodeIds.Contains(Node->NodeGuid))
 		{
-			FixedComments.Add(Comment);
+			continue;
+		}
+		if (const UEdGraphNode_Comment* Comment =
+				Cast<UEdGraphNode_Comment>(Node))
+		{
+			FixedObstacles.Add(StoredCommentBounds(Comment));
+			continue;
+		}
+		FNodeBounds Bounds;
+		if (TryGetNodeBounds(GeometryContext, Node, true, Bounds)
+			&& Bounds.bExact)
+		{
+			FixedObstacles.Add(Bounds);
 		}
 	}
-	FixedComments.Sort(
-		[](const UEdGraphNode_Comment& Left,
-			const UEdGraphNode_Comment& Right)
-		{
-			return Left.NodeGuid.ToString() < Right.NodeGuid.ToString();
-		});
 
 	for (const FLayoutGroup* Group : MovableGroups)
 	{
@@ -848,9 +861,8 @@ bool AvoidCommentOverlaps(
 		TSet<int32> YOffsets;
 		XOffsets.Add(0);
 		YOffsets.Add(0);
-		for (const UEdGraphNode_Comment* FixedComment : FixedComments)
+		for (const FNodeBounds& FixedBounds : FixedObstacles)
 		{
-			const FNodeBounds FixedBounds = StoredCommentBounds(FixedComment);
 			XOffsets.Add(FMath::CeilToInt(
 				FixedBounds.Right() - OriginalBounds.X + Tolerance));
 			XOffsets.Add(FMath::FloorToInt(
@@ -899,13 +911,13 @@ bool AvoidCommentOverlaps(
 			FNodeBounds CandidateBounds = OriginalBounds;
 			CandidateBounds.X += Candidate.X;
 			CandidateBounds.Y += Candidate.Y;
-			const bool bIntersects = FixedComments.ContainsByPredicate(
+			const bool bIntersects = FixedObstacles.ContainsByPredicate(
 				[&CandidateBounds, Tolerance](
-					const UEdGraphNode_Comment* FixedComment)
+					const FNodeBounds& FixedBounds)
 				{
 					return IntersectsWithTolerance(
 						CandidateBounds,
-						StoredCommentBounds(FixedComment),
+						FixedBounds,
 						Tolerance);
 				});
 			if (!bIntersects)
@@ -933,7 +945,7 @@ bool AvoidCommentOverlaps(
 		{
 			return false;
 		}
-		FixedComments.Add(Comment);
+		FixedObstacles.Add(StoredCommentBounds(Comment));
 	}
 	return RefreshGraphEditorLayout(Editor);
 }

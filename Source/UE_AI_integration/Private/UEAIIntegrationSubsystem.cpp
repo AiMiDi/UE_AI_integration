@@ -90,6 +90,9 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	const UUEAIIntegrationEditorSettings* Settings =
 		GetDefault<UUEAIIntegrationEditorSettings>();
 	bServerEnableRequested = Settings->bServerEnabled;
+	const bool bServerSuppressedForProcess = FParse::Param(
+		FCommandLine::Get(),
+		TEXT("UEAIDisableServer"));
 	ServerPort = Settings->Port;
 	ServerPort = FMath::Clamp(ServerPort, 1, 65535);
 
@@ -203,12 +206,15 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		*Executor,
 		*ClientActivityService,
 		BlueprintDebugService.Get());
-	if (!bServerEnableRequested)
+	if (!bServerEnableRequested || bServerSuppressedForProcess)
 	{
 		UE_LOG(
 			LogTemp,
 			Log,
-			TEXT("[UE_AI_integration] Local HTTP service is disabled in Editor user settings."));
+			TEXT("[UE_AI_integration] Local HTTP service is disabled %s."),
+			bServerSuppressedForProcess
+				? TEXT("for this process by -UEAIDisableServer")
+				: TEXT("in Editor user settings"));
 	}
 	else if (Server->Start(ServerPort))
 	{

@@ -654,9 +654,10 @@ TSharedPtr<FJsonObject> CaptureGraphStructure(UEdGraph* Graph)
 		NodeJson->SetStringField(TEXT("id"), StableNodeId(Node));
 		NodeJson->SetStringField(TEXT("name"), Node->GetName());
 		NodeJson->SetStringField(TEXT("class"), Node->GetClass()->GetName());
-		NodeJson->SetStringField(
-			TEXT("title"),
-			Node->GetNodeTitle(ENodeTitleType::ListView).ToString());
+		// GetNodeTitle is display text and may change with the active Editor
+		// culture (for example, Construction Script after a package reload).
+		// Durable structure hashes must only contain serialized identity/state;
+		// the object name, class, pins and explicit NodeComment cover that here.
 		NodeJson->SetNumberField(TEXT("x"), Node->NodePosX);
 		NodeJson->SetNumberField(TEXT("y"), Node->NodePosY);
 		NodeJson->SetStringField(TEXT("comment"), Node->NodeComment);

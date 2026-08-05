@@ -14,6 +14,7 @@
 #include "JsonObjectConverter.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/App.h"
+#include "Misc/ScopeExit.h"
 #include "SGraphNode.h"
 #include "SGraphPanel.h"
 #include "Tools/MCPToolBase.h"
@@ -456,6 +457,26 @@ inline bool TryCaptureSettledEditorGeometry(
 		return false;
 	}
 
+	// SGraphNode can switch its Slate LOD at low zoom, which changes desired
+	// size even though the node's Graph-space layout has not changed. Measure at
+	// the canonical 1.0 editor zoom, then restore the caller's view. The
+	// fingerprint still records the requested view so diagnostics can reproduce
+	// the session state without making its transform part of the bounds hash.
+	FVector2D RequestedViewOffset = FVector2D::ZeroVector;
+	float RequestedZoom = 1.0f;
+	Context.GraphEditor->GetViewLocation(RequestedViewOffset, RequestedZoom);
+	Context.GraphEditor->SetViewLocation(RequestedViewOffset, 1.0f);
+	ON_SCOPE_EXIT
+	{
+		if (Context.GraphEditor.IsValid())
+		{
+			Context.GraphEditor->SetViewLocation(
+				RequestedViewOffset,
+				RequestedZoom);
+			RefreshGraphEditorLayout(Context.GraphEditor);
+		}
+	};
+
 	TArray<UEdGraphNode*> Nodes;
 	Nodes.Reserve(RequestedNodes.Num());
 	for (UEdGraphNode* Node : RequestedNodes)
@@ -517,9 +538,6 @@ inline bool TryCaptureSettledEditorGeometry(
 		}
 		const FString CurrentBoundsHash = TEXT("sha256:") + BoundsDigest;
 
-		FVector2D ViewOffset = FVector2D::ZeroVector;
-		float Zoom = 1.0f;
-		Context.GraphEditor->GetViewLocation(ViewOffset, Zoom);
 		double ApplicationScale = FSlateApplication::Get().GetApplicationScale();
 		double DPIScale = 1.0;
 		const TSharedPtr<SWindow> Window =
@@ -539,8 +557,8 @@ inline bool TryCaptureSettledEditorGeometry(
 			&& PreviousBoundsHash == CurrentBoundsHash)
 		{
 			OutBounds = MoveTemp(CurrentBounds);
-			OutFingerprint.ViewOffset = ViewOffset;
-			OutFingerprint.Zoom = Zoom;
+			OutFingerprint.ViewOffset = RequestedViewOffset;
+			OutFingerprint.Zoom = RequestedZoom;
 			OutFingerprint.ApplicationScale = ApplicationScale;
 			OutFingerprint.DPIScale = DPIScale;
 			OutFingerprint.PassCount = PassIndex;
@@ -578,7 +596,11 @@ inline bool Intersects(const FNodeBounds& A, const FNodeBounds& B)
 
 inline FString ComputeGraphHash(UEdGraph* Graph)
 {
-	if (!Graph)
+	// Package reload keeps the superseded Graph object alive long enough to
+	// replace references to it. IsValid() intentionally still accepts that
+	// object, but its TObjectPtr node handles may already contain reload
+	// sentinels. Never inspect a Graph after a newer package version exists.
+	if (!IsValid(Graph) || Graph->HasAnyFlags(RF_NewerVersionExists))
 	{
 		return FString();
 	}
@@ -586,7 +608,7 @@ inline FString ComputeGraphHash(UEdGraph* Graph)
 	TArray<UEdGraphNode*> Nodes;
 	for (UEdGraphNode* Node : Graph->Nodes)
 	{
-		if (Node)
+		if (IsValid(Node) && !Node->HasAnyFlags(RF_NewerVersionExists))
 		{
 			Nodes.Add(Node);
 		}
