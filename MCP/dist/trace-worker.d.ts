@@ -48,8 +48,10 @@ export declare class TraceWorkerClient {
     private serviceStarting?;
     constructor(options?: TraceWorkerClientOptions);
     location(): TraceWorkerLocation;
-    handshake(requireKnownEngine?: boolean): Promise<Record<string, unknown>>;
-    execute(capability: string, params?: Record<string, unknown>, requestId?: string): Promise<UEExecuteData>;
+    handshake(requireKnownEngine?: boolean, signal?: AbortSignal): Promise<Record<string, unknown>>;
+    execute(capability: string, params?: Record<string, unknown>, requestId?: string, context?: {
+        signal?: AbortSignal;
+    }): Promise<UEExecuteData>;
     private assertMcpImportPath;
     private request;
     private validateHandshake;

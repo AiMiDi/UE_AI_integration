@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync, } from "node:fs";
 import { basename, isAbsolute, relative, resolve, sep, } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CAPABILITY_DOMAINS, } from "./capability-catalog.js";
+import { CAPABILITY_DOMAINS, capabilityIsReadOnly, } from "./capability-catalog.js";
 export const DEFAULT_SKILL_DIR = fileURLToPath(new URL("../../skills/", import.meta.url));
 export class AgentSkillCatalogError extends Error {
     constructor(message) {
@@ -162,7 +162,10 @@ function parseStep(value, location, capabilityIds, catalog) {
     }
     if (step.phase === "verify" &&
         step.optional !== true &&
-        operations.some((operation) => !catalog.get(operation)?.traits.readOnly)) {
+        operations.some((operation) => {
+            const capability = catalog.get(operation);
+            return !capability || !capabilityIsReadOnly(capability);
+        })) {
         throw new AgentSkillCatalogError(`${location} contains a write in a non-optional verify step`);
     }
     return {
@@ -206,7 +209,7 @@ function parseRecipe(value, location, capabilityIds, catalog) {
     }
     const operationDescriptors = steps.flatMap((step) => step.operations.map((operation) => catalog.get(operation)));
     if (risk === "readOnly" &&
-        operationDescriptors.some((capability) => !capability.traits.readOnly || capability.traits.destructive)) {
+        operationDescriptors.some((capability) => !capabilityIsReadOnly(capability) || capability.traits.destructive)) {
         throw new AgentSkillCatalogError(`${location}.risk readOnly may reference only read-only, non-destructive capabilities`);
     }
     if (risk === "safeWrite" &&

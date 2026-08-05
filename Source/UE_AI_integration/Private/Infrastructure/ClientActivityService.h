@@ -52,6 +52,8 @@ public:
 	static constexpr int32 ExpiresAfterMs = 15000;
 
 	FClientActivityService() = default;
+	static void SetActiveService(FClientActivityService* Service);
+	static FClientActivityService* GetActiveService();
 
 	bool RegisterClient(
 		const FClientRegistration& Registration,
@@ -93,6 +95,23 @@ public:
 	int32 GetOnlineMcpCount() const;
 	int32 GetRunningCliCount() const;
 	FString GetLastExecutionResult() const;
+	bool AcquireLease(
+		const FString& Type,
+		const FString& SessionId,
+		bool bOverride,
+		const FString& ApprovePlanDigest,
+		TSharedPtr<FJsonObject>& OutLease,
+		FString& OutError,
+		int32& OutHttpStatus);
+	bool ReleaseLease(
+		const FString& Type,
+		const FString& SessionId,
+		FString& OutError);
+	bool CanAccessLease(
+		const FString& Type,
+		const FString& SessionId,
+		FString& OutOwnerSessionId);
+	TSharedPtr<FJsonObject> MakeLeaseSnapshot() const;
 
 private:
 	struct FSession
@@ -153,6 +172,14 @@ private:
 		int64 OperationSucceeded = 0;
 		uint64 LastTouchedOrdinal = 0;
 	};
+	struct FLease
+	{
+		FString Type;
+		FString OwnerSessionId;
+		FString AcquiredAtUtc;
+		FString ExpiresAtUtc;
+		double ExpiresSeconds = 0.0;
+	};
 
 	struct FStatistics
 	{
@@ -211,6 +238,8 @@ private:
 	mutable FCriticalSection Mutex;
 	TMap<FString, FSession> Sessions;
 	TMap<FString, FString> SessionByInstanceId;
+	TMap<FString, FLease> Leases;
+	TArray<TSharedPtr<FJsonObject>> LeaseAudit;
 	TArray<FCliInvocation> CliInvocations;
 	TArray<FActivity> Activities;
 	FStatistics Statistics;

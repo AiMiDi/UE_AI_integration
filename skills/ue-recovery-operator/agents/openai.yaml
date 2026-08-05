@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE Recovery Operator"
+  short_description: "Recover bounded UE agent work with approval gates."
+  default_prompt: "Use $ue-recovery-operator to recover this interrupted Unreal task with bounded retries, checkpoints, source-control preflight, and final verification."

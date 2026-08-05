@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 
-import { loadCapabilityCatalog } from "../capability-catalog.js";
+import { capabilityIsReadOnly, loadCapabilityCatalog } from "../capability-catalog.js";
 import { runDomainOperation } from "../domain-router.js";
 import {
   handleContext,
@@ -32,7 +32,7 @@ function textPayload(response: ReturnType<typeof handleAgentSkills>) {
   return JSON.parse(response.content[0].text);
 }
 
-test("loads ten validated skill packages with complete recipe phases", () => {
+test("loads eleven validated skill packages with complete recipe phases", () => {
   const capabilities = loadCapabilityCatalog();
   const skills = loadAgentSkillCatalog(capabilities);
 
@@ -44,8 +44,9 @@ test("loads ten validated skill packages with complete recipe phases", () => {
       "ue-blueprint-diagnose",
       "ue-blueprint-graph-organize",
       "ue-landscape-authoring",
-      "ue-performance-regression",
-      "ue-render-debug-capture",
+    "ue-performance-regression",
+    "ue-recovery-operator",
+    "ue-render-debug-capture",
       "ue-trace-insights",
       "ue-umg-authoring",
       "ue-world-partition-validate",
@@ -86,8 +87,9 @@ test("projects only read-only operations into See Results", () => {
     for (const guide of loaded.guides) {
       for (const step of guide.seeResults) {
         for (const operation of step.operations) {
+          const capability = capabilities.get(operation.operation);
           assert.equal(
-            capabilities.get(operation.operation)?.traits.readOnly,
+            capability ? capabilityIsReadOnly(capability) : false,
             true,
             `${skill.id}:${operation.operation}`,
           );

@@ -82,7 +82,7 @@ function Write-BundleManifest(
     }
     $Manifest = [ordered]@{
         schema = 'ue.trace-worker-bundle.v1'
-        workerVersion = '0.9.0'
+        workerVersion = '1.0.0'
         engineVersion = $EngineVersion
         protocolVersion = 1
         contractDigest = $Evidence.contractDigest
@@ -158,7 +158,7 @@ try {
     $Descriptor = [ordered]@{
         FileVersion = 3
         Version = 900
-        VersionName = '0.9.0'
+        VersionName = '1.0.0'
         FriendlyName = 'UE AI Integration Fixture'
     }
     [IO.File]::WriteAllText(
@@ -218,7 +218,7 @@ try {
 
     $Result = Invoke-Preflight $Staging $Install '5.3'
     if ($Result.schema -ne 'ue.plugin-install-preflight.v1' -or
-        $Result.version -ne '0.9.0' -or
+        $Result.version -ne '1.0.0' -or
         $Result.engineVersion -ne '5.3' -or
         [IO.Path]::GetFullPath([string]$Result.engineDirectory) -ne
             [IO.Path]::GetFullPath($FakeEngineDirectory) -or
@@ -335,7 +335,7 @@ try {
         -EngineVersion '5.3' `
         -EngineRoot $FakeEngineRoot | Out-String) | ConvertFrom-Json
     if ($InstallResult.schema -ne 'ue.plugin-install.v1' -or
-        $InstallResult.version -ne '0.9.0' -or
+        $InstallResult.version -ne '1.0.0' -or
         $InstallResult.engineVersion -ne '5.3' -or
         -not (Test-Path -LiteralPath (
             Join-Path $Install 'UE_AI_integration.uplugin') -PathType Leaf) -or

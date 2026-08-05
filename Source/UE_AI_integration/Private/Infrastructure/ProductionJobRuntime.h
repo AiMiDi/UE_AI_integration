@@ -241,6 +241,14 @@ private:
 		const TSharedPtr<FJsonObject>& Params) const;
 	FMCPToolResult GetSourceControlDiff(
 		const TSharedPtr<FJsonObject>& Params) const;
+	FMCPToolResult GetSourceControlProvider(
+		const TSharedPtr<FJsonObject>& Params) const;
+	FMCPToolResult RefreshSourceControlStatus(
+		const TSharedPtr<FJsonObject>& Params) const;
+	FMCPToolResult CheckoutSourceControlFiles(
+		const TSharedPtr<FJsonObject>& Params) const;
+	FMCPToolResult RevertUnchangedSourceControlFiles(
+		const TSharedPtr<FJsonObject>& Params) const;
 	FMCPToolResult PlanSourceControlChange(
 		const TSharedPtr<FJsonObject>& Params) const;
 	FMCPToolResult ExecuteSourceControlChange(

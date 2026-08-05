@@ -23,6 +23,7 @@ public:
         std::string& error);
 
     const nlohmann::json* Find(const std::string& id) const;
+    const nlohmann::json* FindTombstone(const std::string& id) const;
     const std::map<std::string, nlohmann::json>& Descriptors() const;
     const std::filesystem::path& Root() const;
     std::size_t Size() const;
@@ -35,6 +36,7 @@ private:
 
     std::filesystem::path root_;
     std::map<std::string, nlohmann::json> descriptors_;
+    std::map<std::string, nlohmann::json> tombstones_;
 };
 
 std::optional<std::filesystem::path> ResolveCapabilityRoot(

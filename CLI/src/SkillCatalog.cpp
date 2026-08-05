@@ -667,8 +667,12 @@ bool ValidateSkill(
                 const json traits = descriptor->value(
                     "traits",
                     json::object());
-                const bool read_only =
-                    traits.value("readOnly", false);
+                const auto effects = descriptor->find("effects");
+                const bool read_only = effects != descriptor->end()
+                    && effects->is_object()
+                    && effects->value("asset", std::string("write")) != "write"
+                    && effects->value("world", std::string("write")) != "write"
+                    && effects->value("external", std::string("write")) != "write";
                 const bool destructive =
                     traits.value("destructive", false);
                 const std::string dsl_risk =

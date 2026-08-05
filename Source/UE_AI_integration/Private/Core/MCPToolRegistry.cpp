@@ -146,6 +146,20 @@ void FMCPToolRegistry::CancelAsyncTools(const FString& Reason)
 	}
 }
 
+bool FMCPToolRegistry::CancelAsyncTool(
+	const FString& Name,
+	const FString& Reason)
+{
+	check(IsInGameThread());
+	FMCPToolBase* Tool = FindTool(Name);
+	if (!Tool || !Tool->SupportsAsyncExecution())
+	{
+		return false;
+	}
+	Tool->CancelAsyncExecution(Reason);
+	return true;
+}
+
 bool FMCPToolRegistry::LoadCapabilityManifests()
 {
 	const TSharedPtr<IPlugin> Plugin =
@@ -154,6 +168,7 @@ bool FMCPToolRegistry::LoadCapabilityManifests()
 	{
 		CapabilityDescriptors.Reset();
 		CapabilitySchemas.Reset();
+		CapabilityTombstones.Reset();
 		DomainCounts.Reset();
 		ValidationErrors = RegistrationErrors;
 		ValidationErrors.AddUnique(
@@ -180,6 +195,7 @@ bool FMCPToolRegistry::LoadCapabilityManifestsFromDirectory(const FString& Direc
 		CapabilityDescriptors.Add(MoveTemp(Descriptor.Json));
 	}
 	CapabilitySchemas = MoveTemp(Catalog.InputSchemas);
+	CapabilityTombstones = MoveTemp(Catalog.Tombstones);
 	DomainCounts = MoveTemp(Catalog.DomainCounts);
 
 	ValidationErrors = RegistrationErrors;
@@ -237,11 +253,38 @@ bool FMCPToolRegistry::ValidateParams(
 void FMCPToolRegistry::ValidateExactBindings()
 {
 	TSet<FString> ManifestIds;
+	TSet<FString> EditorImplementationRequiredIds;
 	for (const TSharedPtr<FJsonObject>& Descriptor : CapabilityDescriptors)
 	{
 		if (Descriptor.IsValid())
 		{
-			ManifestIds.Add(Descriptor->GetStringField(TEXT("id")));
+			const FString Id = Descriptor->GetStringField(TEXT("id"));
+			ManifestIds.Add(Id);
+			bool bRequiresEditorImplementation = true;
+			const TSharedPtr<FJsonObject>* Execution = nullptr;
+			if (Descriptor->TryGetObjectField(TEXT("execution"), Execution)
+				&& Execution
+				&& Execution->IsValid()
+				&& (*Execution)->HasTypedField<EJson::Array>(TEXT("backends")))
+			{
+				bRequiresEditorImplementation = false;
+				for (const TSharedPtr<FJsonValue>& Backend :
+					(*Execution)->GetArrayField(TEXT("backends")))
+				{
+					FString Name;
+					if (Backend.IsValid()
+						&& Backend->TryGetString(Name)
+						&& Name == TEXT("editor"))
+					{
+						bRequiresEditorImplementation = true;
+						break;
+					}
+				}
+			}
+			if (bRequiresEditorImplementation)
+			{
+				EditorImplementationRequiredIds.Add(Id);
+			}
 		}
 	}
 
@@ -259,7 +302,8 @@ void FMCPToolRegistry::ValidateExactBindings()
 		}
 	}
 
-	TArray<FString> SortedManifestIds = ManifestIds.Array();
+	TArray<FString> SortedManifestIds =
+		EditorImplementationRequiredIds.Array();
 	SortedManifestIds.Sort();
 	for (const FString& ManifestId : SortedManifestIds)
 	{

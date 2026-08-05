@@ -12,7 +12,7 @@ import sys
 from mcp_client import MCPApiError, UEAIIntegrationClient
 
 
-EXPECTED_VERSION = "0.9.0"
+EXPECTED_VERSION = "1.0.0"
 MANIFEST_DIRECTORY = (
     pathlib.Path(__file__).resolve().parents[1] / "Resources" / "Capabilities"
 )

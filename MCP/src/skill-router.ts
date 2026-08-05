@@ -1,4 +1,4 @@
-import { type CapabilityDomain } from "./capability-catalog.js";
+import { capabilityIsReadOnly, type CapabilityDomain } from "./capability-catalog.js";
 import {
   type AgentSkillCatalog,
   type AgentSkillDescriptor,
@@ -140,7 +140,7 @@ function recipeGuide(
           operation,
           traits: capability?.traits,
           risk: capability?.dsl?.risk,
-          note: capability?.traits.readOnly
+          note: capability && capabilityIsReadOnly(capability)
             ? "Use the exact params returned by ue_context."
             : "Execute only when this step's condition and caller authorization are satisfied. Use exact ue_context params and put requestId in the domain-tool envelope.",
         };
@@ -154,7 +154,10 @@ function recipeGuide(
     optional: step.optional ?? false,
     route: "domain" as const,
     operations: step.operations
-      .filter((operation) => catalog.operation(operation)?.traits.readOnly)
+      .filter((operation) => {
+        const capability = catalog.operation(operation);
+        return capability !== undefined && capabilityIsReadOnly(capability);
+      })
       .map((operation) => ({
         tool: executionTool(operation),
         operation,

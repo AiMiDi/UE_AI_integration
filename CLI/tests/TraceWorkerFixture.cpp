@@ -153,7 +153,7 @@ nlohmann::json Handle(const nlohmann::json& request)
         data = {
             { "schema", "ue.trace-worker-handshake.v1" },
             { "protocolVersion", 1 },
-            { "workerVersion", "0.9.0" },
+            { "workerVersion", "1.0.0" },
             { "engineVersion", "5.3.2-fixture" },
             { "contractBound", true },
             { "contractDigest", EnvironmentOr(
@@ -204,7 +204,7 @@ nlohmann::json Handle(const nlohmann::json& request)
                 } },
                 { "meta", {
                     { "requestId", request.value("requestId", "") },
-                    { "workerVersion", "0.9.0" },
+                    { "workerVersion", "1.0.0" },
                     { "engineVersion", "5.3.2-fixture" },
                     { "backend", "localTrace" },
                 } },
@@ -266,7 +266,7 @@ nlohmann::json Handle(const nlohmann::json& request)
         { "data", std::move(data) },
         { "meta", {
             { "requestId", request.value("requestId", "") },
-            { "workerVersion", "0.9.0" },
+            { "workerVersion", "1.0.0" },
             { "engineVersion", "5.3.2-fixture" },
             { "backend", "localTrace" },
         } },

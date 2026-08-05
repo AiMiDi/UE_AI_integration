@@ -702,12 +702,12 @@ function productionCapabilities(
   production: Record<string, unknown>,
 ): Map<string, Record<string, unknown>> {
   if (
-    production.schemaVersion !== 2 ||
+    production.schemaVersion !== 3 ||
     production.domain !== "production" ||
     !Array.isArray(production.capabilities) ||
     production.capabilities.length === 0
   ) {
-    throw new Error("production.json is not a production capability manifest v2.");
+    throw new Error("production.json is not a production capability manifest v3.");
   }
   const capabilities = new Map<string, Record<string, unknown>>();
   for (const candidate of production.capabilities) {
@@ -959,13 +959,14 @@ export class TraceWorkerClient {
 
   async handshake(
     requireKnownEngine = false,
+    signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
     const requestId = randomUUID();
     const data = await this.request({
       schema: TRACE_WORKER_PROTOCOL,
       action: "handshake",
       requestId,
-    });
+    }, signal);
     this.validateHandshake(data, requireKnownEngine);
     return data;
   }
@@ -974,13 +975,17 @@ export class TraceWorkerClient {
     capability: string,
     params: Record<string, unknown> = {},
     requestId?: string,
+    context?: { signal?: AbortSignal },
   ): Promise<UEExecuteData> {
-    await this.handshake(true);
+    await this.handshake(true, context?.signal);
     let effectiveParams = params;
     if (this.restrictImportRoots && capability === "production.trace.import") {
       effectiveParams = {
         ...params,
-        tracePath: await this.assertMcpImportPath(params.tracePath),
+        tracePath: await this.assertMcpImportPath(
+          params.tracePath,
+          context?.signal,
+        ),
       };
     }
     return this.request({
@@ -989,10 +994,13 @@ export class TraceWorkerClient {
       requestId: requestId ?? randomUUID(),
       capability,
       params: effectiveParams,
-    });
+    }, context?.signal);
   }
 
-  private async assertMcpImportPath(tracePath: unknown): Promise<string> {
+  private async assertMcpImportPath(
+    tracePath: unknown,
+    signal?: AbortSignal,
+  ): Promise<string> {
     if (typeof tracePath !== "string" || tracePath.length === 0) {
       throw new UEApiError({
         code: "trace_path_required",
@@ -1008,7 +1016,7 @@ export class TraceWorkerClient {
         message: "The Trace import file does not exist or cannot be resolved.",
       });
     }
-    const handshake = await this.handshake(true);
+    const handshake = await this.handshake(true, signal);
     const roots = [resolve(this.projectRoot, "Saved")];
     if (typeof handshake.storeRoot === "string" && handshake.storeRoot) {
       roots.push(resolve(handshake.storeRoot));
@@ -1038,7 +1046,15 @@ export class TraceWorkerClient {
 
   private async request(
     request: TraceWorkerRequest,
+    signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
+    if (signal?.aborted) {
+      throw new UEApiError({
+        code: "request_cancelled",
+        message: "The MCP client cancelled the local Worker request.",
+        details: { requestId: request.requestId, cancelPending: false },
+      });
+    }
     const encoded = Buffer.from(JSON.stringify(request), "utf8");
     if (encoded.byteLength === 0 || encoded.byteLength > MAX_FRAME_BYTES) {
       throw new UEApiError({
@@ -1047,8 +1063,8 @@ export class TraceWorkerClient {
       });
     }
     return this.transport === "stdio"
-      ? this.requestStdio(encoded, request.requestId)
-      : this.requestService(encoded, request.requestId);
+      ? this.requestStdio(encoded, request.requestId, signal)
+      : this.requestService(encoded, request.requestId, signal);
   }
 
   private validateHandshake(
@@ -1264,6 +1280,7 @@ export class TraceWorkerClient {
   private async requestService(
     encoded: Buffer,
     requestId: string,
+    signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
     const { path: executable, engineVersion, engineDirectory } =
       this.resolveExecutable();
@@ -1291,6 +1308,13 @@ export class TraceWorkerClient {
       spawned = await this.startService(executable, endpoint, engineDirectory);
     }
     while (!socket && Date.now() < startupDeadline) {
+      if (signal?.aborted) {
+        throw new UEApiError({
+          code: "request_cancelled",
+          message: "The MCP client cancelled while the Trace Worker service was starting.",
+          details: { requestId, cancelPending: false },
+        });
+      }
       if (spawned?.exitCode !== null && spawned?.exitCode !== undefined) {
         throw new UEApiError({
           code: "trace_worker_crashed",
@@ -1333,10 +1357,26 @@ export class TraceWorkerClient {
         );
       }, remaining);
       timer.unref?.();
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket?.destroy();
+        reject(
+          new UEApiError({
+            code: "request_cancelled",
+            message: "The MCP client cancelled the local Worker request.",
+            details: { requestId, cancelPending: true },
+          }),
+        );
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const clearAbort = () => signal?.removeEventListener("abort", onAbort);
       const fail = (error: UEApiError) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearAbort();
         socket?.destroy();
         reject(error);
       };
@@ -1374,6 +1414,7 @@ export class TraceWorkerClient {
             const data = this.unwrapEnvelope(envelope, 0, requestId);
             settled = true;
             clearTimeout(timer);
+            clearAbort();
             socket?.end();
             resolveResponse(data);
           } catch (error) {
@@ -1408,6 +1449,7 @@ export class TraceWorkerClient {
   private requestStdio(
     encoded: Buffer,
     requestId: string,
+    signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
     const { path: executable, engineDirectory } = this.resolveExecutable();
     return new Promise((resolvePromise, reject) => {
@@ -1427,7 +1469,19 @@ export class TraceWorkerClient {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         reject(error);
+      };
+      const onAbort = () => {
+        if (settled) return;
+        child.kill();
+        finishError(
+          new UEApiError({
+            code: "request_cancelled",
+            message: "The MCP client cancelled the local Worker process.",
+            details: { requestId, cancelPending: false },
+          }),
+        );
       };
       const timer = setTimeout(() => {
         child.kill();
@@ -1439,6 +1493,7 @@ export class TraceWorkerClient {
         );
       }, this.timeoutMs);
       timer.unref?.();
+      signal?.addEventListener("abort", onAbort, { once: true });
       child.stdout?.setEncoding("utf8");
       child.stderr?.setEncoding("utf8");
       child.stdout?.on("data", (chunk: string) => {
@@ -1463,6 +1518,7 @@ export class TraceWorkerClient {
           envelope = JSON.parse(stdout.trim());
           const data = this.unwrapEnvelope(envelope, code ?? 1, requestId);
           settled = true;
+          signal?.removeEventListener("abort", onAbort);
           resolvePromise(data);
         } catch (error) {
           if (error instanceof UEApiError) {

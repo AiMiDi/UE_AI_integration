@@ -1437,31 +1437,31 @@ public:
 // ============================================================
 // set_node_comment
 // ============================================================
-class FTool_SetNodeComment : public FMCPToolBase
+class FTool_SetCommentTitle : public FMCPToolBase
 {
 public:
 	FString GetCapabilityId() const override
 	{
-		return TEXT("blueprint.node.comment.set");
+		return TEXT("blueprint.comment.title.set");
 	}
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		FString BlueprintName = Params->GetStringField(TEXT("blueprint"));
-		FString NodeId = Params->GetStringField(TEXT("nodeId"));
-		FString Comment = Params->GetStringField(TEXT("comment"));
+		FString NodeId = Params->GetStringField(TEXT("commentNodeId"));
+		FString Title = Params->GetStringField(TEXT("title"));
 
 		FString LoadError;
 		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(BlueprintName, LoadError);
 		if (!BP) return FMCPToolResult::Error(LoadError);
 
-		UEdGraphNode* Node = MCPHelpers::FindNodeByGuid(BP, NodeId);
-		if (!Node) return FMCPToolResult::Error(TEXT("Node not found"));
+		UEdGraphNode_Comment* Node = Cast<UEdGraphNode_Comment>(
+			MCPHelpers::FindNodeByGuid(BP, NodeId));
+		if (!Node) return FMCPToolResult::Error(TEXT("Comment node not found"));
 
 		FString OldComment = Node->NodeComment;
 		Node->Modify();
-		Node->NodeComment = Comment;
-		Node->bCommentBubbleVisible = !Comment.IsEmpty();
+		Node->NodeComment = Title;
 		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, false);
 
 		const bool bSaved =
@@ -1470,8 +1470,48 @@ public:
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
-		Result->SetStringField(TEXT("oldComment"), OldComment);
-		Result->SetStringField(TEXT("newComment"), Comment);
+		Result->SetStringField(TEXT("oldTitle"), OldComment);
+		Result->SetStringField(TEXT("newTitle"), Title);
+		Result->SetBoolField(TEXT("bubbleVisible"), Node->bCommentBubbleVisible);
+		Result->SetBoolField(TEXT("saved"), bSaved);
+		return FMCPToolResult::Ok(Result);
+	}
+};
+
+class FTool_SetCommentBubble : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("blueprint.comment.bubble.set");
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		const FString BlueprintName = Params->GetStringField(TEXT("blueprint"));
+		const FString NodeId = Params->GetStringField(TEXT("commentNodeId"));
+		bool bVisible = false;
+		if (!Params->TryGetBoolField(TEXT("visible"), bVisible))
+		{
+			return FMCPToolResult::Error(TEXT("visible is required"), TEXT("invalid_params"), 422);
+		}
+		FString LoadError;
+		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(BlueprintName, LoadError);
+		if (!BP) return FMCPToolResult::Error(LoadError);
+		UEdGraphNode_Comment* Node = Cast<UEdGraphNode_Comment>(
+			MCPHelpers::FindNodeByGuid(BP, NodeId));
+		if (!Node) return FMCPToolResult::Error(TEXT("Comment node not found"));
+		const bool bOldVisible = Node->bCommentBubbleVisible;
+		Node->Modify();
+		Node->bCommentBubbleVisible = bVisible;
+		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, false);
+		const bool bSaved = UEAIIntegration::Workflow::ShouldSaveImmediately(Params)
+			&& MCPHelpers::SaveBlueprintPackage(BP);
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), true);
+		Result->SetBoolField(TEXT("oldVisible"), bOldVisible);
+		Result->SetBoolField(TEXT("visible"), bVisible);
+		Result->SetStringField(TEXT("title"), Node->NodeComment);
 		Result->SetBoolField(TEXT("saved"), bSaved);
 		return FMCPToolResult::Ok(Result);
 	}
@@ -1624,7 +1664,8 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_MoveNode>());
 		Registry.Register(MakeShared<FTool_SetPinDefault>());
 		Registry.Register(MakeShared<FTool_DuplicateNodes>());
-		Registry.Register(MakeShared<FTool_SetNodeComment>());
+		Registry.Register(MakeShared<FTool_SetCommentTitle>());
+		Registry.Register(MakeShared<FTool_SetCommentBubble>());
 		Registry.Register(MakeShared<FTool_RefreshAllNodes>());
 		Registry.Register(MakeShared<FTool_RenameAsset>());
 		Registry.Register(MakeShared<FTool_SetBlueprintDefault>());

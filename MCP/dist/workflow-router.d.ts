@@ -17,8 +17,8 @@ export declare const UE_WORKFLOW_TOOL_SCHEMA: z.ZodObject<{
     action: "status" | "validate" | "plan" | "execute" | "resume" | "rollback";
     confirmWrite?: boolean | undefined;
     details?: boolean | undefined;
-    workflow?: Record<string, unknown> | undefined;
     approvePlanDigest?: string | undefined;
+    workflow?: Record<string, unknown> | undefined;
     runId?: string | undefined;
     saveOnSuccess?: boolean | undefined;
     detailLevel?: "summary" | "full" | "standard" | undefined;
@@ -27,8 +27,8 @@ export declare const UE_WORKFLOW_TOOL_SCHEMA: z.ZodObject<{
     action: "status" | "validate" | "plan" | "execute" | "resume" | "rollback";
     confirmWrite?: boolean | undefined;
     details?: boolean | undefined;
-    workflow?: Record<string, unknown> | undefined;
     approvePlanDigest?: string | undefined;
+    workflow?: Record<string, unknown> | undefined;
     runId?: string | undefined;
     saveOnSuccess?: boolean | undefined;
     detailLevel?: "summary" | "full" | "standard" | undefined;
@@ -48,8 +48,8 @@ export declare const UE_WORKFLOW_INPUT_SCHEMA: z.ZodEffects<z.ZodObject<{
     action: "status" | "validate" | "plan" | "execute" | "resume" | "rollback";
     confirmWrite?: boolean | undefined;
     details?: boolean | undefined;
-    workflow?: Record<string, unknown> | undefined;
     approvePlanDigest?: string | undefined;
+    workflow?: Record<string, unknown> | undefined;
     runId?: string | undefined;
     saveOnSuccess?: boolean | undefined;
     detailLevel?: "summary" | "full" | "standard" | undefined;
@@ -58,8 +58,8 @@ export declare const UE_WORKFLOW_INPUT_SCHEMA: z.ZodEffects<z.ZodObject<{
     action: "status" | "validate" | "plan" | "execute" | "resume" | "rollback";
     confirmWrite?: boolean | undefined;
     details?: boolean | undefined;
-    workflow?: Record<string, unknown> | undefined;
     approvePlanDigest?: string | undefined;
+    workflow?: Record<string, unknown> | undefined;
     runId?: string | undefined;
     saveOnSuccess?: boolean | undefined;
     detailLevel?: "summary" | "full" | "standard" | undefined;
@@ -68,8 +68,8 @@ export declare const UE_WORKFLOW_INPUT_SCHEMA: z.ZodEffects<z.ZodObject<{
     action: "status" | "validate" | "plan" | "execute" | "resume" | "rollback";
     confirmWrite?: boolean | undefined;
     details?: boolean | undefined;
-    workflow?: Record<string, unknown> | undefined;
     approvePlanDigest?: string | undefined;
+    workflow?: Record<string, unknown> | undefined;
     runId?: string | undefined;
     saveOnSuccess?: boolean | undefined;
     detailLevel?: "summary" | "full" | "standard" | undefined;
@@ -78,8 +78,8 @@ export declare const UE_WORKFLOW_INPUT_SCHEMA: z.ZodEffects<z.ZodObject<{
     action: "status" | "validate" | "plan" | "execute" | "resume" | "rollback";
     confirmWrite?: boolean | undefined;
     details?: boolean | undefined;
-    workflow?: Record<string, unknown> | undefined;
     approvePlanDigest?: string | undefined;
+    workflow?: Record<string, unknown> | undefined;
     runId?: string | undefined;
     saveOnSuccess?: boolean | undefined;
     detailLevel?: "summary" | "full" | "standard" | undefined;
@@ -87,8 +87,8 @@ export declare const UE_WORKFLOW_INPUT_SCHEMA: z.ZodEffects<z.ZodObject<{
 }>;
 export type UEWorkflowInput = z.infer<typeof UE_WORKFLOW_INPUT_SCHEMA>;
 export interface WorkflowExecutor {
-    workflow(request: UEWorkflowRequest): Promise<UEWorkflowData>;
+    workflow(request: UEWorkflowRequest, signal?: AbortSignal): Promise<UEWorkflowData>;
 }
-export declare function runWorkflowAction(executor: WorkflowExecutor, request: UEWorkflowInput): Promise<MCPResponse>;
-export declare function handleWorkflowInput(executor: WorkflowExecutor, value: unknown): Promise<MCPResponse>;
+export declare function runWorkflowAction(executor: WorkflowExecutor, request: UEWorkflowInput, signal?: AbortSignal): Promise<MCPResponse>;
+export declare function handleWorkflowInput(executor: WorkflowExecutor, value: unknown, signal?: AbortSignal): Promise<MCPResponse>;
 export declare function parseWorkflowInput(value: unknown): UEWorkflowInput;

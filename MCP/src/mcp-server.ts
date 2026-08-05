@@ -54,6 +54,10 @@ import {
 } from "./skill-catalog.js";
 import { handleAgentSkills } from "./skill-router.js";
 import { TraceWorkerClient } from "./trace-worker.js";
+import { RecipeRunnerExecutor } from "./recipe-executor.js";
+import { LocalAssetExecutor, LocalProjectExecutor } from "./project-executor.js";
+import { SalExecutor } from "./sal-executor.js";
+import { DevelopmentBridgeExecutor } from "./development-bridge.js";
 
 export const MCP_TOOL_NAMES = [
   "ue_status",
@@ -79,8 +83,12 @@ export interface UEConnectionClient {
     id: string,
     params?: Record<string, unknown>,
     requestId?: string,
+    context?: { signal?: AbortSignal },
   ): Promise<Record<string, unknown>>;
-  workflow(request: UEWorkflowRequest): Promise<UEWorkflowData>;
+  workflow(
+    request: UEWorkflowRequest,
+    signal?: AbortSignal,
+  ): Promise<UEWorkflowData>;
 }
 
 export interface CreateMcpServerOptions {
@@ -90,6 +98,11 @@ export interface CreateMcpServerOptions {
   cliLocator?: () => CliLocationResult;
   shortCliLocator?: () => CliLocationResult;
   localTraceExecutor?: CapabilityExecutor;
+  localRecipeExecutor?: CapabilityExecutor;
+  localProjectExecutor?: CapabilityExecutor;
+  localAssetExecutor?: CapabilityExecutor;
+  localSalExecutor?: CapabilityExecutor;
+  developmentRuntimeExecutor?: CapabilityExecutor;
 }
 
 export interface UEAIIntegrationMcpServer {
@@ -106,7 +119,9 @@ interface CapabilityQueryArgs {
   domain?: CapabilityDomain;
   operation?: string;
   kind?: CapabilityKind;
-  readOnly?: boolean;
+  effect?: `${"asset" | "world" | "editorSession" | "external"}:${"none" | "read" | "write"}`;
+  lifecycle?: "active" | "deprecated";
+  canonicalOnly?: boolean;
   destructive?: boolean;
   expensive?: boolean;
   outputKind?: CapabilityOutputKind;
@@ -120,6 +135,53 @@ interface RankedCapability {
   match?: CapabilitySearchMatch;
 }
 
+type ProgressToken = string | number;
+type ProgressNotifier = (notification: {
+  method: "notifications/progress";
+  params: {
+    progressToken: ProgressToken;
+    progress: number;
+    message?: string;
+  };
+}) => Promise<void>;
+
+async function withMcpProgress<T>(
+  signal: AbortSignal,
+  progressToken: ProgressToken | undefined,
+  notify: ProgressNotifier,
+  phase: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  let heartbeat = 0;
+  const startedAt = Date.now();
+  const timer =
+    progressToken === undefined
+      ? undefined
+      : setInterval(() => {
+          if (signal.aborted) return;
+          heartbeat += 1;
+          void notify({
+            method: "notifications/progress",
+            params: {
+              progressToken,
+              progress: heartbeat,
+              message: JSON.stringify({
+                phase,
+                heartbeatAt: new Date().toISOString(),
+                lastProgressAt: new Date(startedAt).toISOString(),
+                lastLog: "Waiting for the current safe execution boundary.",
+              }),
+            },
+          }).catch(() => undefined);
+        }, 1_000);
+  timer?.unref?.();
+  try {
+    return await operation();
+  } finally {
+    if (timer !== undefined) clearInterval(timer);
+  }
+}
+
 function resolveLocalCapabilities(
   catalog: CapabilityCatalog,
   args: CapabilityQueryArgs,
@@ -129,6 +191,14 @@ function resolveLocalCapabilities(
       ? validateDomainOperation(catalog, args.domain, args.operation)
       : catalog.get(args.operation);
     if (!capability) {
+      const removed = catalog.removed(args.operation);
+      if (removed) {
+        throw new UEApiError({
+          code: "capability_removed",
+          message: `Capability "${args.operation}" was removed; use "${removed.replacement}".`,
+          details: removed,
+        });
+      }
       throw new UEApiError({
         code: "capability_not_found",
         message: `Unknown capability "${args.operation}"`,
@@ -168,8 +238,9 @@ function capabilityMatch(
     (args.domain === undefined || capability.domain === args.domain) &&
     (args.operation === undefined || capability.id === args.operation) &&
     (args.kind === undefined || capability.kind === args.kind) &&
-    (args.readOnly === undefined ||
-      capability.traits.readOnly === args.readOnly) &&
+    (args.lifecycle === undefined || capability.lifecycle.status === args.lifecycle) &&
+    (args.operation !== undefined || args.lifecycle !== undefined || capability.lifecycle.canonicalId === capability.id) &&
+    (args.canonicalOnly !== true || capability.lifecycle.canonicalId === capability.id) &&
     (args.destructive === undefined ||
       capability.traits.destructive === args.destructive) &&
     (args.expensive === undefined ||
@@ -179,6 +250,10 @@ function capabilityMatch(
     (args.risk === undefined || capability.dsl?.risk === args.risk)
   )) {
     return false;
+  }
+  if (args.effect !== undefined) {
+    const [field, access] = args.effect.split(":") as [keyof CapabilityDescriptor["effects"], string];
+    if (capability.effects[field] !== access) return false;
   }
   const query = args.query?.trim();
   if (!query) {
@@ -195,6 +270,8 @@ function summarizeCapability(ranked: RankedCapability) {
     kind: capability.kind,
     description: capability.description,
     traits: capability.traits,
+    effects: capability.effects,
+    lifecycle: capability.lifecycle,
     output: capability.output,
     ...(capability.dsl === undefined ? {} : { risk: capability.dsl.risk }),
     ...(capability.requires === undefined
@@ -248,7 +325,9 @@ export async function handleCapabilities(
     domain?: CapabilityDomain;
     operation?: string;
     kind?: CapabilityKind;
-    readOnly?: boolean;
+    effect?: CapabilityQueryArgs["effect"];
+    lifecycle?: CapabilityQueryArgs["lifecycle"];
+    canonicalOnly?: boolean;
     destructive?: boolean;
     expensive?: boolean;
     outputKind?: CapabilityOutputKind;
@@ -287,7 +366,9 @@ export async function handleCapabilities(
       domain: args.domain,
       operation: args.operation,
       kind: args.kind,
-      readOnly: args.readOnly,
+      effect: args.effect,
+      lifecycle: args.lifecycle,
+      canonicalOnly: args.canonicalOnly,
       destructive: args.destructive,
       expensive: args.expensive,
       outputKind: args.outputKind,
@@ -313,7 +394,9 @@ export function handleContext(
     domain?: CapabilityDomain;
     operation?: string;
     kind?: CapabilityKind;
-    readOnly?: boolean;
+    effect?: CapabilityQueryArgs["effect"];
+    lifecycle?: CapabilityQueryArgs["lifecycle"];
+    canonicalOnly?: boolean;
     destructive?: boolean;
     expensive?: boolean;
     outputKind?: CapabilityOutputKind;
@@ -361,10 +444,15 @@ export function createMcpServer(
     catalog,
     client,
     localTraceExecutor,
+    options.localRecipeExecutor ?? new RecipeRunnerExecutor(),
+    options.localProjectExecutor ?? new LocalProjectExecutor(),
+    options.localAssetExecutor ?? new LocalAssetExecutor(),
+    options.localSalExecutor ?? new SalExecutor(),
+    options.developmentRuntimeExecutor ?? new DevelopmentBridgeExecutor(),
   );
   const server = new McpServer({
     name: "ue-ai-integration",
-    version: "0.9.0",
+    version: "1.0.0",
   });
 
   server.tool(
@@ -396,7 +484,9 @@ export function createMcpServer(
         .optional()
         .describe("Optional dotted capability ID to inspect"),
       kind: z.enum(["query", "command", "validation"]).optional(),
-      readOnly: z.boolean().optional(),
+      effect: z.string().regex(/^(asset|world|editorSession|external):(none|read|write)$/).optional(),
+      lifecycle: z.enum(["active", "deprecated"]).optional(),
+      canonicalOnly: z.boolean().optional().default(false),
       destructive: z.boolean().optional(),
       expensive: z.boolean().optional(),
       outputKind: z.enum(["json", "image"]).optional(),
@@ -425,7 +515,9 @@ export function createMcpServer(
         domain: args.domain,
         operation: args.operation,
         kind: args.kind,
-        readOnly: args.readOnly,
+        effect: args.effect as CapabilityQueryArgs["effect"],
+        lifecycle: args.lifecycle,
+        canonicalOnly: args.canonicalOnly,
         destructive: args.destructive,
         expensive: args.expensive,
         outputKind: args.outputKind,
@@ -454,7 +546,9 @@ export function createMcpServer(
         .optional()
         .describe("Optional dotted capability ID to inspect"),
       kind: z.enum(["query", "command", "validation"]).optional(),
-      readOnly: z.boolean().optional(),
+      effect: z.string().regex(/^(asset|world|editorSession|external):(none|read|write)$/).optional(),
+      lifecycle: z.enum(["active", "deprecated"]).optional(),
+      canonicalOnly: z.boolean().optional().default(false),
       destructive: z.boolean().optional(),
       expensive: z.boolean().optional(),
       outputKind: z.enum(["json", "image"]).optional(),
@@ -470,7 +564,9 @@ export function createMcpServer(
         domain: args.domain,
         operation: args.operation,
         kind: args.kind,
-        readOnly: args.readOnly,
+        effect: args.effect as CapabilityQueryArgs["effect"],
+        lifecycle: args.lifecycle,
+        canonicalOnly: args.canonicalOnly,
         destructive: args.destructive,
         expensive: args.expensive,
         outputKind: args.outputKind,
@@ -583,15 +679,28 @@ export function createMcpServer(
             "Optional idempotency key forwarded to POST /api/execute",
           ),
       },
-      async (args) =>
-        runDomainOperation(
-          catalog,
-          domainExecutor,
-          domain,
-          args.operation,
-          args.params,
-          args.requestId,
-        ),
+      async (args, extra) => {
+        const generatedRequestId =
+          args.requestId ??
+          `mcp-${String(extra.requestId).replace(/[^A-Za-z0-9._:-]/g, "-")}`;
+        const progressToken = extra._meta?.progressToken;
+        return withMcpProgress(
+          extra.signal,
+          progressToken,
+          (notification) => extra.sendNotification(notification),
+          `execute:${args.operation}`,
+          () =>
+            runDomainOperation(
+              catalog,
+              domainExecutor,
+              domain,
+              args.operation,
+              args.params,
+              generatedRequestId,
+              { signal: extra.signal },
+            ),
+        );
+      },
     );
   }
 
@@ -602,7 +711,14 @@ export function createMcpServer(
         "Validate, plan, execute, inspect, resume, or roll back a UE Workflow asset-edit run. The workflow must be passed inline; local file paths are not accepted.",
       inputSchema: UE_WORKFLOW_TOOL_SCHEMA,
     },
-    async (args) => handleWorkflowInput(client, args),
+    async (args, extra) =>
+      withMcpProgress(
+        extra.signal,
+        extra._meta?.progressToken,
+        (notification) => extra.sendNotification(notification),
+        `workflow:${String((args as Record<string, unknown>).action ?? "unknown")}`,
+        () => handleWorkflowInput(client, args, extra.signal),
+      ),
   );
 
   return {

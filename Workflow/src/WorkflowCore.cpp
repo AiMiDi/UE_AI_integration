@@ -2470,7 +2470,13 @@ public:
                 return !expected.has_value() ||
                     traits.value(std::string(name), false) == *expected;
             };
-            if (!trait_matches("readOnly", query.read_only) ||
+            const auto effects = capability.raw.value("effects", json::object());
+            const bool asset_world_read_only =
+                effects.value("asset", std::string("write")) != "write"
+                && effects.value("world", std::string("write")) != "write"
+                && effects.value("external", std::string("write")) != "write";
+            if ((query.read_only.has_value()
+                    && asset_world_read_only != *query.read_only) ||
                 !trait_matches("destructive", query.destructive) ||
                 !trait_matches("expensive", query.expensive))
             {

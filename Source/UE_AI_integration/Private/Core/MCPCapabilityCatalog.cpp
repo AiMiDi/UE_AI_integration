@@ -603,9 +603,13 @@ bool ValidateDescriptor(
 
 	TSharedPtr<FJsonObject> InputSchema;
 	TSharedPtr<FJsonObject> Traits;
+	TSharedPtr<FJsonObject> Effects;
+	TSharedPtr<FJsonObject> Lifecycle;
 	TSharedPtr<FJsonObject> Output;
 	bValid &= HasRequiredObject(Descriptor, TEXT("inputSchema"), Context, InputSchema, Errors);
 	bValid &= HasRequiredObject(Descriptor, TEXT("traits"), Context, Traits, Errors);
+	bValid &= HasRequiredObject(Descriptor, TEXT("effects"), Context, Effects, Errors);
+	bValid &= HasRequiredObject(Descriptor, TEXT("lifecycle"), Context, Lifecycle, Errors);
 	bValid &= HasRequiredObject(Descriptor, TEXT("output"), Context, Output, Errors);
 
 	if (InputSchema.IsValid())
@@ -619,9 +623,45 @@ bool ValidateDescriptor(
 	}
 	if (Traits.IsValid())
 	{
-		bValid &= HasRequiredBool(Traits, TEXT("readOnly"), Context + TEXT(".traits"), Errors);
 		bValid &= HasRequiredBool(Traits, TEXT("destructive"), Context + TEXT(".traits"), Errors);
 		bValid &= HasRequiredBool(Traits, TEXT("expensive"), Context + TEXT(".traits"), Errors);
+		if (Traits->HasField(TEXT("readOnly")))
+		{
+			AddError(Errors, Context + TEXT(".traits.readOnly was removed in schema v3."));
+			bValid = false;
+		}
+	}
+	if (Effects.IsValid())
+	{
+		for (const TCHAR* Field : { TEXT("asset"), TEXT("world"), TEXT("editorSession"), TEXT("external") })
+		{
+			FString Effect;
+			if (!Effects->TryGetStringField(Field, Effect)
+				|| (Effect != TEXT("none") && Effect != TEXT("read") && Effect != TEXT("write")))
+			{
+				AddError(Errors, FString::Printf(TEXT("%s.effects.%s must be none, read, or write."), *Context, Field));
+				bValid = false;
+			}
+		}
+	}
+	if (Lifecycle.IsValid())
+	{
+		FString Status;
+		FString Since;
+		FString CanonicalId;
+		if (!Lifecycle->TryGetStringField(TEXT("status"), Status)
+			|| (Status != TEXT("active") && Status != TEXT("deprecated")))
+		{
+			AddError(Errors, Context + TEXT(".lifecycle.status must be active or deprecated."));
+			bValid = false;
+		}
+		bValid &= HasRequiredString(Lifecycle, TEXT("since"), Context + TEXT(".lifecycle"), Since, Errors);
+		bValid &= HasRequiredString(Lifecycle, TEXT("canonicalId"), Context + TEXT(".lifecycle"), CanonicalId, Errors);
+		if (Status == TEXT("deprecated"))
+		{
+			FString Replacement;
+			bValid &= HasRequiredString(Lifecycle, TEXT("replacement"), Context + TEXT(".lifecycle"), Replacement, Errors);
+		}
 	}
 	if (Output.IsValid())
 	{
@@ -679,7 +719,13 @@ bool ValidateDescriptor(
 				{
 					FString Backend;
 					if (!Value.IsValid() || !Value->TryGetString(Backend)
-						|| (Backend != TEXT("editor") && Backend != TEXT("localTrace"))
+						|| (Backend != TEXT("editor")
+							&& Backend != TEXT("localTrace")
+							&& Backend != TEXT("localRecipe")
+							&& Backend != TEXT("localProject")
+							&& Backend != TEXT("localAsset")
+							&& Backend != TEXT("localSal")
+							&& Backend != TEXT("developmentRuntime"))
 						|| SeenBackends.Contains(Backend))
 					{
 						AddError(
@@ -861,11 +907,11 @@ bool LoadCapabilityCatalog(
 
 		double SchemaVersion = 0.0;
 		if (!Root->TryGetNumberField(TEXT("schemaVersion"), SchemaVersion)
-			|| !FMath::IsNearlyEqual(SchemaVersion, 2.0))
+			|| !FMath::IsNearlyEqual(SchemaVersion, 3.0))
 		{
 			AddError(
 				OutErrors,
-				FString::Printf(TEXT("%s must declare schemaVersion 2."), Spec.FileName));
+				FString::Printf(TEXT("%s must declare schemaVersion 3."), Spec.FileName));
 		}
 
 		FString Domain;
@@ -905,7 +951,7 @@ bool LoadCapabilityCatalog(
 			}
 
 			const FString Id = Descriptor->GetStringField(TEXT("id"));
-			if (SeenIds.Contains(Id))
+			if (SeenIds.Contains(Id) || OutCatalog.Tombstones.Contains(Id))
 			{
 				AddError(
 					OutErrors,
@@ -915,6 +961,7 @@ bool LoadCapabilityCatalog(
 
 			SeenIds.Add(Id);
 			const TSharedPtr<FJsonObject> Traits = Descriptor->GetObjectField(TEXT("traits"));
+			const TSharedPtr<FJsonObject> Effects = Descriptor->GetObjectField(TEXT("effects"));
 			const TSharedPtr<FJsonObject> Output = Descriptor->GetObjectField(TEXT("output"));
 
 			FMCPCapabilityDescriptor TypedDescriptor;
@@ -923,7 +970,15 @@ bool LoadCapabilityCatalog(
 			TypedDescriptor.Kind = Descriptor->GetStringField(TEXT("kind"));
 			TypedDescriptor.Description = Descriptor->GetStringField(TEXT("description"));
 			TypedDescriptor.InputSchema = Descriptor->GetObjectField(TEXT("inputSchema"));
-			TypedDescriptor.bReadOnly = Traits->GetBoolField(TEXT("readOnly"));
+			TypedDescriptor.bReadOnly = true;
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Effect : Effects->Values)
+			{
+				if (Effect.Value.IsValid() && Effect.Value->AsString() == TEXT("write"))
+				{
+					TypedDescriptor.bReadOnly = false;
+					break;
+				}
+			}
 			TypedDescriptor.bDestructive = Traits->GetBoolField(TEXT("destructive"));
 			TypedDescriptor.bExpensive = Traits->GetBoolField(TEXT("expensive"));
 			TypedDescriptor.OutputKind = Output->GetStringField(TEXT("kind"));
@@ -931,6 +986,41 @@ bool LoadCapabilityCatalog(
 			OutCatalog.Descriptors.Add(MoveTemp(TypedDescriptor));
 			OutCatalog.InputSchemas.Add(Id, Descriptor->GetObjectField(TEXT("inputSchema")));
 			++DomainCount;
+		}
+		if (Root->HasField(TEXT("tombstones")))
+		{
+			if (!Root->HasTypedField<EJson::Array>(TEXT("tombstones")))
+			{
+				AddError(OutErrors, FString(Spec.FileName) + TEXT(" tombstones must be an array."));
+			}
+			else
+			{
+				for (const TSharedPtr<FJsonValue>& Value : Root->GetArrayField(TEXT("tombstones")))
+				{
+					if (!Value.IsValid() || Value->Type != EJson::Object)
+					{
+						AddError(OutErrors, FString(Spec.FileName) + TEXT(" contains an invalid tombstone."));
+						continue;
+					}
+					const TSharedPtr<FJsonObject> Tombstone = Value->AsObject();
+					FString Id;
+					FString RemovedIn;
+					FString Replacement;
+					if (!Tombstone->TryGetStringField(TEXT("id"), Id)
+						|| !Tombstone->TryGetStringField(TEXT("removedIn"), RemovedIn)
+						|| !Tombstone->TryGetStringField(TEXT("replacement"), Replacement)
+						|| !IsDottedCapabilityId(Id)
+						|| !IsDottedCapabilityId(Replacement)
+						|| RemovedIn.IsEmpty()
+						|| SeenIds.Contains(Id)
+						|| OutCatalog.Tombstones.Contains(Id))
+					{
+						AddError(OutErrors, FString(Spec.FileName) + TEXT(" contains an invalid or duplicate tombstone."));
+						continue;
+					}
+					OutCatalog.Tombstones.Add(Id, Tombstone);
+				}
+			}
 		}
 		OutCatalog.DomainCounts.Add(Spec.Domain, DomainCount);
 	}

@@ -1,3 +1,4 @@
+import { capabilityIsReadOnly } from "./capability-catalog.js";
 import { formatErrorResponse, formatJsonResponse, } from "./helpers.js";
 import { UEApiError } from "./ue-bridge.js";
 function includesOperation(skill, operation) {
@@ -94,7 +95,7 @@ function recipeGuide(catalog, recipe) {
                     operation,
                     traits: capability?.traits,
                     risk: capability?.dsl?.risk,
-                    note: capability?.traits.readOnly
+                    note: capability && capabilityIsReadOnly(capability)
                         ? "Use the exact params returned by ue_context."
                         : "Execute only when this step's condition and caller authorization are satisfied. Use exact ue_context params and put requestId in the domain-tool envelope.",
                 };
@@ -108,7 +109,10 @@ function recipeGuide(catalog, recipe) {
         optional: step.optional ?? false,
         route: "domain",
         operations: step.operations
-            .filter((operation) => catalog.operation(operation)?.traits.readOnly)
+            .filter((operation) => {
+            const capability = catalog.operation(operation);
+            return capability !== undefined && capabilityIsReadOnly(capability);
+        })
             .map((operation) => ({
             tool: executionTool(operation),
             operation,

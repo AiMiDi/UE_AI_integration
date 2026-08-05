@@ -127,7 +127,8 @@ int main()
             catalog_root / "blueprint.json",
             std::ios::trunc);
         stream << json({
-            { "schema", "ue.capability-manifest.v1" },
+            { "schema", "ue.capability-manifest.v3" },
+            { "schemaVersion", 3 },
             { "domain", "blueprint" },
             { "capabilities", json::array({
                 {
@@ -150,9 +151,19 @@ int main()
                         { "properties", json::object() },
                     } },
                     { "traits", {
-                        { "readOnly", true },
                         { "destructive", false },
                         { "expensive", false },
+                    } },
+                    { "effects", {
+                        { "asset", "read" },
+                        { "world", "none" },
+                        { "editorSession", "none" },
+                        { "external", "none" },
+                    } },
+                    { "lifecycle", {
+                        { "status", "active" },
+                        { "since", "0.10.0" },
+                        { "canonicalId", "blueprint.test_operation" },
                     } },
                     { "output", { { "kind", "json" } } },
                 },

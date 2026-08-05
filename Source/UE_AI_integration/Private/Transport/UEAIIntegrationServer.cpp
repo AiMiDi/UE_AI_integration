@@ -7,12 +7,19 @@
 #include "Infrastructure/ClientActivityService.h"
 #include "Infrastructure/OptionalFeatureAvailability.h"
 #include "Infrastructure/Runtime/BlueprintDebugService.h"
+#include "HAL/FileManager.h"
 #include "HAL/PlatformProperties.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformMisc.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Guid.h"
+#include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "Tools/MCPToolRegistry.h"
 #include "Transport/MCPHttpContract.h"
 #include "UEWorkflowCore/WorkflowCore.h"
@@ -115,7 +122,8 @@ TSharedPtr<FJsonObject> MakeCapabilitySummary(const TSharedPtr<FJsonObject>& Des
 	TSharedPtr<FJsonObject> Summary = MakeShared<FJsonObject>();
 	static const TArray<FString> SummaryFields = {
 	    TEXT("id"),          TEXT("domain"), TEXT("kind"),
-	    TEXT("description"), TEXT("traits"), TEXT("output"), TEXT("requires"),
+	    TEXT("description"), TEXT("traits"), TEXT("effects"), TEXT("lifecycle"),
+	    TEXT("output"), TEXT("requires"),
 	    TEXT("available"), TEXT("availabilityReasons"), TEXT("match"),
 	};
 	for (const FString& FieldName : SummaryFields)
@@ -363,6 +371,9 @@ FUEAIIntegrationServer::FUEAIIntegrationServer(
 	, BlueprintDebugService(InBlueprintDebugService)
 	, WorkflowRuntime(
 		MakeUnique<UEAIIntegration::Workflow::FWorkflowRuntime>(InRegistry))
+	, ServerInstanceId(
+		FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower))
+	, ProcessStartTimeUtc(FDateTime::UtcNow().ToIso8601())
 {
 }
 
@@ -390,6 +401,8 @@ FMCPResult FUEAIIntegrationServer::PlanWorkflowDefinition(
 
 bool FUEAIIntegrationServer::Start(int32 Port)
 {
+	UEAIIntegration::Infrastructure::FClientActivityService::SetActiveService(
+		&ClientActivityService);
 	if (bIsRunning)
 	{
 		return true;
@@ -467,6 +480,27 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 		return false;
 	}
 	RouteHandles.Add(ExecuteRoute);
+
+	const FHttpRouteHandle CancelExecuteRoute = Router->BindRoute(
+		FHttpPath(TEXT("/api/execute/cancel")),
+		EHttpServerRequestVerbs::VERB_POST,
+		[this](
+			const FHttpServerRequest& Request,
+			const FHttpResultCallback& OnComplete)
+		{
+			return HandleExecuteCancel(Request, OnComplete);
+		});
+	if (!CancelExecuteRoute.IsValid())
+	{
+		UE_LOG(
+			LogUEAIIntegrationServer,
+			Error,
+			TEXT("Failed to bind /api/execute/cancel."));
+		UnbindRoutes();
+		Router.Reset();
+		return false;
+	}
+	RouteHandles.Add(CancelExecuteRoute);
 
 	const FHttpRouteHandle WorkflowHandshakeRoute = Router->BindRoute(
 		FHttpPath(TEXT("/api/v1/workflow/handshake")),
@@ -570,6 +604,7 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 	RouteHandles.Add(UnregisterClientRoute);
 
 	bIsRunning = true;
+	WriteInstanceRecord();
 
 	UE_LOG(
 		LogUEAIIntegrationServer,
@@ -582,6 +617,11 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 
 void FUEAIIntegrationServer::Stop()
 {
+	if (UEAIIntegration::Infrastructure::FClientActivityService::GetActiveService()
+		== &ClientActivityService)
+	{
+		UEAIIntegration::Infrastructure::FClientActivityService::SetActiveService(nullptr);
+	}
 	if (!bIsRunning && RouteHandles.IsEmpty())
 	{
 		return;
@@ -592,6 +632,7 @@ void FUEAIIntegrationServer::Stop()
 	// Editor state and complete each request exactly once.
 	Executor.CancelAsyncOperations(
 		TEXT("The UE_AI_integration server is stopping."));
+	RemoveInstanceRecord();
 
 	UnbindRoutes();
 	Router.Reset();
@@ -779,6 +820,9 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 	Context.Capability = CapabilityId;
 	Context.Params = Params;
 	Context.RequestId = RequestId;
+	Context.CallerSessionId = Pending->Caller.IsValid()
+		? Pending->Caller->SessionId
+		: FString();
 	FMCPResult Result;
 	const FHttpResultCallback Completion = Pending->OnComplete;
 	const bool bDeferred = Executor.BeginExecuteAsync(
@@ -801,6 +845,55 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 		Result);
 	if (bDeferred)
 	{
+		return;
+	}
+
+	if (Pending->Kind == EUEAIIntegrationRequestKind::CancelExecute)
+	{
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Field :
+			RequestObject->Values)
+		{
+			if (Field.Key != TEXT("requestId")
+				&& Field.Key != TEXT("reason"))
+			{
+				SendError(
+					Pending->OnComplete,
+					422,
+					TEXT("invalid_params"),
+					FString::Printf(
+						TEXT("Unknown cancellation field '%s'."),
+						*Field.Key));
+				return;
+			}
+		}
+		FString CancelRequestId;
+		if (!RequestObject->TryGetStringField(TEXT("requestId"), CancelRequestId)
+			|| CancelRequestId.IsEmpty()
+			|| CancelRequestId.Len() > 200)
+		{
+			SendError(
+				Pending->OnComplete,
+				422,
+				TEXT("invalid_params"),
+				TEXT("requestId must be a non-empty string of at most 200 characters."));
+			return;
+		}
+		FString Reason;
+		RequestObject->TryGetStringField(TEXT("reason"), Reason);
+		const FMCPResult CancelResult = Executor.CancelAsyncOperation(
+			CancelRequestId,
+			Reason);
+		if (!CancelResult.bOk)
+		{
+			SendError(
+				Pending->OnComplete,
+				CancelResult.Error.HttpStatus,
+				CancelResult.Error.Code,
+				CancelResult.Error.Message,
+				CancelResult.Error.Details);
+			return;
+		}
+		SendSuccess(Pending->OnComplete, CancelResult.Data);
 		return;
 	}
 	if (!Result.bOk)
@@ -839,6 +932,11 @@ bool FUEAIIntegrationServer::HandleHealth(
 	Data->SetStringField(TEXT("engineVersion"), FEngineVersion::Current().ToString());
 	Data->SetStringField(TEXT("projectName"), FApp::GetProjectName());
 	Data->SetStringField(TEXT("mode"), TEXT("editor"));
+	Data->SetStringField(TEXT("serverInstanceId"), ServerInstanceId);
+	Data->SetNumberField(
+		TEXT("processId"),
+		static_cast<double>(FPlatformProcess::GetCurrentProcessId()));
+	Data->SetStringField(TEXT("processStartTime"), ProcessStartTimeUtc);
 	Data->SetNumberField(TEXT("capabilityCount"), Registry.GetCapabilityCount());
 	int32 AvailableCapabilityCount = 0;
 	for (const TSharedPtr<FJsonObject>& Descriptor :
@@ -892,7 +990,8 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 {
 	static const TSet<FString> SupportedQueryParams = {
 	    TEXT("query"),    TEXT("domain"),      TEXT("operation"), TEXT("kind"),
-	    TEXT("readOnly"), TEXT("destructive"), TEXT("expensive"), TEXT("outputKind"),
+	    TEXT("effect"), TEXT("lifecycle"), TEXT("canonicalOnly"),
+	    TEXT("destructive"), TEXT("expensive"), TEXT("outputKind"),
 	    TEXT("risk"),     TEXT("availableOnly"),
 	    TEXT("offset"),   TEXT("limit"),       TEXT("detail"),
 	};
@@ -966,12 +1065,37 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		}
 	}
 
-	TOptional<bool> ReadOnlyFilter;
+	FString EffectField;
+	FString EffectAccess;
+	if (const FString* EffectValue = Request.QueryParams.Find(TEXT("effect")))
+	{
+		if (!EffectValue->Split(TEXT(":"), &EffectField, &EffectAccess)
+			|| (EffectField != TEXT("asset") && EffectField != TEXT("world")
+				&& EffectField != TEXT("editorSession") && EffectField != TEXT("external"))
+			|| (EffectAccess != TEXT("none") && EffectAccess != TEXT("read")
+				&& EffectAccess != TEXT("write")))
+		{
+			SendError(OnComplete, 422, TEXT("invalid_params"),
+				TEXT("Query parameter 'effect' must be asset|world|editorSession|external:none|read|write."));
+			return true;
+		}
+	}
+	FString LifecycleFilter = Request.QueryParams.FindRef(TEXT("lifecycle"));
+	if (!LifecycleFilter.IsEmpty()
+		&& LifecycleFilter != TEXT("active")
+		&& LifecycleFilter != TEXT("deprecated"))
+	{
+		SendError(OnComplete, 422, TEXT("invalid_params"),
+			TEXT("Query parameter 'lifecycle' must be active or deprecated."));
+		return true;
+	}
+
+	TOptional<bool> CanonicalOnlyFilter;
 	TOptional<bool> DestructiveFilter;
 	TOptional<bool> ExpensiveFilter;
 	TOptional<bool> AvailableOnlyFilter;
 	FString ParseError;
-	if (!TryParseQueryBool(Request.QueryParams, TEXT("readOnly"), ReadOnlyFilter, ParseError) ||
+	if (!TryParseQueryBool(Request.QueryParams, TEXT("canonicalOnly"), CanonicalOnlyFilter, ParseError) ||
 	    !TryParseQueryBool(Request.QueryParams, TEXT("destructive"), DestructiveFilter,
 	                       ParseError) ||
 	    !TryParseQueryBool(Request.QueryParams, TEXT("expensive"), ExpensiveFilter, ParseError) ||
@@ -1031,6 +1155,22 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		const FString Id = DecoratedDescriptor->GetStringField(TEXT("id"));
 		const FString Domain = DecoratedDescriptor->GetStringField(TEXT("domain"));
 		const FString Kind = DecoratedDescriptor->GetStringField(TEXT("kind"));
+		const TSharedPtr<FJsonObject>* Effects = nullptr;
+		const TSharedPtr<FJsonObject>* Lifecycle = nullptr;
+		FString LifecycleStatus;
+		FString CanonicalId = Id;
+		FString ActualEffect;
+		DecoratedDescriptor->TryGetObjectField(TEXT("effects"), Effects);
+		DecoratedDescriptor->TryGetObjectField(TEXT("lifecycle"), Lifecycle);
+		if (Lifecycle && Lifecycle->IsValid())
+		{
+			(*Lifecycle)->TryGetStringField(TEXT("status"), LifecycleStatus);
+			(*Lifecycle)->TryGetStringField(TEXT("canonicalId"), CanonicalId);
+		}
+		if (Effects && Effects->IsValid() && !EffectField.IsEmpty())
+		{
+			(*Effects)->TryGetStringField(EffectField, ActualEffect);
+		}
 
 		FString DescriptorRisk;
 		const TSharedPtr<FJsonObject>* Dsl = nullptr;
@@ -1046,10 +1186,12 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		if ((!ExactOperation.IsEmpty() && Id != ExactOperation) ||
 		    (!DomainFilter.IsEmpty() && Domain != DomainFilter) ||
 		    (!KindFilter.IsEmpty() && Kind != KindFilter) ||
+		    (!LifecycleFilter.IsEmpty() && LifecycleStatus != LifecycleFilter) ||
+		    (ExactOperation.IsEmpty() && LifecycleFilter.IsEmpty() && CanonicalId != Id) ||
+		    (CanonicalOnlyFilter.Get(false) && CanonicalId != Id) ||
+		    (!EffectField.IsEmpty() && ActualEffect != EffectAccess) ||
 		    (!RiskFilter.IsEmpty() && DescriptorRisk != RiskFilter) ||
 		    (AvailableOnlyFilter.Get(false) && !bAvailable) ||
-		    !DescriptorMatchesTrait(
-			    DecoratedDescriptor, TEXT("readOnly"), ReadOnlyFilter) ||
 		    !DescriptorMatchesTrait(
 			    DecoratedDescriptor, TEXT("destructive"), DestructiveFilter) ||
 		    !DescriptorMatchesTrait(
@@ -1105,6 +1247,20 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 
 	if (!ExactOperation.IsEmpty() && FilteredDescriptors.IsEmpty())
 	{
+		if (const TSharedPtr<FJsonObject>* Tombstone =
+			Registry.FindCapabilityTombstone(ExactOperation))
+		{
+			SendError(
+				OnComplete,
+				410,
+				TEXT("capability_removed"),
+				FString::Printf(
+					TEXT("Capability '%s' was removed; use '%s'."),
+					*ExactOperation,
+					*(*Tombstone)->GetStringField(TEXT("replacement"))),
+				*Tombstone);
+			return true;
+		}
 		SendError(OnComplete, 404, TEXT("capability_not_found"),
 		          FString::Printf(TEXT("Unknown capability '%s'."), *ExactOperation));
 		return true;
@@ -1322,6 +1478,16 @@ bool FUEAIIntegrationServer::HandleExecute(
 	}
 	return QueueRequest(
 		EUEAIIntegrationRequestKind::LegacyExecute,
+		Request,
+		OnComplete);
+}
+
+bool FUEAIIntegrationServer::HandleExecuteCancel(
+	const FHttpServerRequest& Request,
+	const FHttpResultCallback& OnComplete)
+{
+	return QueueRequest(
+		EUEAIIntegrationRequestKind::CancelExecute,
 		Request,
 		OnComplete);
 }
@@ -1707,6 +1873,96 @@ bool FUEAIIntegrationServer::QueueRequest(
 
 	RequestQueue.Enqueue(Pending);
 	return true;
+}
+
+FString FUEAIIntegrationServer::InstanceRecordPath() const
+{
+	FString UserRoot;
+#if PLATFORM_WINDOWS
+	UserRoot = FPlatformMisc::GetEnvironmentVariable(TEXT("LOCALAPPDATA"));
+#endif
+	if (UserRoot.IsEmpty())
+	{
+		UserRoot = FPlatformProcess::UserSettingsDir();
+	}
+	return FPaths::Combine(
+		UserRoot,
+		TEXT("UE-AI-CLI"),
+		TEXT("instances"),
+		ServerInstanceId + TEXT(".json"));
+}
+
+void FUEAIIntegrationServer::WriteInstanceRecord()
+{
+	const FString Path = InstanceRecordPath();
+	const FString Directory = FPaths::GetPath(Path);
+	if (!IFileManager::Get().MakeDirectory(*Directory, true))
+	{
+		UE_LOG(
+			LogUEAIIntegrationServer,
+			Warning,
+			TEXT("Could not create the instance-record directory."));
+		return;
+	}
+	TSharedRef<FJsonObject> Record = MakeShared<FJsonObject>();
+	Record->SetStringField(TEXT("schema"), TEXT("ue.editor-instance.v1"));
+	Record->SetStringField(TEXT("serverInstanceId"), ServerInstanceId);
+	Record->SetNumberField(
+		TEXT("pid"),
+		static_cast<double>(FPlatformProcess::GetCurrentProcessId()));
+	Record->SetStringField(TEXT("processStartTime"), ProcessStartTimeUtc);
+	Record->SetStringField(
+		TEXT("endpoint"),
+		FString::Printf(TEXT("http://127.0.0.1:%d"), ListenPort));
+	Record->SetStringField(TEXT("project"), FApp::GetProjectName());
+	Record->SetStringField(TEXT("engineVersion"), FEngineVersion::Current().ToString());
+	Record->SetStringField(TEXT("updatedAt"), FDateTime::UtcNow().ToIso8601());
+	FString Json;
+	const TSharedRef<TJsonWriter<>> Writer =
+		TJsonWriterFactory<>::Create(&Json);
+	if (!FJsonSerializer::Serialize(Record, Writer))
+	{
+		return;
+	}
+	const FString Temporary = Path + TEXT(".tmp-") + ServerInstanceId;
+	if (!FFileHelper::SaveStringToFile(
+			Json,
+			*Temporary,
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	{
+		return;
+	}
+	if (!IFileManager::Get().Move(
+			*Path,
+			*Temporary,
+			true,
+			true,
+			false,
+			true))
+	{
+		IFileManager::Get().Delete(*Temporary, false, true);
+	}
+}
+
+void FUEAIIntegrationServer::RemoveInstanceRecord()
+{
+	const FString Path = InstanceRecordPath();
+	FString Json;
+	TSharedPtr<FJsonObject> Record;
+	if (!FFileHelper::LoadFileToString(Json, *Path))
+	{
+		return;
+	}
+	const TSharedRef<TJsonReader<>> Reader =
+		TJsonReaderFactory<>::Create(Json);
+	FString RecordedId;
+	if (FJsonSerializer::Deserialize(Reader, Record)
+		&& Record.IsValid()
+		&& Record->TryGetStringField(TEXT("serverInstanceId"), RecordedId)
+		&& RecordedId == ServerInstanceId)
+	{
+		IFileManager::Get().Delete(*Path, false, true);
+	}
 }
 
 void FUEAIIntegrationServer::UnbindRoutes()

@@ -3,6 +3,7 @@
 #include "UEApiClient/UEApiClient.h"
 #include "UECliPlatform/Utf8Console.h"
 #include "UECommandCli/CapabilityCatalog.h"
+#include "UECommandCli/RecipeCliAdapter.h"
 #include "UECommandCli/SkillCatalog.h"
 #include "UETraceWorker/TraceWorkerClient.h"
 #include "UEWorkflowCore/WorkflowCore.h"
@@ -31,7 +32,7 @@
 #include <vector>
 
 #ifndef UE_CLI_VERSION
-#define UE_CLI_VERSION "0.9.0"
+#define UE_CLI_VERSION "1.0.0"
 #endif
 
 namespace ue::command
@@ -66,6 +67,9 @@ struct Options
     std::vector<RawOption> raw_options;
     std::vector<std::string> trace_arguments;
     bool trace_doctor = false;
+    bool doctor_full = false;
+    std::filesystem::path bundle_root;
+    std::string instance;
 };
 
 struct ParsedEnvelope
@@ -290,6 +294,16 @@ bool ParseArguments(
             options.live_schema = true;
             continue;
         }
+        if (name == "full")
+        {
+            if (inline_value)
+            {
+                error = "--full does not accept a value.";
+                return false;
+            }
+            options.doctor_full = true;
+            continue;
+        }
         if (name == "endpoint"
             || name == "timeout-ms"
             || name == "request-id"
@@ -297,7 +311,9 @@ bool ParseArguments(
             || name == "params-file"
             || name == "output"
             || name == "capability-root"
-            || name == "skill-root")
+            || name == "skill-root"
+            || name == "bundle"
+            || name == "instance")
         {
             std::string value;
             if (!TakeValue(
@@ -356,9 +372,17 @@ bool ParseArguments(
             {
                 options.capability_root = ue::cli::Utf8Path(value);
             }
-            else
+            else if (name == "skill-root")
             {
                 options.skill_root = ue::cli::Utf8Path(value);
+            }
+            else if (name == "bundle")
+            {
+                options.bundle_root = ue::cli::Utf8Path(value);
+            }
+            else
+            {
+                options.instance = std::move(value);
             }
             continue;
         }
@@ -396,9 +420,14 @@ void PrintGeneralHelp(std::ostream& output)
         << "Usage:\n"
         << "  ue <capability-id> [--field value ...] [options]\n"
         << "  ue status [--json]\n"
+        << "  ue doctor [--full] [--instance <id>] [--bundle <path>]\n"
+        << "  ue test-tools [--bundle <path>]\n"
+        << "  ue mcp surface-status [--json]\n"
         << "  ue capabilities [filters] [--json]\n"
         << "  ue skills [filters] [--json]\n"
         << "  ue trace <command> [options]\n"
+        << "  ue recipe validate|plan|start|status|resume|cancel|result [options]\n"
+        << "  ue sal stub|lint|plan [options]\n"
         << "  ue help <capability-id>\n"
         << "  ue shell [--live-schema]\n"
         << "  ue --version\n\n"
@@ -413,6 +442,8 @@ void PrintGeneralHelp(std::ostream& output)
         << "  --live-schema              Fetch exact schema from Editor\n"
         << "  --capability-root <path>   Override packaged local manifests\n"
         << "  --skill-root <path>        Override packaged Agent Skills\n"
+        << "  --bundle <path>            Inspect an explicit release bundle\n"
+        << "  --instance <id>            Select a recorded Editor instance\n"
         << "  --json                     Print the full JSON envelope\n";
 }
 
@@ -592,8 +623,9 @@ void PrintCommandHelp(
         output
             << "Usage: ue capabilities [filters] [--live-schema] [--json]\n"
             << "Filters: --query, --operation, --domain, --kind, "
-               "--read-only, --destructive, --expensive, --output-kind, "
-               "--risk, --offset, --limit, --detail.\n";
+               "--effect, --lifecycle, --canonical-only, --destructive, "
+               "--expensive, --output-kind, --risk, --offset, --limit, "
+               "--detail.\n";
         return;
     }
     if (options.command == "shell")
@@ -1269,7 +1301,8 @@ ParsedEnvelope InvokeTraceWorker(
     ParsedEnvelope handshake = ValidateTraceWorkerHandshake(
         worker,
         InvokeRawTraceWorker(worker, "handshake"),
-        action != "handshake");
+        action != "handshake",
+        worker.Transport() == ue::trace::WorkerTransport::Stdio);
     if (!handshake.ok || action == "handshake")
     {
         return handshake;
@@ -2266,8 +2299,8 @@ std::string CapabilityHelp(const json& descriptor)
         descriptor.value("traits", json::object());
     if (traits.is_object() && !traits.empty())
     {
-        output << " traits="
-               << (traits.value("readOnly", false) ? "readOnly" : "write");
+        output << " effects="
+               << descriptor.value("effects", json::object()).dump();
         if (traits.value("destructive", false))
         {
             output << ",destructive";
@@ -2341,7 +2374,9 @@ int RunLiveCapabilities(
         { "operation", "operation" },
         { "domain", "domain" },
         { "kind", "kind" },
-        { "read-only", "readOnly" },
+        { "effect", "effect" },
+        { "lifecycle", "lifecycle" },
+        { "canonical-only", "canonicalOnly" },
         { "destructive", "destructive" },
         { "expensive", "expensive" },
         { "output-kind", "outputKind" },
@@ -2447,6 +2482,10 @@ json LocalCapabilitySummary(const json& descriptor)
             descriptor.value("description", std::string{}) },
         { "traits",
             descriptor.value("traits", json::object()) },
+        { "effects",
+            descriptor.value("effects", json::object()) },
+        { "lifecycle",
+            descriptor.value("lifecycle", json::object()) },
         { "output",
             descriptor.value("output", json::object()) },
         { "available", nullptr },
@@ -2775,8 +2814,10 @@ int RunLocalCapabilities(
     std::string kind;
     std::string output_kind;
     std::string risk;
+    std::string effect_filter;
+    std::string lifecycle_filter;
     std::string detail = "summary";
-    std::optional<bool> read_only;
+    std::optional<bool> canonical_only;
     std::optional<bool> destructive;
     std::optional<bool> expensive;
     std::size_t offset = 0;
@@ -2820,7 +2861,7 @@ int RunLocalCapabilities(
                 "--available-only requires --live-schema because "
                 "availability is Editor-specific.");
         }
-        if (option.name == "read-only"
+        if (option.name == "canonical-only"
             || option.name == "destructive"
             || option.name == "expensive")
         {
@@ -2831,9 +2872,9 @@ int RunLocalCapabilities(
             {
                 return fail(parse_error);
             }
-            if (option.name == "read-only")
+            if (option.name == "canonical-only")
             {
-                read_only = *value;
+                canonical_only = *value;
             }
             else if (option.name == "destructive")
             {
@@ -2874,6 +2915,33 @@ int RunLocalCapabilities(
         else if (option.name == "risk")
         {
             risk = *value;
+        }
+        else if (option.name == "effect")
+        {
+            const auto separator = value->find(':');
+            if (separator == std::string::npos
+                || separator == 0
+                || separator + 1 >= value->size())
+            {
+                return fail("--effect must be field:none|read|write.");
+            }
+            const std::string field = value->substr(0, separator);
+            const std::string access = value->substr(separator + 1);
+            if ((field != "asset" && field != "world"
+                    && field != "editorSession" && field != "external")
+                || (access != "none" && access != "read" && access != "write"))
+            {
+                return fail("--effect must be asset|world|editorSession|external:none|read|write.");
+            }
+            effect_filter = *value;
+        }
+        else if (option.name == "lifecycle")
+        {
+            if (*value != "active" && *value != "deprecated")
+            {
+                return fail("--lifecycle must be active or deprecated.");
+            }
+            lifecycle_filter = *value;
         }
         else if (option.name == "detail")
         {
@@ -2932,6 +3000,17 @@ int RunLocalCapabilities(
             descriptor.value("traits", json::object());
         const json output_descriptor =
             descriptor.value("output", json::object());
+        const json effects =
+            descriptor.value("effects", json::object());
+        const json lifecycle =
+            descriptor.value("lifecycle", json::object());
+        const auto effect_separator = effect_filter.find(':');
+        const std::string effect_name = effect_separator == std::string::npos
+            ? std::string()
+            : effect_filter.substr(0, effect_separator);
+        const std::string effect_value = effect_separator == std::string::npos
+            ? std::string()
+            : effect_filter.substr(effect_separator + 1);
         if ((!operation.empty() && id != operation)
             || (!domain.empty()
                 && descriptor.value("domain", std::string{})
@@ -2944,8 +3023,12 @@ int RunLocalCapabilities(
                     != output_kind)
             || (!risk.empty()
                 && DescriptorRisk(descriptor) != risk)
-            || (read_only
-                && traits.value("readOnly", false) != *read_only)
+            || (!effect_filter.empty()
+                && effects.value(effect_name, std::string{}) != effect_value)
+            || (!lifecycle_filter.empty()
+                && lifecycle.value("status", std::string{}) != lifecycle_filter)
+            || (canonical_only.value_or(false)
+                && lifecycle.value("canonicalId", id) != id)
             || (destructive
                 && traits.value("destructive", false) != *destructive)
             || (expensive
@@ -3808,6 +3891,24 @@ std::optional<json> ResolveDescriptor(
             catalog ? catalog->Find(capability) : nullptr;
         if (!descriptor)
         {
+            if (const json* tombstone = catalog
+                    ? catalog->FindTombstone(capability)
+                    : nullptr)
+            {
+                exit_code = PrintFailure(
+                    {
+                        false,
+                        *tombstone,
+                        "capability_removed",
+                        "Capability '" + capability + "' was removed; use '"
+                            + tombstone->value("replacement", std::string()) + "'.",
+                    },
+                    options.json_output,
+                    kExitUsage,
+                    output,
+                    error);
+                return std::nullopt;
+            }
             exit_code = PrintFailure(
                 {
                     false,
@@ -3883,6 +3984,516 @@ std::optional<json> ResolveDescriptor(
         return std::nullopt;
     }
     return descriptor;
+}
+
+json DiagnosticCheck(
+    const std::string& id,
+    const std::string& status,
+    const std::string& code,
+    const std::string& detail = {})
+{
+    json check = {
+        { "id", id },
+        { "status", status },
+        { "code", code },
+    };
+    if (!detail.empty())
+    {
+        check["detail"] = detail;
+    }
+    return check;
+}
+
+std::filesystem::path InferBundleRoot(
+    const Options& options,
+    const CapabilityCatalog* catalog)
+{
+    if (!options.bundle_root.empty())
+    {
+        return std::filesystem::absolute(options.bundle_root)
+            .lexically_normal();
+    }
+    if (catalog)
+    {
+        auto candidate = catalog->Root();
+        if (candidate.filename() == "Capabilities")
+        {
+            candidate = candidate.parent_path();
+        }
+        if (candidate.filename() == "Resources")
+        {
+            candidate = candidate.parent_path();
+        }
+        if (std::filesystem::exists(
+                candidate / "UE_AI_integration.uplugin"))
+        {
+            return candidate;
+        }
+    }
+    return {};
+}
+
+std::string RedactedPathLabel(const std::filesystem::path& path)
+{
+    if (path.empty())
+    {
+        return {};
+    }
+    const auto filename = path.filename();
+    return filename.empty()
+        ? std::string("<redacted-path>")
+        : std::string("<redacted>/") + PathToUtf8(filename);
+}
+
+json ReadJsonFileBounded(
+    const std::filesystem::path& path,
+    const std::uintmax_t max_bytes = 1024 * 1024)
+{
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error || size > max_bytes)
+    {
+        return json();
+    }
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream)
+    {
+        return json();
+    }
+    return json::parse(stream, nullptr, false, true);
+}
+
+std::filesystem::path DefaultInstanceRoot()
+{
+#if defined(_WIN32)
+    if (const auto local = Environment("LOCALAPPDATA"))
+    {
+        return ue::cli::Utf8Path(*local)
+            / "UE-AI-CLI" / "instances";
+    }
+#else
+    if (const auto runtime = Environment("XDG_RUNTIME_DIR"))
+    {
+        return ue::cli::Utf8Path(*runtime)
+            / "ue-ai-cli" / "instances";
+    }
+#endif
+    return std::filesystem::temp_directory_path()
+        / "ue-ai-cli" / "instances";
+}
+
+json InspectInstanceRecords(const std::string& selected)
+{
+    const auto root = DefaultInstanceRoot();
+    json records = json::array();
+    std::error_code error;
+    if (!std::filesystem::is_directory(root, error) || error)
+    {
+        return {
+            { "root", RedactedPathLabel(root) },
+            { "selected", selected.empty() ? json(nullptr) : json(selected) },
+            { "records", records },
+        };
+    }
+    std::size_t visited = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(root, error))
+    {
+        if (error || visited++ >= 32)
+        {
+            break;
+        }
+        if (!entry.is_regular_file(error)
+            || error
+            || entry.path().extension() != ".json")
+        {
+            error.clear();
+            continue;
+        }
+        const json value = ReadJsonFileBounded(entry.path(), 64 * 1024);
+        if (!value.is_object())
+        {
+            continue;
+        }
+        const std::string instance_id =
+            value.value("serverInstanceId", std::string{});
+        if (!selected.empty()
+            && selected != instance_id
+            && selected != entry.path().stem().string())
+        {
+            continue;
+        }
+        records.push_back({
+            { "record", entry.path().filename().generic_string() },
+            { "serverInstanceId", instance_id },
+            { "pid", value.value("pid", std::uint64_t{0}) },
+            { "processStartTime",
+                value.value("processStartTime", std::string{}) },
+            { "endpoint", value.value("endpoint", std::string{}) },
+            { "hasRequiredIdentity",
+                !instance_id.empty()
+                    && value.value("pid", std::uint64_t{0}) != 0
+                    && !value.value(
+                            "processStartTime", std::string{}).empty() },
+        });
+    }
+    return {
+        { "root", RedactedPathLabel(root) },
+        { "selected", selected.empty() ? json(nullptr) : json(selected) },
+        { "records", records },
+    };
+}
+
+bool WriteDiagnosticBundle(
+    const std::filesystem::path& output_path,
+    const json& envelope)
+{
+    if (output_path.empty())
+    {
+        return true;
+    }
+    std::error_code error;
+    if (!output_path.parent_path().empty())
+    {
+        std::filesystem::create_directories(
+            output_path.parent_path(), error);
+        if (error)
+        {
+            return false;
+        }
+    }
+    auto temporary = output_path;
+    temporary += ".tmp";
+    {
+        std::ofstream stream(
+            temporary,
+            std::ios::binary | std::ios::trunc);
+        if (!stream)
+        {
+            return false;
+        }
+        stream << envelope.dump(2) << '\n';
+    }
+    std::filesystem::rename(temporary, output_path, error);
+    if (!error)
+    {
+        return true;
+    }
+    std::filesystem::remove(output_path, error);
+    error.clear();
+    std::filesystem::rename(temporary, output_path, error);
+    return !error;
+}
+
+int RunDoctor(
+    const Options& options,
+    const CapabilityCatalog* catalog,
+    const SkillCatalog* skill_catalog,
+    ue::api::Client& client,
+    ue::trace::WorkerClient& trace_worker,
+    std::ostream& output,
+    std::ostream& error)
+{
+    json checks = json::array();
+    bool required_ok = true;
+    const auto add = [&](json check, const bool required)
+    {
+        if (required && check.value("status", "failed") != "passed")
+        {
+            required_ok = false;
+        }
+        checks.push_back(std::move(check));
+    };
+
+    add(DiagnosticCheck(
+            "cli.version", "passed", "ok", UE_CLI_VERSION), true);
+    add(DiagnosticCheck(
+            "capability.catalog",
+            catalog ? "passed" : "failed",
+            catalog ? "ok" : "capability_catalog_unavailable",
+            catalog ? std::to_string(catalog->Size()) + " capabilities" : ""),
+        true);
+    add(DiagnosticCheck(
+            "skills.catalog",
+            skill_catalog ? "passed" : "failed",
+            skill_catalog ? "ok" : "skill_catalog_unavailable",
+            skill_catalog
+                ? std::to_string(skill_catalog->Size()) + " skills"
+                : ""),
+        true);
+
+    const auto bundle_root = InferBundleRoot(options, catalog);
+    static const std::array<std::filesystem::path, 8> required_files = {
+        "UE_AI_integration.uplugin",
+        "CLI/bin/ue.exe",
+        "CLI/bin/ue-workflow.exe",
+        "MCP/package.json",
+        "MCP/dist/index.js",
+        "Resources/Capabilities/blueprint.json",
+        "skills/setup-ue5/SKILL.md",
+        "scripts/mcp_stdio_smoke.mjs",
+    };
+    json missing = json::array();
+    if (!bundle_root.empty())
+    {
+        for (const auto& relative : required_files)
+        {
+            if (!std::filesystem::exists(bundle_root / relative))
+            {
+                missing.push_back(PathToUtf8(relative));
+            }
+        }
+    }
+    const bool bundle_ok = !bundle_root.empty() && missing.empty();
+    add(DiagnosticCheck(
+            "bundle.layout",
+            bundle_ok ? "passed" : "failed",
+            bundle_ok ? "ok" : "bundle_incomplete",
+            bundle_ok
+                ? RedactedPathLabel(bundle_root)
+                : missing.dump()),
+        options.doctor_full || !options.bundle_root.empty());
+
+    json worker_data;
+    if (options.doctor_full)
+    {
+        ParsedEnvelope worker = InvokeTraceWorker(trace_worker, "handshake");
+        if (worker.ok)
+        {
+            worker_data = worker.value.value("data", json::object());
+        }
+        add(DiagnosticCheck(
+                "trace.worker",
+                worker.ok ? "passed" : "failed",
+                worker.ok ? "ok" : worker.code,
+                worker.ok
+                    ? trace_worker.Location().source
+                    : worker.message),
+            true);
+    }
+    else
+    {
+        add(DiagnosticCheck(
+                "trace.worker", "skipped", "full_check_required"),
+            false);
+    }
+
+    const ParsedEnvelope health = ParseEnvelope(client.Get("/api/health"));
+    const bool editor_required = options.endpoint_explicit;
+    add(DiagnosticCheck(
+            "editor.health",
+            health.ok ? "passed" : (editor_required ? "failed" : "unavailable"),
+            health.ok ? "ok" : health.code,
+            health.ok ? "loopback health succeeded" : health.message),
+        editor_required);
+    json editor_data;
+    if (health.ok)
+    {
+        editor_data = health.value.value("data", json::object());
+        const ParsedEnvelope readonly = ParseEnvelope(client.Post(
+            "/api/execute",
+            json({
+                { "capability", "blueprint.asset.list" },
+                { "params", json::object() },
+            }).dump()));
+        add(DiagnosticCheck(
+                "editor.readonly",
+                readonly.ok ? "passed" : "failed",
+                readonly.ok ? "ok" : readonly.code,
+                readonly.ok
+                    ? "blueprint.asset.list schema call succeeded"
+                    : readonly.message),
+            options.doctor_full || editor_required);
+    }
+    else
+    {
+        add(DiagnosticCheck(
+                "editor.readonly",
+                "skipped",
+                "editor_unavailable"),
+            false);
+    }
+
+    json data = {
+        { "schema", "ue.doctor.v2" },
+        { "version", UE_CLI_VERSION },
+        { "full", options.doctor_full },
+        { "endpoint", "<loopback>" },
+        { "bundle", {
+            { "root", RedactedPathLabel(bundle_root) },
+            { "missing", missing },
+        } },
+        { "instances", InspectInstanceRecords(options.instance) },
+        { "checks", checks },
+        { "worker", worker_data },
+        { "editor", editor_data },
+        { "redaction", {
+            { "absolutePaths", true },
+            { "userNames", true },
+            { "remoteAddresses", true },
+            { "credentials", true },
+            { "maxInstanceRecords", 32 },
+        } },
+    };
+    json envelope = {
+        { "ok", required_ok },
+        { "data", data },
+        { "meta", {
+            { "diagnosticBundle",
+                options.output_path.empty()
+                    ? json(nullptr)
+                    : json(RedactedPathLabel(options.output_path)) },
+        } },
+    };
+    if (!WriteDiagnosticBundle(options.output_path, envelope))
+    {
+        return PrintFailure(
+            { false, json(), "diagnostic_bundle_write_failed",
+                "The redacted diagnostic bundle could not be written." },
+            options.json_output,
+            kExitExecution,
+            output,
+            error);
+    }
+    if (!required_ok)
+    {
+        return PrintFailure(
+            { false, envelope, "doctor_failed",
+                "One or more required diagnostic checks failed." },
+            options.json_output,
+            kExitUnavailable,
+            output,
+            error);
+    }
+    return PrintSuccess(
+        "doctor",
+        { true, std::move(envelope), {}, {} },
+        options.json_output,
+        output);
+}
+
+int RunTestTools(
+    const Options& options,
+    const CapabilityCatalog* catalog,
+    const SkillCatalog* skill_catalog,
+    ue::api::Client& client,
+    ue::trace::WorkerClient& trace_worker,
+    std::ostream& output,
+    std::ostream& error)
+{
+    Options doctor = options;
+    doctor.doctor_full = true;
+    doctor.output_path.clear();
+    std::ostringstream ignored_output;
+    std::ostringstream ignored_error;
+    const int doctor_exit = RunDoctor(
+        doctor,
+        catalog,
+        skill_catalog,
+        client,
+        trace_worker,
+        ignored_output,
+        ignored_error);
+    if (doctor_exit != 0)
+    {
+        return PrintFailure(
+            { false, json(), "test_tools_doctor_failed",
+                "The full diagnostic preflight failed: "
+                    + ignored_error.str() },
+            options.json_output,
+            doctor_exit,
+            output,
+            error);
+    }
+    const ParsedEnvelope capabilities = ParseEnvelope(
+        client.Get("/api/capabilities?limit=1&detail=full"));
+    if (!capabilities.ok)
+    {
+        return PrintFailure(
+            capabilities,
+            options.json_output,
+            capabilities.code == "editor_unreachable"
+                ? kExitUnavailable
+                : kExitExecution,
+            output,
+            error);
+    }
+    json envelope = {
+        { "ok", true },
+        { "data", {
+            { "schema", "ue.test-tools.v1" },
+            { "capabilityCount", catalog ? catalog->Size() : 0 },
+            { "skillCount", skill_catalog ? skill_catalog->Size() : 0 },
+            { "mcpExpectedToolCount", 12 },
+            { "editorCatalog", "passed" },
+            { "editorReadonly", "passed" },
+            { "traceWorker", "passed" },
+            { "note",
+                "The release bundle gate performs the actual MCP initialize/list-tools assertion." },
+        } },
+        { "meta", { { "endpoint", "<loopback>" } } },
+    };
+    return PrintSuccess(
+        "test-tools",
+        { true, std::move(envelope), {}, {} },
+        options.json_output,
+        output);
+}
+
+int RunMcpSurfaceStatus(
+    const CapabilityCatalog& catalog,
+    ue::api::Client& client,
+    bool json_output,
+    std::ostream& output)
+{
+    json backend_counts = json::object();
+    std::size_t deprecated = 0;
+    std::size_t canonical = 0;
+    for (const auto& [id, descriptor] : catalog.Descriptors())
+    {
+        const json lifecycle = descriptor.value("lifecycle", json::object());
+        deprecated += lifecycle.value("status", std::string{}) == "deprecated" ? 1 : 0;
+        canonical += lifecycle.value("canonicalId", id) == id ? 1 : 0;
+        for (const auto& backend : descriptor.value("execution", json::object()).value("backends", json::array()))
+        {
+            if (backend.is_string())
+            {
+                const std::string name = backend.get<std::string>();
+                backend_counts[name] = backend_counts.value(name, 0) + 1;
+            }
+        }
+    }
+    const ParsedEnvelope health = ParseEnvelope(client.Get("/api/health"));
+    json online = { { "connected", health.ok } };
+    if (health.ok)
+    {
+        const json data = health.value.value("data", json::object());
+        online["capabilityCount"] = data.value("capabilityCount", 0);
+        online["availableCapabilityCount"] = data.value("availableCapabilityCount", 0);
+        online["handlerMismatches"] = data.value("validationErrors", json::array());
+    }
+    else
+    {
+        online["code"] = health.code;
+    }
+    ParsedEnvelope response{
+        true,
+        {
+            { "ok", true },
+            { "data", {
+                { "schema", "ue.mcp-surface-status.v1" },
+                { "local", {
+                    { "capabilityCount", catalog.Size() },
+                    { "canonicalCount", canonical },
+                    { "deprecatedCount", deprecated },
+                    { "backendCounts", backend_counts },
+                } },
+                { "online", online },
+            } },
+        },
+        {},
+        {},
+    };
+    return PrintSuccess("mcp surface-status", response, json_output, output);
 }
 
 int ExecuteOptions(
@@ -3975,6 +4586,9 @@ int ExecuteOptions(
     }
     if ((options.params_json || options.params_file)
         && (options.command == "status"
+            || options.command == "doctor"
+            || options.command == "test-tools"
+            || options.command == "mcp-surface-status"
             || options.command == "capabilities"
             || options.command == "help"))
     {
@@ -3990,6 +4604,67 @@ int ExecuteOptions(
             kExitUsage,
             output,
             error);
+    }
+    if (options.command == "mcp-surface-status")
+    {
+        if (!catalog)
+        {
+            return PrintFailure(
+                { false, json(), "capability_catalog_unavailable", "Local capability catalog was not loaded." },
+                options.json_output,
+                kExitUnavailable,
+                output,
+                error);
+        }
+        if (!options.raw_options.empty() || options.confirm_write || options.live_schema)
+        {
+            return PrintFailure(
+                { false, json(), "invalid_arguments", "ue mcp surface-status accepts only connection options and --json." },
+                options.json_output,
+                kExitUsage,
+                output,
+                error);
+        }
+        return RunMcpSurfaceStatus(*catalog, client, options.json_output, output);
+    }
+    if (options.command == "doctor"
+        || options.command == "test-tools")
+    {
+        if (!options.raw_options.empty()
+            || options.confirm_write
+            || options.live_schema)
+        {
+            return PrintFailure(
+                {
+                    false,
+                    json(),
+                    "invalid_diagnostic_options",
+                    "Diagnostic commands accept --full, --instance, "
+                    "--bundle, --endpoint, --timeout-ms, --output, and "
+                    "--json only.",
+                },
+                options.json_output,
+                kExitUsage,
+                output,
+                error);
+        }
+        return options.command == "doctor"
+            ? RunDoctor(
+                options,
+                catalog,
+                skill_catalog,
+                client,
+                trace_worker,
+                output,
+                error)
+            : RunTestTools(
+                options,
+                catalog,
+                skill_catalog,
+                client,
+                trace_worker,
+                output,
+                error);
     }
     if (options.command == "status")
     {
@@ -4592,6 +5267,47 @@ int Run(
     std::ostream& output,
     std::ostream& error)
 {
+    if (!arguments.empty() && arguments.front() == "mcp")
+    {
+        if (arguments.size() < 2 || arguments[1] != "surface-status")
+        {
+            error << "Use ue mcp surface-status.\n";
+            return kExitUsage;
+        }
+        std::vector<std::string> normalized = { "mcp-surface-status" };
+        normalized.insert(
+            normalized.end(),
+            arguments.begin() + 2,
+            arguments.end());
+        return Run(normalized, executable, input, output, error);
+    }
+    if (!arguments.empty() && arguments.front() == "recipe")
+    {
+        if (arguments.size() == 1)
+        {
+            error
+                << "Use ue recipe validate|plan|start|status|resume|cancel|result.\n";
+            return kExitUsage;
+        }
+        return RunRecipeCliAdapter(
+            std::vector<std::string>(
+                arguments.begin() + 1,
+                arguments.end()),
+            executable,
+            error);
+    }
+    if (!arguments.empty() && arguments.front() == "sal")
+    {
+        if (arguments.size() < 2)
+        {
+            error << "Use ue sal stub|lint|plan.\n";
+            return kExitUsage;
+        }
+        return RunSalCliAdapter(
+            std::vector<std::string>(arguments.begin() + 1, arguments.end()),
+            executable,
+            error);
+    }
     Options options;
     std::string parse_error;
     if (!ParseArguments(arguments, options, parse_error))
@@ -4630,6 +5346,21 @@ int Run(
         return PrintVersion(options.json_output, output);
     }
 
+    if (!options.bundle_root.empty())
+    {
+        const auto bundle = std::filesystem::absolute(
+            options.bundle_root).lexically_normal();
+        if (options.capability_root.empty())
+        {
+            options.capability_root =
+                bundle / "Resources" / "Capabilities";
+        }
+        if (options.skill_root.empty())
+        {
+            options.skill_root = bundle / "skills";
+        }
+    }
+
     if (!NormalizeTraceShortcut(options, parse_error))
     {
         return PrintFailure(
@@ -4656,6 +5387,9 @@ int Run(
     std::optional<CapabilityCatalog> catalog;
     const bool requires_local_catalog =
         options.command == "shell"
+        || options.command == "doctor"
+        || options.command == "test-tools"
+        || options.command == "mcp-surface-status"
         || (!options.live_schema
             && options.command != "status"
             && (options.command == "capabilities"
@@ -4680,6 +5414,8 @@ int Run(
     std::optional<SkillCatalog> skill_catalog;
     const bool requires_skill_catalog =
         options.command == "skills"
+        || options.command == "doctor"
+        || options.command == "test-tools"
         || (options.command == "shell"
             && !options.skill_root.empty());
     if (requires_skill_catalog)
@@ -4747,9 +5483,14 @@ int Run(
     ue::api::Client client(
         options.endpoint,
         options.timeout_ms);
+    const auto trace_transport = Environment("UEAI_TRACE_TRANSPORT")
+            .value_or("service") == "stdio"
+        ? ue::trace::WorkerTransport::Stdio
+        : ue::trace::WorkerTransport::ResidentService;
     ue::trace::WorkerClient trace_worker(
         executable,
-        options.timeout_ms);
+        options.timeout_ms,
+        trace_transport);
     const std::string invocation_id = ue::api::NewInvocationId();
     client.ConfigureBestEffortCliSession({
         .name = "ue",

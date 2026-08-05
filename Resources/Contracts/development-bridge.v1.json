@@ -1,0 +1,35 @@
+{
+  "schema": "ue.development-bridge-contract.v1",
+  "transport": {
+    "windows": "namedPipe",
+    "unix": "unixSocket",
+    "tcp": false,
+    "http": false,
+    "currentUserOnly": true,
+    "frame": "uint32le byteLength followed by UTF-8 JSON",
+    "maxRequestBytes": 65536
+  },
+  "targetConfigurations": ["Development", "DebugGame"],
+  "shippingExcluded": true,
+  "optIn": ["-UEAIDevelopmentBridge", "ueai.Bridge.Enable"],
+  "pairing": {
+    "tokenTtlSeconds": 60,
+    "singleUse": true,
+    "required": ["pairingToken", "scope", "approvePlanDigest", "confirmAttach"],
+    "scopes": ["observe", "control"]
+  },
+  "session": {
+    "ttlSeconds": 300,
+    "capabilities": [
+      "development.runtime.status",
+      "development.runtime.detach"
+    ],
+    "detachTerminatesTarget": false
+  },
+  "forbidden": [
+    "asset editing",
+    "arbitrary UObject invocation",
+    "arbitrary process termination",
+    "Shipping inclusion"
+  ]
+}

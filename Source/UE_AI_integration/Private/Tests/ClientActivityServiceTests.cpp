@@ -1080,4 +1080,54 @@ bool FClientActivityBoundedSnapshotTest::RunTest(
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FClientActivityLeaseOwnershipTest,
+	"UE_AI_integration.Transport.ClientActivity.LeaseOwnership",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FClientActivityLeaseOwnershipTest::RunTest(const FString& Parameters)
+{
+	FClientActivityService Service;
+	FString OwnerSession;
+	FString OtherSession;
+	FString Error;
+	TestTrue(
+		TEXT("Lease owner registers"),
+		Service.RegisterClient(
+			MakeMcpRegistration(TEXT("owner"), TEXT("lease-owner"), 1001),
+			OwnerSession,
+			Error));
+	TestTrue(
+		TEXT("Second lease client registers"),
+		Service.RegisterClient(
+			MakeMcpRegistration(TEXT("other"), TEXT("lease-other"), 1002),
+			OtherSession,
+			Error));
+
+	TSharedPtr<FJsonObject> Lease;
+	int32 HttpStatus = 0;
+	TestTrue(
+		TEXT("Owner acquires the PIE lease"),
+		Service.AcquireLease(
+			TEXT("pie"), OwnerSession, false, FString(), Lease, Error, HttpStatus));
+	FString ObservedOwner;
+	TestTrue(
+		TEXT("Owner may enter the protected operation"),
+		Service.CanAccessLease(TEXT("pie"), OwnerSession, ObservedOwner));
+	TestFalse(
+		TEXT("Another live session is rejected"),
+		Service.CanAccessLease(TEXT("pie"), OtherSession, ObservedOwner));
+	TestEqual(
+		TEXT("Conflict reports the current owner"),
+		ObservedOwner,
+		OwnerSession);
+	TestTrue(
+		TEXT("Owner releases the lease"),
+		Service.ReleaseLease(TEXT("pie"), OwnerSession, Error));
+	TestTrue(
+		TEXT("The operation becomes available after release"),
+		Service.CanAccessLease(TEXT("pie"), OtherSession, ObservedOwner));
+	return true;
+}
+
 #endif

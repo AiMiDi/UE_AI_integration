@@ -30,7 +30,7 @@
 #include "Serialization/JsonWriter.h"
 
 #ifndef UEAI_TRACE_WORKER_VERSION
-#define UEAI_TRACE_WORKER_VERSION "0.9.0"
+#define UEAI_TRACE_WORKER_VERSION "1.0.0"
 #endif
 
 #ifndef UEAI_TRACE_CONTRACT_DIGEST

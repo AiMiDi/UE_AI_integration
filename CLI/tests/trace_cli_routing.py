@@ -18,7 +18,18 @@ def descriptor(operation: str, properties: dict, required=None, execution=None):
             "properties": properties,
             "additionalProperties": False,
         },
-        "traits": {"readOnly": True, "destructive": False, "expensive": False},
+        "traits": {"destructive": False, "expensive": False},
+        "effects": {
+            "asset": "read",
+            "world": "none",
+            "editorSession": "none",
+            "external": "none",
+        },
+        "lifecycle": {
+            "status": "active",
+            "since": "0.10.0",
+            "canonicalId": operation,
+        },
         "output": {"kind": "json"},
     }
     if required:
@@ -95,6 +106,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="ue-trace-routing-") as temporary:
         root = pathlib.Path(temporary)
         manifest = {
+            "schema": "ue.capability-manifest.v3",
+            "schemaVersion": 3,
             "domain": "production",
             "capabilities": [
                 descriptor(

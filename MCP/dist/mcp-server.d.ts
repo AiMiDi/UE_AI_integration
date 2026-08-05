@@ -10,8 +10,10 @@ export type MCPToolName = (typeof MCP_TOOL_NAMES)[number];
 export interface UEConnectionClient {
     getHealth(): Promise<UEHealthData>;
     getCapabilities(query?: UECapabilityQuery): Promise<UECapabilitiesData>;
-    execute(id: string, params?: Record<string, unknown>, requestId?: string): Promise<Record<string, unknown>>;
-    workflow(request: UEWorkflowRequest): Promise<UEWorkflowData>;
+    execute(id: string, params?: Record<string, unknown>, requestId?: string, context?: {
+        signal?: AbortSignal;
+    }): Promise<Record<string, unknown>>;
+    workflow(request: UEWorkflowRequest, signal?: AbortSignal): Promise<UEWorkflowData>;
 }
 export interface CreateMcpServerOptions {
     catalog?: CapabilityCatalog;
@@ -20,6 +22,11 @@ export interface CreateMcpServerOptions {
     cliLocator?: () => CliLocationResult;
     shortCliLocator?: () => CliLocationResult;
     localTraceExecutor?: CapabilityExecutor;
+    localRecipeExecutor?: CapabilityExecutor;
+    localProjectExecutor?: CapabilityExecutor;
+    localAssetExecutor?: CapabilityExecutor;
+    localSalExecutor?: CapabilityExecutor;
+    developmentRuntimeExecutor?: CapabilityExecutor;
 }
 export interface UEAIIntegrationMcpServer {
     server: McpServer;
@@ -28,12 +35,29 @@ export interface UEAIIntegrationMcpServer {
     registeredToolNames: readonly MCPToolName[];
 }
 type CapabilityDetail = "summary" | "full";
+interface CapabilityQueryArgs {
+    query?: string;
+    domain?: CapabilityDomain;
+    operation?: string;
+    kind?: CapabilityKind;
+    effect?: `${"asset" | "world" | "editorSession" | "external"}:${"none" | "read" | "write"}`;
+    lifecycle?: "active" | "deprecated";
+    canonicalOnly?: boolean;
+    destructive?: boolean;
+    expensive?: boolean;
+    outputKind?: CapabilityOutputKind;
+    risk?: CapabilityDslRisk;
+    offset?: number;
+    limit?: number;
+}
 export declare function handleCapabilities(catalog: CapabilityCatalog, client: UEConnectionClient, args: {
     query?: string;
     domain?: CapabilityDomain;
     operation?: string;
     kind?: CapabilityKind;
-    readOnly?: boolean;
+    effect?: CapabilityQueryArgs["effect"];
+    lifecycle?: CapabilityQueryArgs["lifecycle"];
+    canonicalOnly?: boolean;
     destructive?: boolean;
     expensive?: boolean;
     outputKind?: CapabilityOutputKind;
@@ -49,7 +73,9 @@ export declare function handleContext(catalog: CapabilityCatalog, args: {
     domain?: CapabilityDomain;
     operation?: string;
     kind?: CapabilityKind;
-    readOnly?: boolean;
+    effect?: CapabilityQueryArgs["effect"];
+    lifecycle?: CapabilityQueryArgs["lifecycle"];
+    canonicalOnly?: boolean;
     destructive?: boolean;
     expensive?: boolean;
     outputKind?: CapabilityOutputKind;

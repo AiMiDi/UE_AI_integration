@@ -120,17 +120,17 @@ export const UE_WORKFLOW_INPUT_SCHEMA = UE_WORKFLOW_TOOL_SCHEMA
         });
     }
 });
-export async function runWorkflowAction(executor, request) {
+export async function runWorkflowAction(executor, request, signal) {
     try {
-        return formatJsonResponse(await executor.workflow(request));
+        return formatJsonResponse(await executor.workflow(request, signal));
     }
     catch (error) {
         return formatErrorResponse(error);
     }
 }
-export async function handleWorkflowInput(executor, value) {
+export async function handleWorkflowInput(executor, value, signal) {
     try {
-        return await runWorkflowAction(executor, parseWorkflowInput(value));
+        return await runWorkflowAction(executor, parseWorkflowInput(value), signal);
     }
     catch (error) {
         return formatErrorResponse(error);

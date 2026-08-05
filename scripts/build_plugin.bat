@@ -81,6 +81,11 @@ echo Building and testing the MCP bridge from current TypeScript sources...
 call npm ci --prefix "%PLUGIN_ROOT%\MCP"
 if %ERRORLEVEL% neq 0 exit /b 1
 call npm run build --prefix "%PLUGIN_ROOT%\MCP"
+if %ERRORLEVEL% neq 0 (
+    echo MCP build hit a transient output-write failure; retrying once...
+    powershell -NoProfile -Command "Start-Sleep -Milliseconds 750"
+    call npm run build --prefix "%PLUGIN_ROOT%\MCP"
+)
 if %ERRORLEVEL% neq 0 exit /b 1
 call npm test --prefix "%PLUGIN_ROOT%\MCP"
 if %ERRORLEVEL% neq 0 exit /b 1

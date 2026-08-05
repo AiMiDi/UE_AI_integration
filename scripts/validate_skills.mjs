@@ -274,7 +274,11 @@ function validateSkill(skillDirectory, capabilities) {
           );
         }
         const capability = capabilities.get(operation);
-        const readOnly = capability?.traits?.readOnly === true;
+        const readOnly = capability?.effects
+          ? capability.effects.asset !== "write"
+            && capability.effects.world !== "write"
+            && capability.effects.external !== "write"
+          : false;
         const destructive = capability?.traits?.destructive === true;
         const guarded =
           destructive || capability?.dsl?.risk === "confirmWrite";

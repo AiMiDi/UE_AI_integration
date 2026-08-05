@@ -63,6 +63,7 @@ add_executable(ue-workflow
 add_library(UECommandCliCore STATIC
     src/CapabilityCatalog.cpp
     src/CommandCli.cpp
+    src/RecipeCliAdapter.cpp
     src/SkillCatalog.cpp
 )
 add_executable(ue

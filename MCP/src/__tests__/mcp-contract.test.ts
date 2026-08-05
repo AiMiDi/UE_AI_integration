@@ -33,6 +33,8 @@ import {
   UE_WORKFLOW_TOOL_SCHEMA,
 } from "../workflow-router.js";
 
+const shippedCapabilityCount = loadCapabilityCatalog().summary().capabilityCount;
+
 test("keeps oversized MCP JSON text valid when truncating", () => {
   const output = safeStringify(
     {
@@ -309,7 +311,10 @@ test("pages and filters capability summaries without emitting schemas by default
     assert.fail("Expected capability catalog as MCP text content");
   }
   const defaultPayload = JSON.parse(defaultResponse.content[0].text);
-  assert.equal(defaultPayload.total, catalog.summary().capabilityCount);
+  assert.equal(
+    defaultPayload.total,
+    catalog.capabilities.filter((capability) => capability.lifecycle.canonicalId === capability.id).length,
+  );
   assert.equal(defaultPayload.offset, 0);
   assert.equal(defaultPayload.limit, 25);
   assert.equal(defaultPayload.hasMore, true);
@@ -436,7 +441,7 @@ test("keeps ue_context directory-only by default and pages full schemas by domai
   const domainPayload = JSON.parse(domainResponse.content[0].text);
   assert.equal(
     domainPayload.total,
-    catalog.forDomain("blueprint").length,
+    catalog.forDomain("blueprint").filter((capability) => capability.lifecycle.canonicalId === capability.id).length,
   );
   assert.equal(domainPayload.limit, 10);
   assert.equal(domainPayload.capabilities.length, 10);
@@ -478,7 +483,9 @@ test("forwards live capability filters and pagination directly to the editor", a
     live: true,
     domain: "production",
     kind: "query",
-    readOnly: true,
+    effect: "external:read",
+    lifecycle: "active",
+    canonicalOnly: true,
     expensive: false,
     outputKind: "json",
     risk: "readOnly",
@@ -493,7 +500,9 @@ test("forwards live capability filters and pagination directly to the editor", a
     domain: "production",
     operation: undefined,
     kind: "query",
-    readOnly: true,
+    effect: "external:read",
+    lifecycle: "active",
+    canonicalOnly: true,
     destructive: undefined,
     expensive: false,
     outputKind: "json",
@@ -1018,7 +1027,7 @@ test("uses only HTTP endpoints and maps operations and workflows canonically", a
   await client.getCapabilities({
     domain: "scene",
     query: "pie",
-    readOnly: false,
+    effect: "world:write",
     offset: 2,
     limit: 3,
     detail: "full",
@@ -1049,7 +1058,7 @@ test("uses only HTTP endpoints and maps operations and workflows canonically", a
     {
       url:
         "http://127.0.0.1:19847/api/capabilities" +
-        "?domain=scene&query=pie&readOnly=false&offset=2&limit=3&detail=full",
+        "?domain=scene&query=pie&effect=world%3Awrite&offset=2&limit=3&detail=full",
       method: "GET",
       body: undefined,
     },
@@ -1105,11 +1114,11 @@ test("registers one MCP caller session and attributes subsequent requests", asyn
     } else if (url.endsWith("/api/health")) {
       data = {
         status: "ready",
-        pluginVersion: "0.9.0",
+        pluginVersion: "1.0.0",
         engineVersion: "5.3",
         projectName: "Test",
         mode: "editor",
-        capabilityCount: 381,
+        capabilityCount: shippedCapabilityCount,
         domainCounts: {},
         validationErrors: [],
       };
@@ -1287,11 +1296,11 @@ test("re-registers after a heartbeat rejects an expired session", async () => {
         data: url.endsWith("/api/health")
           ? {
               status: "ready",
-              pluginVersion: "0.9.0",
+              pluginVersion: "1.0.0",
               engineVersion: "5.3",
               projectName: "Test",
               mode: "editor",
-              capabilityCount: 381,
+              capabilityCount: shippedCapabilityCount,
               domainCounts: {},
               validationErrors: [],
             }

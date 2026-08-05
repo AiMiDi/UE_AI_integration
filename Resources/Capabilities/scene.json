@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "domain": "scene",
   "capabilities": [
     {
@@ -36,12 +36,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.actor.blueprint.spawn"
       }
     },
     {
@@ -63,12 +73,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.actor.delete"
       }
     },
     {
@@ -90,12 +110,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.actor.find"
       }
     },
     {
@@ -109,12 +139,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.actor.list"
       }
     },
     {
@@ -136,12 +176,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.actor.properties.get"
       }
     },
     {
@@ -173,12 +223,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.actor.property.set"
       }
     },
     {
@@ -224,12 +284,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.actor.spawn"
       }
     },
     {
@@ -266,12 +336,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.actor.transform.set"
       }
     },
     {
@@ -293,12 +373,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.console.execute"
       }
     },
     {
@@ -327,12 +417,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.foliage.clear"
       }
     },
     {
@@ -346,12 +446,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.foliage.info"
       }
     },
     {
@@ -402,12 +512,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.foliage.scatter"
       }
     },
     {
@@ -441,12 +561,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.foliage.type.add"
       }
     },
     {
@@ -460,12 +590,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.level.info"
       }
     },
     {
@@ -487,12 +627,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.level.open"
       }
     },
     {
@@ -521,12 +671,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.navigation.bounds.add"
       }
     },
     {
@@ -551,12 +711,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.navigation.build"
       }
     },
     {
@@ -570,12 +740,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.navigation.info"
       }
     },
     {
@@ -608,12 +788,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.navigation.modifier.add"
       }
     },
     {
@@ -642,12 +832,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.navigation.path.test"
       }
     },
     {
@@ -670,7 +870,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -683,6 +882,17 @@
         "transactionDomain": "editorSession",
         "deferCompile": false,
         "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.output_log.get"
       }
     },
     {
@@ -696,7 +906,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -709,6 +918,17 @@
         "transactionDomain": "editorSession",
         "deferCompile": false,
         "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.pie.restart"
       }
     },
     {
@@ -722,7 +942,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -735,6 +954,17 @@
         "transactionDomain": "editorSession",
         "deferCompile": false,
         "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.pie.start"
       }
     },
     {
@@ -748,7 +978,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -761,6 +990,17 @@
         "transactionDomain": "editorSession",
         "deferCompile": false,
         "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.pie.stop"
       }
     },
     {
@@ -782,12 +1022,50 @@
           "quality": {
             "type": "number",
             "description": "JPEG quality 1-100 (default 70)"
+          },
+          "imagePolicy": {
+            "type": "object",
+            "properties": {
+              "targetTokens": {
+                "type": "integer",
+                "minimum": 128,
+                "maximum": 32768
+              },
+              "maxWidth": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "maxHeight": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "color": {
+                "type": "string",
+                "enum": [
+                  "color",
+                  "grayscale",
+                  "monochrome"
+                ],
+                "default": "color"
+              },
+              "inline": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "thumbnail",
+                  "full"
+                ],
+                "default": "none"
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -800,6 +1078,17 @@
         "transactionDomain": "editorSession",
         "deferCompile": false,
         "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.viewport.capture"
       }
     },
     {
@@ -837,7 +1126,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -850,6 +1138,17 @@
         "transactionDomain": "editorSession",
         "deferCompile": false,
         "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.viewport.visualization.analyze"
       }
     },
     {
@@ -937,6 +1236,45 @@
             "type": "integer",
             "minimum": 64,
             "maximum": 4096
+          },
+          "imagePolicy": {
+            "type": "object",
+            "properties": {
+              "targetTokens": {
+                "type": "integer",
+                "minimum": 128,
+                "maximum": 32768
+              },
+              "maxWidth": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "maxHeight": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "color": {
+                "type": "string",
+                "enum": [
+                  "color",
+                  "grayscale",
+                  "monochrome"
+                ],
+                "default": "color"
+              },
+              "inline": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "thumbnail",
+                  "full"
+                ],
+                "default": "none"
+              }
+            },
+            "additionalProperties": false
           }
         },
         "required": [
@@ -945,7 +1283,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -958,6 +1295,17 @@
         "transactionDomain": "editorSession",
         "deferCompile": false,
         "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.viewport.visualization.capture"
       }
     },
     {
@@ -998,6 +1346,45 @@
             "minimum": 0,
             "maximum": 255,
             "default": 8
+          },
+          "imagePolicy": {
+            "type": "object",
+            "properties": {
+              "targetTokens": {
+                "type": "integer",
+                "minimum": 128,
+                "maximum": 32768
+              },
+              "maxWidth": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "maxHeight": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "color": {
+                "type": "string",
+                "enum": [
+                  "color",
+                  "grayscale",
+                  "monochrome"
+                ],
+                "default": "color"
+              },
+              "inline": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "thumbnail",
+                  "full"
+                ],
+                "default": "none"
+              }
+            },
+            "additionalProperties": false
           }
         },
         "required": [
@@ -1007,7 +1394,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -1020,6 +1406,17 @@
         "transactionDomain": "editorSession",
         "deferCompile": false,
         "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.viewport.visualization.compare"
       }
     },
     {
@@ -1086,7 +1483,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -1099,6 +1495,17 @@
         "transactionDomain": "editorSession",
         "deferCompile": false,
         "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.viewport.visualization.list"
       }
     },
     {
@@ -1126,12 +1533,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world.arch.create"
       }
     },
     {
@@ -1155,12 +1572,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world.castle.create"
       }
     },
     {
@@ -1196,12 +1623,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world.house.create"
       }
     },
     {
@@ -1237,12 +1674,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world.maze.create"
       }
     },
     {
@@ -1270,12 +1717,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world.pyramid.create"
       }
     },
     {
@@ -1304,12 +1761,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world.staircase.create"
       }
     },
     {
@@ -1345,12 +1812,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world.tower.create"
       }
     },
     {
@@ -1378,12 +1855,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world.town.create"
       }
     },
     {
@@ -1423,12 +1910,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world.wall.create"
       }
     },
     {
@@ -1442,12 +1939,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.pie.status"
       }
     },
     {
@@ -1461,12 +1968,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.pie.pause"
       }
     },
     {
@@ -1480,12 +1997,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.pie.resume"
       }
     },
     {
@@ -1499,12 +2026,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world.contexts.list"
       }
     },
     {
@@ -1557,12 +2094,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.object.find"
       }
     },
     {
@@ -1611,12 +2158,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.object.get"
       }
     },
     {
@@ -1666,12 +2223,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.object.set"
       }
     },
     {
@@ -1721,12 +2288,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.object.call"
       }
     },
     {
@@ -1772,12 +2349,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.widget.tree.get"
       }
     },
     {
@@ -1818,12 +2405,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.widget.state.get"
       }
     },
     {
@@ -1889,12 +2486,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.widget.hit_test"
       }
     },
     {
@@ -1939,12 +2546,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.widget.focus.set"
       }
     },
     {
@@ -1985,12 +2602,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.delegate.list"
       }
     },
     {
@@ -2065,12 +2692,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.delegate.bind"
       }
     },
     {
@@ -2145,12 +2782,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.delegate.unbind"
       }
     },
     {
@@ -2225,12 +2872,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.delegate.is_bound"
       }
     },
     {
@@ -2280,12 +2937,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.delegate.broadcast"
       }
     },
     {
@@ -2410,12 +3077,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.input.pointer"
       }
     },
     {
@@ -2579,12 +3256,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.input.pointer_sequence"
       }
     },
     {
@@ -2606,12 +3293,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.input.pointer_sequence.get"
       }
     },
     {
@@ -2644,6 +3341,45 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 100
+          },
+          "imagePolicy": {
+            "type": "object",
+            "properties": {
+              "targetTokens": {
+                "type": "integer",
+                "minimum": 128,
+                "maximum": 32768
+              },
+              "maxWidth": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "maxHeight": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "color": {
+                "type": "string",
+                "enum": [
+                  "color",
+                  "grayscale",
+                  "monochrome"
+                ],
+                "default": "color"
+              },
+              "inline": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "thumbnail",
+                  "full"
+                ],
+                "default": "none"
+              }
+            },
+            "additionalProperties": false
           }
         },
         "required": [
@@ -2653,12 +3389,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
       "output": {
         "kind": "image"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.viewport.capture"
       }
     },
     {
@@ -2760,12 +3506,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.wait.until"
       }
     },
     {
@@ -2787,12 +3543,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.wait.get"
       }
     },
     {
@@ -2913,12 +3679,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.input.key"
       }
     },
     {
@@ -2982,12 +3758,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.runtime.input.mode.set"
       }
     },
     {
@@ -2995,188 +3781,787 @@
       "domain": "scene",
       "kind": "query",
       "description": "Describe the current editor world's World Partition and streaming state.",
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world_partition.get"
+      }
     },
     {
       "id": "scene.world_partition.cells.list",
       "domain": "scene",
       "kind": "query",
       "description": "List bounded generated World Partition runtime cells and their current states.",
-      "inputSchema": { "type": "object", "properties": { "limit": { "type": "integer", "minimum": 1, "maximum": 500 } }, "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world_partition.cells.list"
+      }
     },
     {
       "id": "scene.world_partition.streaming_sources.list",
       "domain": "scene",
       "kind": "query",
       "description": "List active World Partition streaming sources.",
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world_partition.streaming_sources.list"
+      }
     },
     {
       "id": "scene.world_partition.streaming.audit",
       "domain": "scene",
       "kind": "validation",
       "description": "Audit the current World Partition streaming configuration and observed sources.",
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world_partition.streaming.audit"
+      }
     },
     {
       "id": "scene.data_layer.list",
       "domain": "scene",
       "kind": "query",
       "description": "List Data Layer instances and effective runtime state in the current world.",
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.data_layer.list"
+      }
     },
     {
       "id": "scene.data_layer.get",
       "domain": "scene",
       "kind": "query",
       "description": "Get one Data Layer instance by short name, full name, instance name, or path.",
-      "inputSchema": { "type": "object", "properties": { "dataLayer": { "type": "string" } }, "required": ["dataLayer"], "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dataLayer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataLayer"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.data_layer.get"
+      }
     },
     {
       "id": "scene.hlod.audit",
       "domain": "scene",
       "kind": "validation",
       "description": "Audit World Partition HLOD actor presence without starting a build.",
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.hlod.audit"
+      }
     },
     {
       "id": "scene.pcg.inspect",
       "domain": "scene",
       "kind": "query",
       "description": "Inspect PCG components through optional-module reflection; returns unavailable when PCG is not loaded.",
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "requires": {
-        "features": ["PCG"],
-        "plugins": ["PCG"],
-        "modules": ["PCG"]
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
       },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "requires": {
+        "features": [
+          "PCG"
+        ],
+        "plugins": [
+          "PCG"
+        ],
+        "modules": [
+          "PCG"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.pcg.inspect"
+      }
     },
     {
       "id": "scene.render.context.get",
       "domain": "scene",
       "kind": "query",
       "description": "Get the active RHI, adapter, feature level, world, and ray tracing hardware signal.",
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.render.context.get"
+      }
     },
     {
       "id": "scene.render.feature.audit",
       "domain": "scene",
       "kind": "validation",
       "description": "Audit current Lumen, Nanite, VSM, hardware ray tracing, and TSR CVar/RHI evidence.",
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.render.feature.audit"
+      }
     },
     {
       "id": "scene.render.memory.sample",
       "domain": "scene",
       "kind": "query",
       "description": "Take one instantaneous RHI texture and graphics-memory sample with availability flags.",
-      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.render.memory.sample"
+      }
     },
     {
       "id": "scene.world_partition.change.plan",
       "domain": "scene",
       "kind": "validation",
       "description": "Plan a reversible World Partition streaming or runtime Data Layer state change.",
-      "inputSchema": { "type": "object", "properties": { "action": { "type": "string", "enum": ["setStreamingEnabled", "setDataLayerRuntimeState"] }, "enabled": { "type": "boolean" }, "dataLayer": { "type": "string" }, "state": { "type": "string", "enum": ["unloaded", "loaded", "activated"] } }, "required": ["action"], "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "setStreamingEnabled",
+              "setDataLayerRuntimeState"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "dataLayer": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "unloaded",
+              "loaded",
+              "activated"
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world_partition.change.plan"
+      }
     },
     {
       "id": "scene.world_partition.change.execute",
       "domain": "scene",
       "kind": "command",
       "description": "Execute an approved World Partition change after re-planning and exact digest validation.",
-      "inputSchema": { "type": "object", "properties": { "action": { "type": "string", "enum": ["setStreamingEnabled", "setDataLayerRuntimeState"] }, "enabled": { "type": "boolean" }, "dataLayer": { "type": "string" }, "state": { "type": "string", "enum": ["unloaded", "loaded", "activated"] }, "approvePlanDigest": { "type": "string" }, "confirmWrite": { "type": "boolean" }, "requestId": { "type": "string" } }, "required": ["action", "approvePlanDigest", "confirmWrite"], "additionalProperties": false },
-      "traits": { "readOnly": false, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "setStreamingEnabled",
+              "setDataLayerRuntimeState"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "dataLayer": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "unloaded",
+              "loaded",
+              "activated"
+            ]
+          },
+          "approvePlanDigest": {
+            "type": "string"
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "approvePlanDigest",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world_partition.change.execute"
+      }
     },
     {
       "id": "scene.world_partition.change.rollback",
       "domain": "scene",
       "kind": "command",
       "description": "Rollback a recorded World Partition change in the same Editor instance.",
-      "inputSchema": { "type": "object", "properties": { "runId": { "type": "string" }, "confirmWrite": { "type": "boolean" } }, "required": ["runId", "confirmWrite"], "additionalProperties": false },
-      "traits": { "readOnly": false, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "runId",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.world_partition.change.rollback"
+      }
     },
     {
       "id": "scene.render.settings.plan",
       "domain": "scene",
       "kind": "validation",
       "description": "Plan an allowlisted, session-scoped render setting change.",
-      "inputSchema": { "type": "object", "properties": { "scope": { "type": "string", "enum": ["session"] }, "settings": { "type": "object", "additionalProperties": { "type": "boolean" } } }, "required": ["settings"], "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "session"
+            ]
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          }
+        },
+        "required": [
+          "settings"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.render.settings.plan"
+      }
     },
     {
       "id": "scene.render.settings.execute",
       "domain": "scene",
       "kind": "command",
       "description": "Execute an approved allowlisted session render setting change.",
-      "inputSchema": { "type": "object", "properties": { "scope": { "type": "string", "enum": ["session"] }, "settings": { "type": "object", "additionalProperties": { "type": "boolean" } }, "approvePlanDigest": { "type": "string" }, "confirmWrite": { "type": "boolean" }, "requestId": { "type": "string" } }, "required": ["settings", "approvePlanDigest", "confirmWrite"], "additionalProperties": false },
-      "traits": { "readOnly": false, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "session"
+            ]
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          },
+          "approvePlanDigest": {
+            "type": "string"
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "settings",
+          "approvePlanDigest",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.render.settings.execute"
+      }
     },
     {
       "id": "scene.render.settings.rollback",
       "domain": "scene",
       "kind": "command",
       "description": "Rollback a recorded session render setting change in the same Editor instance.",
-      "inputSchema": { "type": "object", "properties": { "runId": { "type": "string" }, "confirmWrite": { "type": "boolean" } }, "required": ["runId", "confirmWrite"], "additionalProperties": false },
-      "traits": { "readOnly": false, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "runId",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.render.settings.rollback"
+      }
     },
     {
       "id": "scene.hlod.build",
       "domain": "scene",
       "kind": "command",
       "description": "Start an approved WorldPartitionHLODsBuilder commandlet job for the current saved map.",
-      "requires": { "plugins": ["WorldPartitionHLODUtilities"], "modules": ["WorldPartitionHLODUtilities"] },
+      "requires": {
+        "plugins": [
+          "WorldPartitionHLODUtilities"
+        ],
+        "modules": [
+          "WorldPartitionHLODUtilities"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
           "mode": {
             "type": "string",
-            "enum": ["setup", "build", "delete", "stats"]
+            "enum": [
+              "setup",
+              "build",
+              "delete",
+              "stats"
+            ]
           },
           "timeoutSeconds": {
             "type": "number",
@@ -3191,12 +4576,37 @@
             "minLength": 1
           }
         },
-        "required": ["mode", "confirmWrite"],
+        "required": [
+          "mode",
+          "confirmWrite"
+        ],
         "additionalProperties": false
       },
-      "traits": { "readOnly": false, "destructive": true, "expensive": true },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "confirmWrite" },
-      "output": { "kind": "json" }
+      "traits": {
+        "destructive": true,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.hlod.build"
+      }
     },
     {
       "id": "scene.pcg.generate",
@@ -3227,17 +4637,47 @@
             "minLength": 1
           }
         },
-        "required": ["confirmWrite"],
+        "required": [
+          "confirmWrite"
+        ],
         "additionalProperties": false
       },
       "requires": {
-        "features": ["PCG"],
-        "plugins": ["PCG"],
-        "modules": ["PCG"]
+        "features": [
+          "PCG"
+        ],
+        "plugins": [
+          "PCG"
+        ],
+        "modules": [
+          "PCG"
+        ]
       },
-      "traits": { "readOnly": false, "destructive": false, "expensive": true },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "confirmWrite" },
-      "output": { "kind": "json" }
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.pcg.generate"
+      }
     },
     {
       "id": "scene.pcg.cleanup",
@@ -3268,17 +4708,47 @@
             "minLength": 1
           }
         },
-        "required": ["confirmWrite"],
+        "required": [
+          "confirmWrite"
+        ],
         "additionalProperties": false
       },
       "requires": {
-        "features": ["PCG"],
-        "plugins": ["PCG"],
-        "modules": ["PCG"]
+        "features": [
+          "PCG"
+        ],
+        "plugins": [
+          "PCG"
+        ],
+        "modules": [
+          "PCG"
+        ]
       },
-      "traits": { "readOnly": false, "destructive": true, "expensive": true },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "job", "deferCompile": false, "risk": "confirmWrite" },
-      "output": { "kind": "json" }
+      "traits": {
+        "destructive": true,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "job",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.pcg.cleanup"
+      }
     },
     {
       "id": "scene.landscape.list",
@@ -3290,10 +4760,36 @@
         "properties": {},
         "additionalProperties": false
       },
-      "requires": { "modules": ["Landscape"] },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "requires": {
+        "modules": [
+          "Landscape"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.landscape.list"
+      }
     },
     {
       "id": "scene.landscape.get",
@@ -3303,15 +4799,47 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          "landscape": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
         },
-        "required": ["landscape"],
+        "required": [
+          "landscape"
+        ],
         "additionalProperties": false
       },
-      "requires": { "modules": ["Landscape"] },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "requires": {
+        "modules": [
+          "Landscape"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.landscape.get"
+      }
     },
     {
       "id": "scene.landscape.layers.get",
@@ -3321,15 +4849,47 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          "landscape": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
         },
-        "required": ["landscape"],
+        "required": [
+          "landscape"
+        ],
         "additionalProperties": false
       },
-      "requires": { "modules": ["Landscape"] },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "requires": {
+        "modules": [
+          "Landscape"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.landscape.layers.get"
+      }
     },
     {
       "id": "scene.landscape.validate",
@@ -3339,15 +4899,47 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          "landscape": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
         },
-        "required": ["landscape"],
+        "required": [
+          "landscape"
+        ],
         "additionalProperties": false
       },
-      "requires": { "modules": ["Landscape"] },
-      "traits": { "readOnly": true, "destructive": false, "expensive": true },
-      "dsl": { "admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "requires": {
+        "modules": [
+          "Landscape"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.landscape.validate"
+      }
     },
     {
       "id": "scene.landscape.snapshot",
@@ -3357,16 +4949,50 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
-          "includeWater": { "type": "boolean" }
+          "landscape": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "includeWater": {
+            "type": "boolean"
+          }
         },
-        "required": ["landscape"],
+        "required": [
+          "landscape"
+        ],
         "additionalProperties": false
       },
-      "requires": { "modules": ["Landscape"] },
-      "traits": { "readOnly": true, "destructive": false, "expensive": true },
-      "dsl": { "admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "requires": {
+        "modules": [
+          "Landscape"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.landscape.snapshot"
+      }
     },
     {
       "id": "scene.landscape.diff",
@@ -3376,16 +5002,49 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "before": { "type": "object" },
-          "after": { "type": "object" }
+          "before": {
+            "type": "object"
+          },
+          "after": {
+            "type": "object"
+          }
         },
-        "required": ["before", "after"],
+        "required": [
+          "before",
+          "after"
+        ],
         "additionalProperties": false
       },
-      "requires": { "modules": ["Landscape"] },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "requires": {
+        "modules": [
+          "Landscape"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.landscape.diff"
+      }
     },
     {
       "id": "scene.landscape.heightmap.export",
@@ -3395,16 +5054,52 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
-          "outputName": { "type": "string", "minLength": 1, "maxLength": 96 }
+          "landscape": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "outputName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          }
         },
-        "required": ["landscape"],
+        "required": [
+          "landscape"
+        ],
         "additionalProperties": false
       },
-      "requires": { "modules": ["Landscape"] },
-      "traits": { "readOnly": true, "destructive": false, "expensive": true },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "requires": {
+        "modules": [
+          "Landscape"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.landscape.heightmap.export"
+      }
     },
     {
       "id": "scene.landscape.weightmap.export",
@@ -3414,17 +5109,58 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
-          "layer": { "type": "string", "minLength": 1, "maxLength": 256 },
-          "outputName": { "type": "string", "minLength": 1, "maxLength": 96 }
+          "landscape": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "layer": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "outputName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          }
         },
-        "required": ["landscape", "layer"],
+        "required": [
+          "landscape",
+          "layer"
+        ],
         "additionalProperties": false
       },
-      "requires": { "modules": ["Landscape"] },
-      "traits": { "readOnly": true, "destructive": false, "expensive": true },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "requires": {
+        "modules": [
+          "Landscape"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.landscape.weightmap.export"
+      }
     },
     {
       "id": "scene.landscape.change.plan",
@@ -3437,7 +5173,11 @@
           "request": {
             "type": "object",
             "properties": {
-              "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "landscape": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
               "operations": {
                 "type": "array",
                 "minItems": 1,
@@ -3445,42 +5185,144 @@
                 "items": {
                   "type": "object",
                   "properties": {
-                    "action": { "type": "string", "enum": ["importHeightmap", "importWeightmap", "setMaterial", "replaceLayerInfo", "waterCreate", "waterUpdate", "waterDelete"] },
-                    "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
-                    "sourcePath": { "type": "string", "minLength": 1, "maxLength": 2048, "description": "A regular file physically contained by the current project; symbolic links and directory junctions are rejected." },
-                    "layer": { "type": "string", "minLength": 1, "maxLength": 256 },
-                    "layerInfo": { "type": "string", "minLength": 1, "maxLength": 1024 },
-                    "material": { "type": "string", "minLength": 1, "maxLength": 1024 },
-                    "flipY": { "type": "boolean" },
-                    "type": { "type": "string", "enum": ["lake", "river", "ocean", "custom"] },
-                    "water": { "type": "string", "minLength": 1, "maxLength": 1024 },
-                    "label": { "type": "string", "maxLength": 256 },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "importHeightmap",
+                        "importWeightmap",
+                        "setMaterial",
+                        "replaceLayerInfo",
+                        "waterCreate",
+                        "waterUpdate",
+                        "waterDelete"
+                      ]
+                    },
+                    "landscape": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    },
+                    "sourcePath": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048,
+                      "description": "A regular file physically contained by the current project; symbolic links and directory junctions are rejected."
+                    },
+                    "layer": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "layerInfo": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    },
+                    "material": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    },
+                    "flipY": {
+                      "type": "boolean"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "lake",
+                        "river",
+                        "ocean",
+                        "custom"
+                      ]
+                    },
+                    "water": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    },
+                    "label": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
                     "transform": {
                       "type": "object",
                       "properties": {
-                        "location": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
-                        "rotation": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
-                        "scale": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+                        "location": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          },
+                          "minItems": 3,
+                          "maxItems": 3
+                        },
+                        "rotation": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          },
+                          "minItems": 3,
+                          "maxItems": 3
+                        },
+                        "scale": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          },
+                          "minItems": 3,
+                          "maxItems": 3
+                        }
                       },
                       "additionalProperties": false
                     }
                   },
-                  "required": ["action"],
+                  "required": [
+                    "action"
+                  ],
                   "additionalProperties": false
                 }
               }
             },
-            "required": ["operations"],
+            "required": [
+              "operations"
+            ],
             "additionalProperties": false
           }
         },
-        "required": ["request"],
+        "required": [
+          "request"
+        ],
         "additionalProperties": false
       },
-      "requires": { "modules": ["Landscape"] },
-      "traits": { "readOnly": true, "destructive": false, "expensive": true },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
-      "output": { "kind": "json" }
+      "requires": {
+        "modules": [
+          "Landscape"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.landscape.change.plan"
+      }
     },
     {
       "id": "scene.landscape.change.execute",
@@ -3493,7 +5335,11 @@
           "request": {
             "type": "object",
             "properties": {
-              "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "landscape": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
               "operations": {
                 "type": "array",
                 "minItems": 1,
@@ -3501,45 +5347,160 @@
                 "items": {
                   "type": "object",
                   "properties": {
-                    "action": { "type": "string", "enum": ["importHeightmap", "importWeightmap", "setMaterial", "replaceLayerInfo", "waterCreate", "waterUpdate", "waterDelete"] },
-                    "landscape": { "type": "string", "minLength": 1, "maxLength": 1024 },
-                    "sourcePath": { "type": "string", "minLength": 1, "maxLength": 2048, "description": "A regular file physically contained by the current project; symbolic links and directory junctions are rejected." },
-                    "layer": { "type": "string", "minLength": 1, "maxLength": 256 },
-                    "layerInfo": { "type": "string", "minLength": 1, "maxLength": 1024 },
-                    "material": { "type": "string", "minLength": 1, "maxLength": 1024 },
-                    "flipY": { "type": "boolean" },
-                    "type": { "type": "string", "enum": ["lake", "river", "ocean", "custom"] },
-                    "water": { "type": "string", "minLength": 1, "maxLength": 1024 },
-                    "label": { "type": "string", "maxLength": 256 },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "importHeightmap",
+                        "importWeightmap",
+                        "setMaterial",
+                        "replaceLayerInfo",
+                        "waterCreate",
+                        "waterUpdate",
+                        "waterDelete"
+                      ]
+                    },
+                    "landscape": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    },
+                    "sourcePath": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048,
+                      "description": "A regular file physically contained by the current project; symbolic links and directory junctions are rejected."
+                    },
+                    "layer": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "layerInfo": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    },
+                    "material": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    },
+                    "flipY": {
+                      "type": "boolean"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "lake",
+                        "river",
+                        "ocean",
+                        "custom"
+                      ]
+                    },
+                    "water": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    },
+                    "label": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
                     "transform": {
                       "type": "object",
                       "properties": {
-                        "location": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
-                        "rotation": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
-                        "scale": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+                        "location": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          },
+                          "minItems": 3,
+                          "maxItems": 3
+                        },
+                        "rotation": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          },
+                          "minItems": 3,
+                          "maxItems": 3
+                        },
+                        "scale": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          },
+                          "minItems": 3,
+                          "maxItems": 3
+                        }
                       },
                       "additionalProperties": false
                     }
                   },
-                  "required": ["action"],
+                  "required": [
+                    "action"
+                  ],
                   "additionalProperties": false
                 }
               }
             },
-            "required": ["operations"],
+            "required": [
+              "operations"
+            ],
             "additionalProperties": false
           },
-          "approvePlanDigest": { "type": "string", "pattern": "^sha256:[0-9a-fA-F]{64}$" },
-          "confirmWrite": { "type": "boolean", "const": true },
-          "requestId": { "type": "string", "minLength": 1, "maxLength": 200 }
+          "approvePlanDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-fA-F]{64}$"
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "const": true
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
         },
-        "required": ["request", "approvePlanDigest", "confirmWrite", "requestId"],
+        "required": [
+          "request",
+          "approvePlanDigest",
+          "confirmWrite",
+          "requestId"
+        ],
         "additionalProperties": false
       },
-      "requires": { "modules": ["Landscape"] },
-      "traits": { "readOnly": false, "destructive": true, "expensive": true },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
-      "output": { "kind": "json" }
+      "requires": {
+        "modules": [
+          "Landscape"
+        ]
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.landscape.change.execute"
+      }
     },
     {
       "id": "scene.landscape.change.rollback",
@@ -3549,17 +5510,58 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "runId": { "type": "string", "minLength": 1, "maxLength": 200 },
-          "requestId": { "type": "string", "minLength": 1, "maxLength": 200 },
-          "confirmWrite": { "type": "boolean", "const": true }
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "const": true
+          }
         },
-        "required": ["runId", "requestId", "confirmWrite"],
+        "required": [
+          "runId",
+          "requestId",
+          "confirmWrite"
+        ],
         "additionalProperties": false
       },
-      "requires": { "modules": ["Landscape"] },
-      "traits": { "readOnly": false, "destructive": true, "expensive": true },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "editorSession", "deferCompile": false, "risk": "confirmWrite" },
-      "output": { "kind": "json" }
+      "requires": {
+        "modules": [
+          "Landscape"
+        ]
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.landscape.change.rollback"
+      }
     },
     {
       "id": "scene.water.list",
@@ -3571,10 +5573,42 @@
         "properties": {},
         "additionalProperties": false
       },
-      "requires": { "features": ["Water"], "plugins": ["Water"], "modules": ["Water"] },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "requires": {
+        "features": [
+          "Water"
+        ],
+        "plugins": [
+          "Water"
+        ],
+        "modules": [
+          "Water"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.water.list"
+      }
     },
     {
       "id": "scene.water.get",
@@ -3584,15 +5618,53 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "water": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          "water": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
         },
-        "required": ["water"],
+        "required": [
+          "water"
+        ],
         "additionalProperties": false
       },
-      "requires": { "features": ["Water"], "plugins": ["Water"], "modules": ["Water"] },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "requires": {
+        "features": [
+          "Water"
+        ],
+        "plugins": [
+          "Water"
+        ],
+        "modules": [
+          "Water"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.water.get"
+      }
     },
     {
       "id": "scene.water.validate",
@@ -3602,14 +5674,51 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "water": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          "water": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
         },
         "additionalProperties": false
       },
-      "requires": { "features": ["Water"], "plugins": ["Water"], "modules": ["Water"] },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "requires": {
+        "features": [
+          "Water"
+        ],
+        "plugins": [
+          "Water"
+        ],
+        "modules": [
+          "Water"
+        ]
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "scene.water.validate"
+      }
     }
-  ]
+  ],
+  "tombstones": []
 }

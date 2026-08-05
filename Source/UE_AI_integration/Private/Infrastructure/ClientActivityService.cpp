@@ -1,4 +1,5 @@
 #include "Infrastructure/ClientActivityService.h"
+#include "Infrastructure/Sha256.h"
 
 #include "Dom/JsonValue.h"
 #include "HAL/PlatformTime.h"
@@ -12,6 +13,7 @@ namespace UEAIIntegration::Infrastructure
 {
 namespace
 {
+FClientActivityService* GActiveClientActivityService = nullptr;
 // Workflow full-detail results can legitimately exceed the compact-response
 // target. Parsing is transient and metadata-only; the response body is never
 // retained by the activity service.
@@ -59,6 +61,29 @@ bool IsTerminalRunStatus(const FString& Status)
 		|| Status == TEXT("blocked")
 		|| Status == TEXT("rolledBack");
 }
+
+FString LeaseOverrideDigest(
+	const FString& Type,
+	const FString& CurrentOwner,
+	const FString& RequestedOwner)
+{
+	const FString Source = TEXT("ue.lease-override.v1|") + Type
+		+ TEXT("|") + CurrentOwner + TEXT("|") + RequestedOwner;
+	const FTCHARToUTF8 Utf8(*Source);
+	FString Hex;
+	TrySha256Hex(Utf8.Get(), Utf8.Length(), Hex);
+	return TEXT("sha256:") + Hex;
+}
+}
+
+void FClientActivityService::SetActiveService(FClientActivityService* Service)
+{
+	GActiveClientActivityService = Service;
+}
+
+FClientActivityService* FClientActivityService::GetActiveService()
+{
+	return GActiveClientActivityService;
 }
 
 bool FClientActivityService::IsBoundedToken(
@@ -205,6 +230,15 @@ bool FClientActivityService::Heartbeat(
 	}
 	Session->LastActivitySeconds = FPlatformTime::Seconds();
 	Session->LastActivityAtUtc = NowUtc();
+	for (TPair<FString, FLease>& Pair : Leases)
+	{
+		if (Pair.Value.OwnerSessionId == SessionId)
+		{
+			Pair.Value.ExpiresSeconds = Session->LastActivitySeconds + 30.0;
+			Pair.Value.ExpiresAtUtc = FDateTime::FromUnixTimestamp(
+				FDateTime::UtcNow().ToUnixTimestamp() + 30).ToIso8601();
+		}
+	}
 	return true;
 }
 
@@ -244,6 +278,10 @@ bool FClientActivityService::UnregisterClient(
 			FinishedAtUtc);
 	}
 	SessionByInstanceId.Remove(Session->Registration.InstanceId);
+	for (auto It = Leases.CreateIterator(); It; ++It)
+	{
+		if (It.Value().OwnerSessionId == SessionId) It.RemoveCurrent();
+	}
 	Sessions.Remove(SessionId);
 	return true;
 }
@@ -266,6 +304,7 @@ void FClientActivityService::DisconnectAllSessions()
 	}
 	Sessions.Reset();
 	SessionByInstanceId.Reset();
+	Leases.Reset();
 }
 
 bool FClientActivityService::BeginRequest(
@@ -416,6 +455,14 @@ void FClientActivityService::ExpireSessions(const double CurrentSeconds)
 			SessionByInstanceId.Remove(Session->Registration.InstanceId);
 		}
 		Sessions.Remove(SessionId);
+		for (auto It = Leases.CreateIterator(); It; ++It)
+		{
+			if (It.Value().OwnerSessionId == SessionId) It.RemoveCurrent();
+		}
+	}
+	for (auto It = Leases.CreateIterator(); It; ++It)
+	{
+		if (It.Value().ExpiresSeconds <= NowSeconds) It.RemoveCurrent();
 	}
 }
 
@@ -1051,6 +1098,132 @@ TSharedPtr<FJsonObject> FClientActivityService::MakeSnapshot(
 	Root->SetNumberField(TEXT("activityRingCount"), Activities.Num());
 	Root->SetNumberField(TEXT("activityRingCapacity"), ActivityCapacity);
 	return Root;
+}
+
+bool FClientActivityService::AcquireLease(
+	const FString& Type,
+	const FString& SessionId,
+	const bool bOverride,
+	const FString& ApprovePlanDigest,
+	TSharedPtr<FJsonObject>& OutLease,
+	FString& OutError,
+	int32& OutHttpStatus)
+{
+	OutLease.Reset();
+	OutError.Reset();
+	OutHttpStatus = 200;
+	static const TSet<FString> Allowed = {
+		TEXT("pie"), TEXT("compile"), TEXT("editorRestart"), TEXT("performance") };
+	if (!Allowed.Contains(Type) || SessionId.IsEmpty())
+	{
+		OutError = TEXT("lease type or sessionId is invalid.");
+		OutHttpStatus = 422;
+		return false;
+	}
+	ExpireSessions();
+	FScopeLock Lock(&Mutex);
+	if (!Sessions.Contains(SessionId))
+	{
+		OutError = TEXT("lease owner session is unknown or expired.");
+		OutHttpStatus = 404;
+		return false;
+	}
+	if (const FLease* Existing = Leases.Find(Type))
+	{
+		if (Existing->OwnerSessionId != SessionId)
+		{
+			const FString Expected = LeaseOverrideDigest(Type, Existing->OwnerSessionId, SessionId);
+			if (!bOverride || ApprovePlanDigest != Expected)
+			{
+				OutLease = MakeShared<FJsonObject>();
+				OutLease->SetStringField(TEXT("ownerSessionId"), Existing->OwnerSessionId);
+				OutLease->SetStringField(TEXT("overridePlanDigest"), Expected);
+				OutError = TEXT("lease is owned by another live session.");
+				OutHttpStatus = 409;
+				return false;
+			}
+			TSharedPtr<FJsonObject> Audit = MakeShared<FJsonObject>();
+			Audit->SetStringField(TEXT("type"), Type);
+			Audit->SetStringField(TEXT("previousOwner"), Existing->OwnerSessionId);
+			Audit->SetStringField(TEXT("newOwner"), SessionId);
+			Audit->SetStringField(TEXT("atUtc"), NowUtc());
+			LeaseAudit.Add(Audit);
+			if (LeaseAudit.Num() > 100) LeaseAudit.RemoveAt(0, LeaseAudit.Num() - 100);
+		}
+	}
+	const double NowSeconds = FPlatformTime::Seconds();
+	FLease Lease;
+	Lease.Type = Type;
+	Lease.OwnerSessionId = SessionId;
+	Lease.AcquiredAtUtc = NowUtc();
+	Lease.ExpiresAtUtc = FDateTime::FromUnixTimestamp(
+		FDateTime::UtcNow().ToUnixTimestamp() + 30).ToIso8601();
+	Lease.ExpiresSeconds = NowSeconds + 30.0;
+	Leases.Add(Type, Lease);
+	OutLease = MakeShared<FJsonObject>();
+	OutLease->SetStringField(TEXT("type"), Type);
+	OutLease->SetStringField(TEXT("ownerSessionId"), SessionId);
+	OutLease->SetNumberField(TEXT("ttlSeconds"), 30);
+	OutLease->SetStringField(TEXT("expiresAtUtc"), Lease.ExpiresAtUtc);
+	return true;
+}
+
+bool FClientActivityService::ReleaseLease(
+	const FString& Type,
+	const FString& SessionId,
+	FString& OutError)
+{
+	FScopeLock Lock(&Mutex);
+	const FLease* Existing = Leases.Find(Type);
+	if (!Existing || Existing->OwnerSessionId != SessionId)
+	{
+		OutError = TEXT("lease is absent or owned by another session.");
+		return false;
+	}
+	Leases.Remove(Type);
+	return true;
+}
+
+bool FClientActivityService::CanAccessLease(
+	const FString& Type,
+	const FString& SessionId,
+	FString& OutOwnerSessionId)
+{
+	OutOwnerSessionId.Reset();
+	ExpireSessions();
+	FScopeLock Lock(&Mutex);
+	const FLease* Existing = Leases.Find(Type);
+	if (!Existing || Existing->OwnerSessionId == SessionId)
+	{
+		return true;
+	}
+	OutOwnerSessionId = Existing->OwnerSessionId;
+	return false;
+}
+
+TSharedPtr<FJsonObject> FClientActivityService::MakeLeaseSnapshot() const
+{
+	const_cast<FClientActivityService*>(this)->ExpireSessions();
+	FScopeLock Lock(&Mutex);
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("schema"), TEXT("ue.session-leases.v1"));
+	TArray<TSharedPtr<FJsonValue>> Values;
+	for (const TPair<FString, FLease>& Pair : Leases)
+	{
+		TSharedPtr<FJsonObject> Value = MakeShared<FJsonObject>();
+		Value->SetStringField(TEXT("type"), Pair.Value.Type);
+		Value->SetStringField(TEXT("ownerSessionId"), Pair.Value.OwnerSessionId);
+		Value->SetStringField(TEXT("expiresAtUtc"), Pair.Value.ExpiresAtUtc);
+		Values.Add(MakeShared<FJsonValueObject>(Value));
+	}
+	Result->SetArrayField(TEXT("leases"), Values);
+	TArray<TSharedPtr<FJsonValue>> AuditValues;
+	for (const TSharedPtr<FJsonObject>& Entry : LeaseAudit)
+	{
+		AuditValues.Add(MakeShared<FJsonValueObject>(Entry));
+	}
+	Result->SetArrayField(TEXT("overrideAudit"), AuditValues);
+	return Result;
 }
 
 int32 FClientActivityService::GetOnlineMcpCount() const

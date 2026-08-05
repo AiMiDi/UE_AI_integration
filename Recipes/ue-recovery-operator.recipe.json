@@ -1,0 +1,37 @@
+{
+  "schema": "ue.recipe.v2",
+  "id": "ue-recovery-operator",
+  "version": "1.0.0",
+  "description": "Inspect a durable job, request explicit recovery approval, and verify its terminal result without replaying writes.",
+  "inputs": {
+    "jobId": { "type": "string" }
+  },
+  "steps": [
+    {
+      "id": "provider-preflight",
+      "kind": "capability",
+      "capability": "production.source_control.provider.get"
+    },
+    {
+      "id": "initial-status",
+      "kind": "capability",
+      "capability": "production.job.status",
+      "params": { "jobId": "$inputs.jobId" },
+      "retry": {
+        "maxAttempts": 3,
+        "backoffMs": 1000,
+        "transientErrors": ["editor_unreachable", "operation_temporarily_unavailable"]
+      }
+    },
+    {
+      "id": "recovery-approval",
+      "kind": "approval"
+    },
+    {
+      "id": "terminal-result",
+      "kind": "capability",
+      "capability": "production.job.result.get",
+      "params": { "jobId": "$inputs.jobId" }
+    }
+  ]
+}

@@ -16,7 +16,7 @@ public class UE_AI_integration : ModuleRules
 		PrivateIncludePaths.Add(
 			Path.Combine(ModuleDirectory, "..", "..", "Workflow", "ThirdParty"));
 
-		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"0.9.0\"");
+		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"1.0.0\"");
 
 		bool bWithNiagara = IsOptionalFeatureEnabled(Target, "Niagara");
 		bool bWithWater = IsOptionalFeatureEnabled(Target, "Water");
@@ -39,7 +39,8 @@ public class UE_AI_integration : ModuleRules
 			"HTTPServer",
 			"Sockets",
 			"Networking",
-			"DeveloperSettings"
+			"DeveloperSettings",
+			"SourceControl"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]

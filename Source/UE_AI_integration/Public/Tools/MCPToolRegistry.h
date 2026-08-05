@@ -31,6 +31,9 @@ public:
 	/** Cancel all active async tools synchronously (server stop/module unload). */
 	void CancelAsyncTools(const FString& Reason);
 
+	/** Request cancellation for one async capability at its next safe boundary. */
+	bool CancelAsyncTool(const FString& Name, const FString& Reason);
+
 	/** Load and validate the six manifests from this plugin's Resources directory. */
 	bool LoadCapabilityManifests();
 
@@ -53,6 +56,11 @@ public:
 	/** Return the immutable manifest descriptor for availability evaluation. */
 	const TSharedPtr<FJsonObject>* FindCapabilityDescriptor(
 		const FString& CapabilityId) const;
+	const TSharedPtr<FJsonObject>* FindCapabilityTombstone(
+		const FString& CapabilityId) const
+	{
+		return CapabilityTombstones.Find(CapabilityId);
+	}
 
 	/** Manifest descriptors are authoritative for the public capability API. */
 	const TArray<TSharedPtr<FJsonObject>>& GetCapabilityDescriptors() const
@@ -78,6 +86,7 @@ private:
 	TMap<FString, TSharedPtr<FMCPToolBase>> Tools;
 	TArray<TSharedPtr<FJsonObject>> CapabilityDescriptors;
 	TMap<FString, TSharedPtr<FJsonObject>> CapabilitySchemas;
+	TMap<FString, TSharedPtr<FJsonObject>> CapabilityTombstones;
 	TMap<FString, int32> DomainCounts;
 	TArray<FString> RegistrationErrors;
 	TArray<FString> ValidationErrors;

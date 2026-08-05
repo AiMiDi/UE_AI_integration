@@ -81,9 +81,19 @@ def main() -> int:
             "kind": "query",
             "description": f"Fake descriptor for {operation}.",
             "traits": {
-                "readOnly": True,
                 "destructive": False,
                 "expensive": False,
+            },
+            "effects": {
+                "asset": "read",
+                "world": "none",
+                "editorSession": "none",
+                "external": "none",
+            },
+            "lifecycle": {
+                "status": "active",
+                "since": "0.10.0",
+                "canonicalId": operation,
             },
             "risk": "readOnly",
             "inputSchema": schema,
@@ -392,7 +402,8 @@ def main() -> int:
         (capability_root / "test.json").write_text(
             json.dumps(
                 {
-                    "schema": "ue.capability-manifest.v1",
+                    "schema": "ue.capability-manifest.v3",
+                    "schemaVersion": 3,
                     "domain": "test",
                     "capabilities": [
                         descriptor(operation) for operation in local_operations
@@ -1092,7 +1103,7 @@ def main() -> int:
             assert all(
                 header["callerType"] == "cli"
                 and header["caller"] == "ue"
-                and header["callerVersion"] == "0.9.0"
+                and header["callerVersion"] == "1.0.0"
                 and header["invocationId"].startswith("cli-")
                 and header["processId"].isdigit()
                 and header["transport"] == "http"
@@ -1115,7 +1126,7 @@ def main() -> int:
             assert all(
                 registration["clientKind"] == "cli"
                 and registration["name"] == "ue"
-                and registration["version"] == "0.9.0"
+                and registration["version"] == "1.0.0"
                 and registration["transport"] == "http"
                 and isinstance(registration["pid"], int)
                 and registration["pid"] > 0

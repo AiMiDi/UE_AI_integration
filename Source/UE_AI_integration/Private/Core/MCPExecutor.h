@@ -26,6 +26,11 @@ public:
 	/** Cancel active async tools synchronously before transport destruction. */
 	void CancelAsyncOperations(const FString& Reason);
 
+	/** Cancel one in-flight request at the capability's next safe boundary. */
+	FMCPResult CancelAsyncOperation(
+		const FString& RequestId,
+		const FString& Reason);
+
 private:
 	struct FIdempotencyRecord
 	{
@@ -37,9 +42,13 @@ private:
 	struct FInFlightRecord
 	{
 		FString PayloadKey;
+		FString Capability;
 	};
 
 	FMCPResult ExecuteUncached(const FMCPExecutionContext& Context) const;
+	bool CheckProtectedLease(
+		const FMCPExecutionContext& Context,
+		FMCPResult& OutFailure) const;
 	bool PrepareExecution(
 		const FMCPExecutionContext& Context,
 		TSharedPtr<FJsonObject>& OutEffectiveParams,

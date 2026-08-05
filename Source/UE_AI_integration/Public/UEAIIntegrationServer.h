@@ -28,6 +28,7 @@ struct FCallerContext;
 enum class EUEAIIntegrationRequestKind : uint8
 {
 	LegacyExecute,
+	CancelExecute,
 	WorkflowHandshake,
 	WorkflowAction,
 };
@@ -101,6 +102,9 @@ private:
 	bool HandleExecute(
 		const FHttpServerRequest& Request,
 		const FHttpResultCallback& OnComplete);
+	bool HandleExecuteCancel(
+		const FHttpServerRequest& Request,
+		const FHttpResultCallback& OnComplete);
 	bool HandleWorkflowHandshake(
 		const FHttpServerRequest& Request,
 		const FHttpResultCallback& OnComplete);
@@ -127,6 +131,9 @@ private:
 		const FHttpServerRequest& Request,
 		const FHttpResultCallback& OnComplete);
 	void UnbindRoutes();
+	void WriteInstanceRecord();
+	void RemoveInstanceRecord();
+	FString InstanceRecordPath() const;
 
 	static void SendJsonResponse(
 		const FHttpResultCallback& OnComplete,
@@ -156,6 +163,8 @@ private:
 	TQueue<TSharedPtr<FPendingMCPExecuteRequest>, EQueueMode::Mpsc> RequestQueue;
 	int32 ListenPort = 9847;
 	bool bIsRunning = false;
+	FString ServerInstanceId;
+	FString ProcessStartTimeUtc;
 #if WITH_DEV_AUTOMATION_TESTS
 	TFunction<void()> WorkflowDispatchObserverForTesting;
 #endif

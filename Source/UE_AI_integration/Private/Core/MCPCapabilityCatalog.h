@@ -12,6 +12,7 @@ struct FCapabilityCatalogData
 {
 	TArray<FMCPCapabilityDescriptor> Descriptors;
 	TMap<FString, TSharedPtr<FJsonObject>> InputSchemas;
+	TMap<FString, TSharedPtr<FJsonObject>> Tombstones;
 	TMap<FString, int32> DomainCounts;
 };
 

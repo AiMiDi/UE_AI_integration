@@ -64,7 +64,7 @@ Once the server responds, check the capability catalog:
 curl -s http://localhost:9847/api/capabilities | python -c "import sys,json; d=json.load(sys.stdin); print(f'{d[\"data\"][\"total\"]} capabilities available')"
 ```
 
-Release 0.9.0 currently ships 381 capabilities across six domains. The stdio
+Release 1.0.0 currently ships 410 capabilities across six domains. The stdio
 bridge exposes twelve stable MCP tools, including the offline `ue_skills`
 loader. Treat the manifest-derived total as authoritative for later releases.
 

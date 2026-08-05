@@ -86,6 +86,11 @@ function parseStringArray(value, location) {
     }
     return [...new Set(value)];
 }
+export function capabilityIsReadOnly(capability) {
+    return capability.effects.asset !== "write"
+        && capability.effects.world !== "write"
+        && capability.effects.external !== "write";
+}
 function parseSearchMetadata(value, location) {
     if (value === undefined) {
         return undefined;
@@ -188,12 +193,17 @@ function parseExecutionMetadata(value, location) {
     const allowed = [
         "editor",
         "localTrace",
+        "localRecipe",
+        "localProject",
+        "localAsset",
+        "localSal",
+        "developmentRuntime",
     ];
     if (!Array.isArray(execution.backends) ||
         execution.backends.length === 0 ||
         execution.backends.some((backend) => typeof backend !== "string" ||
             !allowed.includes(backend))) {
-        throw new CapabilityManifestError(`${location}.backends must contain editor and/or localTrace`);
+        throw new CapabilityManifestError(`${location}.backends contains an unsupported execution backend`);
     }
     const backends = [
         ...new Set(execution.backends),
@@ -243,6 +253,32 @@ function parseCapability(value, domain, index, manifestPath) {
         throw new CapabilityManifestError(`${location}.inputSchema.required must be an array of strings`);
     }
     const traits = requireRecord(capability.traits, `${location}.traits`);
+    if ("readOnly" in traits) {
+        throw new CapabilityManifestError(`${location}.traits.readOnly was removed in schema v3; declare effects instead`);
+    }
+    const effects = requireRecord(capability.effects, `${location}.effects`);
+    const parseEffect = (key) => {
+        const effect = effects[key];
+        if (effect !== "none" && effect !== "read" && effect !== "write") {
+            throw new CapabilityManifestError(`${location}.effects.${key} must be none, read, or write`);
+        }
+        return effect;
+    };
+    const lifecycle = requireRecord(capability.lifecycle, `${location}.lifecycle`);
+    if (lifecycle.status !== "active" && lifecycle.status !== "deprecated") {
+        throw new CapabilityManifestError(`${location}.lifecycle.status must be active or deprecated`);
+    }
+    const since = requireString(lifecycle, "since", `${location}.lifecycle`);
+    const canonicalId = requireString(lifecycle, "canonicalId", `${location}.lifecycle`);
+    if (!/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/.test(canonicalId)) {
+        throw new CapabilityManifestError(`${location}.lifecycle.canonicalId must be a dotted capability ID`);
+    }
+    const replacement = lifecycle.replacement === undefined
+        ? undefined
+        : requireString(lifecycle, "replacement", `${location}.lifecycle`);
+    if (lifecycle.status === "deprecated" && replacement === undefined) {
+        throw new CapabilityManifestError(`${location}.lifecycle.replacement is required for deprecated capabilities`);
+    }
     const output = requireRecord(capability.output, `${location}.output`);
     if (output.kind !== "json" && output.kind !== "image") {
         throw new CapabilityManifestError(`${location}.output.kind must be json or image`);
@@ -254,9 +290,20 @@ function parseCapability(value, domain, index, manifestPath) {
         description: capability.description,
         inputSchema: inputSchema,
         traits: {
-            readOnly: requireBoolean(traits, "readOnly", `${location}.traits`),
             destructive: requireBoolean(traits, "destructive", `${location}.traits`),
             expensive: requireBoolean(traits, "expensive", `${location}.traits`),
+        },
+        effects: {
+            asset: parseEffect("asset"),
+            world: parseEffect("world"),
+            editorSession: parseEffect("editorSession"),
+            external: parseEffect("external"),
+        },
+        lifecycle: {
+            status: lifecycle.status,
+            since,
+            canonicalId,
+            ...(replacement === undefined ? {} : { replacement }),
         },
         output: {
             kind: output.kind,
@@ -285,8 +332,8 @@ function parseCapability(value, domain, index, manifestPath) {
 }
 function parseManifest(value, expectedDomain, manifestPath) {
     const manifest = requireRecord(value, manifestPath);
-    if (manifest.schemaVersion !== 2) {
-        throw new CapabilityManifestError(`${manifestPath}.schemaVersion must equal 2`);
+    if (manifest.schemaVersion !== 3) {
+        throw new CapabilityManifestError(`${manifestPath}.schemaVersion must equal 3`);
     }
     if (manifest.domain !== expectedDomain) {
         throw new CapabilityManifestError(`${manifestPath}.domain must equal "${expectedDomain}"`);
@@ -294,15 +341,29 @@ function parseManifest(value, expectedDomain, manifestPath) {
     if (!Array.isArray(manifest.capabilities)) {
         throw new CapabilityManifestError(`${manifestPath}.capabilities must be an array`);
     }
+    const tombstones = manifest.tombstones === undefined ? [] : manifest.tombstones;
+    if (!Array.isArray(tombstones)) {
+        throw new CapabilityManifestError(`${manifestPath}.tombstones must be an array`);
+    }
     return {
-        schemaVersion: 2,
+        schemaVersion: 3,
         domain: expectedDomain,
         capabilities: manifest.capabilities.map((capability, index) => parseCapability(capability, expectedDomain, index, manifestPath)),
+        tombstones: tombstones.map((value, index) => {
+            const location = `${manifestPath}.tombstones[${index}]`;
+            const entry = requireRecord(value, location);
+            return {
+                id: requireString(entry, "id", location),
+                removedIn: requireString(entry, "removedIn", location),
+                replacement: requireString(entry, "replacement", location),
+            };
+        }),
     };
 }
 export class CapabilityCatalog {
     manifests;
     capabilities;
+    tombstones;
     byId;
     byDomain;
     constructor(manifests) {
@@ -310,6 +371,7 @@ export class CapabilityCatalog {
         const idMap = new Map();
         const domainMap = new Map();
         const allCapabilities = [];
+        const tombstones = new Map();
         for (const domain of CAPABILITY_DOMAINS) {
             const manifest = manifests.find((candidate) => candidate.domain === domain);
             if (!manifest) {
@@ -327,14 +389,24 @@ export class CapabilityCatalog {
                 idMap.set(capability.id, capability);
                 allCapabilities.push(capability);
             }
+            for (const tombstone of manifest.tombstones) {
+                if (idMap.has(tombstone.id) || tombstones.has(tombstone.id)) {
+                    throw new CapabilityManifestError(`Duplicate active or removed capability ID "${tombstone.id}"`);
+                }
+                tombstones.set(tombstone.id, tombstone);
+            }
         }
         this.manifests = manifestMap;
         this.capabilities = allCapabilities;
         this.byId = idMap;
         this.byDomain = domainMap;
+        this.tombstones = tombstones;
     }
     get(id) {
         return this.byId.get(id);
+    }
+    removed(id) {
+        return this.tombstones.get(id);
     }
     forDomain(domain) {
         return this.byDomain.get(domain) ?? [];
@@ -345,7 +417,7 @@ export class CapabilityCatalog {
             this.forDomain(domain).length,
         ]));
         return {
-            schemaVersion: 2,
+            schemaVersion: 3,
             capabilityCount: this.capabilities.length,
             domainCounts,
         };

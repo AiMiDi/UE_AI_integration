@@ -35,7 +35,7 @@ test("loads all six shipped manifests without regressing the shipped baseline", 
     ai: 9,
     production: 22,
   };
-  assert.equal(summary.schemaVersion, 2);
+  assert.equal(summary.schemaVersion, 3);
   assert.ok(summary.capabilityCount >= 212);
   for (const domain of CAPABILITY_DOMAINS) {
     assert.ok(summary.domainCounts[domain] >= baselines[domain]);
@@ -63,7 +63,7 @@ test("loads all six shipped manifests without regressing the shipped baseline", 
   for (const [operation, kind, outputKind] of [
     ["blueprint.layout.validate", "validation", "json"],
     ["blueprint.layout.organize", "command", "json"],
-    ["blueprint.graph.capture", "query", "image"],
+    ["blueprint.graph.capture", "query", "json"],
     ["blueprint.graph.capture.get", "query", "image"],
     ["blueprint.graph.visual.compare", "query", "image"],
   ] as const) {
@@ -206,7 +206,7 @@ test("ships the exact 0.3.0 capability additions with strict root schemas", () =
       false,
       id,
     );
-    assert.equal(typeof capability.traits.readOnly, "boolean", id);
+    assert.equal(typeof capability.effects.asset, "string", id);
     assert.equal(typeof capability.traits.destructive, "boolean", id);
     assert.equal(typeof capability.traits.expensive, "boolean", id);
   }
@@ -232,11 +232,9 @@ test("preserves optional workflow DSL admission metadata", () => {
                 properties: {},
                 additionalProperties: false,
               },
-              traits: {
-                readOnly: false,
-                destructive: false,
-                expensive: false,
-              },
+              traits: { destructive: false, expensive: false },
+              effects: { asset: "write", world: "none", editorSession: "none", external: "none" },
+              lifecycle: { status: "active", since: "0.10.0", canonicalId: "blueprint.asset.create" },
               output: {
                 kind: "json",
               },
@@ -268,11 +266,9 @@ test("preserves optional workflow DSL admission metadata", () => {
                 properties: {},
                 additionalProperties: false,
               },
-              traits: {
-                readOnly: true,
-                destructive: false,
-                expensive: false,
-              },
+              traits: { destructive: false, expensive: false },
+              effects: { asset: "read", world: "none", editorSession: "none", external: "none" },
+              lifecycle: { status: "active", since: "0.10.0", canonicalId: "blueprint.asset.get" },
               output: {
                 kind: "json",
               },
@@ -282,7 +278,7 @@ test("preserves optional workflow DSL admission metadata", () => {
     writeFileSync(
       join(directory, `${domain}.json`),
       JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         domain,
         capabilities,
       }),
@@ -327,7 +323,7 @@ test("reports a clear error when a manifest is malformed", () => {
   writeFileSync(
     join(directory, "blueprint.json"),
     JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       domain: "blueprint",
       capabilities: [{}],
     }),
@@ -347,7 +343,7 @@ test("rejects malformed optional capability search metadata", () => {
   writeFileSync(
     join(directory, "blueprint.json"),
     JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       domain: "blueprint",
       capabilities: [
         {
@@ -360,11 +356,9 @@ test("rejects malformed optional capability search metadata", () => {
             properties: {},
             additionalProperties: false,
           },
-          traits: {
-            readOnly: true,
-            destructive: false,
-            expensive: false,
-          },
+          traits: { destructive: false, expensive: false },
+          effects: { asset: "read", world: "none", editorSession: "none", external: "none" },
+          lifecycle: { status: "active", since: "0.10.0", canonicalId: "blueprint.test.search" },
           output: { kind: "json" },
           search: {
             keywords: ["layout", "LAYOUT"],

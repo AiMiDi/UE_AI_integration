@@ -14,6 +14,8 @@ export const CAPABILITY_DOMAINS = [
 export type CapabilityDomain = (typeof CAPABILITY_DOMAINS)[number];
 export type CapabilityKind = "query" | "command" | "validation";
 export type CapabilityOutputKind = "json" | "image";
+export type CapabilityEffect = "none" | "read" | "write";
+export type CapabilityLifecycleStatus = "active" | "deprecated";
 export type CapabilityDslAdmission =
   | "editStep"
   | "finalizer"
@@ -43,7 +45,14 @@ export interface CapabilitySearchMetadata {
   aliases?: string[];
 }
 
-export type CapabilityExecutionBackend = "editor" | "localTrace";
+export type CapabilityExecutionBackend =
+  | "editor"
+  | "localTrace"
+  | "localRecipe"
+  | "localProject"
+  | "localAsset"
+  | "localSal"
+  | "developmentRuntime";
 
 export interface CapabilityExecutionMetadata {
   backends: CapabilityExecutionBackend[];
@@ -73,9 +82,20 @@ export interface CapabilityDescriptor {
   description: string;
   inputSchema: CapabilityInputSchema;
   traits: {
-    readOnly: boolean;
     destructive: boolean;
     expensive: boolean;
+  };
+  effects: {
+    asset: CapabilityEffect;
+    world: CapabilityEffect;
+    editorSession: CapabilityEffect;
+    external: CapabilityEffect;
+  };
+  lifecycle: {
+    status: CapabilityLifecycleStatus;
+    since: string;
+    canonicalId: string;
+    replacement?: string;
   };
   output: {
     kind: CapabilityOutputKind;
@@ -87,13 +107,20 @@ export interface CapabilityDescriptor {
 }
 
 export interface CapabilityManifest {
-  schemaVersion: 2;
+  schemaVersion: 3;
   domain: CapabilityDomain;
   capabilities: CapabilityDescriptor[];
+  tombstones: CapabilityTombstone[];
+}
+
+export interface CapabilityTombstone {
+  id: string;
+  removedIn: string;
+  replacement: string;
 }
 
 export interface CapabilityCatalogSummary {
-  schemaVersion: 2;
+  schemaVersion: 3;
   capabilityCount: number;
   domainCounts: Record<CapabilityDomain, number>;
 }
@@ -231,6 +258,12 @@ function parseStringArray(
     );
   }
   return [...new Set(value as string[])];
+}
+
+export function capabilityIsReadOnly(capability: CapabilityDescriptor): boolean {
+  return capability.effects.asset !== "write"
+    && capability.effects.world !== "write"
+    && capability.effects.external !== "write";
 }
 
 function parseSearchMetadata(
@@ -395,6 +428,11 @@ function parseExecutionMetadata(
   const allowed: readonly CapabilityExecutionBackend[] = [
     "editor",
     "localTrace",
+    "localRecipe",
+    "localProject",
+    "localAsset",
+    "localSal",
+    "developmentRuntime",
   ];
   if (
     !Array.isArray(execution.backends) ||
@@ -406,7 +444,7 @@ function parseExecutionMetadata(
     )
   ) {
     throw new CapabilityManifestError(
-      `${location}.backends must contain editor and/or localTrace`,
+      `${location}.backends contains an unsupported execution backend`,
     );
   }
   const backends = [
@@ -497,6 +535,32 @@ function parseCapability(
   }
 
   const traits = requireRecord(capability.traits, `${location}.traits`);
+  if ("readOnly" in traits) {
+    throw new CapabilityManifestError(`${location}.traits.readOnly was removed in schema v3; declare effects instead`);
+  }
+  const effects = requireRecord(capability.effects, `${location}.effects`);
+  const parseEffect = (key: "asset" | "world" | "editorSession" | "external"): CapabilityEffect => {
+    const effect = effects[key];
+    if (effect !== "none" && effect !== "read" && effect !== "write") {
+      throw new CapabilityManifestError(`${location}.effects.${key} must be none, read, or write`);
+    }
+    return effect;
+  };
+  const lifecycle = requireRecord(capability.lifecycle, `${location}.lifecycle`);
+  if (lifecycle.status !== "active" && lifecycle.status !== "deprecated") {
+    throw new CapabilityManifestError(`${location}.lifecycle.status must be active or deprecated`);
+  }
+  const since = requireString(lifecycle, "since", `${location}.lifecycle`);
+  const canonicalId = requireString(lifecycle, "canonicalId", `${location}.lifecycle`);
+  if (!/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/.test(canonicalId)) {
+    throw new CapabilityManifestError(`${location}.lifecycle.canonicalId must be a dotted capability ID`);
+  }
+  const replacement = lifecycle.replacement === undefined
+    ? undefined
+    : requireString(lifecycle, "replacement", `${location}.lifecycle`);
+  if (lifecycle.status === "deprecated" && replacement === undefined) {
+    throw new CapabilityManifestError(`${location}.lifecycle.replacement is required for deprecated capabilities`);
+  }
   const output = requireRecord(capability.output, `${location}.output`);
   if (output.kind !== "json" && output.kind !== "image") {
     throw new CapabilityManifestError(
@@ -511,13 +575,24 @@ function parseCapability(
     description: capability.description,
     inputSchema: inputSchema as CapabilityInputSchema,
     traits: {
-      readOnly: requireBoolean(traits, "readOnly", `${location}.traits`),
       destructive: requireBoolean(
         traits,
         "destructive",
         `${location}.traits`,
       ),
       expensive: requireBoolean(traits, "expensive", `${location}.traits`),
+    },
+    effects: {
+      asset: parseEffect("asset"),
+      world: parseEffect("world"),
+      editorSession: parseEffect("editorSession"),
+      external: parseEffect("external"),
+    },
+    lifecycle: {
+      status: lifecycle.status as CapabilityLifecycleStatus,
+      since,
+      canonicalId,
+      ...(replacement === undefined ? {} : { replacement }),
     },
     output: {
       kind: output.kind,
@@ -560,9 +635,9 @@ function parseManifest(
   manifestPath: string,
 ): CapabilityManifest {
   const manifest = requireRecord(value, manifestPath);
-  if (manifest.schemaVersion !== 2) {
+  if (manifest.schemaVersion !== 3) {
     throw new CapabilityManifestError(
-      `${manifestPath}.schemaVersion must equal 2`,
+      `${manifestPath}.schemaVersion must equal 3`,
     );
   }
   if (manifest.domain !== expectedDomain) {
@@ -576,18 +651,32 @@ function parseManifest(
     );
   }
 
+  const tombstones = manifest.tombstones === undefined ? [] : manifest.tombstones;
+  if (!Array.isArray(tombstones)) {
+    throw new CapabilityManifestError(`${manifestPath}.tombstones must be an array`);
+  }
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     domain: expectedDomain,
     capabilities: manifest.capabilities.map((capability, index) =>
       parseCapability(capability, expectedDomain, index, manifestPath),
     ),
+    tombstones: tombstones.map((value, index) => {
+      const location = `${manifestPath}.tombstones[${index}]`;
+      const entry = requireRecord(value, location);
+      return {
+        id: requireString(entry, "id", location),
+        removedIn: requireString(entry, "removedIn", location),
+        replacement: requireString(entry, "replacement", location),
+      };
+    }),
   };
 }
 
 export class CapabilityCatalog {
   readonly manifests: ReadonlyMap<CapabilityDomain, CapabilityManifest>;
   readonly capabilities: readonly CapabilityDescriptor[];
+  readonly tombstones: ReadonlyMap<string, CapabilityTombstone>;
 
   private readonly byId: ReadonlyMap<string, CapabilityDescriptor>;
   private readonly byDomain: ReadonlyMap<
@@ -603,6 +692,7 @@ export class CapabilityCatalog {
       readonly CapabilityDescriptor[]
     >();
     const allCapabilities: CapabilityDescriptor[] = [];
+    const tombstones = new Map<string, CapabilityTombstone>();
 
     for (const domain of CAPABILITY_DOMAINS) {
       const manifest = manifests.find((candidate) => candidate.domain === domain);
@@ -628,16 +718,27 @@ export class CapabilityCatalog {
         idMap.set(capability.id, capability);
         allCapabilities.push(capability);
       }
+      for (const tombstone of manifest.tombstones) {
+        if (idMap.has(tombstone.id) || tombstones.has(tombstone.id)) {
+          throw new CapabilityManifestError(`Duplicate active or removed capability ID "${tombstone.id}"`);
+        }
+        tombstones.set(tombstone.id, tombstone);
+      }
     }
 
     this.manifests = manifestMap;
     this.capabilities = allCapabilities;
     this.byId = idMap;
     this.byDomain = domainMap;
+    this.tombstones = tombstones;
   }
 
   get(id: string): CapabilityDescriptor | undefined {
     return this.byId.get(id);
+  }
+
+  removed(id: string): CapabilityTombstone | undefined {
+    return this.tombstones.get(id);
   }
 
   forDomain(domain: CapabilityDomain): readonly CapabilityDescriptor[] {
@@ -653,7 +754,7 @@ export class CapabilityCatalog {
     ) as Record<CapabilityDomain, number>;
 
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       capabilityCount: this.capabilities.length,
       domainCounts,
     };

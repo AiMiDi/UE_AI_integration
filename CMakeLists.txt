@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 project(
     UEWorkflow
-    VERSION 0.9.0
+    VERSION 1.0.0
     DESCRIPTION "Portable UE Workflow DSL and short-operation CLIs"
     LANGUAGES CXX
 )
@@ -29,4 +29,8 @@ install(
 install(
     DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/skills/"
     DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow/Skills"
+)
+install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Recipes/"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow/Recipes"
 )

@@ -10,6 +10,7 @@
 #include "IImageWrapperModule.h"
 #include "Misc/App.h"
 #include "Misc/Base64.h"
+#include "Infrastructure/Sha256.h"
 #include "Misc/EngineVersion.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -513,6 +514,36 @@ TSharedRef<FJsonObject> BuildImageResult(
 	return Result;
 }
 
+TSharedRef<FJsonObject> BuildCaptureMetadataResult(
+	const TSharedPtr<FJsonObject>& Metadata,
+	const TArray<uint8>& Bytes)
+{
+	TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+	for (const TCHAR* Field : {
+		TEXT("schema"), TEXT("captureId"), TEXT("blueprint"), TEXT("graph"),
+		TEXT("graphHash"), TEXT("format"), TEXT("mimeType"), TEXT("width"),
+		TEXT("height"), TEXT("renderFingerprint") })
+	{
+		if (const TSharedPtr<FJsonValue>* Value = Metadata->Values.Find(Field))
+		{
+			Result->SetField(Field, *Value);
+		}
+	}
+	const FString CaptureId = Metadata->GetStringField(TEXT("captureId"));
+	const FString Format = Metadata->GetStringField(TEXT("format"));
+	FString Sha256;
+	UEAIIntegration::Infrastructure::TrySha256Hex(Bytes, Sha256);
+	TSharedRef<FJsonObject> Artifact = MakeShared<FJsonObject>();
+	Artifact->SetStringField(TEXT("kind"), TEXT("file"));
+	Artifact->SetStringField(TEXT("path"), ImagePath(CaptureId, Format));
+	Artifact->SetStringField(TEXT("mimeType"), Metadata->GetStringField(TEXT("mimeType")));
+	Artifact->SetNumberField(TEXT("sizeBytes"), Bytes.Num());
+	Artifact->SetStringField(TEXT("sha256"), Sha256);
+	Result->SetObjectField(TEXT("artifact"), Artifact);
+	Result->SetBoolField(TEXT("imageBase64Included"), false);
+	return Result;
+}
+
 bool LoadCaptureBytes(
 	const TSharedPtr<FJsonObject>& Metadata,
 	TArray<uint8>& OutBytes,
@@ -717,8 +748,10 @@ public:
 		// Captures must not inherit arbitrary interactive highlighting. A nodes
 		// capture deliberately highlights exactly its requested set; all and
 		// currentView use a clean selection. The scope guard restores it.
+		bool bHighlightRequestedNodes = false;
+		Params->TryGetBoolField(TEXT("highlightRequestedNodes"), bHighlightRequestedNodes);
 		Context.GraphEditor->ClearSelectionSet();
-		if (Scope == TEXT("nodes"))
+		if (Scope == TEXT("nodes") && bHighlightRequestedNodes)
 		{
 			for (UEdGraphNode* Node : TargetNodes)
 			{
@@ -1045,7 +1078,7 @@ public:
 			CapturedNodeIds);
 		Metadata->SetStringField(
 			TEXT("selectionPolicy"),
-			Scope == TEXT("nodes")
+			Scope == TEXT("nodes") && bHighlightRequestedNodes
 				? TEXT("requestedNodes")
 				: TEXT("cleared"));
 		Metadata->SetNumberField(
@@ -1072,8 +1105,12 @@ public:
 		{
 			return FMCPToolResult::Error(Error);
 		}
+		bool bIncludeImageBase64 = false;
+		Params->TryGetBoolField(TEXT("includeImageBase64"), bIncludeImageBase64);
 		return FMCPToolResult::Ok(
-			BuildImageResult(Metadata, Bytes));
+			bIncludeImageBase64
+				? BuildImageResult(Metadata, Bytes)
+				: BuildCaptureMetadataResult(Metadata, Bytes));
 	}
 };
 

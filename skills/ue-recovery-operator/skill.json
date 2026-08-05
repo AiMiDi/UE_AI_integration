@@ -1,0 +1,137 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-recovery-operator",
+  "version": "1.0.0",
+  "title": "UE Recovery Operator",
+  "description": "Recover interrupted Unreal work with bounded retry, durable-state inspection, explicit restart approval, and final verification.",
+  "domains": ["production"],
+  "risk": "safeWrite",
+  "triggers": [
+    "editor recovery",
+    "mcp reconnect",
+    "stalled unreal job",
+    "resume workflow",
+    "perforce checkout",
+    "编辑器恢复",
+    "任务重试"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": { "min": "5.3" },
+    "capabilities": [
+      "production.job.status",
+      "production.job.log.get",
+      "production.job.result.get",
+      "production.job.cancel",
+      "production.scenario.status",
+      "production.scenario.result.get",
+      "production.source_control.repository.get",
+      "production.source_control.status",
+      "production.source_control.provider.get",
+      "production.source_control.status.refresh",
+      "production.source_control.checkout",
+      "production.source_control.revert_unchanged"
+    ],
+    "optionalCapabilities": []
+  },
+  "recipes": [
+    {
+      "id": "recover-interrupted-operation",
+      "title": "Recover an interrupted Editor operation",
+      "description": "Inspect durable progress, apply at most three declared transient retries, preserve approval boundaries, and verify the final state.",
+      "risk": "safeWrite",
+      "retryPolicy": {
+        "maxAttempts": 3,
+        "backoffSeconds": [1, 2, 4],
+        "transientOnly": true
+      },
+      "inputs": [
+        {
+          "name": "jobId",
+          "type": "string",
+          "required": true,
+          "description": "Durable job whose checkpoint and bounded progress evidence must be recovered."
+        },
+        {
+          "name": "allowRestartApproval",
+          "type": "boolean",
+          "required": false,
+          "description": "Whether the operator may request, but never infer, a separate Editor restart approval."
+        }
+      ],
+      "steps": [
+        {
+          "id": "inspect-durable-state",
+          "phase": "discover",
+          "purpose": "Read job, log, instance, and source-control state before deciding whether any retry is safe.",
+          "operations": [
+            "production.job.status",
+            "production.job.log.get",
+            "production.source_control.repository.get",
+            "production.source_control.status",
+            "production.source_control.provider.get",
+            "production.source_control.status.refresh"
+          ]
+        },
+        {
+          "id": "checkout-before-write",
+          "phase": "execute",
+          "purpose": "Check out every explicit Perforce target and require verified success before any Workflow asset write.",
+          "operations": ["production.source_control.checkout"],
+          "optional": true
+        },
+        {
+          "id": "cancel-at-safe-boundary",
+          "phase": "execute",
+          "purpose": "Request cancellation only when the active attempt cannot safely continue; atomic steps finish before cancellation becomes terminal.",
+          "operations": ["production.job.cancel"],
+          "optional": true
+        },
+        {
+          "id": "revert-unchanged",
+          "phase": "execute",
+          "purpose": "After terminal validation, release only unchanged Perforce checkouts without submit, shelve, or changelist operations.",
+          "operations": ["production.source_control.revert_unchanged"],
+          "optional": true
+        },
+        {
+          "id": "verify-terminal-evidence",
+          "phase": "verify",
+          "purpose": "Read the terminal job/scenario result and confirm that no completed write was replayed.",
+          "operations": [
+            "production.job.status",
+            "production.job.result.get",
+            "production.scenario.status",
+            "production.scenario.result.get",
+            "production.source_control.status"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Bounded recovery result with durable checkpoint, retry, approval, and final validation evidence.",
+        "evidence": [
+          "attempt count and transient classification",
+          "job phase, heartbeat, last progress, and bounded log",
+          "source-control preflight and checkout outcome",
+          "checkpoint, compensation, or rollback receipt",
+          "explicit restart approval state",
+          "final read-back and source-control status"
+        ],
+        "success": [
+          "no retry exceeded three attempts",
+          "completed writes were not replayed",
+          "restart remained approval gated",
+          "checkout failure caused zero asset writes",
+          "final acceptance checks were recorded"
+        ]
+      }
+    }
+  ],
+  "resources": [
+    {
+      "path": "references/recovery-contract.md",
+      "description": "Transient-error classification, unresponsive Editor evidence, Perforce boundary, and final acceptance rules."
+    }
+  ]
+}

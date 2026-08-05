@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "domain": "content",
   "capabilities": [
     {
@@ -26,12 +26,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.data_table.create"
       }
     },
     {
@@ -58,12 +68,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.data_table.csv.import"
       }
     },
     {
@@ -96,12 +116,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.data_table.row.add"
       }
     },
     {
@@ -123,12 +153,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.data_table.row.list"
       }
     },
     {
@@ -155,12 +195,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.data_table.row.remove"
       }
     },
     {
@@ -188,12 +238,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.enum.create"
       }
     },
     {
@@ -232,7 +292,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -247,6 +306,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.create"
       }
     },
     {
@@ -268,12 +338,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.describe"
       }
     },
     {
@@ -311,7 +391,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -326,6 +405,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.expression.add"
       }
     },
     {
@@ -355,12 +445,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.expression.delete"
       }
     },
     {
@@ -400,7 +500,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -415,6 +514,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.expression.move"
       }
     },
     {
@@ -453,7 +563,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -468,6 +577,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.expression.value.set"
       }
     },
     {
@@ -489,12 +609,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.function.get"
       }
     },
     {
@@ -513,12 +643,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.function.list"
       }
     },
     {
@@ -540,12 +680,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.get"
       }
     },
     {
@@ -572,12 +722,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.graph.diff"
       }
     },
     {
@@ -599,7 +759,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -614,6 +773,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.graph.get"
       }
     },
     {
@@ -644,12 +814,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.graph.restore"
       }
     },
     {
@@ -671,12 +851,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.graph.snapshot"
       }
     },
     {
@@ -708,12 +898,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.instance.create"
       }
     },
     {
@@ -745,12 +945,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.instance.parameter.set"
       }
     },
     {
@@ -773,12 +983,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.list"
       }
     },
     {
@@ -823,7 +1043,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -838,6 +1057,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.pin.connect"
       }
     },
     {
@@ -872,12 +1102,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.pin.disconnect"
       }
     },
     {
@@ -913,7 +1153,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -928,6 +1167,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.property.set"
       }
     },
     {
@@ -949,12 +1199,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.references"
       }
     },
     {
@@ -980,12 +1240,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.search"
       }
     },
     {
@@ -1007,7 +1277,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -1022,6 +1291,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.material.validate"
       }
     },
     {
@@ -1029,7 +1309,17 @@
       "domain": "content",
       "kind": "command",
       "description": "Spawn a Niagara particle system actor at a location in the level.",
-      "requires": { "features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"] },
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1059,12 +1349,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.niagara.actor.spawn"
       }
     },
     {
@@ -1072,7 +1372,17 @@
       "domain": "content",
       "kind": "command",
       "description": "Add an emitter to a Niagara System from a template emitter asset.",
-      "requires": { "features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"] },
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1092,12 +1402,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.niagara.emitter.add"
       }
     },
     {
@@ -1105,7 +1425,17 @@
       "domain": "content",
       "kind": "command",
       "description": "Set a parameter override on a spawned Niagara component in the level.",
-      "requires": { "features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"] },
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1134,12 +1464,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.niagara.parameter.set"
       }
     },
     {
@@ -1147,7 +1487,17 @@
       "domain": "content",
       "kind": "command",
       "description": "Create a new empty Niagara System asset.",
-      "requires": { "features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"] },
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1162,12 +1512,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.niagara.system.create"
       }
     },
     {
@@ -1175,7 +1535,17 @@
       "domain": "content",
       "kind": "query",
       "description": "List all Niagara System assets in the project via the Asset Registry.",
-      "requires": { "features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"] },
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1187,12 +1557,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.niagara.system.list"
       }
     },
     {
@@ -1219,12 +1599,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.struct.create"
       }
     },
     {
@@ -1256,12 +1646,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.struct.property.add"
       }
     },
     {
@@ -1288,12 +1688,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.struct.property.remove"
       }
     },
     {
@@ -1323,7 +1733,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -1338,6 +1747,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.blueprint.create"
       }
     },
     {
@@ -1356,12 +1776,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.blueprint.list"
       }
     },
     {
@@ -1421,7 +1851,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -1436,6 +1865,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.child.add"
       }
     },
     {
@@ -1472,7 +1912,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -1487,6 +1926,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.event.bind"
       }
     },
     {
@@ -1523,7 +1973,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -1538,6 +1987,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.property.set"
       }
     },
     {
@@ -1631,7 +2091,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -1646,6 +2105,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.slot.layout.set"
       }
     },
     {
@@ -1672,7 +2142,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -1687,6 +2156,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.child.remove"
       }
     },
     {
@@ -1719,7 +2199,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -1734,6 +2213,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.child.reorder"
       }
     },
     {
@@ -1755,7 +2245,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -1770,6 +2259,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.hierarchy.get"
       }
     },
     {
@@ -1803,7 +2303,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -1818,6 +2317,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.binding.list"
       }
     },
     {
@@ -1853,7 +2363,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -1868,6 +2377,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.event.unbind"
       }
     },
     {
@@ -1899,7 +2419,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -1914,6 +2433,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.child.rename"
       }
     },
     {
@@ -1953,7 +2483,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -1968,6 +2497,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.child.copy"
       }
     },
     {
@@ -2003,7 +2543,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -2018,6 +2557,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.child.reparent"
       }
     },
     {
@@ -2052,7 +2602,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -2067,6 +2616,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.named_slot.set"
       }
     },
     {
@@ -2093,7 +2653,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -2108,6 +2667,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.root.set"
       }
     },
     {
@@ -2480,7 +3050,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -2495,6 +3064,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.slot.properties.set"
       }
     },
     {
@@ -2520,7 +3100,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -2535,6 +3114,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.animation.get"
       }
     },
     {
@@ -2573,7 +3163,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -2588,6 +3177,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.animation.create"
       }
     },
     {
@@ -2658,7 +3258,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -2673,6 +3272,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.animation.track.set"
       }
     },
     {
@@ -2699,7 +3309,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -2714,6 +3323,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.animation.delete"
       }
     },
     {
@@ -2744,7 +3364,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -2759,6 +3378,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.designer.settings.get"
       }
     },
     {
@@ -2825,7 +3455,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -2840,6 +3469,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.designer.settings.set"
       }
     },
     {
@@ -2876,7 +3516,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -2889,6 +3528,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.asset.search"
       }
     },
     {
@@ -2913,7 +3563,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -2926,6 +3575,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.asset.get"
       }
     },
     {
@@ -2957,7 +3617,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -2970,6 +3629,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.asset.dependencies"
       }
     },
     {
@@ -3001,7 +3671,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -3014,6 +3683,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.asset.referencers"
       }
     },
     {
@@ -3041,7 +3721,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -3054,6 +3733,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.asset.audit"
       }
     },
     {
@@ -3075,7 +3765,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -3088,6 +3777,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.static_mesh.inspect"
       }
     },
     {
@@ -3109,7 +3809,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -3122,6 +3821,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.texture.inspect"
       }
     },
     {
@@ -3193,7 +3903,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -3206,6 +3915,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.asset.change.plan"
       }
     },
     {
@@ -3292,7 +4012,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": true
       },
@@ -3305,6 +4024,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.asset.change.execute"
       }
     },
     {
@@ -3332,15 +4062,24 @@
             "type": "boolean"
           }
         },
-        "required": ["confirmWrite"],
+        "required": [
+          "confirmWrite"
+        ],
         "anyOf": [
-          { "required": ["receiptId"] },
-          { "required": ["changeSetId"] }
+          {
+            "required": [
+              "receiptId"
+            ]
+          },
+          {
+            "required": [
+              "changeSetId"
+            ]
+          }
         ],
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": true
       },
@@ -3353,6 +4092,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.asset.change.rollback"
       }
     },
     {
@@ -3374,7 +4124,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -3387,6 +4136,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.static_mesh.settings.get"
       }
     },
     {
@@ -3469,7 +4229,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -3482,6 +4241,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.static_mesh.settings.plan"
       }
     },
     {
@@ -3579,7 +4349,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": true
       },
@@ -3592,6 +4361,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.static_mesh.settings.apply"
       }
     },
     {
@@ -3657,7 +4437,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -3670,6 +4449,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.static_mesh.settings.validate"
       }
     },
     {
@@ -3680,21 +4470,51 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "changeSetId": { "type": "string", "minLength": 36, "maxLength": 36 },
-          "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
-          "confirmWrite": { "type": "boolean" }
+          "changeSetId": {
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          }
         },
-        "required": ["changeSetId", "requestId", "confirmWrite"],
+        "required": [
+          "changeSetId",
+          "requestId",
+          "confirmWrite"
+        ],
         "additionalProperties": false
       },
-      "traits": { "readOnly": false, "destructive": true, "expensive": true },
-      "output": { "kind": "json" },
+      "traits": {
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
       "dsl": {
         "admission": "none",
         "scopeKinds": [],
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.static_mesh.settings.rollback"
       }
     },
     {
@@ -3716,7 +4536,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -3729,6 +4548,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.texture.settings.get"
       }
     },
     {
@@ -3826,7 +4656,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -3839,6 +4668,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.texture.settings.plan"
       }
     },
     {
@@ -3951,7 +4791,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": true
       },
@@ -3964,6 +4803,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.texture.settings.apply"
       }
     },
     {
@@ -4044,7 +4894,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -4057,6 +4906,17 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.texture.settings.validate"
       }
     },
     {
@@ -4067,21 +4927,51 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "changeSetId": { "type": "string", "minLength": 36, "maxLength": 36 },
-          "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
-          "confirmWrite": { "type": "boolean" }
+          "changeSetId": {
+            "type": "string",
+            "minLength": 36,
+            "maxLength": 36
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "confirmWrite": {
+            "type": "boolean"
+          }
         },
-        "required": ["changeSetId", "requestId", "confirmWrite"],
+        "required": [
+          "changeSetId",
+          "requestId",
+          "confirmWrite"
+        ],
         "additionalProperties": false
       },
-      "traits": { "readOnly": false, "destructive": true, "expensive": true },
-      "output": { "kind": "json" },
+      "traits": {
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
       "dsl": {
         "admission": "none",
         "scopeKinds": [],
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.texture.settings.rollback"
       }
     },
     {
@@ -4122,13 +5012,24 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "content.widget.event.ensure_handler"
       }
     }
-  ]
+  ],
+  "tombstones": []
 }

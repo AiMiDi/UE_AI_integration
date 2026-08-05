@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "domain": "animation",
   "capabilities": [
     {
@@ -31,12 +31,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.blend_space.create"
       }
     },
     {
@@ -87,12 +97,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.blend_space.samples.set"
       }
     },
     {
@@ -128,12 +148,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.blueprint.create"
       }
     },
     {
@@ -176,12 +206,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.node.add"
       }
     },
     {
@@ -215,12 +255,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.state_machine.add"
       }
     },
     {
@@ -264,12 +314,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.state.add"
       }
     },
     {
@@ -306,12 +366,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.state.animation.set"
       }
     },
     {
@@ -343,12 +413,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.state.remove"
       }
     },
     {
@@ -397,12 +477,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.transition.add"
       }
     },
     {
@@ -451,12 +541,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.transition.rule.set"
       }
     },
     {
@@ -464,90 +564,410 @@
       "domain": "animation",
       "kind": "query",
       "description": "List Animation Blueprints, Blend Spaces, or animation assets with bounded results.",
-      "inputSchema": { "type": "object", "properties": { "type": { "type": "string", "enum": ["all", "animBlueprint", "blendSpace", "animationAsset"] }, "packagePath": { "type": "string" }, "limit": { "type": "integer", "minimum": 1, "maximum": 500 } }, "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "all",
+              "animBlueprint",
+              "blendSpace",
+              "animationAsset"
+            ]
+          },
+          "packagePath": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.asset.list"
+      }
     },
     {
       "id": "animation.asset.get",
       "domain": "animation",
       "kind": "query",
       "description": "Get a stable snapshot for a supported animation asset.",
-      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.asset.get"
+      }
     },
     {
       "id": "animation.blueprint.get",
       "domain": "animation",
       "kind": "query",
       "description": "Get a stable Animation Blueprint graph and state-machine snapshot.",
-      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.blueprint.get"
+      }
     },
     {
       "id": "animation.blueprint.validate",
       "domain": "animation",
       "kind": "validation",
       "description": "Validate Animation Blueprint Skeleton, state, transition endpoint, and rule-graph structure.",
-      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.blueprint.validate"
+      }
     },
     {
       "id": "animation.blueprint.diff",
       "domain": "animation",
       "kind": "validation",
       "description": "Diff two stable Animation Blueprint snapshots.",
-      "inputSchema": { "type": "object", "properties": { "left": { "type": "string" }, "right": { "type": "string" } }, "required": ["left", "right"], "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "left": {
+            "type": "string"
+          },
+          "right": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "left",
+          "right"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.blueprint.diff"
+      }
     },
     {
       "id": "animation.state_machine.get",
       "domain": "animation",
       "kind": "query",
       "description": "Get one state-machine topology from an Animation Blueprint.",
-      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" }, "stateMachine": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "stateMachine": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.state_machine.get"
+      }
     },
     {
       "id": "animation.blend_space.get",
       "domain": "animation",
       "kind": "query",
       "description": "Get a stable Blend Space axes and samples snapshot.",
-      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.blend_space.get"
+      }
     },
     {
       "id": "animation.blend_space.validate",
       "domain": "animation",
       "kind": "validation",
       "description": "Validate Blend Space axes, sample ranges, animations, and Skeleton compatibility.",
-      "inputSchema": { "type": "object", "properties": { "asset": { "type": "string" } }, "required": ["asset"], "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.blend_space.validate"
+      }
     },
     {
       "id": "animation.blend_space.diff",
       "domain": "animation",
       "kind": "validation",
       "description": "Diff two stable Blend Space snapshots.",
-      "inputSchema": { "type": "object", "properties": { "left": { "type": "string" }, "right": { "type": "string" } }, "required": ["left", "right"], "additionalProperties": false },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly" },
-      "output": { "kind": "json" }
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "left": {
+            "type": "string"
+          },
+          "right": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "left",
+          "right"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "animation.blend_space.diff"
+      }
     }
-  ]
+  ],
+  "tombstones": []
 }

@@ -26,7 +26,7 @@ const handle = request => {
     ? {
         schema: "ue.trace-worker-handshake.v1",
         protocolVersion: 1,
-        workerVersion: "0.9.0",
+        workerVersion: "1.0.0",
         engineVersion: "5.3.2-fixture",
         contractBound: true,
         contractDigest: process.env.FAKE_CONTRACT_DIGEST || "sha256:" + "1".repeat(64),
@@ -51,7 +51,7 @@ const handle = request => {
     schema: "ue.trace-worker-response.v1",
     ok: true,
     data,
-    meta: { requestId: request.requestId, workerVersion: "0.9.0", engineVersion: "5.3.2-fixture", backend: "localTrace" }
+    meta: { requestId: request.requestId, workerVersion: "1.0.0", engineVersion: "5.3.2-fixture", backend: "localTrace" }
   };
 };
 if (process.argv.includes("--stdio")) {

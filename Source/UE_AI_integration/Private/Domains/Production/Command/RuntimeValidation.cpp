@@ -1,4 +1,5 @@
 #include "Infrastructure/ProductionRuntimeController.h"
+#include "Infrastructure/ClientActivityService.h"
 #include "Tools/MCPToolBase.h"
 #include "Tools/MCPToolRegistry.h"
 
@@ -183,6 +184,88 @@ class FTraceAnalyzeTool final : public FEngineeringOperationTool
 public:
 	using FEngineeringOperationTool::FEngineeringOperationTool;
 	FString GetCapabilityId() const override { return TEXT("production.trace.analyze"); }
+};
+
+class FSessionRosterTool final : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override { return TEXT("production.session.roster.get"); }
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>&) override
+	{
+		auto* Service = UEAIIntegration::Infrastructure::FClientActivityService::GetActiveService();
+		return Service
+			? FMCPToolResult::Ok(Service->MakeSnapshot(20, 20))
+			: FMCPToolResult::Error(TEXT("Client activity service is unavailable."), TEXT("session_service_unavailable"), 503);
+	}
+};
+
+class FLeaseStatusTool final : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override { return TEXT("production.lease.status"); }
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>&) override
+	{
+		auto* Service = UEAIIntegration::Infrastructure::FClientActivityService::GetActiveService();
+		return Service
+			? FMCPToolResult::Ok(Service->MakeLeaseSnapshot())
+			: FMCPToolResult::Error(TEXT("Client activity service is unavailable."), TEXT("session_service_unavailable"), 503);
+	}
+};
+
+class FLeaseAcquireTool final : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override { return TEXT("production.lease.acquire"); }
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		auto* Service = UEAIIntegration::Infrastructure::FClientActivityService::GetActiveService();
+		if (!Service) return FMCPToolResult::Error(TEXT("Client activity service is unavailable."), TEXT("session_service_unavailable"), 503);
+		FString Type;
+		FString SessionId;
+		FString ApprovePlanDigest;
+		bool bOverride = false;
+		Params->TryGetStringField(TEXT("type"), Type);
+		Params->TryGetStringField(TEXT("sessionId"), SessionId);
+		Params->TryGetStringField(TEXT("approvePlanDigest"), ApprovePlanDigest);
+		Params->TryGetBoolField(TEXT("override"), bOverride);
+		TSharedPtr<FJsonObject> Lease;
+		FString Error;
+		int32 HttpStatus = 200;
+		if (!Service->AcquireLease(Type, SessionId, bOverride, ApprovePlanDigest, Lease, Error, HttpStatus))
+		{
+			FMCPToolResult Result = FMCPToolResult::Error(
+				Error,
+				HttpStatus == 409 ? TEXT("lease_conflict") : TEXT("lease_invalid"),
+				HttpStatus);
+			Result.Data = Lease;
+			return Result;
+		}
+		return FMCPToolResult::Ok(Lease);
+	}
+};
+
+class FLeaseReleaseTool final : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override { return TEXT("production.lease.release"); }
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		auto* Service = UEAIIntegration::Infrastructure::FClientActivityService::GetActiveService();
+		if (!Service) return FMCPToolResult::Error(TEXT("Client activity service is unavailable."), TEXT("session_service_unavailable"), 503);
+		FString Type;
+		FString SessionId;
+		Params->TryGetStringField(TEXT("type"), Type);
+		Params->TryGetStringField(TEXT("sessionId"), SessionId);
+		FString Error;
+		if (!Service->ReleaseLease(Type, SessionId, Error))
+		{
+			return FMCPToolResult::Error(Error, TEXT("lease_not_owned"), 409);
+		}
+		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("released"), true);
+		Result->SetStringField(TEXT("type"), Type);
+		return FMCPToolResult::Ok(Result);
+	}
 };
 class FTraceTargetListTool final : public FEngineeringOperationTool
 {
@@ -441,6 +524,30 @@ public:
 	using FEngineeringOperationTool::FEngineeringOperationTool;
 	FString GetCapabilityId() const override { return TEXT("production.source_control.diff"); }
 };
+class FSourceProviderTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.source_control.provider.get"); }
+};
+class FSourceRefreshTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.source_control.status.refresh"); }
+};
+class FSourceCheckoutTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.source_control.checkout"); }
+};
+class FSourceRevertUnchangedTool final : public FEngineeringOperationTool
+{
+public:
+	using FEngineeringOperationTool::FEngineeringOperationTool;
+	FString GetCapabilityId() const override { return TEXT("production.source_control.revert_unchanged"); }
+};
 class FSourcePlanTool final : public FEngineeringOperationTool
 {
 public:
@@ -492,6 +599,10 @@ void RegisterProductionRuntimeTools(
 	UEAIIntegration::Infrastructure::FProductionRuntimeController& Controller)
 {
 	Registry.Register(MakeShared<FScenarioValidateTool>(Controller));
+	Registry.Register(MakeShared<FSessionRosterTool>());
+	Registry.Register(MakeShared<FLeaseStatusTool>());
+	Registry.Register(MakeShared<FLeaseAcquireTool>());
+	Registry.Register(MakeShared<FLeaseReleaseTool>());
 	Registry.Register(MakeShared<FScenarioStartTool>(Controller));
 	Registry.Register(MakeShared<FScenarioStatusTool>(Controller));
 	Registry.Register(MakeShared<FScenarioCancelTool>(Controller));
@@ -557,6 +668,10 @@ void RegisterProductionRuntimeTools(
 	Registry.Register(MakeShared<FSourceRepositoryTool>(Controller));
 	Registry.Register(MakeShared<FSourceStatusTool>(Controller));
 	Registry.Register(MakeShared<FSourceDiffTool>(Controller));
+	Registry.Register(MakeShared<FSourceProviderTool>(Controller));
+	Registry.Register(MakeShared<FSourceRefreshTool>(Controller));
+	Registry.Register(MakeShared<FSourceCheckoutTool>(Controller));
+	Registry.Register(MakeShared<FSourceRevertUnchangedTool>(Controller));
 	Registry.Register(MakeShared<FSourcePlanTool>(Controller));
 	Registry.Register(MakeShared<FSourceExecuteTool>(Controller));
 	Registry.Register(MakeShared<FDdcStatusTool>(Controller));

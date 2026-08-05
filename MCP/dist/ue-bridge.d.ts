@@ -55,7 +55,9 @@ export interface UECapabilityQuery {
     domain?: CapabilityDomain;
     operation?: string;
     kind?: CapabilityKind;
-    readOnly?: boolean;
+    effect?: string;
+    lifecycle?: "active" | "deprecated";
+    canonicalOnly?: boolean;
     destructive?: boolean;
     expensive?: boolean;
     outputKind?: CapabilityOutputKind;
@@ -110,7 +112,7 @@ export interface UECallerMetadata {
     command?: string;
 }
 export declare const MCP_BRIDGE_NAME = "ue-ai-integration";
-export declare const MCP_BRIDGE_VERSION = "0.9.0";
+export declare const MCP_BRIDGE_VERSION = "1.0.0";
 export declare class UEClient {
     readonly baseUrl: string;
     readonly timeoutMs: number;
@@ -130,11 +132,14 @@ export declare class UEClient {
     stopSession(): Promise<void>;
     getHealth(): Promise<UEHealthData>;
     getCapabilities(query?: UECapabilityQuery): Promise<UECapabilitiesData>;
-    execute(id: string, params?: Record<string, unknown>, requestId?: string): Promise<UEExecuteData>;
+    execute(id: string, params?: Record<string, unknown>, requestId?: string, context?: {
+        signal?: AbortSignal;
+    }): Promise<UEExecuteData>;
     getWorkflowHandshake(): Promise<UEWorkflowHandshakeData>;
-    workflow(request: UEWorkflowRequest): Promise<UEWorkflowData>;
+    workflow(request: UEWorkflowRequest, signal?: AbortSignal): Promise<UEWorkflowData>;
     private request;
     private requestOnce;
+    private cancelExecution;
     private tryRegister;
     private maintainSession;
     private scheduleMaintenance;

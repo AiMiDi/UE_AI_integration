@@ -25,6 +25,8 @@ struct FMCPExecutionContext
 	TSharedPtr<FJsonObject> Params;
 	/** Optional caller supplied key used to make command retries idempotent. */
 	FString RequestId;
+	/** Registered MCP/CLI session used for advisory lease ownership checks. */
+	FString CallerSessionId;
 };
 
 /** Transport-neutral execution error. */

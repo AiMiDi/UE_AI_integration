@@ -172,7 +172,7 @@ public class UEAITraceWorker : ModuleRules
 		string providerDigest = Sha256File(actionMapping);
 		string launchProfilesDigest = Sha256File(launchProfiles);
 
-		PublicDefinitions.Add("UEAI_TRACE_WORKER_VERSION=\"0.9.0\"");
+		PublicDefinitions.Add("UEAI_TRACE_WORKER_VERSION=\"1.0.0\"");
 		PublicDefinitions.Add(
 			"UEAI_TRACE_CONTRACT_DIGEST=\"" + contractDigest + "\"");
 		PublicDefinitions.Add(

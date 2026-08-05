@@ -1,6 +1,7 @@
 #include "Core/MCPExecutor.h"
 
 #include "Dom/JsonValue.h"
+#include "Infrastructure/ClientActivityService.h"
 #include "Infrastructure/EngineeringContractUtils.h"
 #include "Infrastructure/OptionalFeatureAvailability.h"
 #include "Tools/MCPToolRegistry.h"
@@ -16,6 +17,59 @@ namespace
 			|| Capability == TEXT("production.commandlet.run");
 	}
 
+	bool HasWriteEffect(const TSharedPtr<FJsonObject>& Descriptor)
+	{
+		if (!Descriptor.IsValid())
+		{
+			return false;
+		}
+		const TSharedPtr<FJsonObject>* Effects = nullptr;
+		if (!Descriptor->TryGetObjectField(TEXT("effects"), Effects)
+			|| !Effects || !Effects->IsValid())
+		{
+			return false;
+		}
+		for (const TCHAR* Field : {
+			TEXT("asset"), TEXT("world"), TEXT("editorSession"), TEXT("external") })
+		{
+			FString Value;
+			if ((*Effects)->TryGetStringField(Field, Value)
+				&& Value == TEXT("write"))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	FString ProtectedLeaseType(
+		const FString& Capability,
+		const TSharedPtr<FJsonObject>& Descriptor)
+	{
+		if (!HasWriteEffect(Descriptor))
+		{
+			return FString();
+		}
+		if (Capability.StartsWith(TEXT("scene.pie.")))
+		{
+			return TEXT("pie");
+		}
+		if (Capability.Contains(TEXT("compile"), ESearchCase::IgnoreCase))
+		{
+			return TEXT("compile");
+		}
+		if (Capability.StartsWith(TEXT("production.performance.")))
+		{
+			return TEXT("performance");
+		}
+		if (Capability.Contains(TEXT("editor.restart"), ESearchCase::IgnoreCase)
+			|| Capability.Contains(TEXT("editorRestart"), ESearchCase::IgnoreCase))
+		{
+			return TEXT("editorRestart");
+		}
+		return FString();
+	}
+
 }
 
 FMCPExecutor::FMCPExecutor(FMCPToolRegistry& InRegistry)
@@ -25,6 +79,11 @@ FMCPExecutor::FMCPExecutor(FMCPToolRegistry& InRegistry)
 
 FMCPResult FMCPExecutor::Execute(const FMCPExecutionContext& Context)
 {
+	FMCPResult LeaseFailure;
+	if (!CheckProtectedLease(Context, LeaseFailure))
+	{
+		return LeaseFailure;
+	}
 	if (Context.RequestId.IsEmpty())
 	{
 		return ExecuteUncached(Context);
@@ -61,6 +120,10 @@ bool FMCPExecutor::BeginExecuteAsync(
 	FMCPResult& OutImmediate)
 {
 	check(IsInGameThread());
+	if (!CheckProtectedLease(Context, OutImmediate))
+	{
+		return false;
+	}
 	FMCPToolBase* Tool = Registry.FindTool(Context.Capability);
 	if (!Tool || !Tool->SupportsAsyncExecution())
 	{
@@ -120,7 +183,9 @@ bool FMCPExecutor::BeginExecuteAsync(
 	}
 	if (!Context.RequestId.IsEmpty())
 	{
-		InFlightRequests.Add(Context.RequestId, FInFlightRecord{PayloadKey});
+		InFlightRequests.Add(
+			Context.RequestId,
+			FInFlightRecord{PayloadKey, Context.Capability});
 	}
 
 	const FString RequestId = Context.RequestId;
@@ -179,6 +244,42 @@ void FMCPExecutor::CancelAsyncOperations(const FString& Reason)
 		TEXT("An async MCP tool did not complete during cancellation."));
 }
 
+FMCPResult FMCPExecutor::CancelAsyncOperation(
+	const FString& RequestId,
+	const FString& Reason)
+{
+	check(IsInGameThread());
+	if (RequestId.IsEmpty())
+	{
+		return FMCPResult::Fail(
+			TEXT("invalid_params"),
+			TEXT("requestId is required."),
+			422);
+	}
+	const FInFlightRecord* InFlight = InFlightRequests.Find(RequestId);
+	if (!InFlight)
+	{
+		TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+		Data->SetStringField(TEXT("requestId"), RequestId);
+		Data->SetBoolField(TEXT("cancelPending"), false);
+		Data->SetStringField(TEXT("state"), TEXT("notInFlight"));
+		return FMCPResult::Ok(Data);
+	}
+	const bool bAccepted = Registry.CancelAsyncTool(
+		InFlight->Capability,
+		Reason.IsEmpty()
+			? TEXT("The MCP client cancelled the request.")
+			: Reason);
+	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("requestId"), RequestId);
+	Data->SetStringField(TEXT("capability"), InFlight->Capability);
+	Data->SetBoolField(TEXT("cancelPending"), bAccepted);
+	Data->SetStringField(
+		TEXT("state"),
+		bAccepted ? TEXT("cancellationRequested") : TEXT("notCancellable"));
+	return FMCPResult::Ok(Data);
+}
+
 FMCPResult FMCPExecutor::ExecuteUncached(const FMCPExecutionContext& Context) const
 {
 	TSharedPtr<FJsonObject> EffectiveParams;
@@ -190,6 +291,45 @@ FMCPResult FMCPExecutor::ExecuteUncached(const FMCPExecutionContext& Context) co
 
 	return ConvertToolResult(
 		Registry.ExecuteTool(Context.Capability, EffectiveParams));
+}
+
+bool FMCPExecutor::CheckProtectedLease(
+	const FMCPExecutionContext& Context,
+	FMCPResult& OutFailure) const
+{
+	const TSharedPtr<FJsonObject>* Descriptor =
+		Registry.FindCapabilityDescriptor(Context.Capability);
+	const FString LeaseType = ProtectedLeaseType(
+		Context.Capability,
+		Descriptor ? *Descriptor : nullptr);
+	if (LeaseType.IsEmpty())
+	{
+		return true;
+	}
+	UEAIIntegration::Infrastructure::FClientActivityService* Activity =
+		UEAIIntegration::Infrastructure::FClientActivityService::GetActiveService();
+	if (!Activity)
+	{
+		return true;
+	}
+	FString OwnerSessionId;
+	if (Activity->CanAccessLease(
+		LeaseType,
+		Context.CallerSessionId,
+		OwnerSessionId))
+	{
+		return true;
+	}
+	TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+	Details->SetStringField(TEXT("leaseType"), LeaseType);
+	Details->SetStringField(TEXT("ownerSessionId"), OwnerSessionId);
+	Details->SetStringField(TEXT("callerSessionId"), Context.CallerSessionId);
+	OutFailure = FMCPResult::Fail(
+		TEXT("lease_conflict"),
+		TEXT("The protected operation is leased by another live session."),
+		409,
+		Details);
+	return false;
 }
 
 bool FMCPExecutor::PrepareExecution(
@@ -209,6 +349,20 @@ bool FMCPExecutor::PrepareExecution(
 
 	if (!Registry.FindTool(Context.Capability))
 	{
+		if (const TSharedPtr<FJsonObject>* Tombstone =
+			Registry.FindCapabilityTombstone(Context.Capability))
+		{
+			const FString Replacement = (*Tombstone)->GetStringField(TEXT("replacement"));
+			OutFailure = FMCPResult::Fail(
+				TEXT("capability_removed"),
+				FString::Printf(
+					TEXT("Capability '%s' was removed; use '%s'."),
+					*Context.Capability,
+					*Replacement),
+				410,
+				*Tombstone);
+			return false;
+		}
 		OutFailure = FMCPResult::Fail(
 			TEXT("capability_not_found"),
 			FString::Printf(TEXT("Capability '%s' was not found."), *Context.Capability),

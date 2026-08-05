@@ -61,14 +61,41 @@ export class BackendRoutingExecutor {
     catalog;
     editor;
     localTrace;
-    constructor(catalog, editor, localTrace) {
+    localRecipe;
+    localProject;
+    localAsset;
+    localSal;
+    developmentRuntime;
+    constructor(catalog, editor, localTrace, localRecipe, localProject, localAsset, localSal, developmentRuntime) {
         this.catalog = catalog;
         this.editor = editor;
         this.localTrace = localTrace;
+        this.localRecipe = localRecipe;
+        this.localProject = localProject;
+        this.localAsset = localAsset;
+        this.localSal = localSal;
+        this.developmentRuntime = developmentRuntime;
     }
-    async execute(id, params = {}, requestId) {
+    async execute(id, params = {}, requestId, context) {
         const capability = this.catalog.get(id);
+        if (id.startsWith("production.recipe.")) {
+            if (!this.localRecipe) {
+                throw new UEApiError({
+                    code: "recipe_runner_unavailable",
+                    message: "The local Recipe Runner backend is unavailable.",
+                });
+            }
+            return this.localRecipe.execute(id, params, requestId, context);
+        }
         const execution = capability?.execution;
+        const localBackends = new Map([
+            ["localTrace", this.localTrace],
+            ["localRecipe", this.localRecipe],
+            ["localProject", this.localProject],
+            ["localAsset", this.localAsset],
+            ["localSal", this.localSal],
+            ["developmentRuntime", this.developmentRuntime],
+        ]);
         const requested = params.backend ?? "auto";
         if (requested !== "auto" &&
             requested !== "editor" &&
@@ -91,36 +118,48 @@ export class BackendRoutingExecutor {
         }
         const dynamicJobRoute = forced !== undefined && id.startsWith("production.job.");
         if (execution === undefined && !dynamicJobRoute && forced === undefined) {
-            return this.editor.execute(id, params, requestId);
+            return this.editor.execute(id, params, requestId, context);
         }
         const declared = execution?.backends ?? ["editor", "localTrace"];
         const supportsEditor = declared.includes("editor");
-        const supportsLocal = declared.includes("localTrace");
+        const declaredLocal = declared.find((backend) => backend !== "editor" && localBackends.has(backend));
+        const supportsLocal = declaredLocal !== undefined;
         if (forced === "editor") {
             if (!supportsEditor)
                 throw this.unsupported(id, "editor", declared);
-            return this.editor.execute(id, params, requestId);
+            return this.editor.execute(id, params, requestId, context);
         }
         if (forced === "localTrace") {
             if (!supportsLocal)
                 throw this.unsupported(id, "local", declared);
-            return this.localTrace.execute(id, params, requestId);
+            const executor = localBackends.get("localTrace");
+            if (!executor)
+                throw this.unsupported(id, "local", declared);
+            return executor.execute(id, params, requestId, context);
+        }
+        if (execution?.preferred !== undefined
+            && execution.preferred !== "editor"
+            && execution.preferred !== "localTrace") {
+            const executor = localBackends.get(execution.preferred);
+            if (!executor)
+                throw this.unsupported(id, "local", declared);
+            return executor.execute(id, params, requestId, context);
         }
         if (requested === "editor") {
             if (!supportsEditor) {
                 throw this.unsupported(id, "editor", declared);
             }
-            return this.editor.execute(id, params, requestId);
+            return this.editor.execute(id, params, requestId, context);
         }
         if (requested === "local") {
             if (!supportsLocal) {
                 throw this.unsupported(id, "local", declared);
             }
-            return this.localTrace.execute(id, params, requestId);
+            return localBackends.get(declaredLocal ?? "").execute(id, params, requestId, context);
         }
         if (execution?.preferred === "localTrace" && supportsLocal) {
             try {
-                return await this.localTrace.execute(id, params, requestId);
+                return await this.localTrace.execute(id, params, requestId, context);
             }
             catch (error) {
                 if (!supportsEditor ||
@@ -128,12 +167,12 @@ export class BackendRoutingExecutor {
                     error.code !== "trace_worker_unavailable") {
                     throw error;
                 }
-                return this.editor.execute(id, params, requestId);
+                return this.editor.execute(id, params, requestId, context);
             }
         }
         if (execution?.preferred === "editor" && supportsEditor) {
             try {
-                return await this.editor.execute(id, params, requestId);
+                return await this.editor.execute(id, params, requestId, context);
             }
             catch (error) {
                 if (!supportsLocal ||
@@ -141,14 +180,14 @@ export class BackendRoutingExecutor {
                     error.code !== "editor_unreachable") {
                     throw error;
                 }
-                return this.localTrace.execute(id, params, requestId);
+                return this.localTrace.execute(id, params, requestId, context);
             }
         }
         if (supportsEditor) {
-            return this.editor.execute(id, params, requestId);
+            return this.editor.execute(id, params, requestId, context);
         }
         if (supportsLocal) {
-            return this.localTrace.execute(id, params, requestId);
+            return this.localTrace.execute(id, params, requestId, context);
         }
         throw new UEApiError({
             code: "execution_backend_unavailable",
@@ -166,6 +205,14 @@ export class BackendRoutingExecutor {
 export function validateDomainOperation(catalog, domain, operation) {
     const capability = catalog.get(operation);
     if (!capability) {
+        const removed = catalog.removed(operation);
+        if (removed) {
+            throw new UEApiError({
+                code: "capability_removed",
+                message: `Capability "${operation}" was removed; use "${removed.replacement}".`,
+                details: removed,
+            });
+        }
         throw new UEApiError({
             code: "capability_not_found",
             message: `Unknown capability "${operation}"`,
@@ -186,10 +233,10 @@ export function validateDomainOperation(catalog, domain, operation) {
     }
     return capability;
 }
-export async function runDomainOperation(catalog, executor, domain, operation, params = {}, requestId) {
+export async function runDomainOperation(catalog, executor, domain, operation, params = {}, requestId, context) {
     try {
         const capability = validateDomainOperation(catalog, domain, operation);
-        const data = await executor.execute(capability.id, params, requestId);
+        const data = await executor.execute(capability.id, params, requestId, context);
         return formatCapabilityResponse(capability, data);
     }
     catch (error) {

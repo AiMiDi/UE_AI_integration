@@ -166,15 +166,19 @@ export const UE_WORKFLOW_INPUT_SCHEMA = UE_WORKFLOW_TOOL_SCHEMA
 export type UEWorkflowInput = z.infer<typeof UE_WORKFLOW_INPUT_SCHEMA>;
 
 export interface WorkflowExecutor {
-  workflow(request: UEWorkflowRequest): Promise<UEWorkflowData>;
+  workflow(
+    request: UEWorkflowRequest,
+    signal?: AbortSignal,
+  ): Promise<UEWorkflowData>;
 }
 
 export async function runWorkflowAction(
   executor: WorkflowExecutor,
   request: UEWorkflowInput,
+  signal?: AbortSignal,
 ): Promise<MCPResponse> {
   try {
-    return formatJsonResponse(await executor.workflow(request));
+    return formatJsonResponse(await executor.workflow(request, signal));
   } catch (error) {
     return formatErrorResponse(error);
   }
@@ -183,9 +187,14 @@ export async function runWorkflowAction(
 export async function handleWorkflowInput(
   executor: WorkflowExecutor,
   value: unknown,
+  signal?: AbortSignal,
 ): Promise<MCPResponse> {
   try {
-    return await runWorkflowAction(executor, parseWorkflowInput(value));
+    return await runWorkflowAction(
+      executor,
+      parseWorkflowInput(value),
+      signal,
+    );
   } catch (error) {
     return formatErrorResponse(error);
   }

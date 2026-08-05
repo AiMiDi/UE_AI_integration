@@ -9,13 +9,13 @@ Claude Code can inspect or modify Blueprints, scenes, content assets, animation,
 AI, and production workflows, then analyze `.utrace` files with the Editor
 closed.
 
-The current plugin version is `0.9.0`. Unreal Engine 5.3 is the verified build
+The current plugin version is `1.0.0`. Unreal Engine 5.3 is the verified build
 baseline. Differences for UE 5.4–5.7 are isolated in the compatibility layer,
 but those versions have not all been compiled locally.
 
 ## Highlights
 
-- The current release snapshot contains 381 manifest-driven Editor, PIE,
+- The current release snapshot contains 410 manifest-driven Editor, PIE,
   Development, and local Trace capabilities; the service derives the count from
   the manifests at startup.
 - Twelve stable MCP tools instead of exposing every capability as a tool.

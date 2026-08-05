@@ -1,7 +1,45 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "domain": "blueprint",
   "capabilities": [
+    {
+      "id": "blueprint.asset.compile",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Compile a Blueprint or Widget Blueprint and return compiler diagnostics plus mutation verification metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint asset package or object path"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.compile"
+      }
+    },
     {
       "id": "blueprint.asset.create",
       "domain": "blueprint",
@@ -35,7 +73,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -50,6 +87,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.create"
       }
     },
     {
@@ -75,12 +123,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.delete"
       }
     },
     {
@@ -111,12 +169,60 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.diff"
+      }
+    },
+    {
+      "id": "blueprint.asset.dirty.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Return independent Blueprint packageDirty, compileStatus, needsCompile, and generatedClassUpToDate fields.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint asset package or object path"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.dirty.get"
       }
     },
     {
@@ -138,7 +244,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -154,6 +259,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.get"
       }
     },
     {
@@ -180,12 +296,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.list"
       }
     },
     {
@@ -207,12 +333,64 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.references"
+      }
+    },
+    {
+      "id": "blueprint.asset.reload",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Reload a clean Blueprint or Widget Blueprint package from disk and verify the reloaded asset; dirty assets are rejected.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint asset package or object path"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Allow reload to discard unsaved changes; false rejects dirty assets"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.reload"
       }
     },
     {
@@ -239,12 +417,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.rename"
       }
     },
     {
@@ -271,12 +459,64 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.reparent"
+      }
+    },
+    {
+      "id": "blueprint.asset.save",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Save a Blueprint or Widget Blueprint package and verify the persisted asset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint asset package or object path"
+          },
+          "onlyIfDirty": {
+            "type": "boolean",
+            "description": "If true, skip saving an already clean package"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.save"
       }
     },
     {
@@ -306,12 +546,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.search"
       }
     },
     {
@@ -341,12 +591,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.search_by_type"
       }
     },
     {
@@ -368,12 +628,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.summary"
       }
     },
     {
@@ -395,7 +665,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -411,6 +680,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.validate"
       }
     },
     {
@@ -441,12 +721,77 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.asset.validate_all"
+      }
+    },
+    {
+      "id": "blueprint.call_graph.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Build a bounded cross-asset Blueprint and native function call graph using stable asset, graph, node GUID and function identities.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pathPrefix": {
+            "type": "string",
+            "pattern": "^/Game(?:/.*)?$"
+          },
+          "assetLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "nodeLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.call_graph.get"
       }
     },
     {
@@ -473,12 +818,286 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.class.list"
+      }
+    },
+    {
+      "id": "blueprint.comment.bounds.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Set the graph-space position and size of an existing Blueprint Comment node.",
+      "search": {
+        "title": "Set Blueprint Comment bounds",
+        "keywords": [
+          "comment size",
+          "comment group",
+          "padding",
+          "注释框大小"
+        ],
+        "aliases": [
+          "comment bounds"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "commentNodeId": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          },
+          "width": {
+            "type": "number",
+            "minimum": 1
+          },
+          "height": {
+            "type": "number",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "commentNodeId",
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "scopeParameters": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.comment.bounds.set"
+      }
+    },
+    {
+      "domain": "blueprint",
+      "kind": "command",
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "id": "blueprint.comment.bubble.set",
+      "description": "Set Blueprint Comment bubble visibility without changing its title.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "commentNodeId": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "visible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "blueprint",
+          "commentNodeId",
+          "visible"
+        ],
+        "additionalProperties": false
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.10.0",
+        "canonicalId": "blueprint.comment.bubble.set"
+      }
+    },
+    {
+      "id": "blueprint.comment.create_from_selection",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Create a native group-movement Comment node around the current Graph Editor selection.",
+      "search": {
+        "title": "Create Comment group from selected nodes",
+        "keywords": [
+          "comment group",
+          "wrap nodes",
+          "graph organize",
+          "注释框",
+          "节点分组"
+        ],
+        "aliases": [
+          "create comment"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Non-empty Comment title"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.comment.create_from_selection"
+      }
+    },
+    {
+      "domain": "blueprint",
+      "kind": "command",
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "id": "blueprint.comment.title.set",
+      "description": "Set a Blueprint Comment title without changing its bubble visibility.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "commentNodeId": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "blueprint",
+          "commentNodeId",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.10.0",
+        "canonicalId": "blueprint.comment.title.set"
       }
     },
     {
@@ -514,7 +1133,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -529,6 +1147,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.component.add"
       }
     },
     {
@@ -550,12 +1179,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.component.list"
       }
     },
     {
@@ -582,12 +1221,679 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.component.remove"
+      }
+    },
+    {
+      "id": "blueprint.debug.breakpoint.list",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "List Blueprint debugger breakpoints from the latest immutable PIE debug snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.debug.breakpoint.list"
+      }
+    },
+    {
+      "id": "blueprint.debug.breakpoint.remove",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Queue removal of a Blueprint node breakpoint for Slate pre-tick execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nodeGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint",
+          "nodeGuid"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.debug.breakpoint.remove"
+      }
+    },
+    {
+      "id": "blueprint.debug.breakpoint.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Queue creation or enable-state update of a Blueprint node breakpoint for Slate pre-tick execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nodeGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint",
+          "nodeGuid"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.debug.breakpoint.set"
+      }
+    },
+    {
+      "id": "blueprint.debug.control",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Queue continue, step or abort control for consumption by Slate pre-tick while Kismet has the Game Thread paused.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "continue",
+              "stepInto",
+              "stepOver",
+              "stepOut",
+              "abort"
+            ]
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.debug.control"
+      }
+    },
+    {
+      "id": "blueprint.debug.session.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Read the immutable Blueprint debugger snapshot for the current PIE generation, including pause state, current instruction and recent command status.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.debug.session.get"
+      }
+    },
+    {
+      "id": "blueprint.debug.trace.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Read a bounded, cursor-paged Kismet execution trace mapped to Blueprint asset, graph and source node identities.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cursor": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.debug.trace.get"
+      }
+    },
+    {
+      "id": "blueprint.debug.watch.list",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "List pin watches for a Blueprint from the latest immutable PIE debug snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.debug.watch.list"
+      }
+    },
+    {
+      "id": "blueprint.debug.watch.remove",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Queue removal of a Blueprint pin or nested-property watch for Slate pre-tick execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nodeGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "pinGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "propertyPath": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint",
+          "nodeGuid",
+          "pinGuid"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.debug.watch.remove"
+      }
+    },
+    {
+      "id": "blueprint.debug.watch.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Queue creation of a Blueprint pin or nested-property watch for Slate pre-tick execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nodeGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "pinGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "propertyPath": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint",
+          "nodeGuid",
+          "pinGuid"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.debug.watch.set"
+      }
+    },
+    {
+      "id": "blueprint.debug.watch.value.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Read a watched Blueprint pin value captured from the immutable paused-debug snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nodeGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "pinGuid": {
+            "type": "string",
+            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+          },
+          "propertyPath": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "sessionId",
+          "generation",
+          "debugSessionId",
+          "blueprint",
+          "nodeGuid",
+          "pinGuid"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.debug.watch.value.get"
       }
     },
     {
@@ -619,12 +1925,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.default.set"
       }
     },
     {
@@ -656,7 +1972,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -671,6 +1986,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.dispatcher.add"
       }
     },
     {
@@ -692,12 +2018,110 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.dispatcher.list"
+      }
+    },
+    {
+      "id": "blueprint.findings.correlate",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Correlate a prior Blueprint scan with retained Kismet trace evidence and/or explicitly supplied runtime node IDs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scanId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "observedNodeIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 5000
+          },
+          "debugSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "traceRange": {
+            "type": "object",
+            "properties": {
+              "cursorStart": {
+                "type": "string",
+                "pattern": "^[0-9]+$"
+              },
+              "cursorEnd": {
+                "type": "string",
+                "pattern": "^[0-9]+$"
+              }
+            },
+            "additionalProperties": false
+          },
+          "evidenceCoverage": {
+            "type": "string",
+            "enum": [
+              "partial",
+              "complete"
+            ],
+            "description": "Defaults to partial. complete is honored only for a Kismet trace with explicit cursorStart and cursorEnd."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "scanId",
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.findings.correlate"
       }
     },
     {
@@ -733,12 +2157,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.function.calls.replace"
       }
     },
     {
@@ -764,12 +2198,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.function.list"
       }
     },
     {
@@ -806,7 +2250,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -822,6 +2265,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.function.parameter.add"
       }
     },
     {
@@ -853,12 +2307,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.function.parameter.remove"
       }
     },
     {
@@ -899,12 +2363,491 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.function.parameter.type.set"
+      }
+    },
+    {
+      "id": "blueprint.graph.build.definition.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Read the managed BuildGraph definition and stable ref to NodeGuid mapping stored in Blueprint metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "buildId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "buildId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.build.definition.get"
+      }
+    },
+    {
+      "id": "blueprint.graph.build.metadata.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Persist one approved BuildGraph definition and managed ref mapping as Blueprint package metadata.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "buildId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "definition": {
+            "type": "object"
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "nodeId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resetManagedRefs": {
+            "type": "boolean"
+          },
+          "seedManagedRefs": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "buildId",
+          "definition",
+          "ref",
+          "nodeId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "scopeParameters": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.build.metadata.set"
+      }
+    },
+    {
+      "id": "blueprint.graph.build.plan",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Compile a declarative Blueprint BuildGraph into a normalized Workflow v2 and Editor-bound plan digest.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "definition": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "definition"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.build.plan"
+      }
+    },
+    {
+      "id": "blueprint.graph.build.validate",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Validate a bounded declarative ue.blueprint-buildgraph.v1 definition.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "definition": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "definition"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.build.validate"
+      }
+    },
+    {
+      "id": "blueprint.graph.capture",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Capture only the specified live Blueprint Graph Editor as a bounded PNG or JPEG artifact with graph and rendering fingerprints.",
+      "search": {
+        "title": "Capture Blueprint Graph Editor image",
+        "keywords": [
+          "graph screenshot",
+          "visual evidence",
+          "before after",
+          "蓝图截图"
+        ],
+        "aliases": [
+          "capture graph"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "currentView",
+              "all",
+              "nodes"
+            ],
+            "default": "currentView"
+          },
+          "nodeIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 256,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f-]{32,36}$"
+            }
+          },
+          "padding": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1024,
+            "default": 64
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 64,
+            "maximum": 4096
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 64,
+            "maximum": 4096
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "png",
+              "jpeg"
+            ],
+            "default": "png"
+          },
+          "quality": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 90
+          },
+          "includeImageBase64": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlightRequestedNodes": {
+            "type": "boolean",
+            "default": false
+          },
+          "imagePolicy": {
+            "type": "object",
+            "properties": {
+              "targetTokens": {
+                "type": "integer",
+                "minimum": 128,
+                "maximum": 32768
+              },
+              "maxWidth": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "maxHeight": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "color": {
+                "type": "string",
+                "enum": [
+                  "color",
+                  "grayscale",
+                  "monochrome"
+                ],
+                "default": "color"
+              },
+              "inline": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "thumbnail",
+                  "full"
+                ],
+                "default": "none"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.capture"
+      }
+    },
+    {
+      "id": "blueprint.graph.capture.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Retrieve a persisted Blueprint Graph capture or visual diff artifact by opaque capture ID.",
+      "search": {
+        "title": "Get Blueprint graph capture artifact",
+        "keywords": [
+          "graph screenshot artifact",
+          "capture image"
+        ],
+        "aliases": [
+          "get capture"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "captureId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "imagePolicy": {
+            "type": "object",
+            "properties": {
+              "targetTokens": {
+                "type": "integer",
+                "minimum": 128,
+                "maximum": 32768
+              },
+              "maxWidth": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "maxHeight": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "color": {
+                "type": "string",
+                "enum": [
+                  "color",
+                  "grayscale",
+                  "monochrome"
+                ],
+                "default": "color"
+              },
+              "inline": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "thumbnail",
+                  "full"
+                ],
+                "default": "none"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "captureId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "image"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.capture.get"
       }
     },
     {
@@ -936,7 +2879,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -952,6 +2894,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.create"
       }
     },
     {
@@ -978,12 +2931,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.delete"
       }
     },
     {
@@ -1010,12 +2973,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.describe"
       }
     },
     {
@@ -1046,12 +3019,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.diff"
       }
     },
     {
@@ -1102,7 +3085,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
@@ -1118,6 +3100,17 @@
         "transactionDomain": "asset",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.get"
       }
     },
     {
@@ -1144,12 +3137,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.rebuild_impact.analyze"
       }
     },
     {
@@ -1181,12 +3184,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.rename"
       }
     },
     {
@@ -1225,12 +3238,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.restore"
       }
     },
     {
@@ -1256,12 +3279,117 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.snapshot"
+      }
+    },
+    {
+      "id": "blueprint.graph.visual.compare",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Compare two persisted Blueprint Graph captures, return bounded visual metrics, compatibility, changed bounds, and a diff PNG.",
+      "search": {
+        "title": "Compare Blueprint graph screenshots",
+        "keywords": [
+          "visual diff",
+          "before after",
+          "graph screenshot compare",
+          "视觉对比"
+        ],
+        "aliases": [
+          "compare captures"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "beforeCaptureId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "afterCaptureId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96
+          },
+          "imagePolicy": {
+            "type": "object",
+            "properties": {
+              "targetTokens": {
+                "type": "integer",
+                "minimum": 128,
+                "maximum": 32768
+              },
+              "maxWidth": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "maxHeight": {
+                "type": "integer",
+                "minimum": 64,
+                "maximum": 8192
+              },
+              "color": {
+                "type": "string",
+                "enum": [
+                  "color",
+                  "grayscale",
+                  "monochrome"
+                ],
+                "default": "color"
+              },
+              "inline": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "thumbnail",
+                  "full"
+                ],
+                "default": "none"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "beforeCaptureId",
+          "afterCaptureId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "image"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.graph.visual.compare"
       }
     },
     {
@@ -1288,12 +3416,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.interface.add"
       }
     },
     {
@@ -1315,12 +3453,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.interface.list"
       }
     },
     {
@@ -1351,12 +3499,508 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.interface.remove"
+      }
+    },
+    {
+      "id": "blueprint.layout.align",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Run a native Graph Editor alignment command on the current selection.",
+      "search": {
+        "title": "Align Blueprint graph nodes",
+        "keywords": [
+          "layout align",
+          "graph organize",
+          "排版",
+          "对齐"
+        ],
+        "aliases": [
+          "align nodes"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "alignment": {
+            "type": "string",
+            "enum": [
+              "top",
+              "middle",
+              "bottom",
+              "left",
+              "center",
+              "right"
+            ]
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "alignment"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.layout.align"
+      }
+    },
+    {
+      "id": "blueprint.layout.distribute",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Run a native horizontal or vertical Graph Editor distribution command on the current selection.",
+      "search": {
+        "title": "Distribute Blueprint graph nodes",
+        "keywords": [
+          "layout distribute",
+          "graph spacing",
+          "排版",
+          "均匀分布"
+        ],
+        "aliases": [
+          "distribute nodes"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "orientation": {
+            "type": "string",
+            "enum": [
+              "horizontal",
+              "vertical"
+            ]
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "orientation"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.layout.distribute"
+      }
+    },
+    {
+      "id": "blueprint.layout.organize",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Plan deterministic UE 5.3-compatible Blueprint Graph layout semantics on an exact transient geometry baseline, then atomically apply the approved coordinates and native Comment bounds.",
+      "search": {
+        "title": "Organize Blueprint graph in one transaction",
+        "keywords": [
+          "batch layout",
+          "graph organize",
+          "align distribute straighten comment",
+          "批量排版",
+          "蓝图整理",
+          "排版",
+          "分组",
+          "注释框"
+        ],
+        "aliases": [
+          "organize graph",
+          "layout transaction"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "groups": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "nodeIds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 128,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9A-Fa-f-]{32,36}$"
+                  }
+                },
+                "actions": {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "align",
+                          "distribute",
+                          "straighten"
+                        ]
+                      },
+                      "alignment": {
+                        "type": "string",
+                        "enum": [
+                          "top",
+                          "middle",
+                          "bottom",
+                          "left",
+                          "center",
+                          "right"
+                        ]
+                      },
+                      "orientation": {
+                        "type": "string",
+                        "enum": [
+                          "horizontal",
+                          "vertical"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "comment": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 512
+                    },
+                    "padding": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 512,
+                      "default": 50
+                    },
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "create",
+                        "update",
+                        "upsert"
+                      ],
+                      "default": "upsert"
+                    },
+                    "commentNodeId": {
+                      "type": "string",
+                      "pattern": "^[0-9A-Fa-f-]{32,36}$"
+                    },
+                    "groupKey": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "avoidOverlap": {
+                      "type": "boolean",
+                      "default": true
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "nodeIds"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": true
+          },
+          "expectedGraphHash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "approvePlanDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph",
+          "groups"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.layout.organize"
+      }
+    },
+    {
+      "id": "blueprint.layout.straighten",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Run the native Graph Editor Straighten Connections command on connected selected nodes.",
+      "search": {
+        "title": "Straighten Blueprint graph connections",
+        "keywords": [
+          "layout wire",
+          "graph organize",
+          "拉直连线"
+        ],
+        "aliases": [
+          "straighten"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "deprecated",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.layout.organize",
+        "replacement": "blueprint.layout.organize"
+      }
+    },
+    {
+      "id": "blueprint.layout.validate",
+      "domain": "blueprint",
+      "kind": "validation",
+      "description": "Validate Blueprint Graph node overlap, spacing, Comment containment, and padding using bounded stored or exact Graph Editor geometry.",
+      "search": {
+        "title": "Validate Blueprint graph layout",
+        "keywords": [
+          "layout diagnostics",
+          "node overlap",
+          "comment padding",
+          "排版检查",
+          "重叠检查"
+        ],
+        "aliases": [
+          "validate layout"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1
+          },
+          "geometryMode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "stored",
+              "editor"
+            ],
+            "default": "auto"
+          },
+          "nodeIds": {
+            "type": "array",
+            "maxItems": 256,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f-]{32,36}$"
+            }
+          },
+          "minHorizontalGap": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 4096,
+            "default": 32
+          },
+          "minVerticalGap": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 4096,
+            "default": 24
+          },
+          "commentPadding": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 4096,
+            "default": 32
+          },
+          "tolerance": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 64,
+            "default": 0.5
+          },
+          "strictWarnings": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "blueprint",
+          "graph"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "blueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.layout.validate"
       }
     },
     {
@@ -1472,7 +4116,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -1488,53 +4131,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
-      }
-    },
-    {
-      "id": "blueprint.node.comment.set",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Set or clear the comment bubble text on a node.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "description": "Blueprint name"
-          },
-          "nodeId": {
-            "type": "string",
-            "description": "Node GUID"
-          },
-          "comment": {
-            "type": "string",
-            "description": "Comment text (empty to clear)"
-          }
-        },
-        "required": [
-          "blueprint",
-          "nodeId",
-          "comment"
-        ],
-        "additionalProperties": false
       },
-      "traits": {
-        "readOnly": false,
-        "destructive": false,
-        "expensive": false
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
       },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "editStep",
-        "scopeKinds": [
-          "blueprint",
-          "widgetBlueprint"
-        ],
-        "transactionDomain": "asset",
-        "deferCompile": true,
-        "risk": "safeWrite"
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.node.add"
       }
     },
     {
@@ -1561,7 +4168,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -1574,10 +4180,23 @@
           "blueprint",
           "widgetBlueprint"
         ],
-        "scopeParameters": ["blueprint"],
+        "scopeParameters": [
+          "blueprint"
+        ],
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.node.delete"
       }
     },
     {
@@ -1613,12 +4232,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.node.duplicate"
       }
     },
     {
@@ -1655,7 +4284,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -1671,776 +4299,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
-      }
-    },
-    {
-      "id": "blueprint.selection.set",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Open and focus a Blueprint graph, then replace its native Graph Editor selection with the provided node GUIDs.",
-      "search": {
-        "title": "Set native Graph Editor selection",
-        "keywords": [
-          "select nodes",
-          "graph editor",
-          "节点选区"
-        ],
-        "aliases": [
-          "selection set"
-        ]
       },
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Blueprint name or asset path"
-          },
-          "graph": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Graph name"
-          },
-          "nodeIds": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "pattern": "^[0-9A-Fa-f-]{32,36}$"
-            },
-            "description": "Node GUIDs that replace the current selection; an empty array clears it"
-          }
-        },
-        "required": [
-          "blueprint",
-          "graph",
-          "nodeIds"
-        ],
-        "additionalProperties": false
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
       },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      }
-    },
-    {
-      "id": "blueprint.layout.align",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Run a native Graph Editor alignment command on the current selection.",
-      "search": {
-        "title": "Align Blueprint graph nodes",
-        "keywords": [
-          "layout align",
-          "graph organize",
-          "排版",
-          "对齐"
-        ],
-        "aliases": [
-          "align nodes"
-        ]
-      },
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "graph": {
-            "type": "string",
-            "minLength": 1
-          },
-          "alignment": {
-            "type": "string",
-            "enum": [
-              "top",
-              "middle",
-              "bottom",
-              "left",
-              "center",
-              "right"
-            ]
-          }
-        },
-        "required": [
-          "blueprint",
-          "graph",
-          "alignment"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      }
-    },
-    {
-      "id": "blueprint.layout.straighten",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Run the native Graph Editor Straighten Connections command on connected selected nodes.",
-      "search": {
-        "title": "Straighten Blueprint graph connections",
-        "keywords": [
-          "layout wire",
-          "graph organize",
-          "拉直连线"
-        ],
-        "aliases": [
-          "straighten"
-        ]
-      },
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "graph": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "blueprint",
-          "graph"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      }
-    },
-    {
-      "id": "blueprint.layout.distribute",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Run a native horizontal or vertical Graph Editor distribution command on the current selection.",
-      "search": {
-        "title": "Distribute Blueprint graph nodes",
-        "keywords": [
-          "layout distribute",
-          "graph spacing",
-          "排版",
-          "均匀分布"
-        ],
-        "aliases": [
-          "distribute nodes"
-        ]
-      },
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "graph": {
-            "type": "string",
-            "minLength": 1
-          },
-          "orientation": {
-            "type": "string",
-            "enum": [
-              "horizontal",
-              "vertical"
-            ]
-          }
-        },
-        "required": [
-          "blueprint",
-          "graph",
-          "orientation"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      }
-    },
-    {
-      "id": "blueprint.comment.create_from_selection",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Create a native group-movement Comment node around the current Graph Editor selection.",
-      "search": {
-        "title": "Create Comment group from selected nodes",
-        "keywords": [
-          "comment group",
-          "wrap nodes",
-          "graph organize",
-          "注释框",
-          "节点分组"
-        ],
-        "aliases": [
-          "create comment"
-        ]
-      },
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "graph": {
-            "type": "string",
-            "minLength": 1
-          },
-          "text": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Non-empty Comment title"
-          }
-        },
-        "required": [
-          "blueprint",
-          "graph",
-          "text"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      }
-    },
-    {
-      "id": "blueprint.comment.bounds.set",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Set the graph-space position and size of an existing Blueprint Comment node.",
-      "search": {
-        "title": "Set Blueprint Comment bounds",
-        "keywords": [
-          "comment size",
-          "comment group",
-          "padding",
-          "注释框大小"
-        ],
-        "aliases": [
-          "comment bounds"
-        ]
-      },
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "graph": {
-            "type": "string",
-            "minLength": 1
-          },
-          "commentNodeId": {
-            "type": "string",
-            "pattern": "^[0-9A-Fa-f-]{32,36}$"
-          },
-          "x": {
-            "type": "number"
-          },
-          "y": {
-            "type": "number"
-          },
-          "width": {
-            "type": "number",
-            "minimum": 1
-          },
-          "height": {
-            "type": "number",
-            "minimum": 1
-          }
-        },
-        "required": [
-          "blueprint",
-          "graph",
-          "commentNodeId",
-          "x",
-          "y",
-          "width",
-          "height"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "editStep",
-        "scopeKinds": [
-          "blueprint",
-          "widgetBlueprint"
-        ],
-        "scopeParameters": ["blueprint"],
-        "transactionDomain": "asset",
-        "deferCompile": true,
-        "risk": "safeWrite"
-      }
-    },
-    {
-      "id": "blueprint.layout.validate",
-      "domain": "blueprint",
-      "kind": "validation",
-      "description": "Validate Blueprint Graph node overlap, spacing, Comment containment, and padding using bounded stored or exact Graph Editor geometry.",
-      "search": {
-        "title": "Validate Blueprint graph layout",
-        "keywords": [
-          "layout diagnostics",
-          "node overlap",
-          "comment padding",
-          "排版检查",
-          "重叠检查"
-        ],
-        "aliases": [
-          "validate layout"
-        ]
-      },
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "graph": {
-            "type": "string",
-            "minLength": 1
-          },
-          "geometryMode": {
-            "type": "string",
-            "enum": [
-              "auto",
-              "stored",
-              "editor"
-            ],
-            "default": "auto"
-          },
-          "nodeIds": {
-            "type": "array",
-            "maxItems": 256,
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "pattern": "^[0-9A-Fa-f-]{32,36}$"
-            }
-          },
-          "minHorizontalGap": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 4096,
-            "default": 32
-          },
-          "minVerticalGap": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 4096,
-            "default": 24
-          },
-          "commentPadding": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 4096,
-            "default": 32
-          }
-        },
-        "required": [
-          "blueprint",
-          "graph"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "observeOnly",
-        "scopeKinds": [
-          "blueprint",
-          "widgetBlueprint"
-        ],
-        "transactionDomain": "asset",
-        "deferCompile": false,
-        "risk": "readOnly"
-      }
-    },
-    {
-      "id": "blueprint.layout.organize",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Plan deterministic UE 5.3-compatible Blueprint Graph layout semantics on an exact transient geometry baseline, then atomically apply the approved coordinates and native Comment bounds.",
-      "search": {
-        "title": "Organize Blueprint graph in one transaction",
-        "keywords": [
-          "batch layout",
-          "graph organize",
-          "align distribute straighten comment",
-          "批量排版",
-          "蓝图整理",
-          "排版",
-          "分组",
-          "注释框"
-        ],
-        "aliases": [
-          "organize graph",
-          "layout transaction"
-        ]
-      },
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "graph": {
-            "type": "string",
-            "minLength": 1
-          },
-          "groups": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 32,
-            "items": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 64
-                },
-                "nodeIds": {
-                  "type": "array",
-                  "minItems": 1,
-                  "maxItems": 128,
-                  "uniqueItems": true,
-                  "items": {
-                    "type": "string",
-                    "pattern": "^[0-9A-Fa-f-]{32,36}$"
-                  }
-                },
-                "actions": {
-                  "type": "array",
-                  "maxItems": 8,
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": [
-                          "align",
-                          "distribute",
-                          "straighten"
-                        ]
-                      },
-                      "alignment": {
-                        "type": "string",
-                        "enum": [
-                          "top",
-                          "middle",
-                          "bottom",
-                          "left",
-                          "center",
-                          "right"
-                        ]
-                      },
-                      "orientation": {
-                        "type": "string",
-                        "enum": [
-                          "horizontal",
-                          "vertical"
-                        ]
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ],
-                    "additionalProperties": false
-                  }
-                },
-                "comment": {
-                  "type": "object",
-                  "properties": {
-                    "text": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 512
-                    },
-                    "padding": {
-                      "type": "number",
-                      "minimum": 0,
-                      "maximum": 512,
-                      "default": 50
-                    }
-                  },
-                  "required": [
-                    "text"
-                  ],
-                  "additionalProperties": false
-                }
-              },
-              "required": [
-                "id",
-                "nodeIds"
-              ],
-              "additionalProperties": false
-            }
-          },
-          "dryRun": {
-            "type": "boolean",
-            "default": true
-          },
-          "expectedGraphHash": {
-            "type": "string",
-            "pattern": "^sha256:[0-9a-f]{64}$"
-          },
-          "approvePlanDigest": {
-            "type": "string",
-            "pattern": "^sha256:[0-9a-f]{64}$"
-          }
-        },
-        "required": [
-          "blueprint",
-          "graph",
-          "groups"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "editStep",
-        "scopeKinds": [
-          "blueprint",
-          "widgetBlueprint"
-        ],
-        "transactionDomain": "asset",
-        "deferCompile": true,
-        "risk": "safeWrite"
-      }
-    },
-    {
-      "id": "blueprint.graph.capture",
-      "domain": "blueprint",
-      "kind": "query",
-      "description": "Capture only the specified live Blueprint Graph Editor as a bounded PNG or JPEG artifact with graph and rendering fingerprints.",
-      "search": {
-        "title": "Capture Blueprint Graph Editor image",
-        "keywords": [
-          "graph screenshot",
-          "visual evidence",
-          "before after",
-          "蓝图截图"
-        ],
-        "aliases": [
-          "capture graph"
-        ]
-      },
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "graph": {
-            "type": "string",
-            "minLength": 1
-          },
-          "scope": {
-            "type": "string",
-            "enum": [
-              "currentView",
-              "all",
-              "nodes"
-            ],
-            "default": "currentView"
-          },
-          "nodeIds": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 256,
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "pattern": "^[0-9A-Fa-f-]{32,36}$"
-            }
-          },
-          "padding": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1024,
-            "default": 64
-          },
-          "width": {
-            "type": "integer",
-            "minimum": 64,
-            "maximum": 4096
-          },
-          "height": {
-            "type": "integer",
-            "minimum": 64,
-            "maximum": 4096
-          },
-          "format": {
-            "type": "string",
-            "enum": [
-              "png",
-              "jpeg"
-            ],
-            "default": "png"
-          },
-          "quality": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 100,
-            "default": 90
-          }
-        },
-        "required": [
-          "blueprint",
-          "graph"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": true
-      },
-      "output": {
-        "kind": "image"
-      },
-      "dsl": {
-        "admission": "interactiveOnly",
-        "scopeKinds": [],
-        "transactionDomain": "editorSession",
-        "deferCompile": false,
-        "risk": "readOnly"
-      }
-    },
-    {
-      "id": "blueprint.graph.capture.get",
-      "domain": "blueprint",
-      "kind": "query",
-      "description": "Retrieve a persisted Blueprint Graph capture or visual diff artifact by opaque capture ID.",
-      "search": {
-        "title": "Get Blueprint graph capture artifact",
-        "keywords": [
-          "graph screenshot artifact",
-          "capture image"
-        ],
-        "aliases": [
-          "get capture"
-        ]
-      },
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "captureId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 96
-          }
-        },
-        "required": [
-          "captureId"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "image"
-      }
-    },
-    {
-      "id": "blueprint.graph.visual.compare",
-      "domain": "blueprint",
-      "kind": "query",
-      "description": "Compare two persisted Blueprint Graph captures, return bounded visual metrics, compatibility, changed bounds, and a diff PNG.",
-      "search": {
-        "title": "Compare Blueprint graph screenshots",
-        "keywords": [
-          "visual diff",
-          "before after",
-          "graph screenshot compare",
-          "视觉对比"
-        ],
-        "aliases": [
-          "compare captures"
-        ]
-      },
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "beforeCaptureId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 96
-          },
-          "afterCaptureId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 96
-          }
-        },
-        "required": [
-          "beforeCaptureId",
-          "afterCaptureId"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": true
-      },
-      "output": {
-        "kind": "image"
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.node.move"
       }
     },
     {
@@ -2462,12 +4331,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.node.refresh_all"
       }
     },
     {
@@ -2509,12 +4388,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.pin.compatibility.check"
       }
     },
     {
@@ -2556,7 +4445,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -2572,6 +4460,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.pin.connect"
       }
     },
     {
@@ -2608,7 +4507,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
@@ -2624,6 +4522,17 @@
         "transactionDomain": "asset",
         "deferCompile": true,
         "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.pin.default.set"
       }
     },
     {
@@ -2663,12 +4572,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.pin.disconnect"
       }
     },
     {
@@ -2695,12 +4614,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.pin.disconnected.find"
       }
     },
     {
@@ -2732,12 +4661,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.pin.info"
       }
     },
     {
@@ -2763,332 +4702,22 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
-      }
-    },
-    {
-      "id": "blueprint.variable.add",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Add a new member variable to a Blueprint.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "description": "Blueprint name or path"
-          },
-          "variableName": {
-            "type": "string",
-            "description": "Name for the new variable"
-          },
-          "variableType": {
-            "type": "string",
-            "description": "Type (e.g. Boolean, Float, Vector, MyStruct)"
-          },
-          "category": {
-            "type": "string",
-            "description": "Category for organization"
-          },
-          "isArray": {
-            "type": "boolean",
-            "description": "Whether this is an array variable"
-          },
-          "defaultValue": {
-            "type": "string",
-            "description": "Default value as string"
-          }
-        },
-        "required": [
-          "blueprint",
-          "variableName",
-          "variableType"
-        ],
-        "additionalProperties": false
       },
-      "traits": {
-        "readOnly": false,
-        "destructive": true,
-        "expensive": false
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
       },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "editStep",
-        "scopeKinds": [
-          "blueprint"
-        ],
-        "transactionDomain": "asset",
-        "deferCompile": true,
-        "risk": "safeWrite"
-      }
-    },
-    {
-      "id": "blueprint.variable.metadata.set",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Set variable properties like category, tooltip, replication, editability, etc.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "description": "Blueprint name or path"
-          },
-          "variable": {
-            "type": "string",
-            "description": "Variable name"
-          },
-          "category": {
-            "type": "string",
-            "description": "Category for organization"
-          },
-          "tooltip": {
-            "type": "string",
-            "description": "Tooltip text"
-          },
-          "replication": {
-            "type": "string",
-            "description": "none, replicated, or repNotify"
-          },
-          "exposeOnSpawn": {
-            "type": "boolean",
-            "description": "Expose on spawn"
-          },
-          "isPrivate": {
-            "type": "boolean",
-            "description": "Blueprint private"
-          },
-          "editability": {
-            "type": "string",
-            "description": "editAnywhere, editDefaultsOnly, editInstanceOnly, none"
-          }
-        },
-        "required": [
-          "blueprint",
-          "variable"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": true,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "editStep",
-        "scopeKinds": [
-          "blueprint"
-        ],
-        "transactionDomain": "asset",
-        "deferCompile": true,
-        "risk": "safeWrite"
-      }
-    },
-    {
-      "id": "blueprint.variable.remove",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Remove a member variable from a Blueprint.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "description": "Blueprint name or path"
-          },
-          "variableName": {
-            "type": "string",
-            "description": "Variable to remove"
-          }
-        },
-        "required": [
-          "blueprint",
-          "variableName"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": true,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      }
-    },
-    {
-      "id": "blueprint.variable.type.set",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Change the type of an existing Blueprint member variable.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "description": "Blueprint name or path"
-          },
-          "variable": {
-            "type": "string",
-            "description": "Variable name"
-          },
-          "newType": {
-            "type": "string",
-            "description": "New type name"
-          },
-          "typeCategory": {
-            "type": "string",
-            "description": "object, softobject, class, softclass, interface"
-          },
-          "dryRun": {
-            "type": "boolean",
-            "description": "If true, only analyze impact without changing"
-          }
-        },
-        "required": [
-          "blueprint",
-          "variable",
-          "newType"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": true,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      }
-    },
-    {
-      "id": "blueprint.asset.compile",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Compile a Blueprint or Widget Blueprint and return compiler diagnostics plus mutation verification metadata.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Blueprint asset package or object path"
-          }
-        },
-        "required": [
-          "blueprint"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": false,
-        "expensive": true
-      },
-      "output": {
-        "kind": "json"
-      }
-    },
-    {
-      "id": "blueprint.asset.save",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Save a Blueprint or Widget Blueprint package and verify the persisted asset.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Blueprint asset package or object path"
-          },
-          "onlyIfDirty": {
-            "type": "boolean",
-            "description": "If true, skip saving an already clean package"
-          }
-        },
-        "required": [
-          "blueprint"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      }
-    },
-    {
-      "id": "blueprint.asset.reload",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Reload a clean Blueprint or Widget Blueprint package from disk and verify the reloaded asset; dirty assets are rejected.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Blueprint asset package or object path"
-          },
-          "force": {
-            "type": "boolean",
-            "description": "Allow reload to discard unsaved changes; false rejects dirty assets"
-          }
-        },
-        "required": [
-          "blueprint"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": true,
-        "expensive": true
-      },
-      "output": {
-        "kind": "json"
-      }
-    },
-    {
-      "id": "blueprint.asset.dirty.get",
-      "domain": "blueprint",
-      "kind": "query",
-      "description": "Report whether a Blueprint or Widget Blueprint package is dirty in the editor.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Blueprint asset package or object path"
-          }
-        },
-        "required": [
-          "blueprint"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.property.list"
       }
     },
     {
@@ -3267,7 +4896,6 @@
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": true,
         "destructive": false,
         "expensive": true
       },
@@ -3280,747 +4908,124 @@
         "transactionDomain": "none",
         "deferCompile": false,
         "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.scan"
       }
     },
     {
-      "id": "blueprint.call_graph.get",
+      "id": "blueprint.selection.set",
       "domain": "blueprint",
-      "kind": "query",
-      "description": "Build a bounded cross-asset Blueprint and native function call graph using stable asset, graph, node GUID and function identities.",
+      "kind": "command",
+      "description": "Open and focus a Blueprint graph, then replace its native Graph Editor selection with the provided node GUIDs.",
+      "search": {
+        "title": "Set native Graph Editor selection",
+        "keywords": [
+          "select nodes",
+          "graph editor",
+          "节点选区"
+        ],
+        "aliases": [
+          "selection set"
+        ]
+      },
       "inputSchema": {
         "type": "object",
         "properties": {
-          "asset": {
+          "blueprint": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "Blueprint name or asset path"
           },
-          "pathPrefix": {
+          "graph": {
             "type": "string",
-            "pattern": "^/Game(?:/.*)?$"
+            "minLength": 1,
+            "description": "Graph name"
           },
-          "assetLimit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 200
-          },
-          "nodeLimit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 5000
-          }
-        },
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": true
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "none",
-        "scopeKinds": [],
-        "transactionDomain": "none",
-        "deferCompile": false,
-        "risk": "readOnly"
-      }
-    },
-    {
-      "id": "blueprint.findings.correlate",
-      "domain": "blueprint",
-      "kind": "validation",
-      "description": "Correlate a prior Blueprint scan with retained Kismet trace evidence and/or explicitly supplied runtime node IDs.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "scanId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "runId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "observedNodeIds": {
+          "nodeIds": {
             "type": "array",
             "items": {
               "type": "string",
-              "minLength": 1
+              "pattern": "^[0-9A-Fa-f-]{32,36}$"
             },
-            "maxItems": 5000
-          },
-          "debugSessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "traceRange": {
-            "type": "object",
-            "properties": {
-              "cursorStart": {
-                "type": "string",
-                "pattern": "^[0-9]+$"
-              },
-              "cursorEnd": {
-                "type": "string",
-                "pattern": "^[0-9]+$"
-              }
-            },
-            "additionalProperties": false
-          },
-          "evidenceCoverage": {
-            "type": "string",
-            "enum": [
-              "partial",
-              "complete"
-            ],
-            "description": "Defaults to partial. complete is honored only for a Kismet trace with explicit cursorStart and cursorEnd."
-          },
-          "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 1000
+            "description": "Node GUIDs that replace the current selection; an empty array clears it"
           }
         },
         "required": [
-          "scanId",
-          "runId"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "none",
-        "scopeKinds": [],
-        "transactionDomain": "none",
-        "deferCompile": false,
-        "risk": "readOnly"
-      }
-    },
-    {
-      "id": "blueprint.debug.session.get",
-      "domain": "blueprint",
-      "kind": "query",
-      "description": "Read the immutable Blueprint debugger snapshot for the current PIE generation, including pause state, current instruction and recent command status.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "sessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "generation": {
-            "type": "integer",
-            "minimum": 1
-          }
-        },
-        "required": [
-          "sessionId",
-          "generation"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "interactiveOnly",
-        "scopeKinds": [],
-        "transactionDomain": "editorSession",
-        "deferCompile": false,
-        "risk": "notOpen"
-      }
-    },
-    {
-      "id": "blueprint.debug.trace.get",
-      "domain": "blueprint",
-      "kind": "query",
-      "description": "Read a bounded, cursor-paged Kismet execution trace mapped to Blueprint asset, graph and source node identities.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "sessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "generation": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "debugSessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "cursor": {
-            "type": "string",
-            "pattern": "^[0-9]+$"
-          },
-          "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 500
-          }
-        },
-        "required": [
-          "sessionId",
-          "generation",
-          "debugSessionId"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "interactiveOnly",
-        "scopeKinds": [],
-        "transactionDomain": "editorSession",
-        "deferCompile": false,
-        "risk": "notOpen"
-      }
-    },
-    {
-      "id": "blueprint.debug.breakpoint.list",
-      "domain": "blueprint",
-      "kind": "query",
-      "description": "List Blueprint debugger breakpoints from the latest immutable PIE debug snapshot.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "sessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "generation": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "debugSessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "sessionId",
-          "generation",
-          "debugSessionId",
-          "blueprint"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "interactiveOnly",
-        "scopeKinds": [],
-        "transactionDomain": "editorSession",
-        "deferCompile": false,
-        "risk": "notOpen"
-      }
-    },
-    {
-      "id": "blueprint.debug.breakpoint.set",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Queue creation or enable-state update of a Blueprint node breakpoint for Slate pre-tick execution.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "sessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "generation": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "debugSessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "nodeGuid": {
-            "type": "string",
-            "pattern": "^[0-9A-Fa-f-]{32,36}$"
-          },
-          "enabled": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "sessionId",
-          "generation",
-          "debugSessionId",
           "blueprint",
-          "nodeGuid"
+          "graph",
+          "nodeIds"
         ],
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
         "destructive": false,
         "expensive": false
       },
       "output": {
         "kind": "json"
       },
-      "dsl": {
-        "admission": "interactiveOnly",
-        "scopeKinds": [],
-        "transactionDomain": "editorSession",
-        "deferCompile": false,
-        "risk": "notOpen"
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.selection.set"
       }
     },
     {
-      "id": "blueprint.debug.breakpoint.remove",
+      "id": "blueprint.variable.add",
       "domain": "blueprint",
       "kind": "command",
-      "description": "Queue removal of a Blueprint node breakpoint for Slate pre-tick execution.",
+      "description": "Add a new member variable to a Blueprint.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "sessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "generation": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "debugSessionId": {
-            "type": "string",
-            "minLength": 1
-          },
           "blueprint": {
             "type": "string",
-            "minLength": 1
+            "description": "Blueprint name or path"
           },
-          "nodeGuid": {
+          "variableName": {
             "type": "string",
-            "pattern": "^[0-9A-Fa-f-]{32,36}$"
+            "description": "Name for the new variable"
+          },
+          "variableType": {
+            "type": "string",
+            "description": "Type (e.g. Boolean, Float, Vector, MyStruct)"
+          },
+          "category": {
+            "type": "string",
+            "description": "Category for organization"
+          },
+          "isArray": {
+            "type": "boolean",
+            "description": "Whether this is an array variable"
+          },
+          "defaultValue": {
+            "type": "string",
+            "description": "Default value as string"
           }
         },
         "required": [
-          "sessionId",
-          "generation",
-          "debugSessionId",
           "blueprint",
-          "nodeGuid"
+          "variableName",
+          "variableType"
         ],
         "additionalProperties": false
       },
       "traits": {
-        "readOnly": false,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "interactiveOnly",
-        "scopeKinds": [],
-        "transactionDomain": "editorSession",
-        "deferCompile": false,
-        "risk": "notOpen"
-      }
-    },
-    {
-      "id": "blueprint.debug.watch.list",
-      "domain": "blueprint",
-      "kind": "query",
-      "description": "List pin watches for a Blueprint from the latest immutable PIE debug snapshot.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "sessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "generation": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "debugSessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "sessionId",
-          "generation",
-          "debugSessionId",
-          "blueprint"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "interactiveOnly",
-        "scopeKinds": [],
-        "transactionDomain": "editorSession",
-        "deferCompile": false,
-        "risk": "notOpen"
-      }
-    },
-    {
-      "id": "blueprint.debug.watch.set",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Queue creation of a Blueprint pin or nested-property watch for Slate pre-tick execution.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "sessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "generation": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "debugSessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "nodeGuid": {
-            "type": "string",
-            "pattern": "^[0-9A-Fa-f-]{32,36}$"
-          },
-          "pinGuid": {
-            "type": "string",
-            "pattern": "^[0-9A-Fa-f-]{32,36}$"
-          },
-          "propertyPath": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "maxItems": 16
-          }
-        },
-        "required": [
-          "sessionId",
-          "generation",
-          "debugSessionId",
-          "blueprint",
-          "nodeGuid",
-          "pinGuid"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "interactiveOnly",
-        "scopeKinds": [],
-        "transactionDomain": "editorSession",
-        "deferCompile": false,
-        "risk": "notOpen"
-      }
-    },
-    {
-      "id": "blueprint.debug.watch.remove",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Queue removal of a Blueprint pin or nested-property watch for Slate pre-tick execution.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "sessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "generation": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "debugSessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "nodeGuid": {
-            "type": "string",
-            "pattern": "^[0-9A-Fa-f-]{32,36}$"
-          },
-          "pinGuid": {
-            "type": "string",
-            "pattern": "^[0-9A-Fa-f-]{32,36}$"
-          },
-          "propertyPath": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "maxItems": 16
-          }
-        },
-        "required": [
-          "sessionId",
-          "generation",
-          "debugSessionId",
-          "blueprint",
-          "nodeGuid",
-          "pinGuid"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "interactiveOnly",
-        "scopeKinds": [],
-        "transactionDomain": "editorSession",
-        "deferCompile": false,
-        "risk": "notOpen"
-      }
-    },
-    {
-      "id": "blueprint.debug.watch.value.get",
-      "domain": "blueprint",
-      "kind": "query",
-      "description": "Read a watched Blueprint pin value captured from the immutable paused-debug snapshot.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "sessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "generation": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "debugSessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "blueprint": {
-            "type": "string",
-            "minLength": 1
-          },
-          "nodeGuid": {
-            "type": "string",
-            "pattern": "^[0-9A-Fa-f-]{32,36}$"
-          },
-          "pinGuid": {
-            "type": "string",
-            "pattern": "^[0-9A-Fa-f-]{32,36}$"
-          },
-          "propertyPath": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            },
-            "maxItems": 16
-          }
-        },
-        "required": [
-          "sessionId",
-          "generation",
-          "debugSessionId",
-          "blueprint",
-          "nodeGuid",
-          "pinGuid"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": true,
-        "destructive": false,
-        "expensive": false
-      },
-      "output": {
-        "kind": "json"
-      },
-      "dsl": {
-        "admission": "interactiveOnly",
-        "scopeKinds": [],
-        "transactionDomain": "editorSession",
-        "deferCompile": false,
-        "risk": "notOpen"
-      }
-    },
-    {
-      "id": "blueprint.graph.build.validate",
-      "domain": "blueprint",
-      "kind": "validation",
-      "description": "Validate a bounded declarative ue.blueprint-buildgraph.v1 definition.",
-      "inputSchema": {
-        "type": "object",
-        "properties": { "definition": { "type": "object" } },
-        "required": ["definition"],
-        "additionalProperties": false
-      },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "output": { "kind": "json" },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "notOpen" }
-    },
-    {
-      "id": "blueprint.graph.build.plan",
-      "domain": "blueprint",
-      "kind": "query",
-      "description": "Compile a declarative Blueprint BuildGraph into a normalized Workflow v2 and Editor-bound plan digest.",
-      "inputSchema": {
-        "type": "object",
-        "properties": { "definition": { "type": "object" } },
-        "required": ["definition"],
-        "additionalProperties": false
-      },
-      "traits": { "readOnly": true, "destructive": false, "expensive": true },
-      "output": { "kind": "json" },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "notOpen" }
-    },
-    {
-      "id": "blueprint.graph.build.definition.get",
-      "domain": "blueprint",
-      "kind": "query",
-      "description": "Read the managed BuildGraph definition and stable ref to NodeGuid mapping stored in Blueprint metadata.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": { "type": "string", "minLength": 1 },
-          "graph": { "type": "string", "minLength": 1 },
-          "buildId": { "type": "string", "minLength": 1, "maxLength": 128 }
-        },
-        "required": ["blueprint", "graph", "buildId"],
-        "additionalProperties": false
-      },
-      "traits": { "readOnly": true, "destructive": false, "expensive": false },
-      "output": { "kind": "json" },
-      "dsl": { "admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "notOpen" }
-    },
-    {
-      "id": "blueprint.graph.build.metadata.set",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Persist one approved BuildGraph definition and managed ref mapping as Blueprint package metadata.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "blueprint": { "type": "string", "minLength": 1 },
-          "graph": { "type": "string", "minLength": 1 },
-          "buildId": { "type": "string", "minLength": 1, "maxLength": 128 },
-          "definition": { "type": "object" },
-          "ref": { "type": "string", "minLength": 1, "maxLength": 128 },
-          "nodeId": { "type": "string", "minLength": 1 },
-          "resetManagedRefs": { "type": "boolean" },
-          "seedManagedRefs": { "type": "object", "additionalProperties": { "type": "string" } }
-        },
-        "required": ["blueprint", "graph", "buildId", "definition", "ref", "nodeId"],
-        "additionalProperties": false
-      },
-      "traits": { "readOnly": false, "destructive": false, "expensive": false },
-      "output": { "kind": "json" },
-      "dsl": { "admission": "editStep", "scopeKinds": ["blueprint"], "scopeParameters": ["blueprint"], "transactionDomain": "asset", "deferCompile": true, "risk": "safeWrite" }
-    },
-    {
-      "id": "blueprint.debug.control",
-      "domain": "blueprint",
-      "kind": "command",
-      "description": "Queue continue, step or abort control for consumption by Slate pre-tick while Kismet has the Game Thread paused.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "sessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "generation": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "debugSessionId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "action": {
-            "type": "string",
-            "enum": [
-              "continue",
-              "stepInto",
-              "stepOver",
-              "stepOut",
-              "abort"
-            ]
-          }
-        },
-        "required": [
-          "sessionId",
-          "generation",
-          "debugSessionId",
-          "action"
-        ],
-        "additionalProperties": false
-      },
-      "traits": {
-        "readOnly": false,
         "destructive": true,
         "expensive": false
       },
@@ -4028,12 +5033,204 @@
         "kind": "json"
       },
       "dsl": {
-        "admission": "interactiveOnly",
-        "scopeKinds": [],
-        "transactionDomain": "editorSession",
-        "deferCompile": false,
-        "risk": "notOpen"
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.variable.add"
       }
+    },
+    {
+      "id": "blueprint.variable.metadata.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Set variable properties like category, tooltip, replication, editability, etc.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "variable": {
+            "type": "string",
+            "description": "Variable name"
+          },
+          "category": {
+            "type": "string",
+            "description": "Category for organization"
+          },
+          "tooltip": {
+            "type": "string",
+            "description": "Tooltip text"
+          },
+          "replication": {
+            "type": "string",
+            "description": "none, replicated, or repNotify"
+          },
+          "exposeOnSpawn": {
+            "type": "boolean",
+            "description": "Expose on spawn"
+          },
+          "isPrivate": {
+            "type": "boolean",
+            "description": "Blueprint private"
+          },
+          "editability": {
+            "type": "string",
+            "description": "editAnywhere, editDefaultsOnly, editInstanceOnly, none"
+          }
+        },
+        "required": [
+          "blueprint",
+          "variable"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.variable.metadata.set"
+      }
+    },
+    {
+      "id": "blueprint.variable.remove",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Remove a member variable from a Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "variableName": {
+            "type": "string",
+            "description": "Variable to remove"
+          }
+        },
+        "required": [
+          "blueprint",
+          "variableName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.variable.remove"
+      }
+    },
+    {
+      "id": "blueprint.variable.type.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Change the type of an existing Blueprint member variable.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "description": "Blueprint name or path"
+          },
+          "variable": {
+            "type": "string",
+            "description": "Variable name"
+          },
+          "newType": {
+            "type": "string",
+            "description": "New type name"
+          },
+          "typeCategory": {
+            "type": "string",
+            "description": "object, softobject, class, softclass, interface"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "If true, only analyze impact without changing"
+          }
+        },
+        "required": [
+          "blueprint",
+          "variable",
+          "newType"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "0.9.0",
+        "canonicalId": "blueprint.variable.type.set"
+      }
+    }
+  ],
+  "tombstones": [
+    {
+      "id": "blueprint.node.comment.set",
+      "removedIn": "0.10.0",
+      "replacement": "blueprint.comment.title.set"
     }
   ]
 }

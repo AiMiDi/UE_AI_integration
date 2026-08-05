@@ -17,7 +17,7 @@
 #define UE_CLI_SOURCE_ROOT ""
 #endif
 #ifndef UE_TRACE_CLIENT_VERSION
-#define UE_TRACE_CLIENT_VERSION "0.9.0"
+#define UE_TRACE_CLIENT_VERSION "1.0.0"
 #endif
 
 #if defined(_WIN32)
@@ -1226,6 +1226,11 @@ WorkerClient::WorkerClient(
 const WorkerLocation& WorkerClient::Location() const
 {
     return location_;
+}
+
+WorkerTransport WorkerClient::Transport() const
+{
+    return transport_;
 }
 
 WorkerResult WorkerClient::Invoke(const std::string_view request_json) const

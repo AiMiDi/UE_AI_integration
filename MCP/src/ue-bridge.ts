@@ -102,7 +102,9 @@ export interface UECapabilityQuery {
   domain?: CapabilityDomain;
   operation?: string;
   kind?: CapabilityKind;
-  readOnly?: boolean;
+  effect?: string;
+  lifecycle?: "active" | "deprecated";
+  canonicalOnly?: boolean;
   destructive?: boolean;
   expensive?: boolean;
   outputKind?: CapabilityOutputKind;
@@ -196,7 +198,7 @@ interface UEClientRegistrationData {
 }
 
 export const MCP_BRIDGE_NAME = "ue-ai-integration";
-export const MCP_BRIDGE_VERSION = "0.9.0";
+export const MCP_BRIDGE_VERSION = "1.0.0";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -311,13 +313,20 @@ export class UEClient {
     id: string,
     params: Record<string, unknown> = {},
     requestId?: string,
+    context?: { signal?: AbortSignal },
   ): Promise<UEExecuteData> {
     const request: UEExecuteRequest = {
       capability: id,
       params,
       ...(requestId === undefined ? {} : { requestId }),
     };
-    return this.request<UEExecuteData>("POST", "/api/execute", request);
+    return this.request<UEExecuteData>(
+      "POST",
+      "/api/execute",
+      request,
+      context?.signal,
+      requestId,
+    );
   }
 
   async getWorkflowHandshake(): Promise<UEWorkflowHandshakeData> {
@@ -327,11 +336,15 @@ export class UEClient {
     );
   }
 
-  async workflow(request: UEWorkflowRequest): Promise<UEWorkflowData> {
+  async workflow(
+    request: UEWorkflowRequest,
+    signal?: AbortSignal,
+  ): Promise<UEWorkflowData> {
     return this.request<UEWorkflowData>(
       "POST",
       "/api/v1/workflow",
       request,
+      signal,
     );
   }
 
@@ -339,6 +352,8 @@ export class UEClient {
     method: "GET" | "POST",
     endpoint: string,
     body?: object,
+    signal?: AbortSignal,
+    cancellationRequestId?: string,
   ): Promise<T> {
     if (
       this.sessionRequested &&
@@ -358,6 +373,9 @@ export class UEClient {
         endpoint,
         body,
         this.sessionId,
+        this.timeoutMs,
+        signal,
+        cancellationRequestId,
       );
     } catch (error) {
       if (
@@ -378,6 +396,9 @@ export class UEClient {
           endpoint,
           body,
           this.sessionId,
+          this.timeoutMs,
+          signal,
+          cancellationRequestId,
         );
       }
       throw error;
@@ -390,6 +411,8 @@ export class UEClient {
     body?: object,
     sessionId?: string,
     requestTimeoutMs: number = this.timeoutMs,
+    externalSignal?: AbortSignal,
+    cancellationRequestId?: string,
   ): Promise<T> {
     let response: Response;
     try {
@@ -418,13 +441,30 @@ export class UEClient {
       if (sessionId !== undefined) {
         headers["X-UEAI-Session-Id"] = sessionId;
       }
+      const timeoutSignal = AbortSignal.timeout(requestTimeoutMs);
+      const signal = externalSignal
+        ? AbortSignal.any([externalSignal, timeoutSignal])
+        : timeoutSignal;
       response = await this.fetchImpl(`${this.baseUrl}${endpoint}`, {
         method,
         headers: Object.keys(headers).length > 0 ? headers : undefined,
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(requestTimeoutMs),
+        signal,
       });
     } catch (error) {
+      if (externalSignal?.aborted) {
+        if (cancellationRequestId !== undefined) {
+          await this.cancelExecution(cancellationRequestId, sessionId);
+        }
+        throw new UEApiError({
+          code: "request_cancelled",
+          message: "The MCP client cancelled the Unreal execution request.",
+          details: {
+            requestId: cancellationRequestId,
+            cancelPending: true,
+          },
+        });
+      }
       throw new UEApiError({
         code: "editor_unreachable",
         message: `Cannot connect to the running Unreal Editor at ${this.baseUrl}: ${(error as Error).message}`,
@@ -476,6 +516,29 @@ export class UEClient {
     }
 
     return payload.data as T;
+  }
+
+  private async cancelExecution(
+    requestId: string,
+    sessionId?: string,
+  ): Promise<void> {
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (sessionId !== undefined) {
+        headers["X-UEAI-Session-Id"] = sessionId;
+      }
+      await this.fetchImpl(`${this.baseUrl}/api/execute/cancel`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ requestId }),
+        signal: AbortSignal.timeout(1_000),
+      });
+    } catch {
+      // Cancellation is best effort after the client has stopped waiting. The
+      // Editor still honors its own safe-boundary timeout and journal.
+    }
   }
 
   private async tryRegister(): Promise<boolean> {

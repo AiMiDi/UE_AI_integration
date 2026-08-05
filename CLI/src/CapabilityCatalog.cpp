@@ -238,12 +238,18 @@ bool ValidateExecutionMetadata(
     for (const auto& backend : *backends)
     {
         if (!backend.is_string()
-            || (backend != "editor" && backend != "localTrace")
+            || (backend != "editor"
+                && backend != "localTrace"
+                && backend != "localRecipe"
+                && backend != "localProject"
+                && backend != "localAsset"
+                && backend != "localSal"
+                && backend != "developmentRuntime")
             || !unique.insert(backend.get<std::string>()).second)
         {
             error =
-                "Capability execution backends must uniquely contain editor "
-                "and/or localTrace in " + manifest.generic_string();
+                "Capability execution backends must contain unique supported "
+                "backend names in " + manifest.generic_string();
             return false;
         }
     }
@@ -371,6 +377,7 @@ std::optional<CapabilityCatalog> CapabilityCatalog::LoadFiles(
         }
         json document = json::parse(stream, nullptr, false, true);
         if (!document.is_object()
+            || document.value("schemaVersion", 0) != 3
             || !document.contains("capabilities")
             || !document["capabilities"].is_array())
         {
@@ -378,6 +385,35 @@ std::optional<CapabilityCatalog> CapabilityCatalog::LoadFiles(
                 "Capability manifest is invalid: "
                 + manifest.generic_string();
             return std::nullopt;
+        }
+        if (document.contains("tombstones"))
+        {
+            if (!document["tombstones"].is_array())
+            {
+                error = "Capability tombstones must be an array in "
+                    + manifest.generic_string();
+                return std::nullopt;
+            }
+            for (const auto& tombstone : document["tombstones"])
+            {
+                if (!tombstone.is_object()
+                    || !tombstone.contains("id")
+                    || !tombstone["id"].is_string()
+                    || !tombstone.contains("replacement")
+                    || !tombstone["replacement"].is_string())
+                {
+                    error = "Capability tombstone is invalid in "
+                        + manifest.generic_string();
+                    return std::nullopt;
+                }
+                const std::string id = tombstone["id"].get<std::string>();
+                if (catalog.descriptors_.contains(id)
+                    || !catalog.tombstones_.emplace(id, tombstone).second)
+                {
+                    error = "Duplicate active or removed capability id: " + id;
+                    return std::nullopt;
+                }
+            }
         }
         for (const auto& descriptor : document["capabilities"])
         {
@@ -402,6 +438,7 @@ std::optional<CapabilityCatalog> CapabilityCatalog::LoadFiles(
             }
             const std::string id = descriptor["id"].get<std::string>();
             if (id.empty()
+                || catalog.tombstones_.contains(id)
                 || !catalog.descriptors_.emplace(id, descriptor).second)
             {
                 error = "Duplicate or empty capability id: " + id;
@@ -423,6 +460,14 @@ const json* CapabilityCatalog::Find(const std::string& id) const
     return descriptor == descriptors_.end()
         ? nullptr
         : &descriptor->second;
+}
+
+const json* CapabilityCatalog::FindTombstone(const std::string& id) const
+{
+    const auto tombstone = tombstones_.find(id);
+    return tombstone == tombstones_.end()
+        ? nullptr
+        : &tombstone->second;
 }
 
 const std::map<std::string, json>& CapabilityCatalog::Descriptors() const

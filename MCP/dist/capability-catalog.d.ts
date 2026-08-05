@@ -2,6 +2,8 @@ export declare const CAPABILITY_DOMAINS: readonly ["blueprint", "scene", "conten
 export type CapabilityDomain = (typeof CAPABILITY_DOMAINS)[number];
 export type CapabilityKind = "query" | "command" | "validation";
 export type CapabilityOutputKind = "json" | "image";
+export type CapabilityEffect = "none" | "read" | "write";
+export type CapabilityLifecycleStatus = "active" | "deprecated";
 export type CapabilityDslAdmission = "editStep" | "finalizer" | "observeOnly" | "interactiveOnly" | "none";
 export type CapabilityDslRisk = "readOnly" | "safeWrite" | "confirmWrite" | "notOpen";
 export interface CapabilityRequirements {
@@ -19,7 +21,7 @@ export interface CapabilitySearchMetadata {
     keywords?: string[];
     aliases?: string[];
 }
-export type CapabilityExecutionBackend = "editor" | "localTrace";
+export type CapabilityExecutionBackend = "editor" | "localTrace" | "localRecipe" | "localProject" | "localAsset" | "localSal" | "developmentRuntime";
 export interface CapabilityExecutionMetadata {
     backends: CapabilityExecutionBackend[];
     preferred: CapabilityExecutionBackend;
@@ -45,9 +47,20 @@ export interface CapabilityDescriptor {
     description: string;
     inputSchema: CapabilityInputSchema;
     traits: {
-        readOnly: boolean;
         destructive: boolean;
         expensive: boolean;
+    };
+    effects: {
+        asset: CapabilityEffect;
+        world: CapabilityEffect;
+        editorSession: CapabilityEffect;
+        external: CapabilityEffect;
+    };
+    lifecycle: {
+        status: CapabilityLifecycleStatus;
+        since: string;
+        canonicalId: string;
+        replacement?: string;
     };
     output: {
         kind: CapabilityOutputKind;
@@ -58,12 +71,18 @@ export interface CapabilityDescriptor {
     execution?: CapabilityExecutionMetadata;
 }
 export interface CapabilityManifest {
-    schemaVersion: 2;
+    schemaVersion: 3;
     domain: CapabilityDomain;
     capabilities: CapabilityDescriptor[];
+    tombstones: CapabilityTombstone[];
+}
+export interface CapabilityTombstone {
+    id: string;
+    removedIn: string;
+    replacement: string;
 }
 export interface CapabilityCatalogSummary {
-    schemaVersion: 2;
+    schemaVersion: 3;
     capabilityCount: number;
     domainCounts: Record<CapabilityDomain, number>;
 }
@@ -71,13 +90,16 @@ export declare const DEFAULT_MANIFEST_DIR: string;
 export declare class CapabilityManifestError extends Error {
     constructor(message: string);
 }
+export declare function capabilityIsReadOnly(capability: CapabilityDescriptor): boolean;
 export declare class CapabilityCatalog {
     readonly manifests: ReadonlyMap<CapabilityDomain, CapabilityManifest>;
     readonly capabilities: readonly CapabilityDescriptor[];
+    readonly tombstones: ReadonlyMap<string, CapabilityTombstone>;
     private readonly byId;
     private readonly byDomain;
     constructor(manifests: CapabilityManifest[]);
     get(id: string): CapabilityDescriptor | undefined;
+    removed(id: string): CapabilityTombstone | undefined;
     forDomain(domain: CapabilityDomain): readonly CapabilityDescriptor[];
     summary(): CapabilityCatalogSummary;
 }

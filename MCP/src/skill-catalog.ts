@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   CAPABILITY_DOMAINS,
+  capabilityIsReadOnly,
   type CapabilityCatalog,
   type CapabilityDescriptor,
   type CapabilityDomain,
@@ -346,7 +347,10 @@ function parseStep(
   if (
     step.phase === "verify" &&
     step.optional !== true &&
-    operations.some((operation) => !catalog.get(operation)?.traits.readOnly)
+    operations.some((operation) => {
+      const capability = catalog.get(operation);
+      return !capability || !capabilityIsReadOnly(capability);
+    })
   ) {
     throw new AgentSkillCatalogError(
       `${location} contains a write in a non-optional verify step`,
@@ -421,7 +425,7 @@ function parseRecipe(
     risk === "readOnly" &&
     operationDescriptors.some(
       (capability) =>
-        !capability.traits.readOnly || capability.traits.destructive,
+        !capabilityIsReadOnly(capability) || capability.traits.destructive,
     )
   ) {
     throw new AgentSkillCatalogError(

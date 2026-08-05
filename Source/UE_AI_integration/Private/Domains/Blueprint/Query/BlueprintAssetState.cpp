@@ -77,10 +77,16 @@ public:
 			TEXT("blueprint"),
 			Blueprint->GetPathName());
 		Result->SetStringField(TEXT("package"), Package->GetName());
-		Result->SetBoolField(TEXT("dirty"), Package->IsDirty());
+		Result->SetBoolField(TEXT("packageDirty"), Package->IsDirty());
 		Result->SetStringField(
-			TEXT("status"),
+			TEXT("compileStatus"),
 			BlueprintAssetStateStatusName(Blueprint->Status));
+		const bool bCompileUpToDate = Blueprint->Status == BS_UpToDate
+			|| Blueprint->Status == BS_UpToDateWithWarnings;
+		Result->SetBoolField(TEXT("needsCompile"), !bCompileUpToDate);
+		Result->SetBoolField(
+			TEXT("generatedClassUpToDate"),
+			bCompileUpToDate && Blueprint->GeneratedClass != nullptr);
 		return FMCPToolResult::Ok(Result);
 	}
 };

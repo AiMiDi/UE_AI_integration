@@ -45,7 +45,7 @@ export class UEApiError extends Error {
     }
 }
 export const MCP_BRIDGE_NAME = "ue-ai-integration";
-export const MCP_BRIDGE_VERSION = "0.9.0";
+export const MCP_BRIDGE_VERSION = "1.0.0";
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -128,21 +128,21 @@ export class UEClient {
         const suffix = search.size > 0 ? `?${search.toString()}` : "";
         return this.request("GET", `/api/capabilities${suffix}`);
     }
-    async execute(id, params = {}, requestId) {
+    async execute(id, params = {}, requestId, context) {
         const request = {
             capability: id,
             params,
             ...(requestId === undefined ? {} : { requestId }),
         };
-        return this.request("POST", "/api/execute", request);
+        return this.request("POST", "/api/execute", request, context?.signal, requestId);
     }
     async getWorkflowHandshake() {
         return this.request("GET", "/api/v1/workflow/handshake");
     }
-    async workflow(request) {
-        return this.request("POST", "/api/v1/workflow", request);
+    async workflow(request, signal) {
+        return this.request("POST", "/api/v1/workflow", request, signal);
     }
-    async request(method, endpoint, body) {
+    async request(method, endpoint, body, signal, cancellationRequestId) {
         if (this.sessionRequested &&
             this.caller?.clientKind === "mcp" &&
             this.sessionId === undefined) {
@@ -152,7 +152,7 @@ export class UEClient {
                 : this.nextRegistrationBackoffMs());
         }
         try {
-            return await this.requestOnce(method, endpoint, body, this.sessionId);
+            return await this.requestOnce(method, endpoint, body, this.sessionId, this.timeoutMs, signal, cancellationRequestId);
         }
         catch (error) {
             if (error instanceof UEApiError &&
@@ -164,12 +164,12 @@ export class UEClient {
                 this.scheduleMaintenance(registered
                     ? this.heartbeatIntervalMs
                     : this.nextRegistrationBackoffMs());
-                return this.requestOnce(method, endpoint, body, this.sessionId);
+                return this.requestOnce(method, endpoint, body, this.sessionId, this.timeoutMs, signal, cancellationRequestId);
             }
             throw error;
         }
     }
-    async requestOnce(method, endpoint, body, sessionId, requestTimeoutMs = this.timeoutMs) {
+    async requestOnce(method, endpoint, body, sessionId, requestTimeoutMs = this.timeoutMs, externalSignal, cancellationRequestId) {
         let response;
         try {
             const headers = {};
@@ -197,14 +197,31 @@ export class UEClient {
             if (sessionId !== undefined) {
                 headers["X-UEAI-Session-Id"] = sessionId;
             }
+            const timeoutSignal = AbortSignal.timeout(requestTimeoutMs);
+            const signal = externalSignal
+                ? AbortSignal.any([externalSignal, timeoutSignal])
+                : timeoutSignal;
             response = await this.fetchImpl(`${this.baseUrl}${endpoint}`, {
                 method,
                 headers: Object.keys(headers).length > 0 ? headers : undefined,
                 body: body === undefined ? undefined : JSON.stringify(body),
-                signal: AbortSignal.timeout(requestTimeoutMs),
+                signal,
             });
         }
         catch (error) {
+            if (externalSignal?.aborted) {
+                if (cancellationRequestId !== undefined) {
+                    await this.cancelExecution(cancellationRequestId, sessionId);
+                }
+                throw new UEApiError({
+                    code: "request_cancelled",
+                    message: "The MCP client cancelled the Unreal execution request.",
+                    details: {
+                        requestId: cancellationRequestId,
+                        cancelPending: true,
+                    },
+                });
+            }
             throw new UEApiError({
                 code: "editor_unreachable",
                 message: `Cannot connect to the running Unreal Editor at ${this.baseUrl}: ${error.message}`,
@@ -237,6 +254,26 @@ export class UEClient {
             }, response.status);
         }
         return payload.data;
+    }
+    async cancelExecution(requestId, sessionId) {
+        try {
+            const headers = {
+                "Content-Type": "application/json",
+            };
+            if (sessionId !== undefined) {
+                headers["X-UEAI-Session-Id"] = sessionId;
+            }
+            await this.fetchImpl(`${this.baseUrl}/api/execute/cancel`, {
+                method: "POST",
+                headers,
+                body: JSON.stringify({ requestId }),
+                signal: AbortSignal.timeout(1_000),
+            });
+        }
+        catch {
+            // Cancellation is best effort after the client has stopped waiting. The
+            // Editor still honors its own safe-boundary timeout and journal.
+        }
     }
     async tryRegister() {
         if (!this.sessionRequested ||

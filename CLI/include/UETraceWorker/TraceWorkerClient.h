@@ -58,6 +58,7 @@ public:
         WorkerTransport transport = WorkerTransport::ResidentService);
 
     const WorkerLocation& Location() const;
+    WorkerTransport Transport() const;
     WorkerResult Invoke(std::string_view request_json) const;
 
     /** Executes one request in an isolated Worker process with no root grant. */

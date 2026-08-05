@@ -173,14 +173,22 @@ function validateExecutionMetadata(execution, location) {
       fail(`${location}.${field} is not supported`);
     }
   }
-  const validBackends = new Set(["editor", "localTrace"]);
+  const validBackends = new Set([
+    "editor",
+    "localTrace",
+    "localRecipe",
+    "localProject",
+  "localAsset",
+  "localSal",
+  "developmentRuntime",
+  ]);
   if (
     !Array.isArray(execution.backends) ||
     execution.backends.length === 0 ||
     execution.backends.some((backend) => !validBackends.has(backend)) ||
     new Set(execution.backends).size !== execution.backends.length
   ) {
-    fail(`${location}.backends must contain unique editor/localTrace values`);
+    fail(`${location}.backends must contain unique supported backend values`);
     return;
   }
   if (
@@ -225,8 +233,8 @@ for (const [domain, baselineCount] of Object.entries(baselineCounts)) {
     continue;
   }
 
-  if (manifest.schemaVersion !== 2) {
-    fail(`${domain}.json schemaVersion must be 2`);
+  if (manifest.schemaVersion !== 3) {
+    fail(`${domain}.json schemaVersion must be 3`);
   }
   if (manifest.domain !== domain) {
     fail(`${domain}.json domain must be "${domain}"`);
@@ -306,10 +314,38 @@ for (const [domain, baselineCount] of Object.entries(baselineCounts)) {
     if (!isPlainObject(capability.traits)) {
       fail(`${location}.traits must be an object`);
     } else {
-      for (const trait of ["readOnly", "destructive", "expensive"]) {
+      if (Object.hasOwn(capability.traits, "readOnly")) {
+        fail(`${location}.traits.readOnly was removed in schema v3`);
+      }
+      for (const trait of ["destructive", "expensive"]) {
         if (typeof capability.traits[trait] !== "boolean") {
           fail(`${location}.traits.${trait} must be boolean`);
         }
+      }
+    }
+    if (!isPlainObject(capability.effects)) {
+      fail(`${location}.effects must be an object`);
+    } else {
+      for (const effect of ["asset", "world", "editorSession", "external"]) {
+        if (!["none", "read", "write"].includes(capability.effects[effect])) {
+          fail(`${location}.effects.${effect} must be none, read, or write`);
+        }
+      }
+    }
+    if (!isPlainObject(capability.lifecycle)) {
+      fail(`${location}.lifecycle must be an object`);
+    } else {
+      if (!["active", "deprecated"].includes(capability.lifecycle.status)) {
+        fail(`${location}.lifecycle.status must be active or deprecated`);
+      }
+      if (typeof capability.lifecycle.since !== "string" || capability.lifecycle.since.length === 0) {
+        fail(`${location}.lifecycle.since must be non-empty`);
+      }
+      if (typeof capability.lifecycle.canonicalId !== "string" || !idPattern.test(capability.lifecycle.canonicalId)) {
+        fail(`${location}.lifecycle.canonicalId must be a dotted capability ID`);
+      }
+      if (capability.lifecycle.status === "deprecated" && typeof capability.lifecycle.replacement !== "string") {
+        fail(`${location}.lifecycle.replacement is required for deprecated capabilities`);
       }
     }
     if (
@@ -509,12 +545,24 @@ for (const handlerPath of handlerFiles) {
   }
 }
 
-if (handlerIdTotal !== manifestTotal || handlerIds.size !== manifestIds.size) {
+const editorRequiredIds = new Set(
+  [...manifestById.entries()]
+    .filter(([, capability]) =>
+      capability.execution === undefined ||
+      capability.execution.backends.includes("editor"),
+    )
+    .map(([id]) => id),
+);
+if (
+  handlerIdTotal < editorRequiredIds.size ||
+  handlerIdTotal > manifestTotal ||
+  handlerIds.size !== handlerIdTotal
+) {
   fail(
-    `Handlers must exactly match the manifest catalog; manifest=${manifestTotal}, handlerTotal=${handlerIdTotal}, handlerUnique=${handlerIds.size}`
+    `Handlers must cover every Editor capability and no unknown capability; manifest=${manifestTotal}, editorRequired=${editorRequiredIds.size}, handlerTotal=${handlerIdTotal}, handlerUnique=${handlerIds.size}`
   );
 }
-const missingFromHandlers = [...manifestIds].filter((id) => !handlerIds.has(id));
+const missingFromHandlers = [...editorRequiredIds].filter((id) => !handlerIds.has(id));
 const missingFromManifests = [...handlerIds].filter((id) => !manifestIds.has(id));
 if (missingFromHandlers.length > 0) {
   fail(`Manifest-only IDs: ${missingFromHandlers.join(", ")}`);
@@ -732,7 +780,7 @@ console.log(
   JSON.stringify(
     {
       ok: true,
-      schemaVersion: 2,
+      schemaVersion: 3,
       manifests: Object.keys(baselineCounts).length,
       handlers: handlerFiles.length,
       capabilities: manifestIds.size,

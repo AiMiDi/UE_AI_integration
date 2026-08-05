@@ -1,0 +1,15 @@
+plan({
+  "kind": "recipe",
+  "value": {
+    "schema": "ue.recipe.v2",
+    "id": "sal-read-only-example",
+    "version": "1.0.0",
+    "steps": [
+      {
+        "id": "provider",
+        "kind": "capability",
+        "capability": "production.source_control.provider.get"
+      }
+    ]
+  }
+});

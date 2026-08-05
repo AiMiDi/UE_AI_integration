@@ -14,6 +14,9 @@
 #include "HAL/PlatformProperties.h"
 #include "Infrastructure/EngineeringContractUtils.h"
 #include "Infrastructure/Sha256.h"
+#include "ISourceControlModule.h"
+#include "ISourceControlProvider.h"
+#include "ISourceControlState.h"
 #include "Misc/App.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Base64.h"
@@ -31,6 +34,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "SourceControlOperations.h"
 #include "TraceServices/AnalysisService.h"
 #include "TraceServices/Containers/Tables.h"
 #include "TraceServices/ITraceServicesModule.h"
@@ -1622,6 +1626,10 @@ FMCPToolResult FProductionJobRuntime::Execute(
 	if (CapabilityId == TEXT("production.source_control.repository.get")) return GetSourceControlRepository(Params);
 	if (CapabilityId == TEXT("production.source_control.status")) return GetSourceControlStatus(Params);
 	if (CapabilityId == TEXT("production.source_control.diff")) return GetSourceControlDiff(Params);
+	if (CapabilityId == TEXT("production.source_control.provider.get")) return GetSourceControlProvider(Params);
+	if (CapabilityId == TEXT("production.source_control.status.refresh")) return RefreshSourceControlStatus(Params);
+	if (CapabilityId == TEXT("production.source_control.checkout")) return CheckoutSourceControlFiles(Params);
+	if (CapabilityId == TEXT("production.source_control.revert_unchanged")) return RevertUnchangedSourceControlFiles(Params);
 	if (CapabilityId == TEXT("production.source_control.change.plan")) return PlanSourceControlChange(Params);
 	if (CapabilityId == TEXT("production.source_control.change.execute")) return ExecuteSourceControlChange(Params);
 	if (CapabilityId == TEXT("production.ddc.status")) return GetDdcStatus(Params);
@@ -6376,6 +6384,348 @@ FMCPToolResult FProductionJobRuntime::GetSourceControlRepository(
 	return FMCPToolResult::Ok(Data);
 }
 
+FMCPToolResult FProductionJobRuntime::GetSourceControlProvider(
+	const TSharedPtr<FJsonObject>& Params) const
+{
+	(void)Params;
+	ISourceControlModule& Module = ISourceControlModule::Get();
+	ISourceControlProvider& Provider = Module.GetProvider();
+	Provider.Init(false);
+	TArray<FName> ProviderNames;
+	Module.GetProviderNames(ProviderNames);
+	TArray<TSharedPtr<FJsonValue>> AvailableProviders;
+	for (const FName& Name : ProviderNames)
+	{
+		AvailableProviders.Add(
+			MakeShared<FJsonValueString>(Name.ToString()));
+	}
+	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("provider"), Provider.GetName().ToString());
+	Data->SetBoolField(TEXT("enabled"), Provider.IsEnabled());
+	Data->SetBoolField(TEXT("available"), Provider.IsAvailable());
+	Data->SetStringField(TEXT("status"), Provider.GetStatusText().ToString());
+	Data->SetArrayField(TEXT("registeredProviders"), AvailableProviders);
+	Data->SetBoolField(
+		TEXT("boundedPerforceOperations"),
+		Provider.GetName() == FName(TEXT("Perforce")));
+	Data->SetArrayField(
+		TEXT("allowedPerforceOperations"),
+		{
+			MakeShared<FJsonValueString>(TEXT("statusRefresh")),
+			MakeShared<FJsonValueString>(TEXT("checkout")),
+			MakeShared<FJsonValueString>(TEXT("revertUnchanged"))
+		});
+	Data->SetArrayField(
+		TEXT("forbiddenPerforceOperations"),
+		{
+			MakeShared<FJsonValueString>(TEXT("submit")),
+			MakeShared<FJsonValueString>(TEXT("shelve")),
+			MakeShared<FJsonValueString>(TEXT("changelistManagement"))
+		});
+	return FMCPToolResult::Ok(Data);
+}
+
+namespace
+{
+bool ResolveProjectSourceControlFiles(
+	const TSharedPtr<FJsonObject>& Params,
+	TArray<FString>& OutFiles,
+	FString& OutError)
+{
+	OutFiles.Reset();
+	OutError.Reset();
+	if (!Params.IsValid()
+		|| !Params->HasTypedField<EJson::Array>(TEXT("files")))
+	{
+		OutError = TEXT("files is required.");
+		return false;
+	}
+	const FString ProjectRoot = FPaths::ConvertRelativePathToFull(
+		FPaths::ProjectDir());
+	for (const TSharedPtr<FJsonValue>& Value :
+		Params->GetArrayField(TEXT("files")))
+	{
+		FString Requested;
+		if (!Value.IsValid()
+			|| !Value->TryGetString(Requested)
+			|| Requested.IsEmpty())
+		{
+			OutError = TEXT("files must contain non-empty strings.");
+			return false;
+		}
+		FString Full;
+		if (FPackageName::IsValidLongPackageName(Requested))
+		{
+			if (!FPackageName::TryConvertLongPackageNameToFilename(
+					Requested,
+					Full,
+					FPackageName::GetAssetPackageExtension()))
+			{
+				OutError = FString::Printf(
+					TEXT("Could not resolve package '%s'."), *Requested);
+				return false;
+			}
+		}
+		else
+		{
+			Full = FPaths::IsRelative(Requested)
+				? FPaths::Combine(ProjectRoot, Requested)
+				: Requested;
+		}
+		Full = FPaths::ConvertRelativePathToFull(Full);
+		FPaths::NormalizeFilename(Full);
+		if (!FProductionJobRuntime::IsPathWithin(Full, ProjectRoot)
+			|| FPaths::IsSamePath(Full, ProjectRoot))
+		{
+			OutError = FString::Printf(
+				TEXT("Source-control path is outside the project: '%s'."),
+				*Requested);
+			return false;
+		}
+		OutFiles.AddUnique(Full);
+		if (OutFiles.Num() > 500)
+		{
+			OutError = TEXT("At most 500 source-control files are allowed.");
+			return false;
+		}
+	}
+	if (OutFiles.IsEmpty())
+	{
+		OutError = TEXT("At least one source-control file is required.");
+		return false;
+	}
+	return true;
+}
+
+FMCPToolResult RequirePerforceProvider(ISourceControlProvider*& OutProvider)
+{
+	ISourceControlProvider& Provider = ISourceControlModule::Get().GetProvider();
+	Provider.Init(false);
+	if (Provider.GetName() != FName(TEXT("Perforce")))
+	{
+		return FMCPToolResult::Error(
+			TEXT("The bounded source-control write surface currently supports only the Perforce provider."),
+			TEXT("source_control_provider_unsupported"),
+			503);
+	}
+	if (!Provider.IsEnabled() || !Provider.IsAvailable())
+	{
+		return FMCPToolResult::Error(
+			TEXT("The Perforce provider is not enabled and connected."),
+			TEXT("source_control_provider_unavailable"),
+			503);
+	}
+	OutProvider = &Provider;
+	return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+}
+
+TSharedPtr<FJsonObject> MakeSourceControlState(
+	const FSourceControlStateRef& State)
+{
+	FString OtherUser;
+	TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
+	Entry->SetStringField(TEXT("file"), State->GetFilename());
+	Entry->SetStringField(TEXT("display"), State->GetDisplayName().ToString());
+	Entry->SetBoolField(TEXT("sourceControlled"), State->IsSourceControlled());
+	Entry->SetBoolField(TEXT("current"), State->IsCurrent());
+	Entry->SetBoolField(TEXT("checkedOut"), State->IsCheckedOut());
+	Entry->SetBoolField(
+		TEXT("checkedOutOther"), State->IsCheckedOutOther(&OtherUser));
+	Entry->SetStringField(TEXT("otherUser"), OtherUser);
+	Entry->SetBoolField(TEXT("canCheckout"), State->CanCheckout());
+	Entry->SetBoolField(TEXT("modified"), State->IsModified());
+	Entry->SetBoolField(TEXT("canRevert"), State->CanRevert());
+	return Entry;
+}
+}
+
+FMCPToolResult FProductionJobRuntime::RefreshSourceControlStatus(
+	const TSharedPtr<FJsonObject>& Params) const
+{
+	TArray<FString> Files;
+	FString Error;
+	if (!ResolveProjectSourceControlFiles(Params, Files, Error))
+	{
+		return FMCPToolResult::Error(Error, TEXT("invalid_params"), 422);
+	}
+	ISourceControlProvider* Provider = nullptr;
+	FMCPToolResult Required = RequirePerforceProvider(Provider);
+	if (!Required.bSuccess)
+	{
+		return Required;
+	}
+	const ECommandResult::Type Updated = Provider->Execute(
+		ISourceControlOperation::Create<FUpdateStatus>(),
+		Files,
+		EConcurrency::Synchronous);
+	if (Updated != ECommandResult::Succeeded)
+	{
+		return FMCPToolResult::Error(
+			TEXT("Perforce status refresh failed."),
+			TEXT("source_control_status_refresh_failed"),
+			409);
+	}
+	TArray<FSourceControlStateRef> States;
+	if (Provider->GetState(Files, States, EStateCacheUsage::Use)
+		!= ECommandResult::Succeeded)
+	{
+		return FMCPToolResult::Error(
+			TEXT("Perforce state readback failed after refresh."),
+			TEXT("source_control_status_readback_failed"),
+			409);
+	}
+	TArray<TSharedPtr<FJsonValue>> Entries;
+	for (const FSourceControlStateRef& State : States)
+	{
+		Entries.Add(MakeShared<FJsonValueObject>(
+			MakeSourceControlState(State)));
+	}
+	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("provider"), TEXT("Perforce"));
+	Data->SetNumberField(TEXT("fileCount"), Files.Num());
+	Data->SetArrayField(TEXT("files"), Entries);
+	return FMCPToolResult::Ok(Data);
+}
+
+FMCPToolResult FProductionJobRuntime::CheckoutSourceControlFiles(
+	const TSharedPtr<FJsonObject>& Params) const
+{
+	if (!GetBoolFieldOr(Params, TEXT("confirmWrite"), false))
+	{
+		return FMCPToolResult::Error(
+			TEXT("confirmWrite:true is required before Perforce checkout."),
+			TEXT("confirmation_required"),
+			422);
+	}
+	TArray<FString> Files;
+	FString Error;
+	if (!ResolveProjectSourceControlFiles(Params, Files, Error))
+	{
+		return FMCPToolResult::Error(Error, TEXT("invalid_params"), 422);
+	}
+	ISourceControlProvider* Provider = nullptr;
+	FMCPToolResult Required = RequirePerforceProvider(Provider);
+	if (!Required.bSuccess)
+	{
+		return Required;
+	}
+	if (Provider->Execute(
+			ISourceControlOperation::Create<FUpdateStatus>(),
+			Files,
+			EConcurrency::Synchronous)
+		!= ECommandResult::Succeeded)
+	{
+		return FMCPToolResult::Error(
+			TEXT("Perforce status refresh failed before checkout; no checkout was attempted."),
+			TEXT("source_control_status_refresh_failed"),
+			409);
+	}
+	TArray<FSourceControlStateRef> Before;
+	if (Provider->GetState(Files, Before, EStateCacheUsage::Use)
+		!= ECommandResult::Succeeded)
+	{
+		return FMCPToolResult::Error(
+			TEXT("Perforce pre-checkout state could not be read; no checkout was attempted."),
+			TEXT("source_control_status_readback_failed"),
+			409);
+	}
+	for (const FSourceControlStateRef& State : Before)
+	{
+		FString OtherUser;
+		if (State->IsCheckedOutOther(&OtherUser)
+			|| (!State->IsCheckedOut() && !State->CanCheckout()))
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Perforce checkout preflight rejected '%s'; no files were checked out."),
+					*State->GetFilename()),
+				TEXT("source_control_checkout_preflight_failed"),
+				409);
+		}
+	}
+	TArray<FString> NeedsCheckout;
+	for (const FSourceControlStateRef& State : Before)
+	{
+		if (!State->IsCheckedOut())
+		{
+			NeedsCheckout.Add(State->GetFilename());
+		}
+	}
+	if (!NeedsCheckout.IsEmpty()
+		&& Provider->Execute(
+			ISourceControlOperation::Create<FCheckOut>(),
+			NeedsCheckout,
+			EConcurrency::Synchronous)
+			!= ECommandResult::Succeeded)
+	{
+		return FMCPToolResult::Error(
+			TEXT("Perforce checkout failed. The Runner must not perform asset writes."),
+			TEXT("source_control_checkout_failed"),
+			409);
+	}
+	TArray<FSourceControlStateRef> After;
+	Provider->GetState(Files, After, EStateCacheUsage::ForceUpdate);
+	for (const FSourceControlStateRef& State : After)
+	{
+		if (!State->IsCheckedOut())
+		{
+			return FMCPToolResult::Error(
+				TEXT("Perforce checkout readback did not confirm every target. The Runner must not perform asset writes."),
+				TEXT("source_control_checkout_unverified"),
+				409);
+		}
+	}
+	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("provider"), TEXT("Perforce"));
+	Data->SetNumberField(TEXT("requestedCount"), Files.Num());
+	Data->SetNumberField(TEXT("checkedOutCount"), NeedsCheckout.Num());
+	Data->SetBoolField(TEXT("verified"), true);
+	Data->SetBoolField(TEXT("assetWritesAllowed"), true);
+	return FMCPToolResult::Ok(Data);
+}
+
+FMCPToolResult FProductionJobRuntime::RevertUnchangedSourceControlFiles(
+	const TSharedPtr<FJsonObject>& Params) const
+{
+	if (!GetBoolFieldOr(Params, TEXT("confirmWrite"), false))
+	{
+		return FMCPToolResult::Error(
+			TEXT("confirmWrite:true is required before revert unchanged."),
+			TEXT("confirmation_required"),
+			422);
+	}
+	TArray<FString> Files;
+	FString Error;
+	if (!ResolveProjectSourceControlFiles(Params, Files, Error))
+	{
+		return FMCPToolResult::Error(Error, TEXT("invalid_params"), 422);
+	}
+	ISourceControlProvider* Provider = nullptr;
+	FMCPToolResult Required = RequirePerforceProvider(Provider);
+	if (!Required.bSuccess)
+	{
+		return Required;
+	}
+	if (Provider->Execute(
+			ISourceControlOperation::Create<FRevertUnchanged>(),
+			Files,
+			EConcurrency::Synchronous)
+		!= ECommandResult::Succeeded)
+	{
+		return FMCPToolResult::Error(
+			TEXT("Perforce revert unchanged failed."),
+			TEXT("source_control_revert_unchanged_failed"),
+			409);
+	}
+	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetStringField(TEXT("provider"), TEXT("Perforce"));
+	Data->SetNumberField(TEXT("requestedCount"), Files.Num());
+	Data->SetStringField(TEXT("action"), TEXT("revertUnchanged"));
+	Data->SetBoolField(TEXT("submitSupported"), false);
+	Data->SetBoolField(TEXT("shelveSupported"), false);
+	return FMCPToolResult::Ok(Data);
+}
+
 FMCPToolResult FProductionJobRuntime::GetSourceControlStatus(
 	const TSharedPtr<FJsonObject>& Params) const
 {
@@ -8197,6 +8547,22 @@ TSharedPtr<FJsonObject> FProductionJobRuntime::MakeJobSummary(
 	}
 	Data->SetObjectField(TEXT("progress"), Progress);
 	Data->SetStringField(TEXT("phase"), Job.Phase);
+	Data->SetStringField(
+		TEXT("heartbeatAt"),
+		IsTerminalStatus(Job.Status)
+			? Job.CompletedAtUtc
+			: FDateTime::UtcNow().ToIso8601());
+	Data->SetStringField(
+		TEXT("lastProgressAt"),
+		!Job.CompletedAtUtc.IsEmpty()
+			? Job.CompletedAtUtc
+			: (!Job.StartedAtUtc.IsEmpty()
+				? Job.StartedAtUtc
+				: Job.CreatedAtUtc));
+	Data->SetStringField(
+		TEXT("lastLog"),
+		Job.Output.Right(1024));
+	Data->SetBoolField(TEXT("cancelPending"), Job.bTerminationRequested);
 	TSharedPtr<FJsonObject> PhaseDurations = MakeShared<FJsonObject>();
 	static const TArray<FString> ProcessPhases = {
 		TEXT("launching"),

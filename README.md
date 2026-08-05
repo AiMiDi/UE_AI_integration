@@ -7,12 +7,12 @@ Editor 控制模块、Development Trace Runtime、离线 Trace Worker 和 TypeSc
 stdio bridge，让 Codex CLI、Claude Code 等 MCP 客户端查询或修改 Blueprint、
 场景、内容资产、动画、AI 与生产流程，并在 Editor 关闭后分析 `.utrace`。
 
-当前插件版本为 `0.9.0`，以 Unreal Engine 5.3 为实际构建基线；UE
+当前插件版本为 `1.0.0`，以 Unreal Engine 5.3 为实际构建基线；UE
 5.4–5.7 的差异集中在兼容层，但尚未全部完成本地编译验证。
 
 ## 核心特性
 
-- 当前发布快照包含 381 项 manifest 驱动的 Editor、PIE、Development 与本地
+- 当前发布快照包含 410 项 manifest 驱动的 Editor、PIE、Development 与本地
   Trace 能力；
   服务启动时从 manifest 动态计算数量。
 - 十二个稳定的 MCP 工具，不把全部能力直接展开成工具列表。
