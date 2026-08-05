@@ -444,6 +444,19 @@ try {
     path.join(projectRoot, "skills", "setup-ue5", "SKILL.md"),
     "utf8"
   );
+  const entrySkillRoot = path.join(projectRoot, "skills", "ue-ai");
+  const entrySkill = fs.readFileSync(
+    path.join(entrySkillRoot, "SKILL.md"),
+    "utf8"
+  );
+  const entryAgent = fs.readFileSync(
+    path.join(entrySkillRoot, "agents", "openai.yaml"),
+    "utf8"
+  );
+  const entryRouting = fs.readFileSync(
+    path.join(entrySkillRoot, "references", "skill-routing.md"),
+    "utf8"
+  );
   if (
     typeof descriptor.VersionName !== "string" ||
     descriptor.VersionName !== mcpPackage.version ||
@@ -458,6 +471,33 @@ try {
     !setupSkill.includes(`Release ${descriptor.VersionName} currently ships ${manifestTotal} capabilities`)
   ) {
     fail("setup-ue5 release guidance must match the current version and capability count");
+  }
+  if (
+    !entrySkill.includes("name: ue-ai") ||
+    !entrySkill.includes("ue_skills") ||
+    !entrySkill.includes("ue_context") ||
+    entrySkill.includes("[TODO") ||
+    !entryAgent.includes("Use $ue-ai")
+  ) {
+    fail("ue-ai client entry Skill must route through ue_skills and ue_context with complete UI metadata");
+  }
+  if (fs.existsSync(path.join(entrySkillRoot, "skill.json"))) {
+    fail("ue-ai is a client entry Skill and must not recursively enter the ue_skills machine catalog");
+  }
+  const routedSkillIds = fs.readdirSync(path.join(projectRoot, "skills"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((id) => fs.existsSync(path.join(projectRoot, "skills", id, "skill.json")))
+    .sort();
+  for (const id of routedSkillIds) {
+    if (!entryRouting.includes(`\`${id}\``)) {
+      fail(`ue-ai routing reference does not point to packaged domain Skill ${id}`);
+    }
+  }
+  for (const installer of ["install_entry_skill.ps1", "install_entry_skill.sh"]) {
+    if (!fs.existsSync(path.join(projectRoot, "scripts", installer))) {
+      fail(`Missing UE AI entry Skill installer: scripts/${installer}`);
+    }
   }
 } catch (error) {
   fail(`Release metadata could not be validated: ${error.message}`);

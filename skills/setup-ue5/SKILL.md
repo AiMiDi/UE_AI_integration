@@ -43,7 +43,30 @@ For **Blueprint-only projects**, also check if `BuiltPlugin/` exists at the plug
 
 For **C++ projects**, just the Source/ and .uplugin is enough — the engine compiles it.
 
-### 5. Verify the MCP server connection
+### 5. Install the UE AI client entry Skill
+
+Install `$ue-ai` for the MCP client being configured. The installer copies
+only the client entry Skill; it discovers the packaged domain Skills later
+through `ue_skills`.
+
+For Codex on Windows:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  "<PluginRoot>\scripts\install_entry_skill.ps1" -Client codex
+```
+
+For Claude Code or a Bash environment:
+
+```bash
+bash "<PluginRoot>/scripts/install_entry_skill.sh" --client claude
+```
+
+Do not overwrite a differing local copy silently. During an explicit upgrade,
+use `-Force` or `--force`; the installer preserves the previous copy as a
+timestamped backup.
+
+### 6. Verify the MCP server connection
 
 The plugin starts an HTTP server on port 9847 when UE5 opens. Try to reach it:
 
@@ -56,7 +79,7 @@ If it responds, the plugin is already running. If not, tell the user to:
 2. Wait for the editor to fully load
 3. Check the Output Log for `[UE_AI_integration] Server started on port 9847`
 
-### 6. Confirm capability count
+### 7. Confirm capability count
 
 Once the server responds, check the capability catalog:
 
@@ -68,14 +91,16 @@ Release 1.0.0 currently ships 410 capabilities across six domains. The stdio
 bridge exposes twelve stable MCP tools, including the offline `ue_skills`
 loader. Treat the manifest-derived total as authoritative for later releases.
 
-### 7. Report success
+### 8. Report success
 
 Tell the user:
 - The plugin is installed at `Plugins/UE_AI_integration/`
 - The UE HTTP service starts with the Editor; the MCP stdio bridge connects to
   it but never launches or shuts down the Editor
+- The `$ue-ai` entry Skill is installed for the selected client and routes
+  requests through `ue_skills`, `ue_context`, domain tools, and `ue_workflow`
 - They can now ask Claude to do things like:
-  - "Load the Blueprint diagnosis Skill and inspect BP_Player"
+  - "Use $ue-ai to inspect BP_Player and choose the right diagnosis Skill"
   - "List all blueprints in my project"
   - "Create a new Actor blueprint called BP_Enemy"
   - "Add a health variable to BP_Player"

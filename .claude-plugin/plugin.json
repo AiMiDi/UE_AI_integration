@@ -1,6 +1,6 @@
 {
   "name": "ue-ai-integration",
-  "description": "Control Unreal Engine 5.3-5.7 through twelve MCP tools, 410 manifest-driven capabilities, UE Workflow, Recipe Runner, offline project inspection, rendering debug evidence, and Unreal Trace analysis. Use /setup-ue5 to install the plugin into your current UE5 project.",
+  "description": "Control Unreal Engine 5.3-5.7 through twelve MCP tools, 410 manifest-driven capabilities, UE Workflow, Recipe Runner, offline project inspection, rendering debug evidence, and Unreal Trace analysis. Use /setup-ue5 to install the plugin, then use $ue-ai as the default entrypoint for UE work.",
   "version": "1.0.0",
   "author": {
     "name": "NodeNestor"

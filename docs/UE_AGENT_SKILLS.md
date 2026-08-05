@@ -25,6 +25,27 @@ recipe 不包含循环、条件、脚本、参数 schema 或数据绑定。精�
 `ue_context` 或 `ue help`，写入仍经过 capability 的 `confirmWrite`、
 Workflow 的 plan digest、事务、readback 和 rollback。
 
+## 客户端入口 Skill
+
+`skills/ue-ai/` 是安装到 Codex 或 Claude Code 的入口 Skill。它先检查
+`ue_status` / `ue_cli`，再通过 `ue_skills` 加载最匹配的领域 Skill，并用
+`ue_context` 发现精确 schema。入口 Skill 自身不执行 UE operation，也不复制
+领域 recipe。
+
+它故意不提供 `skill.json`，因此不会出现在 `ue_skills` 的领域 Skill 计数中，
+也不会形成入口 Skill 递归加载自身。发布包安装 MCP 时可显式安装它：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\scripts\install_entry_skill.ps1 -Client codex
+```
+
+```bash
+bash ./scripts/install_entry_skill.sh --client claude
+```
+
+重复安装相同版本是幂等的；不同内容默认拒绝覆盖，显式升级会先保留时间戳备份。
+
 ## 发布 Skill
 
 | Skill ID | 默认用途 | 主要闭环 |

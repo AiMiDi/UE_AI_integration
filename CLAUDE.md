@@ -30,6 +30,11 @@ published capability IDs and must not duplicate parameter schemas or execute
 operations. `ue_skills` loads recipes; `ue_context` discovers exact APIs;
 domain tools and `ue_workflow` remain the only execution paths.
 
+`skills/ue-ai` is the client entry Skill and intentionally has no
+`skill.json`. It is installed beside an MCP client, routes requests to
+`ue_skills` and `ue_context`, and must never become a second execution or
+capability authority.
+
 ## Invariants
 
 - The catalog contains six domain manifests. Capability and per-domain counts

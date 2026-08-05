@@ -56,10 +56,15 @@ if ! ls "$PROJECT_ROOT"/*.uproject &> /dev/null 2>&1; then
     echo ""
 fi
 
-# 4. Register MCP server with Claude Code
+# 4. Register MCP server and install the client entry Skill
 BRIDGE_PATH="$PLUGIN_DIR/MCP/dist/index.js"
 echo "[..] Registering MCP server with Claude Code..."
-claude mcp add ue_ai_integration -- node "$BRIDGE_PATH" 2>/dev/null && echo "[OK] MCP server registered" || echo "[!!] Could not register (is Claude Code installed?)"
+if claude mcp add ue_ai_integration -- node "$BRIDGE_PATH" 2>/dev/null; then
+    echo "[OK] MCP server registered"
+    bash "$PLUGIN_DIR/scripts/install_entry_skill.sh" --client claude --force
+else
+    echo "[!!] Could not register (is Claude Code installed?)"
+fi
 
 echo ""
 echo "========================================"
@@ -69,5 +74,5 @@ echo ""
 echo " Next steps:"
 echo "   1. Open your project in UE5"
 echo "   2. Run 'claude' in this folder"
-echo "   3. Call ue_skills, then ue_context, then ue_status/ue_capabilities"
+echo "   3. Invoke \$ue-ai; it will route through ue_skills and ue_context"
 echo ""

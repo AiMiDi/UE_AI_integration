@@ -223,6 +223,32 @@ For Claude Code:
 claude mcp add ue_ai_integration -- node Plugins\UE_AI_integration\MCP\dist\index.js
 ```
 
+## Install the UE AI Entry Skill
+
+After registering MCP, install `$ue-ai` for the current agent client. The
+entry Skill checks connectivity and the capability catalog, then loads the
+most specific Blueprint, UMG, asset, Landscape, rendering, performance,
+Trace, or recovery Skill through `ue_skills`. It never bypasses the existing
+execution gates.
+
+Codex:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\scripts\install_entry_skill.ps1 -Client codex
+```
+
+Claude Code / Bash:
+
+```bash
+bash ./scripts/install_entry_skill.sh --client claude
+```
+
+Reinstalling identical content is a no-op. Add `-Force` or `--force` only for
+an explicit upgrade; the installer preserves the previous copy as a timestamped
+backup. Agents can then start with: “Use `$ue-ai` to inspect this Unreal
+project and choose the correct tool or domain Skill.”
+
 ## MCP Tools
 
 The bridge always registers these twelve tools, even while Unreal Editor is

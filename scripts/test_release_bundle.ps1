@@ -49,9 +49,14 @@ try {
         'Resources/Trace/worker-protocol.v1.json',
         'Resources/Contracts/recipe.schema.v2.json',
         'Resources/Contracts/development-bridge.v1.json',
+        'skills/ue-ai/SKILL.md',
+        'skills/ue-ai/agents/openai.yaml',
+        'skills/ue-ai/references/skill-routing.md',
         'skills/setup-ue5/SKILL.md',
         'skills/ue-recovery-operator/SKILL.md',
         'Recipes/ue-recovery-operator.recipe.json',
+        'scripts/install_entry_skill.ps1',
+        'scripts/install_entry_skill.sh',
         'Release/release-files.sha256.json'
     )
     foreach ($relative in $required) {
@@ -75,6 +80,18 @@ try {
     if ($ExpectedVersion) {
         Assert-Condition ($descriptor.VersionName -eq $ExpectedVersion) "Expected version $ExpectedVersion, found $($descriptor.VersionName)."
     }
+
+    $entryClientRoot = Join-Path $extractRoot 'entry-skill-client'
+    $entryInstaller = Join-Path $bundleRoot 'scripts/install_entry_skill.ps1'
+    $entryInstallOutput = & $entryInstaller -Client codex -TargetRoot $entryClientRoot -Json
+    $entryInstall = $entryInstallOutput | Out-String | ConvertFrom-Json
+    Assert-Condition ($entryInstall.ok -eq $true) 'Packaged UE AI entry Skill install failed.'
+    Assert-Condition ($entryInstall.results[0].status -eq 'installed') 'First entry Skill install must report installed.'
+    $installedEntry = Join-Path $entryClientRoot 'skills/ue-ai/SKILL.md'
+    Assert-Condition (Test-Path -LiteralPath $installedEntry -PathType Leaf) 'Packaged UE AI entry Skill was not installed.'
+    $entryRepeatOutput = & $entryInstaller -Client codex -TargetRoot $entryClientRoot -Json
+    $entryRepeat = $entryRepeatOutput | Out-String | ConvertFrom-Json
+    Assert-Condition ($entryRepeat.results[0].status -eq 'unchanged') 'Repeated entry Skill install must be idempotent.'
 
     $ue = Join-Path $bundleRoot 'CLI/bin/ue.exe'
     $workflow = Join-Path $bundleRoot 'CLI/bin/ue-workflow.exe'
@@ -166,6 +183,7 @@ try {
         version = $descriptor.VersionName
         fileCount = $manifest.files.Count
         mcpToolCount = $mcp.toolCount
+        entrySkillChecked = $true
         localProjectCliChecked = $true
         workerChecked = [bool]$EngineRoot
         editorChecked = [bool]$EditorEndpoint

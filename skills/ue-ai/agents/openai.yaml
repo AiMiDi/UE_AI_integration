@@ -1,0 +1,14 @@
+interface:
+  display_name: "UE AI"
+  short_description: "Route Unreal tasks through UE MCP and domain skills."
+  default_prompt: "Use $ue-ai to inspect this Unreal project, select the right UE tool or domain skill, execute safely, and verify the result."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "ue_ai_integration"
+      description: "UE_AI_integration local stdio MCP server"
+      transport: "stdio"
+
+policy:
+  allow_implicit_invocation: true

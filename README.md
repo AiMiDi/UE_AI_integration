@@ -192,6 +192,29 @@ Claude Code 可使用：
 claude mcp add ue_ai_integration -- node Plugins\UE_AI_integration\MCP\dist\index.js
 ```
 
+## 安装 UE AI 入口 Skill
+
+MCP 注册完成后，把 `$ue-ai` 安装到当前 Agent 客户端。入口 Skill 会先检查
+连接与能力目录，再通过 `ue_skills` 选择 Blueprint、UMG、资产、Landscape、
+渲染、性能、Trace 或恢复 Skill；它本身不绕过现有执行门禁。
+
+Codex：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\scripts\install_entry_skill.ps1 -Client codex
+```
+
+Claude Code / Bash：
+
+```bash
+bash ./scripts/install_entry_skill.sh --client claude
+```
+
+相同内容重复安装不会改写文件。升级已有不同版本时显式添加 `-Force` 或
+`--force`；旧副本会保留在同一 `skills` 目录的时间戳备份中。随后可直接说：
+“使用 `$ue-ai` 检查这个 UE 工程并选择正确的工具或领域 Skill”。
+
 ## MCP 工具
 
 bridge 始终注册以下十二个工具，即使 Unreal Editor 暂时离线：

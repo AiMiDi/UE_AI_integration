@@ -188,6 +188,19 @@ if(UE_WORKFLOW_BUILD_TESTS AND BUILD_TESTING)
             set_tests_properties(
                 ue_plugin_install_preflight PROPERTIES TIMEOUT 30
             )
+            add_test(
+                NAME ue_entry_skill_install
+                COMMAND "${UE_POWERSHELL_EXECUTABLE}"
+                    -NoProfile
+                    -NonInteractive
+                    -ExecutionPolicy Bypass
+                    -File "${CMAKE_SOURCE_DIR}/scripts/test_install_entry_skill.ps1"
+                    -Installer "${CMAKE_SOURCE_DIR}/scripts/install_entry_skill.ps1"
+                    -SourceRoot "${CMAKE_SOURCE_DIR}"
+            )
+            set_tests_properties(
+                ue_entry_skill_install PROPERTIES TIMEOUT 30
+            )
         endif()
     endif()
     add_test(

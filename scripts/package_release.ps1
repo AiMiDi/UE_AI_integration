@@ -57,9 +57,14 @@ $required = @(
     'Resources/Trace/worker-protocol.v1.json',
     'Resources/Contracts/recipe.schema.v2.json',
     'Resources/Contracts/development-bridge.v1.json',
+    'skills/ue-ai/SKILL.md',
+    'skills/ue-ai/agents/openai.yaml',
+    'skills/ue-ai/references/skill-routing.md',
     'skills/setup-ue5/SKILL.md',
     'skills/ue-recovery-operator/SKILL.md',
     'Recipes/ue-recovery-operator.recipe.json',
+    'scripts/install_entry_skill.ps1',
+    'scripts/install_entry_skill.sh',
     'scripts/mcp_stdio_smoke.mjs'
 )
 foreach ($relative in $required) {
