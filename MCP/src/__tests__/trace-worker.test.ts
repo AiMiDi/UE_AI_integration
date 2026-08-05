@@ -106,13 +106,22 @@ const repositoryRoot = resolve(
   "..",
 );
 
+const cleanupWait = new Int32Array(
+  new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+);
+
 function removeTemporaryDirectory(directory: string): void {
-  rmSync(directory, {
-    recursive: true,
-    force: true,
-    maxRetries: 10,
-    retryDelay: 100,
-  });
+  const retryable = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rmSync(directory, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "";
+      if (!retryable.has(code) || attempt >= 20) throw error;
+      Atomics.wait(cleanupWait, 0, 0, Math.min(500, 50 * 2 ** attempt));
+    }
+  }
 }
 
 interface FakeWorkerBundle {
@@ -141,10 +150,14 @@ function fakeWorkerBundle(directory: string): FakeWorkerBundle {
     process.platform === "win32" ? "UEAITraceWorker.exe" : "UEAITraceWorker",
   );
   mkdirSync(dirname(executable), { recursive: true });
-  try {
-    linkSync(process.execPath, executable);
-  } catch {
+  if (process.platform === "win32") {
     copyFileSync(process.execPath, executable);
+  } else {
+    try {
+      linkSync(process.execPath, executable);
+    } catch {
+      copyFileSync(process.execPath, executable);
+    }
   }
   if (process.platform !== "win32") chmodSync(executable, 0o755);
 

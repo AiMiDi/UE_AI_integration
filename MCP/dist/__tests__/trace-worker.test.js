@@ -82,13 +82,21 @@ if (process.argv.includes("--stdio")) {
   process.exitCode = 2;
 }`;
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const cleanupWait = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 function removeTemporaryDirectory(directory) {
-    rmSync(directory, {
-        recursive: true,
-        force: true,
-        maxRetries: 10,
-        retryDelay: 100,
-    });
+    const retryable = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+    for (let attempt = 0;; attempt += 1) {
+        try {
+            rmSync(directory, { recursive: true, force: true });
+            return;
+        }
+        catch (error) {
+            const code = error.code ?? "";
+            if (!retryable.has(code) || attempt >= 20)
+                throw error;
+            Atomics.wait(cleanupWait, 0, 0, Math.min(500, 50 * 2 ** attempt));
+        }
+    }
 }
 function fakeWorkerBundle(directory) {
     const root = join(directory, "Plugin");
@@ -99,11 +107,16 @@ function fakeWorkerBundle(directory) {
             : "Linux";
     const executable = join(root, "Tools", "Trace", platform, "5.3", process.platform === "win32" ? "UEAITraceWorker.exe" : "UEAITraceWorker");
     mkdirSync(dirname(executable), { recursive: true });
-    try {
-        linkSync(process.execPath, executable);
-    }
-    catch {
+    if (process.platform === "win32") {
         copyFileSync(process.execPath, executable);
+    }
+    else {
+        try {
+            linkSync(process.execPath, executable);
+        }
+        catch {
+            copyFileSync(process.execPath, executable);
+        }
     }
     if (process.platform !== "win32")
         chmodSync(executable, 0o755);
