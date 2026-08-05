@@ -19,8 +19,8 @@ capability ID or input schema:
 object must contain at least one of them. Arrays must be non-empty and may not
 contain duplicate values.
 
-Editor HTTP, MCP local/live discovery, `ue capabilities`, and
-`ue-workflow capabilities` share the `ue.capability-search-v1` contract:
+Editor HTTP, MCP local/live discovery, `ue-cli capabilities`, and
+`ue-workflow-cli capabilities` share the `ue.capability-search-v1` contract:
 
 - ASCII whitespace, punctuation, `.`, `_`, and `-` separate tokens.
 - camelCase and acronym-to-word boundaries also separate tokens.
@@ -52,9 +52,9 @@ written through the Unicode console API.
 For complex JSON in PowerShell, prefer:
 
 ```powershell
-ue blueprint layout.organize --params-file .\layout.json
+ue-cli blueprint layout.organize --params-file .\layout.json
 Get-Content -Raw -Encoding utf8 .\layout.json |
-  ue blueprint layout.organize --params-file -
+  ue-cli blueprint layout.organize --params-file -
 ```
 
 In Windows PowerShell 5.1, explicitly set the pipeline encoding before piping

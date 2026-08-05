@@ -63,9 +63,9 @@ execute_process(
     ERROR_VARIABLE short_error
 )
 if(NOT short_result EQUAL 0)
-    message(FATAL_ERROR "Packaged ue version failed: ${short_output}${short_error}")
+    message(FATAL_ERROR "Packaged ue-cli version failed: ${short_output}${short_error}")
 endif()
-string(FIND "${short_output}" "\"executable\":\"ue\"" short_index)
+string(FIND "${short_output}" "\"executable\":\"ue-cli\"" short_index)
 if(short_index EQUAL -1)
     message(FATAL_ERROR "Packaged short-operation CLI is invalid: ${short_output}")
 endif()
@@ -78,7 +78,7 @@ execute_process(
     ERROR_VARIABLE catalog_error
 )
 if(NOT catalog_result EQUAL 0)
-    message(FATAL_ERROR "Packaged ue catalog failed: ${catalog_output}${catalog_error}")
+    message(FATAL_ERROR "Packaged ue-cli catalog failed: ${catalog_output}${catalog_error}")
 endif()
 string(FIND "${catalog_output}" "\"source\":\"local\"" local_source_index)
 string(FIND "${catalog_output}" "\"total\":" total_index)
@@ -88,7 +88,7 @@ if(
     OR total_index EQUAL -1
     OR root_index EQUAL -1
 )
-    message(FATAL_ERROR "Packaged ue did not resolve its local catalog: ${catalog_output}")
+    message(FATAL_ERROR "Packaged ue-cli did not resolve its local catalog: ${catalog_output}")
 endif()
 
 execute_process(
@@ -99,7 +99,7 @@ execute_process(
     ERROR_VARIABLE skills_error
 )
 if(NOT skills_result EQUAL 0)
-    message(FATAL_ERROR "Packaged ue skills failed: ${skills_output}${skills_error}")
+    message(FATAL_ERROR "Packaged ue-cli skills failed: ${skills_output}${skills_error}")
 endif()
 string(FIND "${skills_output}" "\"source\":\"local\"" skills_source_index)
 string(FIND "${skills_output}" "\"total\":" skills_total_index)
@@ -109,5 +109,5 @@ if(
     OR skills_total_index EQUAL -1
     OR skills_root_index EQUAL -1
 )
-    message(FATAL_ERROR "Packaged ue did not resolve Agent Skills: ${skills_output}")
+    message(FATAL_ERROR "Packaged ue-cli did not resolve Agent Skills: ${skills_output}")
 endif()

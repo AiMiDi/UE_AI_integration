@@ -300,7 +300,7 @@ json binary_help()
         {"ok", true},
         {"schema", "ue.workflow-cli-help.v1"},
         {"product", "UE Workflow DSL"},
-        {"executable", "ue-workflow"},
+        {"executable", "ue-workflow-cli"},
         {"version", UE_WORKFLOW_VERSION},
         {"dsl", "ue.workflow"},
         {"commands", json::array({
@@ -349,7 +349,7 @@ json command_help(const CliOptions& options)
     json command_options = json::array();
     if (command == "doctor")
     {
-        usage = "ue-workflow doctor [--connect]";
+        usage = "ue-workflow-cli doctor [--connect]";
         description =
             "Validate local Workflow contracts and optionally compare both "
             "DSL 1.0 and 2.0 digests with the running Editor.";
@@ -357,7 +357,7 @@ json command_help(const CliOptions& options)
     }
     else if (command == "capabilities")
     {
-        usage = "ue-workflow capabilities [filters] [--connect]";
+        usage = "ue-workflow-cli capabilities [filters] [--connect]";
         description =
             "Search and page the Workflow capability catalog.";
         command_options = json::array({
@@ -379,14 +379,14 @@ json command_help(const CliOptions& options)
     }
     else if (command == "validate")
     {
-        usage = "ue-workflow validate --file <workflow.json|->";
+        usage = "ue-workflow-cli validate --file <workflow.json|->";
         description = "Validate a Workflow without contacting the Editor.";
         command_options = json::array({ "--file <workflow.json|->" });
     }
     else if (command == "plan")
     {
         usage =
-            "ue-workflow plan --file <workflow.json|-> [--connect]";
+            "ue-workflow-cli plan --file <workflow.json|-> [--connect]";
         description =
             "Create an offline plan or bind it to live Editor asset "
             "preconditions.";
@@ -400,7 +400,7 @@ json command_help(const CliOptions& options)
     else if (command == "execute")
     {
         usage =
-            "ue-workflow execute --file <workflow.json|-> "
+            "ue-workflow-cli execute --file <workflow.json|-> "
             "--approve-plan <digest> --receipt <path>";
         description =
             "Execute an approved, Editor-bound Workflow plan.";
@@ -419,7 +419,7 @@ json command_help(const CliOptions& options)
         || command == "resume"
         || command == "rollback")
     {
-        usage = "ue-workflow " + command + " --receipt <path>";
+        usage = "ue-workflow-cli " + command + " --receipt <path>";
         description =
             command == "status"
             ? "Read a Workflow run by its compact receipt."
@@ -434,23 +434,23 @@ json command_help(const CliOptions& options)
     }
     else if (command == "shell")
     {
-        usage = "ue-workflow shell";
+        usage = "ue-workflow-cli shell";
         description = "Start the interactive Workflow CLI shell.";
     }
     else if (command == "help")
     {
         usage =
-            "ue-workflow help composable [scope] | "
-            "ue-workflow help operation <type>";
+            "ue-workflow-cli help composable [scope] | "
+            "ue-workflow-cli help operation <type>";
         description =
             "Inspect composable Workflow operations after loading contracts.";
     }
     else if (command == "operation")
     {
-        usage = "ue <capability-id> [--field value ...]";
+        usage = "ue-cli <capability-id> [--field value ...]";
         description =
-            "Single capability execution moved to the short `ue` CLI. "
-            "`ue-workflow operation run` is not an execution command.";
+            "Single capability execution moved to the short `ue-cli` CLI. "
+            "`ue-workflow-cli operation run` is not an execution command.";
         command_options = json::array({
             "--params <json-object>",
             "--params-file <path|->",
@@ -458,15 +458,15 @@ json command_help(const CliOptions& options)
     }
     else
     {
-        usage = "ue-workflow <command> --help";
-        description = "Unknown ue-workflow command.";
+        usage = "ue-workflow-cli <command> --help";
+        description = "Unknown ue-workflow-cli command.";
     }
 
     return {
         { "ok", true },
         { "schema", "ue.workflow-cli-help.v1" },
         { "product", "UE Workflow DSL" },
-        { "executable", "ue-workflow" },
+        { "executable", "ue-workflow-cli" },
         { "version", UE_WORKFLOW_VERSION },
         { "command", command },
         { "usage", std::move(usage) },
@@ -814,7 +814,7 @@ void resolve_contract_paths(
             const std::vector<std::filesystem::path> candidates = {
                 executable.parent_path() / "Resources" / "Workflow",
                 executable.parent_path() / "Contracts",
-                executable.parent_path() / ".." / "share" / "ue-workflow" / "Contracts",
+                executable.parent_path() / ".." / "share" / "ue-workflow-cli" / "Contracts",
                 executable.parent_path() / ".." / ".." / "Workflow" / "Contracts",
                 std::filesystem::path(UE_WORKFLOW_SOURCE_ROOT) / "Workflow" / "Contracts",
             };
@@ -841,7 +841,7 @@ void resolve_contract_paths(
             const std::vector<std::filesystem::path> candidates = {
                 executable.parent_path() / "Resources" / "Capabilities",
                 executable.parent_path() / "Capabilities",
-                executable.parent_path() / ".." / "share" / "ue-workflow" / "Capabilities",
+                executable.parent_path() / ".." / "share" / "ue-workflow-cli" / "Capabilities",
                 executable.parent_path() / ".." / ".." / "Resources" / "Capabilities",
                 std::filesystem::path(UE_WORKFLOW_SOURCE_ROOT) / "Resources" / "Capabilities",
             };
@@ -919,7 +919,7 @@ void ConfigureWorkflowCaller(
 {
     const std::string invocation_id = ue::api::NewInvocationId();
     client.ConfigureBestEffortCliSession({
-        .name = "ue-workflow",
+        .name = "ue-workflow-cli",
         .version = UE_WORKFLOW_VERSION,
         .command = command,
         .invocation_id = invocation_id,
@@ -1252,13 +1252,13 @@ int run_shell(
         return print_error(
             kExitUsage,
             "shell_requires_tty",
-            "ue-workflow shell requires an interactive terminal.");
+            "ue-workflow-cli shell requires an interactive terminal.");
     }
     std::cerr << "UE Workflow shell. Type 'help' or 'exit'.\n";
     std::string line;
     for (;;)
     {
-        std::cerr << "ue-workflow> ";
+        std::cerr << "ue-workflow-cli> ";
         if (!std::getline(std::cin, line))
         {
             return 0;
@@ -1339,7 +1339,7 @@ int run_command(
         print_json_text(json({
             { "ok", true },
             { "product", "UE Workflow DSL" },
-            { "executable", "ue-workflow" },
+            { "executable", "ue-workflow-cli" },
             { "version", UE_WORKFLOW_VERSION },
             { "dsl", "ue.workflow" },
             { "dslVersion", ue::workflow::DslVersion() },
@@ -1593,7 +1593,7 @@ int run_command(
                 kExitApproval,
                 "approval_required",
                 "Execute requires the exact planDigest from a reviewed "
-                "ue-workflow plan --connect.",
+                "ue-workflow-cli plan --connect.",
                 "/approvePlanDigest");
         }
         json prepare_request = {
@@ -1643,7 +1643,7 @@ int run_command(
                 kExitApproval,
                 "asset_precondition_required",
                 "Editor did not return an execution-ready asset-bound plan; "
-                "run ue-workflow plan --connect again.");
+                "run ue-workflow-cli plan --connect again.");
         }
         if (options.approve_plan != expected_digest)
         {
@@ -1651,7 +1651,7 @@ int run_command(
                 kExitApproval,
                 "plan_changed",
                 "Execute requires the exact planDigest from a reviewed "
-                "ue-workflow plan --connect.",
+                "ue-workflow-cli plan --connect.",
                 "/approvePlanDigest");
         }
         const json approval =

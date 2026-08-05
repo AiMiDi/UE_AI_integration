@@ -86,7 +86,7 @@ Rollback, when eligible, is:
 }
 ```
 
-For MCP, put `requestId` in the domain-tool envelope. The `ue` CLI generates it
+For MCP, put `requestId` in the domain-tool envelope. The `ue-cli` CLI generates it
 when supported. Persistence has no hidden default in this Skill: the caller
 must choose `dirtyOnly` or `saveOnSuccess`; recommend `dirtyOnly` unless the
 caller explicitly authorizes saving.

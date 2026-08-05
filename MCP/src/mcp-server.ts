@@ -639,7 +639,7 @@ export function createMcpServer(
 
   server.tool(
     "ue_cli",
-    "Locate both the ue-workflow DSL CLI and the ue short-operation CLI without contacting Unreal Editor.",
+    "Locate both the ue-workflow-cli DSL CLI and the ue-cli short-operation CLI without contacting Unreal Editor.",
     {},
     async () => {
       try {

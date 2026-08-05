@@ -7,13 +7,13 @@ UE Agent Skill 层把领域知识、调用顺序、风险边界和验收证据�
 它实现四段闭环：
 
 ```text
-ue_skills / ue skills
+ue_skills / ue-cli skills
         │ Load Skills
         ▼
-ue_context / ue help
+ue_context / ue-cli help
         │ Discover exact API
         ▼
-ue_<domain> / ue_workflow / ue <capability>
+ue_<domain> / ue_workflow / ue-cli <capability>
         │ Execute through existing safety gates
         ▼
 structured result + recipe verify operations
@@ -22,7 +22,7 @@ structured result + recipe verify operations
 
 Skill 不是新的任意编排器。`ue_skills` 不连接 Editor，也没有 `run` action；
 recipe 不包含循环、条件、脚本、参数 schema 或数据绑定。精确参数始终来自
-`ue_context` 或 `ue help`，写入仍经过 capability 的 `confirmWrite`、
+`ue_context` 或 `ue-cli help`，写入仍经过 capability 的 `confirmWrite`、
 Workflow 的 plan digest、事务、readback 和 rollback。
 
 ## 客户端入口 Skill
@@ -134,26 +134,26 @@ verify operation，不会重复暴露 save、rollback 或其他写操作。
 短 CLI 从本地包加载机器 recipe，不连接 Editor：
 
 ```powershell
-ue skills --query blueprint
-ue skills --name ue-blueprint-diagnose --recipe scan-and-verify --detail full --json
+ue-cli skills --query blueprint
+ue-cli skills --name ue-blueprint-diagnose --recipe scan-and-verify --detail full --json
 ```
 
 再用本地 capability manifest 发现参数：
 
 ```powershell
-ue help blueprint.scan --json
-ue help blueprint.scan --live-schema --json
+ue-cli help blueprint.scan --json
+ue-cli help blueprint.scan --live-schema --json
 ```
 
 执行和验证仍是普通短操作：
 
 ```powershell
-ue blueprint.scan --asset /Game/Blueprints/BP_Player --json
-ue blueprint.asset.validate --blueprint /Game/Blueprints/BP_Player --json
+ue-cli blueprint.scan --asset /Game/Blueprints/BP_Player --json
+ue-cli blueprint.asset.validate --blueprint /Game/Blueprints/BP_Player --json
 ```
 
 `UE_SKILL_ROOT` 或 `--skill-root` 可覆盖本地 Skill 根目录。普通
-`ue <capability>` 不加载 SkillCatalog，因此不会增加短操作冷启动成本。
+`ue-cli <capability>` 不加载 SkillCatalog，因此不会增加短操作冷启动成本。
 
 ## `ue.agent-skill.v1` 约束
 

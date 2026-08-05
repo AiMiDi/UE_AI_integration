@@ -123,13 +123,18 @@ FMCPResult PlanWorkflow(
 
 FMCPResult ExecuteWorkflow(UEAIIntegration::Workflow::FWorkflowRuntime& Runtime,
                            const TSharedPtr<FJsonObject>& Workflow, const FString& PlanDigest,
-                           bool bSaveOnSuccess = false, const FString& DetailLevel = TEXT("full"))
+                           bool bSaveOnSuccess = false, const FString& DetailLevel = TEXT("full"),
+                           const FString& RequestId = FString())
 {
 	TSharedPtr<FJsonObject> Request = MakeShared<FJsonObject>();
 	Request->SetStringField(TEXT("action"), TEXT("execute"));
 	Request->SetObjectField(TEXT("workflow"), Workflow);
 	Request->SetStringField(TEXT("approvePlanDigest"), PlanDigest);
 	Request->SetStringField(TEXT("detailLevel"), DetailLevel);
+	if (!RequestId.IsEmpty())
+	{
+		Request->SetStringField(TEXT("requestId"), RequestId);
+	}
 	if (bSaveOnSuccess)
 	{
 		Request->SetBoolField(TEXT("saveOnSuccess"), true);
@@ -1009,10 +1014,19 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 		1);
 	FMCPResult BlueprintResult;
 	int32 BlueprintCompileCount = 0;
+	const FString BlueprintRequestId = FString::Printf(
+		TEXT("workflow-idempotency-%s"),
+		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 	{
 		FScopedBlueprintCompileCounter CompileCounter(BlueprintPath);
 		BlueprintResult =
-			ExecuteWorkflow(Runtime, BlueprintWorkflow, BlueprintDigest);
+			ExecuteWorkflow(
+				Runtime,
+				BlueprintWorkflow,
+				BlueprintDigest,
+				false,
+				TEXT("full"),
+				BlueprintRequestId);
 		BlueprintCompileCount = CompileCounter.GetCount();
 	}
 	TestTrue(TEXT("Blueprint workflow executes"), BlueprintResult.bOk);
@@ -1022,6 +1036,48 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 		1);
 	if (BlueprintResult.bOk)
 	{
+		const FString OriginalRunId =
+			BlueprintResult.Data->GetStringField(TEXT("runId"));
+		const FMCPResult SameInstanceReplay = ExecuteWorkflow(
+			Runtime,
+			BlueprintWorkflow,
+			BlueprintDigest,
+			false,
+			TEXT("summary"),
+			BlueprintRequestId);
+		TestTrue(
+			TEXT("Same requestId reattaches to the persisted Workflow result"),
+			SameInstanceReplay.bOk
+				&& SameInstanceReplay.Data->GetBoolField(TEXT("idempotentReplay"))
+				&& SameInstanceReplay.Data->GetStringField(TEXT("runId")) == OriginalRunId);
+		const FMCPResult ConflictingReplay = ExecuteWorkflow(
+			Runtime,
+			BlueprintWorkflow,
+			BlueprintDigest,
+			true,
+			TEXT("summary"),
+			BlueprintRequestId);
+		TestFalse(
+			TEXT("A reused requestId with a different payload is rejected"),
+			ConflictingReplay.bOk);
+		TestEqual(
+			TEXT("Workflow requestId conflict has a stable code"),
+			ConflictingReplay.Error.Code,
+			FString(TEXT("idempotency_conflict")));
+		UEAIIntegration::Workflow::FWorkflowRuntime IdempotencyJournalReader(
+			*Subsystem->GetRegistry());
+		const FMCPResult RestartReplay = ExecuteWorkflow(
+			IdempotencyJournalReader,
+			BlueprintWorkflow,
+			BlueprintDigest,
+			false,
+			TEXT("summary"),
+			BlueprintRequestId);
+		TestTrue(
+			TEXT("requestId reattaches after Workflow Runtime reload"),
+			RestartReplay.bOk
+				&& RestartReplay.Data->GetBoolField(TEXT("idempotentReplay"))
+				&& RestartReplay.Data->GetStringField(TEXT("runId")) == OriginalRunId);
 		TestTrue(
 			TEXT("Workflow v1 execution uses durable v2 runtime"),
 			BlueprintResult.Data->GetObjectField(TEXT("receipt"))

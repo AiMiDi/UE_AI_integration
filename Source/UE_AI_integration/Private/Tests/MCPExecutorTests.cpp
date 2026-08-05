@@ -27,6 +27,9 @@ public:
 		if (Params.IsValid())
 		{
 			Params->TryGetStringField(TEXT("requestId"), LastRequestId);
+			Params->TryGetStringField(
+				TEXT("__callerSessionId"),
+				LastCallerSessionId);
 		}
 		if (bFails)
 		{
@@ -37,12 +40,17 @@ public:
 
 	int32 GetExecuteCount() const { return ExecuteCount; }
 	const FString& GetLastRequestId() const { return LastRequestId; }
+	const FString& GetLastCallerSessionId() const
+	{
+		return LastCallerSessionId;
+	}
 
 private:
 	FString Id;
 	bool bFails = false;
 	int32 ExecuteCount = 0;
 	FString LastRequestId;
+	FString LastCallerSessionId;
 };
 }
 
@@ -74,6 +82,7 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 	Registry.LoadCapabilityManifests();
 	TSharedPtr<FExecutorTestTool> IdempotentTool;
 	TSharedPtr<FExecutorTestTool> ContextRequestIdTool;
+	TSharedPtr<FExecutorTestTool> LeaseAcquireTool;
 	for (const TSharedPtr<FJsonObject>& Descriptor : Registry.GetCapabilityDescriptors())
 	{
 		const FString Id = Descriptor->GetStringField(TEXT("id"));
@@ -89,6 +98,10 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 		if (Id == TEXT("content.asset.change.rollback"))
 		{
 			ContextRequestIdTool = Tool;
+		}
+		if (Id == TEXT("production.lease.acquire"))
+		{
+			LeaseAcquireTool = Tool;
 		}
 		Registry.Register(Tool);
 		Registry.EndDomainRegistration();
@@ -262,6 +275,51 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 	TestTrue(
 		TEXT("Allowlisted legacy commandlet remains callable without requestId"),
 		LegacyCommandlet.bOk);
+
+	TSharedPtr<FJsonObject> LeaseParams = MakeShared<FJsonObject>();
+	LeaseParams->SetStringField(TEXT("type"), TEXT("pie"));
+	FMCPExecutionContext MissingLeaseSession;
+	MissingLeaseSession.Capability = TEXT("production.lease.acquire");
+	MissingLeaseSession.Params = LeaseParams;
+	const FMCPResult MissingLeaseSessionResult =
+		Executor.Execute(MissingLeaseSession);
+	TestFalse(
+		TEXT("Lease acquisition requires a registered caller session"),
+		MissingLeaseSessionResult.bOk);
+	TestEqual(
+		TEXT("Missing lease caller has a stable error"),
+		MissingLeaseSessionResult.Error.Code,
+		FString(TEXT("client_session_required")));
+
+	FMCPExecutionContext BoundLeaseSession = MissingLeaseSession;
+	BoundLeaseSession.CallerSessionId = TEXT("session-bound-by-transport");
+	const FMCPResult BoundLeaseResult = Executor.Execute(BoundLeaseSession);
+	TestTrue(
+		TEXT("Registered caller reaches the lease handler"),
+		BoundLeaseResult.bOk);
+	TestTrue(TEXT("Lease fixture tool is registered"), LeaseAcquireTool.IsValid());
+	if (LeaseAcquireTool.IsValid())
+	{
+		TestEqual(
+			TEXT("Lease handler receives only the transport-bound session"),
+			LeaseAcquireTool->GetLastCallerSessionId(),
+			BoundLeaseSession.CallerSessionId);
+	}
+	TSharedPtr<FJsonObject> SpoofedLeaseParams =
+		MakeShared<FJsonObject>(*LeaseParams);
+	SpoofedLeaseParams->SetStringField(
+		TEXT("sessionId"),
+		TEXT("spoofed-session"));
+	FMCPExecutionContext SpoofedLease = BoundLeaseSession;
+	SpoofedLease.Params = SpoofedLeaseParams;
+	const FMCPResult SpoofedLeaseResult = Executor.Execute(SpoofedLease);
+	TestFalse(
+		TEXT("Public lease params cannot spoof another session"),
+		SpoofedLeaseResult.bOk);
+	TestEqual(
+		TEXT("Spoofed session is rejected by the public schema"),
+		SpoofedLeaseResult.Error.Code,
+		FString(TEXT("invalid_params")));
 
 	return true;
 }

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { basename, extname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { UEApiError } from "./ue-bridge.js";
 const MAX_TEXT = 4 * 1024 * 1024;
+const MAX_ASSET_WORKER_OUTPUT = 1024 * 1024;
 function inside(root, candidate) {
     const rel = relative(root, candidate);
     return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
@@ -104,6 +105,203 @@ function publicConfigValue(key, value, source) {
         source,
     };
 }
+function engineRoot(params) {
+    if (params.engineRoot === undefined)
+        return undefined;
+    if (typeof params.engineRoot !== "string" || !isAbsolute(params.engineRoot)) {
+        throw new UEApiError({ code: "engine_root_invalid", message: "engineRoot must be an explicit absolute Engine checkout root." });
+    }
+    const candidate = resolve(params.engineRoot);
+    if (!existsSync(candidate) || !statSync(candidate).isDirectory()) {
+        throw new UEApiError({ code: "engine_root_invalid", message: "engineRoot must be an existing directory." });
+    }
+    const real = realpathSync(candidate);
+    if (!existsSync(resolve(real, "Engine", "Build", "Build.version"))
+        || !existsSync(resolve(real, "Engine", "Plugins"))) {
+        throw new UEApiError({ code: "engine_root_invalid", message: "engineRoot must contain Engine/Build/Build.version and Engine/Plugins." });
+    }
+    return real;
+}
+function parseDescriptor(path, code) {
+    try {
+        const parsed = JSON.parse(boundedText(path));
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+            throw new Error("descriptor root is not an object");
+        return parsed;
+    }
+    catch (error) {
+        if (error instanceof UEApiError)
+            throw error;
+        throw new UEApiError({ code, message: `${basename(path)} is invalid JSON: ${error.message}` });
+    }
+}
+function scanPluginRoot(scanRoot, source, diagnostics, maximumDescriptors) {
+    if (!existsSync(scanRoot) || !statSync(scanRoot).isDirectory())
+        return [];
+    const canonicalRoot = realpathSync(scanRoot);
+    const descriptors = [];
+    const pending = [{ path: canonicalRoot, depth: 0 }];
+    while (pending.length > 0) {
+        const current = pending.pop();
+        if (current.depth > 16) {
+            diagnostics.push({ severity: "warning", code: "plugin_scan_depth_exceeded", source, path: relative(canonicalRoot, current.path) });
+            continue;
+        }
+        for (const entry of readdirSync(current.path, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+            const candidate = resolve(current.path, entry.name);
+            if (entry.isSymbolicLink()) {
+                diagnostics.push({ severity: "warning", code: "plugin_scan_link_skipped", source, path: relative(canonicalRoot, candidate) });
+                continue;
+            }
+            if (entry.isDirectory()) {
+                const real = realpathSync(candidate);
+                if (inside(canonicalRoot, real))
+                    pending.push({ path: real, depth: current.depth + 1 });
+                else
+                    diagnostics.push({ severity: "error", code: "plugin_root_escape", source, path: relative(canonicalRoot, candidate) });
+                continue;
+            }
+            if (!entry.isFile() || extname(entry.name).toLowerCase() !== ".uplugin")
+                continue;
+            maximumDescriptors.value += 1;
+            if (maximumDescriptors.value > 20_000) {
+                throw new UEApiError({ code: "plugin_scan_limit_exceeded", message: "Plugin descriptor discovery exceeded the 20,000 file limit." });
+            }
+            try {
+                descriptors.push({
+                    name: basename(entry.name, extname(entry.name)),
+                    source,
+                    descriptorPath: realpathSync(candidate),
+                    root: canonicalRoot,
+                    data: parseDescriptor(candidate, "uplugin_invalid"),
+                });
+            }
+            catch (error) {
+                const payload = error;
+                diagnostics.push({ severity: "warning", code: payload.code ?? "uplugin_invalid", source, path: relative(canonicalRoot, candidate), message: payload.message });
+            }
+        }
+    }
+    return descriptors;
+}
+function pluginKey(name) {
+    return process.platform === "win32" ? name.toLowerCase() : name;
+}
+function engineBuildVersion(root) {
+    return parseDescriptor(resolve(root, "Engine", "Build", "Build.version"), "engine_build_version_invalid");
+}
+function validatePlugins(root, project, params) {
+    const diagnostics = [];
+    const engine = engineRoot(params);
+    const descriptorCount = { value: 0 };
+    const indexed = [];
+    indexed.push(...scanPluginRoot(resolve(root, "Plugins"), "project", diagnostics, descriptorCount));
+    const additional = Array.isArray(project.data.AdditionalPluginDirectories)
+        ? project.data.AdditionalPluginDirectories
+        : [];
+    for (const raw of additional) {
+        if (typeof raw !== "string" || raw.trim() === "")
+            continue;
+        const candidate = resolve(dirname(project.path), raw);
+        if (!existsSync(candidate) || !statSync(candidate).isDirectory()) {
+            diagnostics.push({ severity: "error", code: "additional_plugin_root_missing", path: raw });
+            continue;
+        }
+        const real = realpathSync(candidate);
+        if (!inside(root, real) && (!engine || !inside(engine, real))) {
+            diagnostics.push({ severity: "error", code: "additional_plugin_root_outside_allowed_roots", path: raw });
+            continue;
+        }
+        indexed.push(...scanPluginRoot(real, "additional", diagnostics, descriptorCount));
+    }
+    if (engine)
+        indexed.push(...scanPluginRoot(resolve(engine, "Engine", "Plugins"), "engine", diagnostics, descriptorCount));
+    const precedence = { project: 0, additional: 1, engine: 2 };
+    indexed.sort((left, right) => precedence[left.source] - precedence[right.source] || left.name.localeCompare(right.name));
+    const byName = new Map();
+    for (const descriptor of indexed) {
+        const key = pluginKey(descriptor.name);
+        const existing = byName.get(key);
+        if (!existing)
+            byName.set(key, descriptor);
+        else
+            diagnostics.push({
+                severity: "warning",
+                code: "plugin_shadowed",
+                plugin: descriptor.name,
+                selectedSource: existing.source,
+                shadowedSource: descriptor.source,
+                shadowedPath: relative(descriptor.root, descriptor.descriptorPath),
+            });
+    }
+    const resolvedPlugins = [];
+    const visited = new Set();
+    const resolvePlugin = (name, optional, requestedBy) => {
+        const key = pluginKey(name);
+        if (visited.has(key))
+            return;
+        visited.add(key);
+        const descriptor = byName.get(key);
+        if (!descriptor) {
+            const unresolvedSeverity = engine ? (optional ? "warning" : "error") : "info";
+            diagnostics.push({
+                severity: unresolvedSeverity,
+                code: engine ? (optional ? "plugin_optional_dependency_missing" : "plugin_dependency_missing") : "plugin_unresolved_external",
+                plugin: name,
+                requestedBy,
+            });
+            resolvedPlugins.push({ name, source: "unresolved", requestedBy, optional });
+            return;
+        }
+        resolvedPlugins.push({
+            name,
+            source: descriptor.source,
+            requestedBy,
+            optional,
+            descriptorPath: relative(descriptor.root, descriptor.descriptorPath),
+            version: descriptor.data.Version ?? null,
+            versionName: descriptor.data.VersionName ?? null,
+        });
+        for (const dependency of Array.isArray(descriptor.data.Plugins) ? descriptor.data.Plugins : []) {
+            if (typeof dependency !== "object" || dependency === null)
+                continue;
+            const value = dependency;
+            if (value.Enabled === false || typeof value.Name !== "string")
+                continue;
+            resolvePlugin(value.Name, value.Optional === true, name);
+        }
+    };
+    for (const plugin of Array.isArray(project.data.Plugins) ? project.data.Plugins : []) {
+        if (typeof plugin !== "object" || plugin === null)
+            continue;
+        const value = plugin;
+        if (value.Enabled === false || typeof value.Name !== "string")
+            continue;
+        resolvePlugin(value.Name, value.Optional === true, null);
+    }
+    let engineData = null;
+    if (engine) {
+        const build = engineBuildVersion(engine);
+        const major = Number(build.MajorVersion);
+        const minor = Number(build.MinorVersion);
+        const association = typeof project.data.EngineAssociation === "string" ? project.data.EngineAssociation : "";
+        const associationMatches = /^\d+\.\d+/.test(association) ? association.startsWith(`${major}.${minor}`) : null;
+        if (associationMatches === false)
+            diagnostics.push({ severity: "error", code: "engine_association_mismatch", engineAssociation: association, engineVersion: `${major}.${minor}` });
+        if (associationMatches === null && association !== "")
+            diagnostics.push({ severity: "info", code: "engine_association_unresolved", engineAssociation: association });
+        engineData = { major, minor, patch: Number(build.PatchVersion), associationMatches };
+    }
+    return {
+        schema: "ue.local-project-validation.v2",
+        valid: !diagnostics.some((item) => item.severity === "error"),
+        diagnostics,
+        plugins: resolvedPlugins,
+        pluginIndex: { descriptorCount: descriptorCount.value, engineRootSupplied: engine !== undefined },
+        engine: engineData,
+        buildConfiguration: { present: existsSync(resolve(root, "BuildConfiguration.xml")) },
+    };
+}
 export class LocalProjectExecutor {
     async execute(id, params = {}) {
         const root = projectRoot(params);
@@ -143,19 +341,7 @@ export class LocalProjectExecutor {
             return { schema: "ue.local-project-config.v1", projectRoot: root, files: files.map((file) => relative(root, file)), merged };
         }
         if (id === "production.project.validate") {
-            const diagnostics = [];
-            for (const plugin of Array.isArray(project.data.Plugins) ? project.data.Plugins : []) {
-                if (typeof plugin !== "object" || plugin === null || typeof plugin.Name !== "string")
-                    continue;
-                if (plugin.Enabled === false)
-                    continue;
-                const name = String(plugin.Name);
-                const local = resolve(root, "Plugins", name, `${name}.uplugin`);
-                if (!existsSync(local))
-                    diagnostics.push({ severity: "warning", code: "plugin_not_project_local", plugin: name, message: "Enabled plugin was not found under the project Plugins directory; it must be supplied by Engine or another allowed plugin root." });
-            }
-            const buildConfig = resolve(root, "BuildConfiguration.xml");
-            return { schema: "ue.local-project-validation.v1", valid: !diagnostics.some((item) => item.severity === "error"), diagnostics, buildConfiguration: { present: existsSync(buildConfig) } };
+            return validatePlugins(root, project, params);
         }
         throw new UEApiError({ code: "local_project_operation_unsupported", message: `Unsupported localProject capability ${id}.` });
     }
@@ -169,17 +355,28 @@ export class LocalAssetExecutor {
             const child = spawn(process.execPath, [script], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
             let output = "";
             let errors = "";
+            let outputExceeded = false;
             const abort = () => child.kill();
             context?.signal?.addEventListener("abort", abort, { once: true });
             child.stdout.setEncoding("utf8");
             child.stderr.setEncoding("utf8");
-            child.stdout.on("data", (chunk) => { output = (output + chunk).slice(-4 * 1024 * 1024); });
+            child.stdout.on("data", (chunk) => {
+                if (outputExceeded)
+                    return;
+                output += chunk;
+                if (Buffer.byteLength(output, "utf8") > MAX_ASSET_WORKER_OUTPUT) {
+                    outputExceeded = true;
+                    child.kill();
+                }
+            });
             child.stderr.on("data", (chunk) => { errors = (errors + chunk).slice(-8192); });
             child.on("error", (error) => rejectPromise(new UEApiError({ code: "asset_worker_unavailable", message: error.message })));
             child.on("close", (code) => {
                 context?.signal?.removeEventListener("abort", abort);
                 if (context?.signal?.aborted)
                     return rejectPromise(new UEApiError({ code: "request_cancelled", message: "Asset Worker request was cancelled." }));
+                if (outputExceeded)
+                    return rejectPromise(new UEApiError({ code: "asset_output_budget_exceeded", message: "Asset Worker output exceeded the 1 MiB transport ceiling." }));
                 try {
                     const payload = JSON.parse(output);
                     if (!payload.ok || !payload.data)
@@ -193,7 +390,18 @@ export class LocalAssetExecutor {
             const otherAssetPath = id === "production.asset.package.diff"
                 ? resolveProjectFile(root, params.otherAssetPath, [".uasset", ".uexp"])
                 : undefined;
-            child.stdin.end(JSON.stringify({ operation: id, assetPath: asset, otherAssetPath, engineVersion: params.engineVersion ?? "5.3" }));
+            child.stdin.end(JSON.stringify({
+                operation: id,
+                assetPath: asset,
+                otherAssetPath,
+                engineVersion: params.engineVersion ?? "5.3",
+                detail: params.detail,
+                sections: params.sections,
+                offset: params.offset,
+                limit: params.limit,
+                targetTokens: params.targetTokens,
+                maxBytes: params.maxBytes,
+            }));
         });
     }
 }

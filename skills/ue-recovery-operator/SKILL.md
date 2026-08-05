@@ -7,7 +7,7 @@ description: Recover interrupted or stalled Unreal Editor agent work with bounde
 
 Recover evidence before repeating work. Load
 `references/recovery-contract.md`, discover exact schemas through `ue_context`
-or `ue help`, and keep all writes inside Workflow or Recipe Runner.
+or `ue-cli help`, and keep all writes inside Workflow or Recipe Runner.
 
 ## Run the recovery loop
 

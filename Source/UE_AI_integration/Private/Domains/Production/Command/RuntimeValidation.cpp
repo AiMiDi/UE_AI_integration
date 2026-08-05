@@ -225,7 +225,7 @@ public:
 		FString ApprovePlanDigest;
 		bool bOverride = false;
 		Params->TryGetStringField(TEXT("type"), Type);
-		Params->TryGetStringField(TEXT("sessionId"), SessionId);
+		Params->TryGetStringField(TEXT("__callerSessionId"), SessionId);
 		Params->TryGetStringField(TEXT("approvePlanDigest"), ApprovePlanDigest);
 		Params->TryGetBoolField(TEXT("override"), bOverride);
 		TSharedPtr<FJsonObject> Lease;
@@ -255,7 +255,7 @@ public:
 		FString Type;
 		FString SessionId;
 		Params->TryGetStringField(TEXT("type"), Type);
-		Params->TryGetStringField(TEXT("sessionId"), SessionId);
+		Params->TryGetStringField(TEXT("__callerSessionId"), SessionId);
 		FString Error;
 		if (!Service->ReleaseLease(Type, SessionId, Error))
 		{

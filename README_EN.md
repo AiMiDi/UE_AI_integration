@@ -86,7 +86,7 @@ but those versions have not all been compiled locally.
 - The [short-operation CLI](docs/UE_SHORT_CLI.md) takes a manifest capability ID
   as its first argument. It uses the local schema for one `/api/execute` call by
   default, supports forced live validation with `--live-schema`, and reuses the
-  catalog and connection in `ue shell`; `ue-workflow` contains only DSL commands.
+  catalog and connection in `ue-cli shell`; `ue-workflow-cli` contains only DSL commands.
 - [UE Agent Skills](docs/UE_AGENT_SKILLS.md) ships eleven validated domain Skills
   and capability recipes for a Load → Discover → Execute → See Results loop
   without adding a generic script executor.
@@ -94,7 +94,7 @@ but those versions have not all been compiled locally.
 ## Architecture
 
 ```text
-MCP client / ue CLI
+MCP client / ue-cli
         │
         ├── HTTP :9847 ──► UE_AI_integration Editor Module
         │                    ├── Core / Transport / Domains
@@ -184,7 +184,7 @@ disable the service locally and shows:
 
 - MCP callers registered with a five-second heartbeat and expired after
   fifteen seconds without one.
-- One-shot `ue` and `ue-workflow` invocations, attributed by `invocationId` but
+- One-shot `ue-cli` and `ue-workflow-cli` invocations, attributed by `invocationId` but
   excluded from the online-connection count.
 - Capability, Workflow Run, and Durable Job status, duration, error code, and
   `requestId/runId/jobId`. Request parameters, response bodies, and image data
@@ -270,7 +270,7 @@ offline:
 `ue_cli` does not contact the Editor. It locates both executables through
 `UE_CLI` / `UE_WORKFLOW_CLI`, packaged `CLI/bin`, `PATH`, and development build
 directories. The existing workflow locator fields remain stable and a new
-`shortCli` result describes `ue`. `scripts/build_plugin.bat` packages both
+`shortCli` result describes `ue-cli`. `scripts/build_plugin.bat` packages both
 executables, the Workflow Contracts/Capabilities, and MCP production
 dependencies.
 
@@ -301,24 +301,24 @@ The short-operation CLI uses the same capability contract as the six domain MCP
 tools:
 
 ```powershell
-ue blueprint.asset.get --name /Game/UI/WBP_Login
-ue scene.actor.spawn --type PointLight --name KeyLight --location '[0,0,300]'
-ue production.job.status --job-id job-123
-ue skills --query blueprint
-ue trace doctor
-ue trace import --trace-path D:\Traces\sample.utrace --backend local
-ue trace query timing --trace-id trace-local-... --operation frames --limit 100
-ue shell
+ue-cli blueprint.asset.get --name /Game/UI/WBP_Login
+ue-cli scene.actor.spawn --type PointLight --name KeyLight --location '[0,0,300]'
+ue-cli production.job.status --job-id job-123
+ue-cli skills --query blueprint
+ue-cli trace doctor
+ue-cli trace import --trace-path D:\Traces\sample.utrace --backend local
+ue-cli trace query timing --trace-id trace-local-... --operation frames --limit 100
+ue-cli shell
 ```
 
-`ue` does not link WorkflowCore. By default it maps arguments with the packaged
+`ue-cli` does not link WorkflowCore. By default it maps arguments with the packaged
 manifests and sends one `/api/execute` request; the Editor performs final
 validation. `--live-schema` first fetches the exact Editor descriptor to
-diagnose contract drift or force an availability check. `ue shell` loads the
+diagnose contract drift or force an availability check. `ue-cli shell` loads the
 catalog once and reuses an HTTP keep-alive connection, while ordinary commands
 still exit immediately. Starting a durable job returns its `jobId` immediately;
 the CLI never waits automatically. Deterministic multi-step asset edits remain
-in `ue-workflow`. `ue trace` can invoke manifest-declared `localTrace`
+in `ue-workflow-cli`. `ue-cli trace` can invoke manifest-declared `localTrace`
 capabilities while the Editor is closed; see
 [Rendering Debug Evidence and Offline Insights](docs/UE_TRACE_INSIGHTS.md) for
 recording targets, path boundaries, and the provider-adapter matrix.
@@ -326,9 +326,9 @@ recording targets, path boundaries, and the provider-adapter matrix.
 The Workflow CLI uses the offline/online catalog query contract:
 
 ```powershell
-ue-workflow capabilities --query debug --domain blueprint --risk interactive --limit 10
-ue-workflow capabilities --connect --available-only --domain scene --limit 25
-ue-workflow capabilities --connect --operation blueprint.debug.session.get --detail full
+ue-workflow-cli capabilities --query debug --domain blueprint --risk interactive --limit 10
+ue-workflow-cli capabilities --connect --available-only --domain scene --limit 25
+ue-workflow-cli capabilities --connect --operation blueprint.debug.session.get --detail full
 ```
 
 Without `--connect`, the command reads the manifests packaged with the CLI.
@@ -483,7 +483,7 @@ in an isolated validation project.
 The `BuildPlugin` package retains the root `CMakeLists.txt` plus the `CLI` and
 `Workflow` sources. Prebuilt programs under `CLI/bin` target only the host that
 ran the packaging script; after copying the package to another platform, run
-`cmake -S .` from the package root to build native `ue` and `ue-workflow`
+`cmake -S .` from the package root to build native `ue-cli` and `ue-workflow-cli`
 binaries.
 
 When a compatible Editor is running, continue with read-only and reversible

@@ -7,12 +7,12 @@ manifest、plan digest、Workflow、结构 Diff 或 rollback 合同。
 ## 发现与 Unicode
 
 Capability manifest 可用 `search.title`、`search.keywords` 和
-`search.aliases` 描述用户可见的名称。Editor、MCP、`ue capabilities` 与
-`ue-workflow capabilities` 使用同一 tokenization、AND 匹配、稳定排序和
+`search.aliases` 描述用户可见的名称。Editor、MCP、`ue-cli capabilities` 与
+`ue-workflow-cli capabilities` 使用同一 tokenization、AND 匹配、稳定排序和
 `match.score/matchedFields/matchedTokens` 结果合同。因此 `layout`、`align`、
 `comment group`、`graph organize` 与“排版/分组/注释框”等查询能定位同一能力。
 
-Windows 的 `ue` 与 `ue-workflow` 使用宽字符 argv，并把文件、stdin 和重定向
+Windows 的 `ue-cli` 与 `ue-workflow-cli` 使用宽字符 argv，并把文件、stdin 和重定向
 输出统一到无 BOM UTF-8；输入还接受带 BOM 的 UTF-8、UTF-16LE 和 UTF-16BE。
 复杂 PowerShell JSON 推荐 `--params-file <path>` 或 `--params-file -`。Windows
 PowerShell 5.1 必须先设置 `$OutputEncoding`；上游已替换为 `?` 的字符无法恢复。

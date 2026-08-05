@@ -38,8 +38,8 @@ try {
 
     $required = @(
         'UE_AI_integration.uplugin',
-        'CLI/bin/ue.exe',
-        'CLI/bin/ue-workflow.exe',
+        'CLI/bin/ue-cli.exe',
+        'CLI/bin/ue-workflow-cli.exe',
         'MCP/package.json',
         'MCP/dist/index.js',
         'MCP/dist/local-capability-cli.js',
@@ -93,8 +93,8 @@ try {
     $entryRepeat = $entryRepeatOutput | Out-String | ConvertFrom-Json
     Assert-Condition ($entryRepeat.results[0].status -eq 'unchanged') 'Repeated entry Skill install must be idempotent.'
 
-    $ue = Join-Path $bundleRoot 'CLI/bin/ue.exe'
-    $workflow = Join-Path $bundleRoot 'CLI/bin/ue-workflow.exe'
+    $ue = Join-Path $bundleRoot 'CLI/bin/ue-cli.exe'
+    $workflow = Join-Path $bundleRoot 'CLI/bin/ue-workflow-cli.exe'
     $previousTraceTransport = $env:UEAI_TRACE_TRANSPORT
     try {
         # Black-box validation owns a one-shot Worker. It must not leave a
@@ -103,19 +103,19 @@ try {
         $doctorArgs = @('doctor', '--full', '--bundle', $bundleRoot, '--json')
         if ($EditorEndpoint) { $doctorArgs += @('--endpoint', $EditorEndpoint) }
         $doctor = Invoke-JsonCommand $ue $doctorArgs
-        Assert-Condition ($doctor.ok -eq $true) 'ue doctor --full did not succeed.'
+        Assert-Condition ($doctor.ok -eq $true) 'ue-cli doctor --full did not succeed.'
 
         $testTools = $null
         if ($EditorEndpoint) {
             $testToolsArgs = @('test-tools', '--bundle', $bundleRoot, '--endpoint', $EditorEndpoint, '--json')
             $testTools = Invoke-JsonCommand $ue $testToolsArgs
-            Assert-Condition ($testTools.ok -eq $true) 'ue test-tools did not succeed.'
+            Assert-Condition ($testTools.ok -eq $true) 'ue-cli test-tools did not succeed.'
         }
     }
     finally { $env:UEAI_TRACE_TRANSPORT = $previousTraceTransport }
 
     $workflowDoctor = Invoke-JsonCommand $workflow @('doctor', '--json')
-    Assert-Condition ($workflowDoctor.ok -eq $true) 'ue-workflow doctor did not succeed.'
+    Assert-Condition ($workflowDoctor.ok -eq $true) 'ue-workflow-cli doctor did not succeed.'
     $capabilities = Invoke-JsonCommand $ue @('capabilities', '--limit', '1', '--json')
     Assert-Condition ($capabilities.ok -eq $true) 'Packaged capability query failed.'
     $skills = Invoke-JsonCommand $ue @('skills', '--limit', '1', '--json')

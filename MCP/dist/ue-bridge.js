@@ -210,16 +210,18 @@ export class UEClient {
         }
         catch (error) {
             if (externalSignal?.aborted) {
+                let cancelAck = {
+                    requestId: cancellationRequestId,
+                    cancelPending: false,
+                    state: "cancelAckUnavailable",
+                };
                 if (cancellationRequestId !== undefined) {
-                    await this.cancelExecution(cancellationRequestId, sessionId);
+                    cancelAck = await this.cancelExecution(cancellationRequestId, sessionId);
                 }
                 throw new UEApiError({
                     code: "request_cancelled",
                     message: "The MCP client cancelled the Unreal execution request.",
-                    details: {
-                        requestId: cancellationRequestId,
-                        cancelPending: true,
-                    },
+                    details: cancelAck,
                 });
             }
             throw new UEApiError({
@@ -263,17 +265,21 @@ export class UEClient {
             if (sessionId !== undefined) {
                 headers["X-UEAI-Session-Id"] = sessionId;
             }
-            await this.fetchImpl(`${this.baseUrl}/api/execute/cancel`, {
+            const response = await this.fetchImpl(`${this.baseUrl}/api/execute/cancel`, {
                 method: "POST",
                 headers,
                 body: JSON.stringify({ requestId }),
                 signal: AbortSignal.timeout(1_000),
             });
+            const payload = await response.json();
+            if (isRecord(payload) && isRecord(payload.data))
+                return payload.data;
         }
         catch {
             // Cancellation is best effort after the client has stopped waiting. The
             // Editor still honors its own safe-boundary timeout and journal.
         }
+        return { requestId, cancelPending: false, state: "cancelAckUnavailable" };
     }
     async tryRegister() {
         if (!this.sessionRequested ||

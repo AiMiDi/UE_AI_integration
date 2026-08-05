@@ -15,7 +15,7 @@ produce a bounded trace; use the local Trace Worker for offline semantic data.
 2. Use `analyze-existing-trace` for an existing `.utrace` file, including when
    Unreal Editor is closed.
 3. Load `references/trace-insights-workflow.md` and discover every operation
-   through `ue_context` or `ue help` before execution.
+   through `ue_context` or `ue-cli help` before execution.
 
 ## Guardrails
 
@@ -37,4 +37,3 @@ Report trace/job IDs, SHA-256, Engine/protocol/contract identity, target and
 Region, provider availability, exact query range/filter/page, normalized export
 artifact IDs, partial/crash status, and whether an Insights view mapping was
 applied. Do not return unbounded raw event streams.
-

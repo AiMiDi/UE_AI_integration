@@ -93,6 +93,8 @@ private:
 	struct FRunRecord
 	{
 		FString RunId;
+		FString RequestId;
+		FString RequestPayloadDigest;
 		FString ServerInstanceId;
 		FString WorkflowId;
 		FString DslVersion = TEXT("1.0");
@@ -218,6 +220,9 @@ private:
 		FString& OutError) const;
 
 	bool LoadRun(const FString& RunId, FRunRecord& OutRecord) const;
+	bool FindRunByRequestId(
+		const FString& RequestId,
+		FRunRecord& OutRecord) const;
 	bool SaveRun(const FRunRecord& Record, FString& OutError) const;
 	FString GetRunPath(const FString& RunId) const;
 	FString GetRunDirectory(const FString& RunId) const;

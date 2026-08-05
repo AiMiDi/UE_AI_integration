@@ -242,16 +242,16 @@ artifact，不返回无限事件流。
 ### CLI
 
 ```powershell
-ue trace doctor
-ue trace target list
-ue trace import --trace-path D:\Traces\sample.utrace --backend local
-ue trace providers --trace-id trace-local-...
-ue trace query timing --trace-id trace-local-... --operation frames --limit 100
-ue trace export --trace-id trace-local-... --provider timing --operation timers --format json
-ue trace open --trace-id trace-local-... --view timing
+ue-cli trace doctor
+ue-cli trace target list
+ue-cli trace import --trace-path D:\Traces\sample.utrace --backend local
+ue-cli trace providers --trace-id trace-local-...
+ue-cli trace query timing --trace-id trace-local-... --operation frames --limit 100
+ue-cli trace export --trace-id trace-local-... --provider timing --operation timers --format json
+ue-cli trace open --trace-id trace-local-... --view timing
 ```
 
-原有 `ue production.trace.*` 调用继续有效。`backend=auto` 只按 manifest 和目标
+`ue-cli production.trace.*` 调用继续有效。`backend=auto` 只按 manifest 和目标
 规则路由；显式 `editor` 或 `local` 失败时不会静默切换。带
 `trace-local-*`、`trace-analysis-local-*` 或 `trace-launch-local-*` 命名空间的
 Job/Trace ID 会由 CLI/MCP 路由到 Worker。Editor 未启动时，`ue_production` 仅允许

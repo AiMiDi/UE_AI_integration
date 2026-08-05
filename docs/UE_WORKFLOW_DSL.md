@@ -1,7 +1,7 @@
 # UE Workflow DSL / CLI
 
 `UE Workflow DSL` 用于把围绕一个或一组 Unreal 资产的连续编辑合并为一次确定、
-可审批、可恢复、可回滚的执行。命令行程序名为 `ue-workflow`，MCP 工具名为
+可审批、可恢复、可回滚的执行。命令行程序名为 `ue-workflow-cli`，MCP 工具名为
 `ue_workflow`，HTTP 入口继续为 `/api/v1/workflow`；路由版本与 DSL 版本彼此
 独立。
 
@@ -139,9 +139,9 @@ v2 仍然不支持循环、条件、事件等待、调试、性能采样、Cook 
 ## Plan 与审批
 
 ```powershell
-ue-workflow validate --file .\workflow.json
-ue-workflow plan --connect --file .\workflow.json
-ue-workflow execute --file .\workflow.json `
+ue-workflow-cli validate --file .\workflow.json
+ue-workflow-cli plan --connect --file .\workflow.json
+ue-workflow-cli execute --file .\workflow.json `
   --approve-plan sha256:<64-hex-digest> `
   --receipt .\workflow.receipt.json
 ```
@@ -165,7 +165,7 @@ ue-workflow execute --file .\workflow.json `
 `confirmWrite` 风险还要求：
 
 ```powershell
-ue-workflow execute --file .\workflow.json `
+ue-workflow-cli execute --file .\workflow.json `
   --approve-plan sha256:<64-hex-digest> `
   --confirm-write `
   --receipt .\workflow.receipt.json
@@ -193,24 +193,24 @@ Editor 将完整恢复数据写入项目 `Saved/UEWorkflow/`，对外 receipt �
 ## CLI
 
 ```text
-ue-workflow --help|--version [--json]
-ue-workflow doctor [--connect] --json
-ue-workflow capabilities [--connect] [--query <text>] [--domain <domain>]
+ue-workflow-cli --help|--version [--json]
+ue-workflow-cli doctor [--connect] --json
+ue-workflow-cli capabilities [--connect] [--query <text>] [--domain <domain>]
                          [--kind <kind>] [--risk <risk>] [--available-only]
                          [--offset <n>] [--limit <n>]
                          [--detail summary|full]
-ue-workflow help composable [blueprint|widget|material] --json
-ue-workflow help operation <type> --json
-ue-workflow validate --file <workflow.json|->
-ue-workflow plan [--connect] --file <workflow.json|->
-ue-workflow execute --file <workflow.json|-> --approve-plan <digest>
+ue-workflow-cli help composable [blueprint|widget|material] --json
+ue-workflow-cli help operation <type> --json
+ue-workflow-cli validate --file <workflow.json|->
+ue-workflow-cli plan [--connect] --file <workflow.json|->
+ue-workflow-cli execute --file <workflow.json|-> --approve-plan <digest>
                     --receipt <path> [--save-on-success] [--confirm-write]
                     [--detail-level summary|standard|full]
                     [--section <name>]...
-ue-workflow resume|status|rollback --receipt <path>
+ue-workflow-cli resume|status|rollback --receipt <path>
                     [--detail-level summary|standard|full]
                     [--section <name>]...
-ue-workflow shell
+ue-workflow-cli shell
 ```
 
 机器可读结果写 stdout；连接进度和日志写 stderr。`validate`、离线 `plan` 和
@@ -226,7 +226,7 @@ help 可离线使用，但可执行审批必须来自 `plan --connect`。`execut
 `doctor --connect` 时还会分别展示 Editor digest 和 `match`，只有两套合同都
 匹配时 `editor.contractMatch=true`。
 
-每个 `ue-workflow` 进程生成一个 `invocationId` 并最佳努力注册客户端会话。
+每个 `ue-workflow-cli` 进程生成一个 `invocationId` 并最佳努力注册客户端会话。
 同一条 `execute` 命令的在线 plan 与 execute、以及 shell 中的后续请求复用
 同一个 `X-UEAI-Session-Id`，因此 Editor 状态菜单只统计一次 CLI invocation。
 旧 Editor 缺少会话路由时自动退回 Legacy HTTP；会话失效时最多重新注册并
@@ -235,14 +235,14 @@ help 可离线使用，但可执行审批必须来自 `plan --connect`。`execut
 `operation run` 已在 0.6.0 移除。单次 capability 迁移到独立短操作 CLI：
 
 ```powershell
-# 旧：ue-workflow operation run scene.pie.status --params '{}'
-ue scene.pie.status
+# 旧：ue-workflow-cli operation run scene.pie.status --params '{}'
+ue-cli scene.pie.status
 
-# 旧：ue-workflow operation run blueprint.asset.get --params '{"name":"/Game/BP_A"}'
-ue blueprint.asset.get --name /Game/BP_A
+# 旧：ue-workflow-cli operation run blueprint.asset.get --params '{"name":"/Game/BP_A"}'
+ue-cli blueprint.asset.get --name /Game/BP_A
 ```
 
-`ue` 默认读取随程序分发的 schema，并可用 `--live-schema` 强制读取 Editor
+`ue-cli` 默认读取随程序分发的 schema，并可用 `--live-schema` 强制读取 Editor
 精确 schema；它不属于 Workflow DSL，详见
 [UE 短操作 CLI](UE_SHORT_CLI.md)。
 
@@ -252,11 +252,11 @@ ue blueprint.asset.get --name /Game/BP_A
 cmake -S . -B build-workflow -DUE_WORKFLOW_BUILD_TESTS=ON
 cmake --build build-workflow --config Release
 ctest --test-dir build-workflow -C Release --output-on-failure
-cmake --install build-workflow --config Release --prefix C:\Tools\ue-workflow
+cmake --install build-workflow --config Release --prefix C:\Tools\ue-workflow-cli
 ```
 
-安装同时生成 `bin/ue` 与 `bin/ue-workflow`。后者会相对定位
-`share/ue-workflow/{Contracts,Capabilities}`，不依赖源码工作目录。
+安装同时生成 `bin/ue-cli` 与 `bin/ue-workflow-cli`。后者会相对定位
+`share/ue-workflow-cli/{Contracts,Capabilities}`，不依赖源码工作目录。
 
 ## MCP
 

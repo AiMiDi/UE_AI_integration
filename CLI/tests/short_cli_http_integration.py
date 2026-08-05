@@ -3,6 +3,8 @@
 import argparse
 import base64
 import codecs
+import ctypes
+import datetime
 import hashlib
 import json
 import os
@@ -11,9 +13,41 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+
+def current_process_start_time() -> str:
+    if os.name != "nt":
+        return datetime.datetime.now(datetime.timezone.utc).isoformat().replace(
+            "+00:00", "Z"
+        )
+    ctypes.windll.kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    ctypes.windll.kernel32.GetProcessTimes.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.POINTER(ctypes.c_uint64),
+    ]
+    creation = ctypes.c_uint64()
+    exit_time = ctypes.c_uint64()
+    kernel = ctypes.c_uint64()
+    user = ctypes.c_uint64()
+    if not ctypes.windll.kernel32.GetProcessTimes(
+        ctypes.windll.kernel32.GetCurrentProcess(),
+        ctypes.byref(creation),
+        ctypes.byref(exit_time),
+        ctypes.byref(kernel),
+        ctypes.byref(user),
+    ):
+        raise OSError("GetProcessTimes failed")
+    unix_seconds = creation.value / 10_000_000 - 11_644_473_600
+    return datetime.datetime.fromtimestamp(
+        unix_seconds, datetime.timezone.utc
+    ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def main() -> int:
@@ -41,6 +75,8 @@ def main() -> int:
     queries: list[dict[str, list[str]]] = []
     artifact = b"standalone ue artifact\n"
     artifact_hash = hashlib.sha256(artifact).hexdigest()
+    health_identity: dict[str, object] = {}
+    health_control: dict[str, object] = {"hook": None}
 
     typed_schema = {
         "type": "object",
@@ -158,6 +194,9 @@ def main() -> int:
             parsed = urlparse(self.path)
             if parsed.path == "/api/health":
                 get_request_headers.append(self.caller_headers())
+                hook = health_control.get("hook")
+                if callable(hook):
+                    hook()
                 self.send_json(
                     200,
                     {
@@ -166,6 +205,7 @@ def main() -> int:
                             "status": "healthy",
                             "apiVersion": "v1",
                             "pluginVersion": "0.8.0",
+                            **health_identity,
                         },
                     },
                 )
@@ -446,6 +486,194 @@ def main() -> int:
             )
             assert json.loads(status.stdout)["data"]["status"] == "healthy"
 
+            if os.name == "nt":
+                instance_root = temporary_path / "instances"
+                instance_root.mkdir()
+                process_start = current_process_start_time()
+                live_id = str(uuid.uuid4())
+                health_identity.update(
+                    {
+                        "serverInstanceId": live_id,
+                        "processId": os.getpid(),
+                        "processStartTime": process_start,
+                    }
+                )
+
+                def write_instance(
+                    instance_id: str,
+                    *,
+                    pid: int,
+                    started_at: str,
+                    record_endpoint: str = endpoint,
+                    valid: bool = True,
+                ) -> Path:
+                    path = instance_root / f"{instance_id}.json"
+                    payload = (
+                        {
+                            "schema": "ue.editor-instance.v1",
+                            "serverInstanceId": instance_id,
+                            "pid": pid,
+                            "processStartTime": started_at,
+                            "endpoint": record_endpoint,
+                        }
+                        if valid
+                        else {}
+                    )
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    old = time.time() - 600
+                    os.utime(path, (old, old))
+                    return path
+
+                live_path = write_instance(
+                    live_id,
+                    pid=os.getpid(),
+                    started_at=process_start,
+                )
+                stale_path = write_instance(
+                    str(uuid.uuid4()),
+                    pid=0xFFFFFFFF,
+                    started_at="2000-01-01T00:00:00.000Z",
+                )
+                reused_path = write_instance(
+                    str(uuid.uuid4()),
+                    pid=os.getpid(),
+                    started_at="2000-01-01T00:00:00.000Z",
+                )
+                mismatch_path = write_instance(
+                    str(uuid.uuid4()),
+                    pid=os.getpid(),
+                    started_at=process_start,
+                )
+                unverified_path = write_instance(
+                    str(uuid.uuid4()),
+                    pid=os.getpid(),
+                    started_at=process_start,
+                    record_endpoint="http://127.0.0.1:1",
+                )
+                invalid_path = write_instance(
+                    str(uuid.uuid4()),
+                    pid=0,
+                    started_at="",
+                    valid=False,
+                )
+                doctor_environment = os.environ.copy()
+                doctor_environment["UEAI_INSTANCE_ROOT"] = str(instance_root)
+                source_root = Path(__file__).resolve().parents[2]
+
+                def run_doctor(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+                    return subprocess.run(
+                        [
+                            args.cli,
+                            *arguments,
+                            "--capability-root",
+                            str(source_root / "Resources" / "Capabilities"),
+                            "--skill-root",
+                            str(source_root / "skills"),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=20,
+                        env=doctor_environment,
+                    )
+
+                inspected = run_doctor(
+                    [
+                        "doctor",
+                        "--full",
+                        "--endpoint",
+                        endpoint,
+                        "--no-clean-stale-instances",
+                        "--json",
+                    ]
+                )
+                inspected_json = json.loads(inspected.stdout)
+                assert inspected_json["data"]["schema"] == "ue.doctor.v3"
+                counts = inspected_json["data"]["instances"]["counts"]
+                assert counts == {
+                    "live": 1,
+                    "stale": 3,
+                    "invalid": 1,
+                    "unverified": 1,
+                }
+                assert all(
+                    path.exists()
+                    for path in [
+                        live_path,
+                        stale_path,
+                        reused_path,
+                        mismatch_path,
+                        unverified_path,
+                        invalid_path,
+                    ]
+                )
+
+                cleaned = run_doctor(
+                    ["doctor", "--full", "--endpoint", endpoint, "--json"]
+                )
+                cleaned_json = json.loads(cleaned.stdout)
+                cleanup = cleaned_json["data"]["instances"]["cleanup"]
+                assert cleanup["enabled"] is True
+                assert len(cleanup["deleted"]) == 4, cleanup
+                assert live_path.exists()
+                assert unverified_path.exists()
+                assert not stale_path.exists()
+                assert not reused_path.exists()
+                assert not mismatch_path.exists()
+                assert not invalid_path.exists()
+
+                race_id = str(uuid.uuid4())
+                race_path = write_instance(
+                    race_id,
+                    pid=os.getpid(),
+                    started_at=process_start,
+                )
+                race_health_calls = 0
+
+                def replace_record_during_health() -> None:
+                    nonlocal race_health_calls
+                    race_health_calls += 1
+                    if race_health_calls != 2:
+                        return
+                    replacement = {
+                        "schema": "ue.editor-instance.v1",
+                        "serverInstanceId": race_id,
+                        "pid": os.getpid(),
+                        "processStartTime": process_start,
+                        "endpoint": endpoint,
+                        "generation": 2,
+                    }
+                    preserved_times = race_path.stat()
+                    race_path.write_text(
+                        json.dumps(replacement), encoding="utf-8"
+                    )
+                    os.utime(
+                        race_path,
+                        (preserved_times.st_atime, preserved_times.st_mtime),
+                    )
+                    health_control["hook"] = None
+
+                health_control["hook"] = replace_record_during_health
+                raced = run_doctor(
+                    [
+                        "doctor",
+                        "--full",
+                        "--instance",
+                        race_id,
+                        "--endpoint",
+                        endpoint,
+                        "--json",
+                    ]
+                )
+                raced_json = json.loads(raced.stdout)
+                race_cleanup = raced_json["data"]["instances"]["cleanup"]
+                assert race_path.exists()
+                assert race_cleanup["deleted"] == []
+                assert any(
+                    item["record"] == race_path.name
+                    and item["reason"] == "record_changed"
+                    for item in race_cleanup["skipped"]
+                ), {"calls": race_health_calls, "cleanup": race_cleanup}
+
             invalid_capability = run(["invalid", "--json"])
             assert invalid_capability.returncode == 2
             assert (
@@ -475,7 +703,7 @@ def main() -> int:
                 capture_output=True,
                 text=True,
             )
-            assert "Usage: ue test.typed" in capability_help.stdout
+            assert "Usage: ue-cli test.typed" in capability_help.stdout
             assert "performs no catalog load or Editor request" in capability_help.stdout
             assert len(queries) == before_help_queries
             assert len(requests) == before_help_requests
@@ -483,13 +711,13 @@ def main() -> int:
                 ["status", "--help", "--endpoint", "http://127.0.0.1:1"],
                 check=True,
             )
-            assert status_help.stdout.startswith("Usage: ue status")
+            assert status_help.stdout.startswith("Usage: ue-cli status")
             capabilities_help = run(
                 ["capabilities", "--help", "--live-schema"],
                 check=True,
             )
             assert capabilities_help.stdout.startswith(
-                "Usage: ue capabilities"
+                "Usage: ue-cli capabilities"
             )
             strict_positional = run(["status", "extra", "--json"])
             assert strict_positional.returncode == 2
@@ -1102,7 +1330,7 @@ def main() -> int:
             assert request_headers
             assert all(
                 header["callerType"] == "cli"
-                and header["caller"] == "ue"
+                and header["caller"] == "ue-cli"
                 and header["callerVersion"] == "1.0.0"
                 and header["invocationId"].startswith("cli-")
                 and header["processId"].isdigit()
@@ -1117,15 +1345,22 @@ def main() -> int:
             )
             assert get_request_headers
             assert all(
-                header["sessionId"] in issued_sessions
-                and issued_sessions[header["sessionId"]]["invocationId"]
-                == header["invocationId"]
+                (
+                    header["sessionId"] in issued_sessions
+                    and issued_sessions[header["sessionId"]]["invocationId"]
+                    == header["invocationId"]
+                )
+                or (
+                    header["sessionId"] == ""
+                    and header["callerType"] == ""
+                    and header["invocationId"] == ""
+                )
                 for header in get_request_headers
             )
             assert registrations
             assert all(
                 registration["clientKind"] == "cli"
-                and registration["name"] == "ue"
+                and registration["name"] == "ue-cli"
                 and registration["version"] == "1.0.0"
                 and registration["transport"] == "http"
                 and isinstance(registration["pid"], int)
@@ -1262,7 +1497,7 @@ def main() -> int:
             assert all(
                 header["sessionId"] == ""
                 and header["callerType"] == "cli"
-                and header["caller"] == "ue"
+                and header["caller"] == "ue-cli"
                 and header["invocationId"].startswith("cli-")
                 for header in fallback_headers
             )

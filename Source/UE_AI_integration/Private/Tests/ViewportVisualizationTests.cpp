@@ -534,8 +534,8 @@ public:
 		FMCPToolAsyncCompletion Local = MoveTemp(Completion);
 		Local(FMCPToolResult::Error(
 			Reason,
-			TEXT("service_unavailable"),
-			503));
+			TEXT("request_cancelled"),
+			499));
 	}
 
 	int32 BeginCount = 0;
@@ -763,10 +763,10 @@ bool FViewportVisualizationAsyncExecutorTest::RunTest(
 		CancelCompletionCount,
 		1);
 	TestTrue(
-		TEXT("Cancellation publishes a service-unavailable result"),
+		TEXT("Cancellation publishes the canonical cancelled result"),
 		CancelResult.IsSet()
 			&& !CancelResult->bOk
-			&& CancelResult->Error.Code == TEXT("service_unavailable"));
+			&& CancelResult->Error.Code == TEXT("request_cancelled"));
 	return true;
 }
 
@@ -1666,7 +1666,7 @@ bool FWaitForRenderedVisualizationCapture::Update()
 		VerifyFailureRestored(
 			State,
 			*Test,
-			TEXT("service_unavailable"),
+			TEXT("request_cancelled"),
 			TEXT("server-stop cancellation"));
 		State->Stage = ERenderedCaptureStage::Finished;
 		break;

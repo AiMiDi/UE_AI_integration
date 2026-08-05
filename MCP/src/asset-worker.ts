@@ -2,8 +2,31 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { extname } from "node:path";
 
-type Request = { operation: string; assetPath: string; otherAssetPath?: string; engineVersion: string };
+type AssetDetail = "summary" | "tables" | "full";
+type AssetSection = "names" | "imports" | "exports" | "assetRegistry" | "dependencies";
+type Request = {
+  operation: string;
+  assetPath: string;
+  otherAssetPath?: string;
+  engineVersion: string;
+  detail?: AssetDetail;
+  sections?: AssetSection[];
+  offset?: number;
+  limit?: number;
+  targetTokens?: number;
+  maxBytes?: number;
+};
 type JsonObject = Record<string, unknown>;
+
+type OutputOptions = {
+  detail: AssetDetail;
+  sections: Set<AssetSection>;
+  offset: number;
+  limit: number;
+  targetTokens: number;
+  maxBytes: number;
+  effectiveMaxBytes: number;
+};
 
 const PACKAGE_TAG = 0x9e2a83c1;
 const LEGACY_VERSION_UE5 = -8;
@@ -19,10 +42,13 @@ const PKG_FILTER_EDITOR_ONLY = 0x80000000;
 const MAX_HEADER_BYTES = 64 * 1024 * 1024;
 const MAX_ARRAY_ITEMS = 1_000_000;
 const MAX_STRING_UNITS = 1_048_576;
-const MAX_PREVIEW_NAMES = 256;
-const MAX_PREVIEW_ASSETS = 64;
-const MAX_PREVIEW_TAGS = 512;
 const MAX_TAG_VALUE_CHARACTERS = 4096;
+const DEFAULT_TARGET_TOKENS = 2048;
+const DEFAULT_MAX_BYTES = 64 * 1024;
+const MIN_MAX_BYTES = 4 * 1024;
+const MAX_MAX_BYTES = 1024 * 1024;
+const DEFAULT_PAGE_LIMIT = 64;
+const MAX_PAGE_LIMIT = 256;
 
 class PackageReader {
   position = 0;
@@ -105,6 +131,52 @@ class PackageReader {
 
 function failure(code: string, message: string): { code: string; message: string } {
   return { code, message };
+}
+
+function boundedInteger(
+  value: unknown,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+  label: string,
+): number {
+  const resolved = value === undefined ? fallback : value;
+  if (!Number.isInteger(resolved) || Number(resolved) < minimum || Number(resolved) > maximum) {
+    throw failure("invalid_params", `${label} must be an integer from ${minimum} to ${maximum}.`);
+  }
+  return Number(resolved);
+}
+
+function outputOptions(request: Request): OutputOptions {
+  const detail = request.detail ?? "summary";
+  if (!["summary", "tables", "full"].includes(detail)) {
+    throw failure("invalid_params", "detail must be summary, tables, or full.");
+  }
+  const allowed: AssetSection[] = ["names", "imports", "exports", "assetRegistry", "dependencies"];
+  const requestedSections = request.sections ?? (detail === "summary" ? [] : allowed);
+  if (!Array.isArray(requestedSections) || requestedSections.some((section) => !allowed.includes(section))) {
+    throw failure("invalid_params", "sections contains an unsupported Asset section.");
+  }
+  const targetTokens = boundedInteger(request.targetTokens, DEFAULT_TARGET_TOKENS, 256, 32768, "targetTokens");
+  const maxBytes = boundedInteger(request.maxBytes, DEFAULT_MAX_BYTES, MIN_MAX_BYTES, MAX_MAX_BYTES, "maxBytes");
+  return {
+    detail,
+    sections: new Set(requestedSections),
+    offset: boundedInteger(request.offset, 0, 0, MAX_ARRAY_ITEMS, "offset"),
+    limit: boundedInteger(request.limit, DEFAULT_PAGE_LIMIT, 1, MAX_PAGE_LIMIT, "limit"),
+    targetTokens,
+    maxBytes,
+    effectiveMaxBytes: Math.min(maxBytes, targetTokens * 4),
+  };
+}
+
+function byteLength(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function pageMetadata(total: number, offset: number, returned: number, limit: number): JsonObject {
+  const next = offset + returned < total ? offset + returned : null;
+  return { total, offset, limit, returned, nextOffset: next, truncated: next !== null };
 }
 
 function sha256(bytes: Buffer): string {
@@ -306,35 +378,76 @@ function nextOffset(summary: ParsedSummary, offset: number): number {
   return summary.allOffsets.filter((candidate) => candidate > offset).sort((left, right) => left - right)[0] ?? summary.totalHeaderSize;
 }
 
-function tableDescriptor(bytes: Buffer, summary: ParsedSummary, count: number, offset: number): JsonObject {
-  if (count === 0 || offset === 0) return { count, offset, available: count === 0 };
+function tableDescriptor(
+  bytes: Buffer,
+  summary: ParsedSummary,
+  count: number,
+  offset: number,
+  options: OutputOptions,
+): JsonObject {
+  if (count === 0 || offset === 0) {
+    return {
+      available: count === 0,
+      offsetBytes: offset,
+      items: [],
+      ...pageMetadata(count, options.offset, 0, options.limit),
+    };
+  }
   if (offset < 0 || offset >= summary.totalHeaderSize) throw failure("asset_corrupt", "Package table offset is outside TotalHeaderSize.");
   const endOffset = nextOffset(summary, offset);
   if (endOffset < offset || endOffset > bytes.length) throw failure("asset_corrupt", "Package table range is invalid.");
-  return { count, offset, endOffset, byteLength: endOffset - offset, sha256: sha256(bytes.subarray(offset, endOffset)) };
+  const byteLength = endOffset - offset;
+  const fixedEntryBytes = byteLength % count === 0 ? byteLength / count : null;
+  const returned = Math.max(0, Math.min(options.limit, count - options.offset));
+  const items: JsonObject[] = [];
+  if (fixedEntryBytes !== null) {
+    for (let index = options.offset; index < options.offset + returned; index += 1) {
+      const itemOffset = offset + index * fixedEntryBytes;
+      items.push({
+        index,
+        offsetBytes: itemOffset,
+        byteLength: fixedEntryBytes,
+        sha256: sha256(bytes.subarray(itemOffset, itemOffset + fixedEntryBytes)),
+      });
+    }
+  } else {
+    for (let index = options.offset; index < options.offset + returned; index += 1) {
+      items.push({ index, unavailable: true, reason: "entry_layout_not_fixed" });
+    }
+  }
+  return {
+    available: true,
+    ...pageMetadata(count, options.offset, items.length, options.limit),
+    offsetBytes: offset,
+    endOffset,
+    byteLength,
+    fixedEntryBytes,
+    items,
+    structuredEntriesAvailable: fixedEntryBytes !== null,
+    sha256: sha256(bytes.subarray(offset, endOffset)),
+  };
 }
 
-function parseNames(bytes: Buffer, summary: ParsedSummary): JsonObject {
-  if (summary.nameCount === 0) return { count: 0, offset: summary.nameOffset, names: [] };
+function parseNames(bytes: Buffer, summary: ParsedSummary, options: OutputOptions): JsonObject {
+  if (summary.nameCount === 0) return { offsetBytes: summary.nameOffset, items: [], ...pageMetadata(0, options.offset, 0, options.limit) };
   const reader = new PackageReader(bytes);
   reader.seek(summary.nameOffset, "name table");
-  const names: string[] = [];
+  const items: string[] = [];
   const digest = createHash("sha256");
   const start = reader.position;
   for (let index = 0; index < summary.nameCount; index += 1) {
     const value = reader.string(`names[${index}]`);
     reader.skip(4, `names[${index}].hashes`);
     digest.update(value, "utf8").update("\0", "utf8");
-    if (names.length < MAX_PREVIEW_NAMES) names.push(value);
+    if (index >= options.offset && index < options.offset + options.limit) items.push(value);
   }
   if (reader.position > nextOffset(summary, summary.nameOffset)) throw failure("asset_corrupt", "Name table overlaps the next package section.");
   return {
-    count: summary.nameCount,
-    offset: summary.nameOffset,
+    ...pageMetadata(summary.nameCount, options.offset, items.length, options.limit),
+    offsetBytes: summary.nameOffset,
     endOffset: reader.position,
     byteLength: reader.position - start,
-    names,
-    truncated: summary.nameCount > names.length,
+    items,
     normalizedSha256: `sha256:${digest.digest("hex")}`,
   };
 }
@@ -356,8 +469,16 @@ function parseNameList(bytes: Buffer, summary: ParsedSummary): string[] {
   return names;
 }
 
-function parseDependencies(bytes: Buffer, summary: ParsedSummary, names: string[]): JsonObject {
-  const result: JsonObject = { dependsMap: { exportCount: summary.exportCount, offset: summary.dependsOffset, edges: 0 } };
+function parseDependencies(bytes: Buffer, summary: ParsedSummary, names: string[], options: OutputOptions): JsonObject {
+  const result: JsonObject = {
+    dependsMap: {
+      exportCount: summary.exportCount,
+      offsetBytes: summary.dependsOffset,
+      edges: 0,
+      perExportCounts: [],
+      ...pageMetadata(summary.exportCount, options.offset, 0, options.limit),
+    },
+  };
   if (summary.exportCount > 0 && summary.dependsOffset > 0) {
     const reader = new PackageReader(bytes);
     reader.seek(summary.dependsOffset, "depends map");
@@ -370,35 +491,50 @@ function parseDependencies(bytes: Buffer, summary: ParsedSummary, names: string[
       reader.skip(count * 4, `dependsMap[${index}] entries`);
     }
     result.dependsMap = {
+      ...pageMetadata(summary.exportCount, options.offset, perExportCounts.slice(options.offset, options.offset + options.limit).length, options.limit),
       exportCount: summary.exportCount,
-      offset: summary.dependsOffset,
+      offsetBytes: summary.dependsOffset,
       endOffset: reader.position,
       edges: edgeCount,
-      perExportCounts: perExportCounts.slice(0, 256),
-      truncated: perExportCounts.length > 256,
+      perExportCounts: perExportCounts.slice(options.offset, options.offset + options.limit),
       sha256: sha256(bytes.subarray(summary.dependsOffset, reader.position)),
     };
   }
   const softPackageReferences: Array<string | null> = [];
+  const softReferenceDigest = createHash("sha256");
   if (summary.softPackageReferencesCount > 0 && summary.softPackageReferencesOffset > 0) {
     const reader = new PackageReader(bytes);
     reader.seek(summary.softPackageReferencesOffset, "soft package references");
     for (let index = 0; index < summary.softPackageReferencesCount; index += 1) {
       const nameIndex = reader.i32(`softPackageReferences[${index}].nameIndex`);
       const number = reader.i32(`softPackageReferences[${index}].number`);
-      softPackageReferences.push(nameAt(names, nameIndex, number));
+      const value = nameAt(names, nameIndex, number);
+      softReferenceDigest.update(value ?? "<invalid>", "utf8").update("\0", "utf8");
+      if (index >= options.offset && index < options.offset + options.limit) softPackageReferences.push(value);
     }
   }
   result.softPackageReferences = {
-    count: summary.softPackageReferencesCount,
-    values: softPackageReferences.slice(0, 256),
-    truncated: softPackageReferences.length > 256,
+    ...pageMetadata(summary.softPackageReferencesCount, options.offset, softPackageReferences.length, options.limit),
+    values: softPackageReferences,
+    normalizedSha256: `sha256:${softReferenceDigest.digest("hex")}`,
   };
+  const depends = result.dependsMap as JsonObject;
+  const soft = result.softPackageReferences as JsonObject;
+  const total = Math.max(Number(depends.total ?? 0), Number(soft.total ?? 0));
+  const returned = Math.max(Number(depends.returned ?? 0), Number(soft.returned ?? 0));
+  Object.assign(result, pageMetadata(total, options.offset, returned, options.limit));
   return result;
 }
 
-function parseAssetRegistry(bytes: Buffer, summary: ParsedSummary): JsonObject {
-  if (summary.assetRegistryDataOffset <= 0) return { available: false, reason: "asset_registry_section_absent", assets: [] };
+function parseAssetRegistry(bytes: Buffer, summary: ParsedSummary, options: OutputOptions): JsonObject {
+  if (summary.assetRegistryDataOffset <= 0) {
+    return {
+      available: false,
+      reason: "asset_registry_section_absent",
+      assets: [],
+      ...pageMetadata(0, options.offset, 0, options.limit),
+    };
+  }
   const reader = new PackageReader(bytes);
   reader.seek(summary.assetRegistryDataOffset, "asset registry");
   const dependencyDataOffset = reader.i64("assetRegistry.dependencyDataOffset");
@@ -410,31 +546,40 @@ function parseAssetRegistry(bytes: Buffer, summary: ParsedSummary): JsonObject {
     const objectClass = reader.string(`assetRegistry.assets[${objectIndex}].objectClass`);
     const tagCount = reader.count(`assetRegistry.assets[${objectIndex}].tagCount`, MAX_ARRAY_ITEMS - totalTagCount);
     totalTagCount += tagCount;
-    const tags: Record<string, string> = {};
-    const tagMetadata: Record<string, JsonObject> = {};
-    let retained = 0;
+    const retainAsset = objectIndex >= options.offset && objectIndex < options.offset + options.limit;
+    const tags: JsonObject[] = [];
     for (let tagIndex = 0; tagIndex < tagCount; tagIndex += 1) {
       const key = reader.string(`assetRegistry.assets[${objectIndex}].tags[${tagIndex}].key`);
       const value = reader.string(`assetRegistry.assets[${objectIndex}].tags[${tagIndex}].value`);
-      if (assets.length < MAX_PREVIEW_ASSETS && retained < MAX_PREVIEW_TAGS) {
-        tags[key] = value.length <= MAX_TAG_VALUE_CHARACTERS ? value : `${value.slice(0, MAX_TAG_VALUE_CHARACTERS)}…`;
-        if (value.length > MAX_TAG_VALUE_CHARACTERS) {
-          tagMetadata[key] = { truncated: true, originalCharacters: value.length, sha256: sha256(Buffer.from(value, "utf8")) };
-        }
-        retained += 1;
+      if (retainAsset && options.detail === "full" && tagIndex < options.limit) {
+        const truncated = value.length > MAX_TAG_VALUE_CHARACTERS;
+        tags.push({
+          key,
+          value: truncated ? `${value.slice(0, MAX_TAG_VALUE_CHARACTERS)}…` : value,
+          ...(truncated ? { valueTruncated: true, originalCharacters: value.length, sha256: sha256(Buffer.from(value, "utf8")) } : {}),
+        });
       }
     }
-    if (assets.length < MAX_PREVIEW_ASSETS) assets.push({ objectPath, objectClass, tagCount, tags, tagMetadata, tagsTruncated: retained < tagCount });
+    if (retainAsset) {
+      assets.push({
+        objectPath,
+        objectClass,
+        tagCount,
+        ...(options.detail === "full"
+          ? { tags, tagsTruncated: tags.length < tagCount }
+          : {}),
+      });
+    }
   }
   return {
     available: true,
-    offset: summary.assetRegistryDataOffset,
+    ...pageMetadata(objectCount, options.offset, assets.length, options.limit),
+    offsetBytes: summary.assetRegistryDataOffset,
     endOffset: reader.position,
     dependencyDataOffset,
     objectCount,
     totalTagCount,
     assets,
-    truncated: assets.length < objectCount,
     sha256: sha256(bytes.subarray(summary.assetRegistryDataOffset, reader.position)),
   };
 }
@@ -442,15 +587,130 @@ function parseAssetRegistry(bytes: Buffer, summary: ParsedSummary): JsonObject {
 function normalizedDigest(value: JsonObject): string {
   const normalized = {
     packageSummary: value.packageSummary,
-    tables: value.tables,
-    assetRegistry: value.assetRegistry,
-    dependencies: value.dependencies,
+    sectionDigests: value.sectionDigests,
     companion: value.companion ?? null,
   };
   return `sha256:${createHash("sha256").update(JSON.stringify(normalized), "utf8").digest("hex")}`;
 }
 
-function summary(path: string, requestedEngineVersion: string): JsonObject {
+function compactPackageSummary(value: JsonObject): JsonObject {
+  const result = { ...value };
+  const chunkIds = Array.isArray(result.chunkIds) ? result.chunkIds as unknown[] : [];
+  result.chunkIds = {
+    count: chunkIds.length,
+    normalizedSha256: sha256(Buffer.from(JSON.stringify(chunkIds), "utf8")),
+  };
+  return result;
+}
+
+function updatePageAfterTrim(section: JsonObject, itemField: string): void {
+  const items = Array.isArray(section[itemField]) ? section[itemField] as unknown[] : [];
+  section.returned = items.length;
+  const total = Number(section.total ?? 0);
+  const offset = Number(section.offset ?? 0);
+  section.nextOffset = offset + items.length < total ? offset + items.length : null;
+  section.truncated = section.nextOffset !== null;
+}
+
+function updateDependencyPageAfterTrim(section: JsonObject): void {
+  const depends = section.dependsMap as JsonObject | undefined;
+  const soft = section.softPackageReferences as JsonObject | undefined;
+  const total = Math.max(Number(depends?.total ?? 0), Number(soft?.total ?? 0));
+  const returned = Math.max(Number(depends?.returned ?? 0), Number(soft?.returned ?? 0));
+  const offset = Number(section.offset ?? depends?.offset ?? soft?.offset ?? 0);
+  const limit = Number(section.limit ?? depends?.limit ?? soft?.limit ?? DEFAULT_PAGE_LIMIT);
+  Object.assign(section, pageMetadata(total, offset, returned, limit));
+}
+
+function enforceBudget(value: JsonObject, options: OutputOptions): JsonObject {
+  const omittedSections: string[] = [];
+  value.budget = {
+    targetTokens: options.targetTokens,
+    maxBytes: options.maxBytes,
+    effectiveMaxBytes: options.effectiveMaxBytes,
+    estimatedBytes: 0,
+    truncated: false,
+    omittedSections,
+  };
+  value.truncated = false;
+  value.omittedSections = omittedSections;
+  const sections = value.sections as JsonObject | undefined;
+  const trimOne = (): boolean => {
+    const assetRegistry = sections?.assetRegistry as JsonObject | undefined;
+    const assets = Array.isArray(assetRegistry?.assets) ? assetRegistry.assets as JsonObject[] : [];
+    for (let index = assets.length - 1; index >= 0; index -= 1) {
+      const tags = Array.isArray(assets[index]?.tags) ? assets[index]!.tags as unknown[] : [];
+      if (tags.length > 0) {
+        tags.pop();
+        assets[index]!.tagsTruncated = true;
+        return true;
+      }
+    }
+    const candidates: Array<[JsonObject | undefined, string]> = [
+      [sections?.dependencies as JsonObject | undefined, "perExportCounts"],
+      [sections?.dependencies as JsonObject | undefined, "softPackageReferences"],
+      [assetRegistry, "assets"],
+      [sections?.exports as JsonObject | undefined, "items"],
+      [sections?.imports as JsonObject | undefined, "items"],
+      [sections?.names as JsonObject | undefined, "items"],
+    ];
+    for (const [section, field] of candidates) {
+      if (!section) continue;
+      if (field === "perExportCounts") {
+        const depends = section.dependsMap as JsonObject | undefined;
+        const items = Array.isArray(depends?.perExportCounts) ? depends.perExportCounts as unknown[] : [];
+        if (items.length > 0) {
+          items.pop();
+          updatePageAfterTrim(depends!, "perExportCounts");
+          updateDependencyPageAfterTrim(section);
+          return true;
+        }
+        continue;
+      }
+      if (field === "softPackageReferences") {
+        const soft = section.softPackageReferences as JsonObject | undefined;
+        const items = Array.isArray(soft?.values) ? soft.values as unknown[] : [];
+        if (items.length > 0) {
+          items.pop();
+          updatePageAfterTrim(soft!, "values");
+          updateDependencyPageAfterTrim(section);
+          return true;
+        }
+        continue;
+      }
+      const items = Array.isArray(section[field]) ? section[field] as unknown[] : [];
+      if (items.length > 0) { items.pop(); updatePageAfterTrim(section, field); return true; }
+    }
+    if (sections) {
+      for (const name of ["dependencies", "assetRegistry", "exports", "imports", "names"] as const) {
+        if (name in sections) {
+          delete sections[name];
+          omittedSections.push(name);
+          return true;
+        }
+      }
+      if ("left" in sections || "right" in sections) {
+        delete sections.left;
+        delete sections.right;
+        omittedSections.push("diffSections");
+        return true;
+      }
+    }
+    return false;
+  };
+  while (byteLength(value) > options.effectiveMaxBytes && trimOne()) {
+    (value.budget as JsonObject).truncated = true;
+    value.truncated = true;
+  }
+  const budget = value.budget as JsonObject;
+  budget.estimatedBytes = byteLength(value);
+  if (Number(budget.estimatedBytes) > options.effectiveMaxBytes) {
+    throw failure("asset_output_budget_exceeded", "The compact Asset summary cannot fit inside the requested output budget.");
+  }
+  return value;
+}
+
+function summary(path: string, requestedEngineVersion: string, options: OutputOptions): JsonObject {
   if (!requestedEngineVersion.startsWith("5.3")) throw failure("asset_version_incompatible", "This bundled Asset Worker is pinned to UE 5.3 package headers.");
   const resolved = headerPath(path);
   const stat = statSync(resolved.headerPath);
@@ -458,41 +718,91 @@ function summary(path: string, requestedEngineVersion: string): JsonObject {
   const bytes = readPrefix(resolved.headerPath, MAX_HEADER_BYTES);
   const parsed = parseSummary(new PackageReader(bytes));
   const names = parseNameList(bytes, parsed);
+  const nameSection = parseNames(bytes, parsed, options);
+  const imports = tableDescriptor(bytes, parsed, parsed.importCount, parsed.importOffset, options);
+  const exports = tableDescriptor(bytes, parsed, parsed.exportCount, parsed.exportOffset, options);
+  const assetRegistry = parseAssetRegistry(bytes, parsed, options);
+  const dependencies = parseDependencies(bytes, parsed, names, options);
   const value: JsonObject = {
-    schema: "ue.local-asset-summary.v2",
+    schema: "ue.local-asset-summary.v3",
     available: true,
     assetPath: path,
     packageHeaderPath: resolved.headerPath,
     extension: extname(path).toLowerCase(),
     sizeBytes: statSync(path).size,
     headerSizeBytes: parsed.totalHeaderSize,
-    packageSummary: parsed.packageSummary,
+    packageSummary: compactPackageSummary(parsed.packageSummary),
     headerSha256: sha256(bytes.subarray(0, parsed.totalHeaderSize)),
-    tables: {
-      names: parseNames(bytes, parsed),
-      imports: tableDescriptor(bytes, parsed, parsed.importCount, parsed.importOffset),
-      exports: tableDescriptor(bytes, parsed, parsed.exportCount, parsed.exportOffset),
+    counts: {
+      names: parsed.nameCount,
+      imports: parsed.importCount,
+      exports: parsed.exportCount,
+      assetRegistryObjects: Number(assetRegistry.objectCount ?? 0),
+      assetRegistryTags: Number(assetRegistry.totalTagCount ?? 0),
+      dependencyEdges: Number((dependencies.dependsMap as JsonObject)?.edges ?? 0),
+      softPackageReferences: parsed.softPackageReferencesCount,
     },
-    assetRegistry: parseAssetRegistry(bytes, parsed),
-    dependencies: parseDependencies(bytes, parsed, names),
+    sectionDigests: {
+      names: nameSection.normalizedSha256,
+      imports: imports.sha256 ?? null,
+      exports: exports.sha256 ?? null,
+      assetRegistry: assetRegistry.sha256 ?? null,
+      dependencies: {
+        dependsMap: (dependencies.dependsMap as JsonObject)?.sha256 ?? null,
+        softPackageReferences: (dependencies.softPackageReferences as JsonObject)?.normalizedSha256 ?? null,
+      },
+    },
     companion: resolved.companion,
   };
+  const sections: JsonObject = {};
+  if (options.sections.has("names")) sections.names = nameSection;
+  if (options.sections.has("imports")) sections.imports = imports;
+  if (options.sections.has("exports")) sections.exports = exports;
+  if (options.sections.has("assetRegistry")) sections.assetRegistry = assetRegistry;
+  if (options.sections.has("dependencies")) sections.dependencies = dependencies;
+  if (Object.keys(sections).length > 0) value.sections = sections;
   value.normalizedDigest = normalizedDigest(value);
-  return value;
+  return enforceBudget(value, options);
 }
 
-function diff(left: JsonObject, right: JsonObject): JsonObject {
-  const fields = ["packageSummary", "tables", "assetRegistry", "dependencies", "companion"];
-  const changes = fields.filter((field) => JSON.stringify(left[field] ?? null) !== JSON.stringify(right[field] ?? null));
+function compactSide(value: JsonObject): JsonObject {
   return {
-    schema: "ue.local-asset-diff.v2",
-    left,
-    right,
+    assetPath: value.assetPath,
+    sizeBytes: value.sizeBytes,
+    headerSizeBytes: value.headerSizeBytes,
+    headerSha256: value.headerSha256,
+    normalizedDigest: value.normalizedDigest,
+    counts: value.counts,
+    sectionDigests: value.sectionDigests,
+    packageSummary: value.packageSummary,
+    companion: value.companion ?? null,
+  };
+}
+
+function diff(left: JsonObject, right: JsonObject, options: OutputOptions): JsonObject {
+  const leftDigests = left.sectionDigests as JsonObject;
+  const rightDigests = right.sectionDigests as JsonObject;
+  const fields = ["packageSummary", "names", "imports", "exports", "assetRegistry", "dependencies", "companion"];
+  const changes = fields.filter((field) => {
+    if (field === "packageSummary" || field === "companion") return JSON.stringify(left[field] ?? null) !== JSON.stringify(right[field] ?? null);
+    return JSON.stringify(leftDigests[field] ?? null) !== JSON.stringify(rightDigests[field] ?? null);
+  });
+  const value: JsonObject = {
+    schema: "ue.local-asset-diff.v3",
+    left: compactSide(left),
+    right: compactSide(right),
     equalNormalized: left.normalizedDigest === right.normalizedDigest,
     equalHeader: left.headerSha256 === right.headerSha256,
     sizeDelta: Number(right.sizeBytes) - Number(left.sizeBytes),
     changedSections: changes,
   };
+  if (options.detail !== "summary") {
+    value.sections = {
+      left: left.sections ?? {},
+      right: right.sections ?? {},
+    };
+  }
+  return enforceBudget(value, options);
 }
 
 let input = "";
@@ -501,11 +811,12 @@ process.stdin.on("data", (chunk) => { input += chunk; if (input.length > 1024 * 
 process.stdin.on("end", () => {
   try {
     const request = JSON.parse(input) as Request;
-    const first = summary(request.assetPath, request.engineVersion);
+    const options = outputOptions(request);
+    const first = summary(request.assetPath, request.engineVersion, options);
     const data = request.operation === "production.asset.package.diff"
       ? (() => {
           if (typeof request.otherAssetPath !== "string" || !existsSync(request.otherAssetPath)) throw failure("asset_diff_target_required", "otherAssetPath is required for package diff.");
-          return diff(first, summary(request.otherAssetPath, request.engineVersion));
+          return diff(first, summary(request.otherAssetPath, request.engineVersion, options), options);
         })()
       : first;
     process.stdout.write(JSON.stringify({ ok: true, data }));

@@ -77,6 +77,7 @@ export declare const UE_WORKFLOW_ACTIONS: readonly ["validate", "plan", "execute
 export type UEWorkflowAction = (typeof UE_WORKFLOW_ACTIONS)[number];
 export interface UEWorkflowRequest {
     action: UEWorkflowAction;
+    requestId?: string;
     workflow?: Record<string, unknown>;
     approvePlanDigest?: string;
     runId?: string;

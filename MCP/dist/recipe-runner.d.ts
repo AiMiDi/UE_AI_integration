@@ -1,9 +1,9 @@
 import { type CapabilityCatalog } from "./capability-catalog.js";
 export declare const RECIPE_SCHEMA = "ue.recipe.v2";
 export declare const RECIPE_PLAN_SCHEMA = "ue.recipe-plan.v2";
-export declare const RECIPE_RUN_SCHEMA = "ue.recipe-run.v1";
+export declare const RECIPE_RUN_SCHEMA = "ue.recipe-run.v2";
 type JsonObject = Record<string, unknown>;
-type RunStatus = "running" | "awaitingApproval" | "completed" | "failed" | "cancelled";
+type RunStatus = "running" | "interrupted" | "awaitingApproval" | "completed" | "failed" | "cancelled";
 interface RetryPolicy {
     maxAttempts: number;
     backoffMs: number;
@@ -55,7 +55,7 @@ export interface RecipeValidation {
 }
 interface StepState {
     id: string;
-    status: "pending" | "running" | "completed" | "failed" | "compensated";
+    status: "pending" | "dispatching" | "running" | "completed" | "failed" | "compensated";
     attempts: number;
     startedAt?: string;
     completedAt?: string;
@@ -78,6 +78,10 @@ export interface RecipeRunState extends JsonObject {
     createdAt: string;
     updatedAt: string;
     heartbeatAt: string;
+    workerPid?: number;
+    workerInstanceId?: string;
+    workerHeartbeatAt?: string;
+    workerLeaseExpiresAt?: string;
     lastProgressAt: string;
     lastLog: string;
     nextStep: number;
@@ -118,10 +122,10 @@ export declare class RecipeRunner {
     plan(recipe: unknown): JsonObject;
     start(recipe: unknown, inputs?: JsonObject, approvePlanDigest?: string): RecipeRunState;
     status(runId: string): RecipeRunState;
-    resume(runId: string, approvePlanDigest: string): RecipeRunState;
+    resume(runId: string, approvePlanDigest: string, approveStepDigest?: string): RecipeRunState;
     cancel(runId: string): RecipeRunState;
     result(runId: string): RecipeRunState;
     list(limit?: number): RecipeRunState[];
 }
-export declare function executeRecipeRun(runId: string, endpoint?: string): Promise<void>;
+export declare function executeRecipeRun(runId: string, endpoint?: string, workerInstanceId?: string): Promise<void>;
 export {};

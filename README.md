@@ -66,7 +66,7 @@ stdio bridge，让 Codex CLI、Claude Code 等 MCP 客户端查询或修改 Blue
   通过 TraceServices 语义 API 查询，不依赖鼠标操作 Unreal Insights UI。
 - [UE 短操作 CLI](docs/UE_SHORT_CLI.md) 以 manifest capability ID 作为首参数，
   默认用本地 schema 单次调用 `/api/execute`，`--live-schema` 可强制在线校验，
-  `ue shell` 可复用目录与连接；`ue-workflow` 只保留 DSL。
+  `ue-cli shell` 可复用目录与连接；`ue-workflow-cli` 只保留 DSL。
 - [UE Agent Skills](docs/UE_AGENT_SKILLS.md) 提供十一个已验证领域 Skill 和
   capability recipe，形成 Load → Discover → Execute → See Results 闭环，
   但不新增任意脚本执行器。
@@ -74,7 +74,7 @@ stdio bridge，让 Codex CLI、Claude Code 等 MCP 客户端查询或修改 Blue
 ## 架构
 
 ```text
-MCP client / ue CLI
+MCP client / ue-cli
         │
         ├── HTTP :9847 ──► UE_AI_integration Editor Module
         │                    ├── Core / Transport / Domains
@@ -158,7 +158,7 @@ Level Editor 右下角会显示 `UE AI · N` 状态入口。绿色表示服务�
 本地 HTTP 服务。点击后打开 UE 原生快捷菜单，可在本地启停服务，并查看：
 
 - 通过 5 秒心跳注册的 MCP 调用方；15 秒无心跳后自动离线。
-- 一次性 `ue` / `ue-workflow` CLI 调用，按 `invocationId` 归属但不计入在线连接数。
+- 一次性 `ue-cli` / `ue-workflow-cli` CLI 调用，按 `invocationId` 归属但不计入在线连接数。
 - Capability、Workflow Run 与 Durable Job 的状态、耗时、错误码和
   `requestId/runId/jobId`；不会保存请求参数、响应正文或图片数据。
 
@@ -233,7 +233,7 @@ bridge 始终注册以下十二个工具，即使 Unreal Editor 暂时离线：
 - `ue_workflow`
 
 `ue_cli` 不连接 Editor。它分别按 `UE_CLI` / `UE_WORKFLOW_CLI`、插件包内
-`CLI/bin/ue.exe` / `ue-workflow.exe`、`PATH` 和开发构建目录定位两套 CLI。
+`CLI/bin/ue-cli.exe` / `ue-workflow-cli.exe`、`PATH` 和开发构建目录定位两套 CLI。
 原有 Workflow locator 字段保持不变，并新增 `shortCli`。
 `scripts/build_plugin.bat` 会将 CLI 及其 Contracts/Capabilities 安装到插件包
 的 `CLI/` 目录，同时恢复 MCP 的生产依赖。
@@ -264,31 +264,31 @@ operation 读回结果。
 短操作 CLI 与六个领域 MCP 工具使用同一份 capability contract：
 
 ```powershell
-ue blueprint.asset.get --name /Game/UI/WBP_Login
-ue scene.actor.spawn --type PointLight --name KeyLight --location '[0,0,300]'
-ue production.job.status --job-id job-123
-ue skills --query blueprint
-ue trace doctor
-ue trace import --trace-path D:\Traces\sample.utrace --backend local
-ue trace query timing --trace-id trace-local-... --operation frames --limit 100
-ue shell
+ue-cli blueprint.asset.get --name /Game/UI/WBP_Login
+ue-cli scene.actor.spawn --type PointLight --name KeyLight --location '[0,0,300]'
+ue-cli production.job.status --job-id job-123
+ue-cli skills --query blueprint
+ue-cli trace doctor
+ue-cli trace import --trace-path D:\Traces\sample.utrace --backend local
+ue-cli trace query timing --trace-id trace-local-... --operation frames --limit 100
+ue-cli shell
 ```
 
-`ue` 不加载 WorkflowCore。默认从随程序分发的 manifest 做参数映射，只发送
+`ue-cli` 不加载 WorkflowCore。默认从随程序分发的 manifest 做参数映射，只发送
 一次 `/api/execute`，由 Editor 做最终校验；`--live-schema` 会先向当前
 Editor 获取单项完整 schema，适合诊断 contract 漂移或强制校验 availability。
-`ue shell` 启动后加载一次目录并复用 HTTP keep-alive 连接，普通调用仍立即
+`ue-cli shell` 启动后加载一次目录并复用 HTTP keep-alive 连接，普通调用仍立即
 退出。长任务只启动 Job 并立即返回 `jobId`，不会自动等待；复杂连续资产编辑
-仍使用 `ue-workflow`。`ue trace` 对 manifest 声明为 `localTrace` 的能力可在
+仍使用 `ue-workflow-cli`。`ue-cli trace` 对 manifest 声明为 `localTrace` 的能力可在
 Editor 关闭时调用；录制目标、路径边界与 Provider 适配矩阵见
 [渲染调试证据与离线 Insights](docs/UE_TRACE_INSIGHTS.md)。
 
 Workflow CLI 使用离线/在线目录查询合同：
 
 ```powershell
-ue-workflow capabilities --query debug --domain blueprint --risk interactive --limit 10
-ue-workflow capabilities --connect --available-only --domain scene --limit 25
-ue-workflow capabilities --connect --operation blueprint.debug.session.get --detail full
+ue-workflow-cli capabilities --query debug --domain blueprint --risk interactive --limit 10
+ue-workflow-cli capabilities --connect --available-only --domain scene --limit 25
+ue-workflow-cli capabilities --connect --operation blueprint.debug.session.get --detail full
 ```
 
 未加 `--connect` 时直接读取随 CLI 分发的 manifest；加上后把过滤、risk、
@@ -430,7 +430,7 @@ bash scripts/build_plugin.sh /path/to/UnrealEngine ../UE_AI_integration-BuiltPlu
 
 `BuildPlugin` 包保留根 `CMakeLists.txt`、`CLI` 与 `Workflow` 源码。
 `CLI/bin` 中的预编译程序只适用于执行打包脚本的宿主平台；把包复制到另一平台后，
-可在包根目录重新执行 `cmake -S .` 构建本机 `ue` 和 `ue-workflow`。
+可在包根目录重新执行 `cmake -S .` 构建本机 `ue-cli` 和 `ue-workflow-cli`。
 
 有运行中的 Editor 时，可继续执行只读和可回滚的 smoke test：
 

@@ -36,7 +36,7 @@ FClientRegistration MakeCliRegistration(
 {
 	FClientRegistration Registration;
 	Registration.ClientKind = TEXT("cli");
-	Registration.Name = TEXT("ue-workflow");
+	Registration.Name = TEXT("ue-workflow-cli");
 	Registration.Version = TEXT("0.8.0");
 	Registration.Transport = TEXT("terminal");
 	Registration.Command = Command;
@@ -176,6 +176,7 @@ bool FClientActivityRegistrationLifecycleTest::RunTest(
 	const FString& Parameters)
 {
 	FClientActivityService Service;
+	Service.SetServerInstanceId(TEXT("server-instance-fixture"));
 	FString SessionId;
 	FString Error;
 	const FClientRegistration Codex =
@@ -455,7 +456,7 @@ bool FClientActivityRequestLifetimeTest::RunTest(
 
 	FCallerContext StatelessCli;
 	StatelessCli.ClientKind = TEXT("cli");
-	StatelessCli.Name = TEXT("ue");
+	StatelessCli.Name = TEXT("ue-cli");
 	StatelessCli.Version = TEXT("0.8.0");
 	StatelessCli.Transport = TEXT("http");
 	StatelessCli.Command = TEXT("blueprint scan");
@@ -1019,7 +1020,7 @@ bool FClientActivityBoundedSnapshotTest::RunTest(
 	FClientActivityService PruningService;
 	FCallerContext ActiveCli;
 	ActiveCli.ClientKind = TEXT("cli");
-	ActiveCli.Name = TEXT("ue");
+	ActiveCli.Name = TEXT("ue-cli");
 	ActiveCli.Version = TEXT("0.8.0");
 	ActiveCli.Transport = TEXT("http");
 	ActiveCli.Command = TEXT("production test");
@@ -1121,9 +1122,36 @@ bool FClientActivityLeaseOwnershipTest::RunTest(const FString& Parameters)
 		TEXT("Conflict reports the current owner"),
 		ObservedOwner,
 		OwnerSession);
+	const FString OriginalLeaseId = Lease->GetStringField(TEXT("leaseId"));
+	TSharedPtr<FJsonObject> Conflict;
+	TestFalse(
+		TEXT("Cross-owner acquire requires an override digest"),
+		Service.AcquireLease(
+			TEXT("pie"), OtherSession, false, FString(), Conflict, Error, HttpStatus));
+	TestEqual(TEXT("Cross-owner acquire is a conflict"), HttpStatus, 409);
+	const FString OverrideDigest =
+		Conflict->GetStringField(TEXT("overridePlanDigest"));
+	TestFalse(
+		TEXT("An incorrect override digest is rejected"),
+		Service.AcquireLease(
+			TEXT("pie"), OtherSession, true,
+			TEXT("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+			Conflict, Error, HttpStatus));
 	TestTrue(
-		TEXT("Owner releases the lease"),
+		TEXT("The exact state-bound digest overrides the lease"),
+		Service.AcquireLease(
+			TEXT("pie"), OtherSession, true,
+			OverrideDigest, Lease, Error, HttpStatus));
+	TestNotEqual(
+		TEXT("A successful override creates a new lease identity"),
+		Lease->GetStringField(TEXT("leaseId")),
+		OriginalLeaseId);
+	TestFalse(
+		TEXT("The previous owner cannot release the overridden lease"),
 		Service.ReleaseLease(TEXT("pie"), OwnerSession, Error));
+	TestTrue(
+		TEXT("The new owner releases the lease"),
+		Service.ReleaseLease(TEXT("pie"), OtherSession, Error));
 	TestTrue(
 		TEXT("The operation becomes available after release"),
 		Service.CanAccessLease(TEXT("pie"), OtherSession, ObservedOwner));

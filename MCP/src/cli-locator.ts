@@ -178,7 +178,7 @@ export function locateWorkflowCli(
 ): CliLocationResult {
   return locateCli(
     {
-      command: "ue-workflow",
+      command: "ue-workflow-cli",
       environmentKey: "UE_WORKFLOW_CLI",
       developmentBuilds: [
         "build-eval-workflow",
@@ -196,7 +196,7 @@ export function locateShortCli(
 ): CliLocationResult {
   return locateCli(
     {
-      command: "ue",
+      command: "ue-cli",
       environmentKey: "UE_CLI",
       developmentBuilds: [
         "build-short-cli",

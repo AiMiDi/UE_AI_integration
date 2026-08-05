@@ -42,7 +42,7 @@ default; use the returned artifact descriptor and an explicit artifact read.
 
 ## CLI and MCP filters
 
-Use `--effect`, `--lifecycle`, and `--canonical-only` with `ue capabilities`.
+Use `--effect`, `--lifecycle`, and `--canonical-only` with `ue-cli capabilities`.
 The `ue_capabilities` and `ue_context` MCP tools accept the equivalent fields.
-`ue mcp surface-status` compares manifests, local backends, live Editor
+`ue-cli mcp surface-status` compares manifests, local backends, live Editor
 availability, lifecycle state, and handler bindings.

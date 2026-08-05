@@ -63,17 +63,28 @@ bool IsTerminalRunStatus(const FString& Status)
 }
 
 FString LeaseOverrideDigest(
+	const FString& ServerInstanceId,
 	const FString& Type,
+	const FString& LeaseId,
 	const FString& CurrentOwner,
 	const FString& RequestedOwner)
 {
-	const FString Source = TEXT("ue.lease-override.v1|") + Type
+	const FString Source = TEXT("ue.lease-override.v2|")
+		+ ServerInstanceId + TEXT("|") + Type + TEXT("|") + LeaseId
 		+ TEXT("|") + CurrentOwner + TEXT("|") + RequestedOwner;
 	const FTCHARToUTF8 Utf8(*Source);
 	FString Hex;
 	TrySha256Hex(Utf8.Get(), Utf8.Length(), Hex);
 	return TEXT("sha256:") + Hex;
 }
+
+}
+
+void FClientActivityService::SetServerInstanceId(
+	const FString& InServerInstanceId)
+{
+	FScopeLock Lock(&Mutex);
+	ServerInstanceId = InServerInstanceId;
 }
 
 void FClientActivityService::SetActiveService(FClientActivityService* Service)
@@ -1132,11 +1143,17 @@ bool FClientActivityService::AcquireLease(
 	{
 		if (Existing->OwnerSessionId != SessionId)
 		{
-			const FString Expected = LeaseOverrideDigest(Type, Existing->OwnerSessionId, SessionId);
+			const FString Expected = LeaseOverrideDigest(
+				ServerInstanceId,
+				Type,
+				Existing->LeaseId,
+				Existing->OwnerSessionId,
+				SessionId);
 			if (!bOverride || ApprovePlanDigest != Expected)
 			{
 				OutLease = MakeShared<FJsonObject>();
 				OutLease->SetStringField(TEXT("ownerSessionId"), Existing->OwnerSessionId);
+				OutLease->SetStringField(TEXT("leaseId"), Existing->LeaseId);
 				OutLease->SetStringField(TEXT("overridePlanDigest"), Expected);
 				OutError = TEXT("lease is owned by another live session.");
 				OutHttpStatus = 409;
@@ -1144,6 +1161,7 @@ bool FClientActivityService::AcquireLease(
 			}
 			TSharedPtr<FJsonObject> Audit = MakeShared<FJsonObject>();
 			Audit->SetStringField(TEXT("type"), Type);
+			Audit->SetStringField(TEXT("leaseId"), Existing->LeaseId);
 			Audit->SetStringField(TEXT("previousOwner"), Existing->OwnerSessionId);
 			Audit->SetStringField(TEXT("newOwner"), SessionId);
 			Audit->SetStringField(TEXT("atUtc"), NowUtc());
@@ -1153,6 +1171,10 @@ bool FClientActivityService::AcquireLease(
 	}
 	const double NowSeconds = FPlatformTime::Seconds();
 	FLease Lease;
+	const FLease* Previous = Leases.Find(Type);
+	Lease.LeaseId = Previous && Previous->OwnerSessionId == SessionId
+		? Previous->LeaseId
+		: NewOpaqueId(TEXT("lease"));
 	Lease.Type = Type;
 	Lease.OwnerSessionId = SessionId;
 	Lease.AcquiredAtUtc = NowUtc();
@@ -1161,6 +1183,7 @@ bool FClientActivityService::AcquireLease(
 	Lease.ExpiresSeconds = NowSeconds + 30.0;
 	Leases.Add(Type, Lease);
 	OutLease = MakeShared<FJsonObject>();
+	OutLease->SetStringField(TEXT("leaseId"), Lease.LeaseId);
 	OutLease->SetStringField(TEXT("type"), Type);
 	OutLease->SetStringField(TEXT("ownerSessionId"), SessionId);
 	OutLease->SetNumberField(TEXT("ttlSeconds"), 30);
@@ -1212,6 +1235,7 @@ TSharedPtr<FJsonObject> FClientActivityService::MakeLeaseSnapshot() const
 	{
 		TSharedPtr<FJsonObject> Value = MakeShared<FJsonObject>();
 		Value->SetStringField(TEXT("type"), Pair.Value.Type);
+		Value->SetStringField(TEXT("leaseId"), Pair.Value.LeaseId);
 		Value->SetStringField(TEXT("ownerSessionId"), Pair.Value.OwnerSessionId);
 		Value->SetStringField(TEXT("expiresAtUtc"), Pair.Value.ExpiresAtUtc);
 		Values.Add(MakeShared<FJsonValueObject>(Value));

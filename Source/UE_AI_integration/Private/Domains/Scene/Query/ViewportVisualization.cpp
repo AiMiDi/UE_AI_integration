@@ -2508,8 +2508,8 @@ public:
 				Reason.IsEmpty()
 					? TEXT("Viewport capture was cancelled.")
 					: Reason,
-				TEXT("service_unavailable"),
-				503,
+				TEXT("request_cancelled"),
+				499,
 				false);
 		}
 	}

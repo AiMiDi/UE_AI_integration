@@ -27,7 +27,7 @@ install(
 )
 install(
     DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Contracts/"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow/Contracts"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow-cli/Contracts"
 )
 
 if(MSVC)

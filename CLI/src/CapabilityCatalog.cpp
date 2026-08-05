@@ -508,7 +508,7 @@ std::optional<std::filesystem::path> ResolveCapabilityRoot(
             candidates.push_back(
                 bin / ".." / ".." / "Resources" / "Capabilities");
             candidates.push_back(
-                bin / ".." / "share" / "ue-workflow" / "Capabilities");
+                bin / ".." / "share" / "ue-workflow-cli" / "Capabilities");
         }
         if (std::string_view(UE_CLI_SOURCE_ROOT).size() > 0)
         {

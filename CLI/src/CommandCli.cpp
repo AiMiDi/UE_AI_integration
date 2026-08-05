@@ -12,6 +12,7 @@
 #include <array>
 #include <charconv>
 #include <chrono>
+#include <cstdio>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -30,6 +31,12 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#endif
 
 #ifndef UE_CLI_VERSION
 #define UE_CLI_VERSION "1.0.0"
@@ -68,6 +75,8 @@ struct Options
     std::vector<std::string> trace_arguments;
     bool trace_doctor = false;
     bool doctor_full = false;
+    bool require_editor = false;
+    bool clean_stale_instances = true;
     std::filesystem::path bundle_root;
     std::string instance;
 };
@@ -347,6 +356,26 @@ bool ParseArguments(
             options.doctor_full = true;
             continue;
         }
+        if (name == "require-editor")
+        {
+            if (inline_value)
+            {
+                error = "--require-editor does not accept a value.";
+                return false;
+            }
+            options.require_editor = true;
+            continue;
+        }
+        if (name == "no-clean-stale-instances")
+        {
+            if (inline_value)
+            {
+                error = "--no-clean-stale-instances does not accept a value.";
+                return false;
+            }
+            options.clean_stale_instances = false;
+            continue;
+        }
         if (name == "endpoint"
             || name == "timeout-ms"
             || name == "request-id"
@@ -461,19 +490,19 @@ void PrintGeneralHelp(std::ostream& output)
     output
         << "UE short-operation CLI\n"
         << "Usage:\n"
-        << "  ue <capability-id> [--field value ...] [options]\n"
-        << "  ue status [--json]\n"
-        << "  ue doctor [--full] [--instance <id>] [--bundle <path>]\n"
-        << "  ue test-tools [--bundle <path>]\n"
-        << "  ue mcp surface-status [--json]\n"
-        << "  ue capabilities [filters] [--json]\n"
-        << "  ue skills [filters] [--json]\n"
-        << "  ue trace <command> [options]\n"
-        << "  ue recipe validate|plan|start|status|resume|cancel|result [options]\n"
-        << "  ue sal stub|lint|plan [options]\n"
-        << "  ue help <capability-id>\n"
-        << "  ue shell [--live-schema]\n"
-        << "  ue --version\n\n"
+        << "  ue-cli <capability-id> [--field value ...] [options]\n"
+        << "  ue-cli status [--json]\n"
+        << "  ue-cli doctor [--full] [--instance <id>] [--bundle <path>] [--no-clean-stale-instances]\n"
+        << "  ue-cli test-tools [--bundle <path>] [--require-editor]\n"
+        << "  ue-cli mcp surface-status [--json]\n"
+        << "  ue-cli capabilities [filters] [--json]\n"
+        << "  ue-cli skills [filters] [--json]\n"
+        << "  ue-cli trace <command> [options]\n"
+        << "  ue-cli recipe validate|plan|start|status|resume|cancel|result [options]\n"
+        << "  ue-cli sal stub|lint|plan [options]\n"
+        << "  ue-cli help <capability-id>\n"
+        << "  ue-cli shell [--live-schema]\n"
+        << "  ue-cli --version\n\n"
         << "Global options:\n"
         << "  --endpoint <loopback-url>  Editor API endpoint\n"
         << "  --timeout-ms <n>           Socket timeout (default 300000)\n"
@@ -487,6 +516,8 @@ void PrintGeneralHelp(std::ostream& output)
         << "  --skill-root <path>        Override packaged Agent Skills\n"
         << "  --bundle <path>            Inspect an explicit release bundle\n"
         << "  --instance <id>            Select a recorded Editor instance\n"
+        << "  --require-editor           Make Editor checks mandatory for test-tools\n"
+        << "  --no-clean-stale-instances Keep confirmed stale Doctor records\n"
         << "  --json                     Print the full JSON envelope\n";
 }
 
@@ -495,12 +526,12 @@ void PrintTraceHelp(std::ostream& output)
     output
         << "Offline-capable Unreal Trace CLI\n"
         << "Usage:\n"
-        << "  ue trace doctor\n"
-        << "  ue trace target list\n"
-        << "  ue trace start|status|stop [options]\n"
-        << "  ue trace import|analyze|providers [options]\n"
-        << "  ue trace query <timing|counter|memory|loading|network|tasks|context-switches|log|io|bookmark|region|screenshot> [options]\n"
-        << "  ue trace export|open [options]\n\n"
+        << "  ue-cli trace doctor\n"
+        << "  ue-cli trace target list\n"
+        << "  ue-cli trace start|status|stop [options]\n"
+        << "  ue-cli trace import|analyze|providers [options]\n"
+        << "  ue-cli trace query <timing|counter|memory|loading|network|tasks|context-switches|log|io|bookmark|region|screenshot> [options]\n"
+        << "  ue-cli trace export|open [options]\n\n"
         << "Trace parameters use the normal schema-derived options, "
            "including --backend auto|editor|local and --params-file.\n";
 }
@@ -613,7 +644,7 @@ void PrintSkillsHelp(std::ostream& output)
     output
         << "UE Agent Skill catalog\n"
         << "Usage:\n"
-        << "  ue skills [filters] [--json]\n\n"
+        << "  ue-cli skills [filters] [--json]\n\n"
         << "The command reads packaged skill.json files locally and does "
            "not connect to Unreal Editor.\n\n"
         << "Filters:\n"
@@ -657,14 +688,14 @@ void PrintCommandHelp(
     if (options.command == "status")
     {
         output
-            << "Usage: ue status [--json] [connection options]\n"
+            << "Usage: ue-cli status [--json] [connection options]\n"
             << "Read the running Editor and plugin health envelope.\n";
         return;
     }
     if (options.command == "capabilities")
     {
         output
-            << "Usage: ue capabilities [filters] [--live-schema] [--json]\n"
+            << "Usage: ue-cli capabilities [filters] [--live-schema] [--json]\n"
             << "Filters: --query, --operation, --domain, --kind, "
                "--effect, --lifecycle, --canonical-only, --destructive, "
                "--expensive, --output-kind, --risk, --offset, --limit, "
@@ -674,24 +705,24 @@ void PrintCommandHelp(
     if (options.command == "shell")
     {
         output
-            << "Usage: ue shell [--live-schema] [connection options]\n"
+            << "Usage: ue-cli shell [--live-schema] [connection options]\n"
             << "Run multiple short capability commands over one connection.\n";
         return;
     }
     if (options.command == "help")
     {
         output
-            << "Usage: ue help <capability-id> [--live-schema] [--json]\n"
+            << "Usage: ue-cli help <capability-id> [--live-schema] [--json]\n"
             << "Load the local or live descriptor and print exact parameters.\n";
         return;
     }
 
     output
-        << "Usage: ue " << options.command
+        << "Usage: ue-cli " << options.command
         << " [--field value ...] [--params <json> | "
            "--params-file <path|->] [options]\n"
         << "This syntactic help performs no catalog load or Editor request.\n"
-        << "Run `ue help " << options.command
+        << "Run `ue-cli help " << options.command
         << "` to inspect the schema-derived parameters.\n";
 }
 
@@ -703,7 +734,7 @@ bool NormalizeTraceShortcut(Options& options, std::string& error)
     }
     if (options.trace_arguments.empty())
     {
-        error = "ue trace requires a command.";
+        error = "ue-cli trace requires a command.";
         return false;
     }
     const std::string& action = options.trace_arguments[0];
@@ -759,7 +790,7 @@ bool NormalizeTraceShortcut(Options& options, std::string& error)
             return true;
         }
     }
-    error = "Unknown ue trace command. Run `ue trace --help`.";
+    error = "Unknown ue-cli trace command. Run `ue-cli trace --help`.";
     return false;
 }
 
@@ -3413,7 +3444,7 @@ int RunLocalSkills(
     if (options.live_schema)
     {
         return fail(
-            "ue skills is local-only; remove --live-schema.");
+            "ue-cli skills is local-only; remove --live-schema.");
     }
 
     std::string query;
@@ -3891,7 +3922,7 @@ int PrintVersion(
         output << json({
             { "ok", true },
             { "product", "UE short-operation CLI" },
-            { "executable", "ue" },
+            { "executable", "ue-cli" },
             { "version", UE_CLI_VERSION },
             { "apiVersion", "v1" },
             { "transport", "loopback-http" },
@@ -3901,7 +3932,7 @@ int PrintVersion(
     }
     else
     {
-        output << "ue " << UE_CLI_VERSION << " (API v1)\n";
+        output << "ue-cli " << UE_CLI_VERSION << " (API v1)\n";
     }
     return 0;
 }
@@ -4203,6 +4234,10 @@ json ReadJsonFileBounded(
 
 std::filesystem::path DefaultInstanceRoot()
 {
+    if (const auto override_root = Environment("UEAI_INSTANCE_ROOT"))
+    {
+        return ue::cli::Utf8Path(*override_root);
+    }
 #if defined(_WIN32)
     if (const auto local = Environment("LOCALAPPDATA"))
     {
@@ -4220,10 +4255,175 @@ std::filesystem::path DefaultInstanceRoot()
         / "ue-ai-cli" / "instances";
 }
 
-json InspectInstanceRecords(const std::string& selected)
+bool IsLoopbackEndpoint(const std::string& endpoint)
+{
+    return endpoint.starts_with("http://127.0.0.1:")
+        || endpoint.starts_with("http://localhost:")
+        || endpoint.starts_with("http://[::1]:");
+}
+
+bool LooksLikeInstanceId(const std::string& value)
+{
+    if (value.size() != 36)
+    {
+        return false;
+    }
+    for (std::size_t index = 0; index < value.size(); ++index)
+    {
+        if (index == 8 || index == 13 || index == 18 || index == 23)
+        {
+            if (value[index] != '-') return false;
+            continue;
+        }
+        if (!std::isxdigit(static_cast<unsigned char>(value[index])))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+enum class ProcessIdentity
+{
+    Match,
+    Missing,
+    StartTimeMismatch,
+    Unverified,
+};
+
+#if defined(_WIN32)
+std::optional<std::uint64_t> Iso8601FileTime(
+    const std::string& value)
+{
+    int year = 0;
+    int month = 0;
+    int day = 0;
+    int hour = 0;
+    int minute = 0;
+    double seconds = 0.0;
+    if (sscanf_s(
+            value.c_str(),
+            "%d-%d-%dT%d:%d:%lfZ",
+            &year,
+            &month,
+            &day,
+            &hour,
+            &minute,
+            &seconds)
+        != 6)
+    {
+        return std::nullopt;
+    }
+    SYSTEMTIME system{};
+    system.wYear = static_cast<WORD>(year);
+    system.wMonth = static_cast<WORD>(month);
+    system.wDay = static_cast<WORD>(day);
+    system.wHour = static_cast<WORD>(hour);
+    system.wMinute = static_cast<WORD>(minute);
+    system.wSecond = static_cast<WORD>(seconds);
+    system.wMilliseconds = static_cast<WORD>(
+        (seconds - static_cast<int>(seconds)) * 1000.0 + 0.5);
+    FILETIME file_time{};
+    if (!SystemTimeToFileTime(&system, &file_time))
+    {
+        return std::nullopt;
+    }
+    ULARGE_INTEGER combined{};
+    combined.LowPart = file_time.dwLowDateTime;
+    combined.HighPart = file_time.dwHighDateTime;
+    return combined.QuadPart;
+}
+#endif
+
+ProcessIdentity ProbeProcessIdentity(
+    const std::uint64_t pid,
+    const std::string& recorded_start)
+{
+    if (pid == 0 || pid > std::numeric_limits<std::uint32_t>::max())
+    {
+        return ProcessIdentity::Missing;
+    }
+#if defined(_WIN32)
+    HANDLE process = OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION,
+        FALSE,
+        static_cast<DWORD>(pid));
+    if (!process)
+    {
+        return GetLastError() == ERROR_INVALID_PARAMETER
+            ? ProcessIdentity::Missing
+            : ProcessIdentity::Unverified;
+    }
+    DWORD exit_code = 0;
+    FILETIME creation{};
+    FILETIME exit_time{};
+    FILETIME kernel{};
+    FILETIME user{};
+    const bool running = GetExitCodeProcess(process, &exit_code)
+        && exit_code == STILL_ACTIVE;
+    const bool has_times = GetProcessTimes(
+        process,
+        &creation,
+        &exit_time,
+        &kernel,
+        &user);
+    CloseHandle(process);
+    if (!running)
+    {
+        return ProcessIdentity::Missing;
+    }
+    const auto expected = Iso8601FileTime(recorded_start);
+    if (!has_times || !expected)
+    {
+        return ProcessIdentity::Unverified;
+    }
+    ULARGE_INTEGER actual{};
+    actual.LowPart = creation.dwLowDateTime;
+    actual.HighPart = creation.dwHighDateTime;
+    const std::uint64_t difference = actual.QuadPart > *expected
+        ? actual.QuadPart - *expected
+        : *expected - actual.QuadPart;
+    return difference <= 20'000'000ULL
+        ? ProcessIdentity::Match
+        : ProcessIdentity::StartTimeMismatch;
+#else
+    (void)recorded_start;
+    return ProcessIdentity::Unverified;
+#endif
+}
+
+double FileAgeSeconds(const std::filesystem::path& path)
+{
+    std::error_code error;
+    const auto modified = std::filesystem::last_write_time(path, error);
+    if (error)
+    {
+        return 0.0;
+    }
+    const auto system_modified =
+        std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+            modified - std::filesystem::file_time_type::clock::now()
+            + std::chrono::system_clock::now());
+    return std::max(
+        0.0,
+        std::chrono::duration<double>(
+            std::chrono::system_clock::now() - system_modified).count());
+}
+
+json InspectInstanceRecords(
+    const std::string& selected,
+    const bool clean_stale)
 {
     const auto root = DefaultInstanceRoot();
     json records = json::array();
+    json deleted = json::array();
+    json cleanup_skipped = json::array();
+    json counts = {
+        { "live", 0 },
+        { "stale", 0 },
+        { "invalid", 0 },
+        { "unverified", 0 },
+    };
     std::error_code error;
     if (!std::filesystem::is_directory(root, error) || error)
     {
@@ -4231,12 +4431,19 @@ json InspectInstanceRecords(const std::string& selected)
             { "root", RedactedPathLabel(root) },
             { "selected", selected.empty() ? json(nullptr) : json(selected) },
             { "records", records },
+            { "counts", counts },
+            { "cleanup", {
+                { "enabled", clean_stale },
+                { "graceSeconds", 300 },
+                { "deleted", deleted },
+                { "skipped", cleanup_skipped },
+            } },
         };
     }
-    std::size_t visited = 0;
+    std::vector<std::filesystem::directory_entry> entries;
     for (const auto& entry : std::filesystem::directory_iterator(root, error))
     {
-        if (error || visited++ >= 32)
+        if (error || entries.size() >= 256)
         {
             break;
         }
@@ -4247,37 +4454,194 @@ json InspectInstanceRecords(const std::string& selected)
             error.clear();
             continue;
         }
-        const json value = ReadJsonFileBounded(entry.path(), 64 * 1024);
-        if (!value.is_object())
+        entries.push_back(entry);
+    }
+    std::sort(
+        entries.begin(),
+        entries.end(),
+        [](const auto& left, const auto& right)
         {
-            continue;
-        }
+            std::error_code left_error;
+            std::error_code right_error;
+            return left.last_write_time(left_error)
+                > right.last_write_time(right_error);
+        });
+    std::size_t health_checks = 0;
+    for (const auto& entry : entries)
+    {
+        const auto inspected_hash = HashFile(entry.path());
+        std::error_code inspected_time_error;
+        const auto inspected_time = entry.last_write_time(
+            inspected_time_error);
+        const json value = ReadJsonFileBounded(entry.path(), 64 * 1024);
         const std::string instance_id =
-            value.value("serverInstanceId", std::string{});
+            value.is_object()
+                ? value.value("serverInstanceId", std::string{})
+                : std::string{};
         if (!selected.empty()
             && selected != instance_id
             && selected != entry.path().stem().string())
         {
             continue;
         }
+        const std::uint64_t pid = value.is_object()
+            ? value.value("pid", std::uint64_t{0})
+            : 0;
+        const std::string process_start = value.is_object()
+            ? value.value("processStartTime", std::string{})
+            : std::string{};
+        const std::string endpoint = value.is_object()
+            ? value.value("endpoint", std::string{})
+            : std::string{};
+        std::string status = "invalid";
+        std::string reason = "record_invalid";
+        const bool identity_valid = value.is_object()
+            && LooksLikeInstanceId(instance_id)
+            && instance_id == entry.path().stem().string()
+            && pid != 0
+            && !process_start.empty()
+            && IsLoopbackEndpoint(endpoint);
+        if (identity_valid)
+        {
+            switch (ProbeProcessIdentity(pid, process_start))
+            {
+            case ProcessIdentity::Missing:
+                status = "stale";
+                reason = "process_not_found";
+                break;
+            case ProcessIdentity::StartTimeMismatch:
+                status = "stale";
+                reason = "process_start_mismatch";
+                break;
+            case ProcessIdentity::Unverified:
+                status = "unverified";
+                reason = "process_identity_unverified";
+                break;
+            case ProcessIdentity::Match:
+                if (health_checks++ >= 8)
+                {
+                    status = "unverified";
+                    reason = "health_check_limit";
+                    break;
+                }
+                {
+                    ue::api::Client probe(endpoint, 250);
+                    const ParsedEnvelope health =
+                        ParseEnvelope(probe.Get("/api/health"));
+                    if (!health.ok)
+                    {
+                        status = "unverified";
+                        reason = "health_unreachable";
+                        break;
+                    }
+                    const json data = health.value.value(
+                        "data", json::object());
+                    const bool matches =
+                        data.value("serverInstanceId", std::string{})
+                            == instance_id
+                        && data.value("processId", std::uint64_t{0})
+                            == pid
+                        && data.value("processStartTime", std::string{})
+                            == process_start;
+                    status = matches ? "live" : "stale";
+                    reason = matches
+                        ? "identity_verified"
+                        : "health_identity_mismatch";
+                }
+                break;
+            }
+        }
+        counts[status] = counts.value(status, 0) + 1;
+        bool was_deleted = false;
+        const double age_seconds = FileAgeSeconds(entry.path());
+        if (clean_stale
+            && (status == "stale" || status == "invalid")
+            && age_seconds >= 300.0
+            && LooksLikeInstanceId(entry.path().stem().string()))
+        {
+            const auto current_hash = HashFile(entry.path());
+            std::error_code current_time_error;
+            const auto current_time = std::filesystem::last_write_time(
+                entry.path(), current_time_error);
+            const json current_value = ReadJsonFileBounded(
+                entry.path(), 64 * 1024);
+            const std::string current_instance_id =
+                current_value.is_object()
+                    ? current_value.value(
+                        "serverInstanceId", std::string{})
+                    : std::string{};
+            std::string cleanup_skip_reason;
+            if (!inspected_hash || !current_hash
+                || inspected_time_error || current_time_error)
+            {
+                cleanup_skip_reason = "record_unreadable";
+            }
+            else if (*inspected_hash != *current_hash
+                || inspected_time != current_time)
+            {
+                cleanup_skip_reason = "record_changed";
+            }
+            else if (current_instance_id != instance_id
+                || (!current_instance_id.empty()
+                    && current_instance_id
+                        != entry.path().stem().string()))
+            {
+                cleanup_skip_reason = "server_instance_changed";
+            }
+            else
+            {
+                error.clear();
+                std::filesystem::remove(entry.path(), error);
+                was_deleted = !error;
+                if (was_deleted)
+                {
+                    deleted.push_back({
+                        { "record", entry.path().filename().generic_string() },
+                        { "status", status },
+                        { "reason", reason },
+                    });
+                }
+                else
+                {
+                    cleanup_skip_reason = "delete_failed";
+                }
+            }
+            if (!was_deleted)
+            {
+                cleanup_skipped.push_back({
+                    { "record", entry.path().filename().generic_string() },
+                    { "reason", cleanup_skip_reason },
+                });
+            }
+        }
+        if (records.size() >= 32)
+        {
+            continue;
+        }
         records.push_back({
             { "record", entry.path().filename().generic_string() },
             { "serverInstanceId", instance_id },
-            { "pid", value.value("pid", std::uint64_t{0}) },
-            { "processStartTime",
-                value.value("processStartTime", std::string{}) },
-            { "endpoint", value.value("endpoint", std::string{}) },
-            { "hasRequiredIdentity",
-                !instance_id.empty()
-                    && value.value("pid", std::uint64_t{0}) != 0
-                    && !value.value(
-                            "processStartTime", std::string{}).empty() },
+            { "pid", pid },
+            { "processStartTime", process_start },
+            { "endpoint", endpoint.empty() ? json(nullptr) : json("<loopback>") },
+            { "hasRequiredIdentity", identity_valid },
+            { "status", status },
+            { "reason", reason },
+            { "ageSeconds", static_cast<std::uint64_t>(age_seconds) },
+            { "deleted", was_deleted },
         });
     }
     return {
         { "root", RedactedPathLabel(root) },
         { "selected", selected.empty() ? json(nullptr) : json(selected) },
         { "records", records },
+        { "counts", counts },
+        { "cleanup", {
+            { "enabled", clean_stale },
+            { "graceSeconds", 300 },
+            { "deleted", deleted },
+            { "skipped", cleanup_skipped },
+        } },
     };
 }
 
@@ -4322,14 +4686,89 @@ bool WriteDiagnosticBundle(
     return !error;
 }
 
-int RunDoctor(
+std::string CommandQuote(const std::string& value)
+{
+    std::string result = "\"";
+    for (const char character : value)
+    {
+        if (character == '"') result += '\\';
+        result += character;
+    }
+    result += '"';
+    return result;
+}
+
+json RunMcpStdioDiagnostic(const std::filesystem::path& bundle_root)
+{
+    const auto started = std::chrono::steady_clock::now();
+    const auto elapsed = [&]()
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+    };
+    const auto script = bundle_root / "scripts" / "mcp_stdio_smoke.mjs";
+    if (bundle_root.empty() || !std::filesystem::exists(script))
+    {
+        json check = DiagnosticCheck(
+            "mcp.stdio",
+            "failed",
+            "mcp_smoke_unavailable",
+            "The bundled MCP stdio smoke script is missing.");
+        check["durationMs"] = elapsed();
+        return check;
+    }
+    const std::string node = Environment("UEAI_NODE").value_or("node");
+    const auto output_path = std::filesystem::temp_directory_path()
+        / ("ue-test-tools-mcp-" + ue::api::NewInvocationId() + ".json");
+    std::string command =
+        CommandQuote(node)
+        + " " + CommandQuote(PathToUtf8(script))
+        + " " + CommandQuote(PathToUtf8(bundle_root))
+        + " > " + CommandQuote(PathToUtf8(output_path))
+        + " 2>&1";
+#if defined(_WIN32)
+    command = "\"" + command + "\"";
+#endif
+    const int exit_code = std::system(command.c_str());
+    std::string text;
+    if (std::filesystem::exists(output_path))
+    {
+        std::ifstream stream(output_path, std::ios::binary);
+        text.assign(
+            std::istreambuf_iterator<char>(stream),
+            std::istreambuf_iterator<char>());
+        if (text.size() > 8192) text.erase(0, text.size() - 8192);
+        std::error_code remove_error;
+        std::filesystem::remove(output_path, remove_error);
+    }
+    json payload = json::parse(text, nullptr, false, true);
+    const bool passed = exit_code == 0
+        && payload.is_object()
+        && payload.value("ok", false)
+        && payload.value("toolCount", 0) == 12;
+    json check = DiagnosticCheck(
+        "mcp.stdio",
+        passed ? "passed" : "failed",
+        passed ? "ok" : "mcp_smoke_failed",
+        passed
+            ? "MCP initialize/list-tools returned exactly 12 tools."
+            : (text.empty() ? "MCP stdio smoke produced no result." : text));
+    check["durationMs"] = elapsed();
+    return check;
+}
+
+struct DoctorReport
+{
+    json envelope;
+    bool required_ok = false;
+};
+
+DoctorReport CollectDoctorReport(
     const Options& options,
     const CapabilityCatalog* catalog,
     const SkillCatalog* skill_catalog,
     ue::api::Client& client,
-    ue::trace::WorkerClient& trace_worker,
-    std::ostream& output,
-    std::ostream& error)
+    ue::trace::WorkerClient& trace_worker)
 {
     json checks = json::array();
     bool required_ok = true;
@@ -4360,14 +4799,15 @@ int RunDoctor(
         true);
 
     const auto bundle_root = InferBundleRoot(options, catalog);
-    static const std::array<std::filesystem::path, 8> required_files = {
+    static const std::array<std::filesystem::path, 9> required_files = {
         "UE_AI_integration.uplugin",
-        "CLI/bin/ue.exe",
-        "CLI/bin/ue-workflow.exe",
+        "CLI/bin/ue-cli.exe",
+        "CLI/bin/ue-workflow-cli.exe",
         "MCP/package.json",
         "MCP/dist/index.js",
         "Resources/Capabilities/blueprint.json",
         "skills/setup-ue5/SKILL.md",
+        "Recipes/ue-recovery-operator.recipe.json",
         "scripts/mcp_stdio_smoke.mjs",
     };
     json missing = json::array();
@@ -4452,7 +4892,7 @@ int RunDoctor(
     }
 
     json data = {
-        { "schema", "ue.doctor.v2" },
+        { "schema", "ue.doctor.v3" },
         { "version", UE_CLI_VERSION },
         { "full", options.doctor_full },
         { "endpoint", "<loopback>" },
@@ -4460,7 +4900,9 @@ int RunDoctor(
             { "root", RedactedPathLabel(bundle_root) },
             { "missing", missing },
         } },
-        { "instances", InspectInstanceRecords(options.instance) },
+        { "instances", InspectInstanceRecords(
+            options.instance,
+            options.doctor_full && options.clean_stale_instances) },
         { "checks", checks },
         { "worker", worker_data },
         { "editor", editor_data },
@@ -4470,6 +4912,7 @@ int RunDoctor(
             { "remoteAddresses", true },
             { "credentials", true },
             { "maxInstanceRecords", 32 },
+            { "maxScannedInstanceRecords", 256 },
         } },
     };
     json envelope = {
@@ -4482,7 +4925,25 @@ int RunDoctor(
                     : json(RedactedPathLabel(options.output_path)) },
         } },
     };
-    if (!WriteDiagnosticBundle(options.output_path, envelope))
+    return { std::move(envelope), required_ok };
+}
+
+int RunDoctor(
+    const Options& options,
+    const CapabilityCatalog* catalog,
+    const SkillCatalog* skill_catalog,
+    ue::api::Client& client,
+    ue::trace::WorkerClient& trace_worker,
+    std::ostream& output,
+    std::ostream& error)
+{
+    DoctorReport report = CollectDoctorReport(
+        options,
+        catalog,
+        skill_catalog,
+        client,
+        trace_worker);
+    if (!WriteDiagnosticBundle(options.output_path, report.envelope))
     {
         return PrintFailure(
             { false, json(), "diagnostic_bundle_write_failed",
@@ -4492,10 +4953,10 @@ int RunDoctor(
             output,
             error);
     }
-    if (!required_ok)
+    if (!report.required_ok)
     {
         return PrintFailure(
-            { false, envelope, "doctor_failed",
+            { false, report.envelope, "doctor_failed",
                 "One or more required diagnostic checks failed." },
             options.json_output,
             kExitUnavailable,
@@ -4504,7 +4965,7 @@ int RunDoctor(
     }
     return PrintSuccess(
         "doctor",
-        { true, std::move(envelope), {}, {} },
+        { true, std::move(report.envelope), {}, {} },
         options.json_output,
         output);
 }
@@ -4521,55 +4982,81 @@ int RunTestTools(
     Options doctor = options;
     doctor.doctor_full = true;
     doctor.output_path.clear();
-    std::ostringstream ignored_output;
-    std::ostringstream ignored_error;
-    const int doctor_exit = RunDoctor(
+    doctor.endpoint_explicit = options.require_editor;
+    DoctorReport report = CollectDoctorReport(
         doctor,
         catalog,
         skill_catalog,
         client,
-        trace_worker,
-        ignored_output,
-        ignored_error);
-    if (doctor_exit != 0)
+        trace_worker);
+    json checks = report.envelope["data"].value(
+        "checks", json::array());
+    for (json& check : checks)
     {
-        return PrintFailure(
-            { false, json(), "test_tools_doctor_failed",
-                "The full diagnostic preflight failed: "
-                    + ignored_error.str() },
-            options.json_output,
-            doctor_exit,
-            output,
-            error);
+        if (check.value("status", std::string{}) == "unavailable")
+        {
+            check["status"] = "skipped";
+        }
+        if (!check.contains("durationMs")) check["durationMs"] = 0;
     }
+    const auto bundle_root = InferBundleRoot(doctor, catalog);
+    checks.push_back(RunMcpStdioDiagnostic(bundle_root));
     const ParsedEnvelope capabilities = ParseEnvelope(
         client.Get("/api/capabilities?limit=1&detail=full"));
-    if (!capabilities.ok)
+    json editor_catalog = DiagnosticCheck(
+        "editor.catalog",
+        capabilities.ok
+            ? "passed"
+            : (options.require_editor ? "failed" : "skipped"),
+        capabilities.ok ? "ok" : capabilities.code,
+        capabilities.ok
+            ? "Online capability catalog query succeeded."
+            : capabilities.message);
+    editor_catalog["durationMs"] = 0;
+    checks.push_back(std::move(editor_catalog));
+
+    std::size_t passed = 0;
+    std::size_t skipped = 0;
+    std::size_t failed = 0;
+    for (const json& check : checks)
     {
-        return PrintFailure(
-            capabilities,
-            options.json_output,
-            capabilities.code == "editor_unreachable"
-                ? kExitUnavailable
-                : kExitExecution,
-            output,
-            error);
+        const std::string status = check.value("status", "failed");
+        if (status == "passed") ++passed;
+        else if (status == "skipped") ++skipped;
+        else ++failed;
     }
+    const std::string status = failed > 0
+        ? "failed"
+        : (skipped > 0 ? "partial" : "passed");
+    const bool ok = failed == 0;
     json envelope = {
-        { "ok", true },
+        { "ok", ok },
         { "data", {
-            { "schema", "ue.test-tools.v1" },
+            { "schema", "ue.test-tools.v2" },
+            { "status", status },
+            { "requireEditor", options.require_editor },
             { "capabilityCount", catalog ? catalog->Size() : 0 },
             { "skillCount", skill_catalog ? skill_catalog->Size() : 0 },
             { "mcpExpectedToolCount", 12 },
-            { "editorCatalog", "passed" },
-            { "editorReadonly", "passed" },
-            { "traceWorker", "passed" },
-            { "note",
-                "The release bundle gate performs the actual MCP initialize/list-tools assertion." },
+            { "checks", checks },
+            { "summary", {
+                { "passed", passed },
+                { "skipped", skipped },
+                { "failed", failed },
+            } },
         } },
         { "meta", { { "endpoint", "<loopback>" } } },
     };
+    if (!ok)
+    {
+        return PrintFailure(
+            { false, envelope, "test_tools_failed",
+                "One or more required tool checks failed." },
+            options.json_output,
+            kExitUnavailable,
+            output,
+            error);
+    }
     return PrintSuccess(
         "test-tools",
         { true, std::move(envelope), {}, {} },
@@ -4674,7 +5161,7 @@ int ExecuteOptions(
                     false,
                     json(),
                     "params_option_misplaced",
-                    "ue trace doctor does not accept capability parameters.",
+                    "ue-cli trace doctor does not accept capability parameters.",
                 },
                 options.json_output,
                 kExitUsage,
@@ -4744,6 +5231,28 @@ int ExecuteOptions(
             output,
             error);
     }
+    if (options.require_editor && options.command != "test-tools")
+    {
+        return PrintFailure(
+            { false, json(), "invalid_diagnostic_options",
+                "--require-editor is valid only for ue-cli test-tools." },
+            options.json_output,
+            kExitUsage,
+            output,
+            error);
+    }
+    if (!options.clean_stale_instances
+        && options.command != "doctor"
+        && options.command != "test-tools")
+    {
+        return PrintFailure(
+            { false, json(), "invalid_diagnostic_options",
+                "--no-clean-stale-instances is valid only for diagnostic commands." },
+            options.json_output,
+            kExitUsage,
+            output,
+            error);
+    }
     if (options.command == "mcp-surface-status")
     {
         if (!catalog)
@@ -4758,7 +5267,7 @@ int ExecuteOptions(
         if (!options.raw_options.empty() || options.confirm_write || options.live_schema)
         {
             return PrintFailure(
-                { false, json(), "invalid_arguments", "ue mcp surface-status accepts only connection options and --json." },
+                { false, json(), "invalid_arguments", "ue-cli mcp surface-status accepts only connection options and --json." },
                 options.json_output,
                 kExitUsage,
                 output,
@@ -4779,7 +5288,8 @@ int ExecuteOptions(
                     json(),
                     "invalid_diagnostic_options",
                     "Diagnostic commands accept --full, --instance, "
-                    "--bundle, --endpoint, --timeout-ms, --output, and "
+                    "--bundle, --endpoint, --timeout-ms, --output, "
+                    "--require-editor, --no-clean-stale-instances, and "
                     "--json only.",
                 },
                 options.json_output,
@@ -5299,7 +5809,7 @@ int RunShell(
                 false,
                 json(),
                 "invalid_shell_options",
-                "ue shell accepts only global connection, catalog, "
+                "ue-cli shell accepts only global connection, catalog, "
                 "--json, and --live-schema options.",
             },
             base.json_output,
@@ -5314,7 +5824,7 @@ int RunShell(
     std::string line;
     for (;;)
     {
-        error << "ue> " << std::flush;
+        error << "ue-cli> " << std::flush;
         if (!std::getline(input, line))
         {
             return 0;
@@ -5436,7 +5946,7 @@ int Run(
     {
         if (arguments.size() < 2 || arguments[1] != "surface-status")
         {
-            error << "Use ue mcp surface-status.\n";
+            error << "Use ue-cli mcp surface-status.\n";
             return kExitUsage;
         }
         std::vector<std::string> normalized = { "mcp-surface-status" };
@@ -5451,7 +5961,7 @@ int Run(
         if (arguments.size() == 1)
         {
             error
-                << "Use ue recipe validate|plan|start|status|resume|cancel|result.\n";
+                << "Use ue-cli recipe validate|plan|start|status|resume|cancel|result.\n";
             return kExitUsage;
         }
         return RunRecipeCliAdapter(
@@ -5465,7 +5975,7 @@ int Run(
     {
         if (arguments.size() < 2)
         {
-            error << "Use ue sal stub|lint|plan.\n";
+            error << "Use ue-cli sal stub|lint|plan.\n";
             return kExitUsage;
         }
         return RunSalCliAdapter(
@@ -5592,7 +6102,7 @@ int Run(
                     false,
                     json(),
                     "invalid_arguments",
-                    "ue skills is local-only; remove --live-schema.",
+                    "ue-cli skills is local-only; remove --live-schema.",
                 },
                 options.json_output,
                 kExitUsage,
@@ -5658,7 +6168,7 @@ int Run(
         trace_transport);
     const std::string invocation_id = ue::api::NewInvocationId();
     client.ConfigureBestEffortCliSession({
-        .name = "ue",
+        .name = "ue-cli",
         .version = UE_CLI_VERSION,
         .command = options.command,
         .invocation_id = invocation_id,

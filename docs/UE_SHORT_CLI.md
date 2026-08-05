@@ -1,37 +1,37 @@
 # UE 短操作 CLI
 
-`ue` 是轻量短操作 CLI。普通能力连接运行中的 Unreal Editor；manifest 声明
+`ue-cli` 是轻量短操作 CLI。普通能力连接运行中的 Unreal Editor；manifest 声明
 `localTrace` 的 `.utrace` import/query/export/open 可由 Engine 匹配的本地 Worker
 在 Editor 关闭时执行。CLI 把随包分发的 capability 动态映射为传统命令行，
 首参数就是完整 capability ID：
 
 ```powershell
-ue blueprint.asset.get --name /Game/UI/WBP_Login
-ue scene.actor.spawn --type PointLight --name KeyLight --location '[0,0,300]'
-ue production.job.status --job-id job-123
+ue-cli blueprint.asset.get --name /Game/UI/WBP_Login
+ue-cli scene.actor.spawn --type PointLight --name KeyLight --location '[0,0,300]'
+ue-cli production.job.status --job-id job-123
 ```
 
-`ue` 与六个领域 MCP 工具共享 `/api/capabilities` 和 `/api/execute`，但 MCP
-不会启动 `ue` 子进程。`ue-workflow` 只负责确定的连续资产编辑 DSL；调试、
+`ue-cli` 与六个领域 MCP 工具共享 `/api/capabilities` 和 `/api/execute`，但 MCP
+不会启动 `ue-cli` 子进程。`ue-workflow-cli` 只负责确定的连续资产编辑 DSL；调试、
 查询和 Job 启动等单次操作不进入 Workflow。
 
 ## 命令
 
 ```text
-ue status
-ue capabilities [filters]
-ue skills [filters]
-ue trace doctor
-ue trace target list
-ue trace start|status|stop
-ue trace import|analyze|providers
-ue trace query <provider>
-ue trace export|open
-ue help <capability>
-ue <capability> --help
-ue <capability> [capability parameters]
-ue shell [--live-schema]
-ue --version
+ue-cli status
+ue-cli capabilities [filters]
+ue-cli skills [filters]
+ue-cli trace doctor
+ue-cli trace target list
+ue-cli trace start|status|stop
+ue-cli trace import|analyze|providers
+ue-cli trace query <provider>
+ue-cli trace export|open
+ue-cli help <capability>
+ue-cli <capability> --help
+ue-cli <capability> [capability parameters]
+ue-cli shell [--live-schema]
+ue-cli --version
 ```
 
 全局参数：
@@ -54,14 +54,14 @@ ue --version
 可设置默认值，显式 `--endpoint` 和 `--timeout-ms` 优先。
 
 所有层级的 `--help` 都在加载本地 manifest 或创建 Editor 连接前处理。例如
-`ue blueprint.scan --help --live-schema` 只显示语法帮助，不会扫描资产，也不会
+`ue-cli blueprint.scan --help --live-schema` 只显示语法帮助，不会扫描资产，也不会
 产生 HTTP 请求。需要 schema 生成的精确参数说明时使用
-`ue help blueprint.scan`。
+`ue-cli help blueprint.scan`。
 
 ## 双模式 schema 与连接复用
 
 默认模式从安装包内 `Resources/Capabilities`（CMake 安装布局为
-`share/ue-workflow/Capabilities`）加载 schema，参数转换后只发送一次
+`share/ue-workflow-cli/Capabilities`）加载 schema，参数转换后只发送一次
 `POST /api/execute`。Editor 仍会使用当前注册表完成最终 schema、availability、
 业务约束和权限校验，因此本地 manifest 不会绕过服务端验证。
 
@@ -77,7 +77,7 @@ POST /api/execute
 `--live-schema` 一起使用。`--capability-root` 与 `UE_CAPABILITY_ROOT`
 仅用于开发、测试或诊断本地目录。
 
-`ue shell` 是持久模式：启动时加载一次本地 capability 与 Skill 目录，并在
+`ue-cli shell` 是持久模式：启动时加载一次本地 capability 与 Skill 目录，并在
 多条命令间复用同一个 HTTP keep-alive 连接。shell 内也可先运行 `skills`
 加载 recipe，再运行 `help`、执行和验证命令。也可只给某一条命令添加
 `--live-schema`；若
@@ -86,17 +86,17 @@ session 的 endpoint、
 timeout、capability root 和 skill root 在启动后固定：
 
 ```text
-ue shell
-ue> skills --name ue-blueprint-diagnose --json
-ue> scene.pie.status
-ue> blueprint.asset.get --name /Game/BP_A --live-schema
-ue> exit
+ue-cli shell
+ue-cli> skills --name ue-blueprint-diagnose --json
+ue-cli> scene.pie.status
+ue-cli> blueprint.asset.get --name /Game/BP_A --live-schema
+ue-cli> exit
 ```
 
 `skills` 始终读取本地包；即使 shell 以 `--live-schema` 启动，它也不会连接
 Editor。显式输入 `skills --live-schema` 仍会作为无效组合拒绝。
 
-普通 `ue <capability>` 仍是一条命令执行后立即退出。CLI 不复制 UE handler；
+普通 `ue-cli <capability>` 仍是一条命令执行后立即退出。CLI 不复制 UE handler；
 Editor capability 仍以 Game Thread 调度和 Editor 结果为唯一权威，本地 Trace
 能力则以 `UEAITraceWorker + UEAITraceAnalysisCore` 为唯一权威。manifest 声明为
 `localProject`、`localAsset`、`localRecipe`、`localSal` 或
@@ -109,16 +109,16 @@ Editor capability 仍以 Game Thread 调度和 Editor 结果为唯一权威，�
 
 ## Trace 快捷命令与后端
 
-`ue trace` 是 `production.trace.*` capability 的稳定快捷语法：
+`ue-cli trace` 是 `production.trace.*` capability 的稳定快捷语法：
 
 ```powershell
-ue trace doctor
-ue trace target list
-ue trace import --trace-path D:\Traces\sample.utrace --backend local
-ue trace providers --trace-id trace-local-...
-ue trace query timing --trace-id trace-local-... --operation frames --limit 100
-ue trace export --trace-id trace-local-... --provider timing --operation timers --format json
-ue trace open --trace-id trace-local-... --view timing
+ue-cli trace doctor
+ue-cli trace target list
+ue-cli trace import --trace-path D:\Traces\sample.utrace --backend local
+ue-cli trace providers --trace-id trace-local-...
+ue-cli trace query timing --trace-id trace-local-... --operation frames --limit 100
+ue-cli trace export --trace-id trace-local-... --provider timing --operation timers --format json
+ue-cli trace open --trace-id trace-local-... --view timing
 ```
 
 `backend=auto|editor|local` 仍由 capability manifest 校验。Editor/PIE start 固定
@@ -136,7 +136,7 @@ Worker 使用当前用户专属本地 IPC，不监听 TCP/HTTP；按需启动，
 
 ## 调用方会话
 
-每个 `ue` 进程生成一个 `invocationId`，并最佳努力调用
+每个 `ue-cli` 进程生成一个 `invocationId`，并最佳努力调用
 `/api/v1/clients/register`。注册成功后，同一普通命令或 shell 中的所有请求
 携带同一个 `X-UEAI-Session-Id`；正常退出时使用独立、最长一秒的连接注销。
 长请求在服务端会 pin 住会话，不依赖 CLI 心跳。
@@ -149,11 +149,11 @@ capability 的执行结果。
 
 ## Agent Skill recipe
 
-`ue skills` 从本地 `skills/*/skill.json` 搜索机器 recipe，不连接 Editor：
+`ue-cli skills` 从本地 `skills/*/skill.json` 搜索机器 recipe，不连接 Editor：
 
 ```powershell
-ue skills --query blueprint
-ue skills --name ue-blueprint-diagnose --recipe scan-and-verify --detail full --json
+ue-cli skills --query blueprint
+ue-cli skills --name ue-blueprint-diagnose --recipe scan-and-verify --detail full --json
 ```
 
 支持 `--query`、`--name`、`--recipe`、`--domain`、`--operation`、`--risk`、
@@ -161,7 +161,7 @@ ue skills --name ue-blueprint-diagnose --recipe scan-and-verify --detail full --
 本地 Skill 包位置。普通 capability 调用不会加载 SkillCatalog。
 
 Skill recipe 不执行命令，也不复制 capability 参数 schema。按 recipe 选定
-operation 后，使用 `ue help <operation>` 发现参数，再执行普通短操作和
+operation 后，使用 `ue-cli help <operation>` 发现参数，再执行普通短操作和
 recipe 的 verify readback。完整设计见 [UE Agent Skills](UE_AGENT_SKILLS.md)。
 
 ## 参数映射
@@ -183,9 +183,9 @@ recipe 的 verify readback。完整设计见 [UE Agent Skills](UE_AGENT_SKILLS.m
 调用方，不再作为 PowerShell 的推荐写法：
 
 ```powershell
-ue blueprint.scan --params-file .\scan-params.json
-Get-Content .\scan-params.json -Raw | ue blueprint.scan --params-file -
-ue blueprint.scan --params '{"roots":["/Game"],"minimumSeverity":"medium"}'
+ue-cli blueprint.scan --params-file .\scan-params.json
+Get-Content .\scan-params.json -Raw | ue-cli blueprint.scan --params-file -
+ue-cli blueprint.scan --params '{"roots":["/Game"],"minimumSeverity":"medium"}'
 ```
 
 `--params` 与 `--params-file` 互斥，且完整对象模式不能再混用 schema 生成的
@@ -227,7 +227,7 @@ stderr，并带第一条 validation error。
 ```powershell
 cmake -S . -B build-workflow -DUE_WORKFLOW_BUILD_TESTS=ON
 cmake --build build-workflow --config Release
-cmake --install build-workflow --config Release --prefix C:\Tools\ue
+cmake --install build-workflow --config Release --prefix C:\Tools\ue-cli
 ```
 
 Linux/macOS 使用同一 CMake 工程构建本机程序：
@@ -241,8 +241,8 @@ cmake --install build-workflow --prefix "$HOME/.local"
 安装和插件包均包含：
 
 ```text
-CLI/bin/ue(.exe)
-CLI/bin/ue-workflow(.exe)
+CLI/bin/ue-cli(.exe)
+CLI/bin/ue-workflow-cli(.exe)
 Resources/Capabilities/*.json
 skills/*/SKILL.md
 skills/*/skill.json

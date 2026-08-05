@@ -25,6 +25,10 @@
 #include "UEWorkflowCore/WorkflowCore.h"
 #include "Workflow/UEWorkflowRuntime.h"
 
+#if PLATFORM_WINDOWS
+#include "Windows/WindowsHWrapper.h"
+#endif
+
 #ifndef UE_AI_INTEGRATION_VERSION
 #define UE_AI_INTEGRATION_VERSION "unknown"
 #endif
@@ -33,6 +37,37 @@ DEFINE_LOG_CATEGORY_STATIC(LogUEAIIntegrationServer, Log, All);
 
 namespace
 {
+FString CurrentProcessStartTimeUtc()
+{
+#if PLATFORM_WINDOWS
+	FILETIME CreationTime{};
+	FILETIME ExitTime{};
+	FILETIME KernelTime{};
+	FILETIME UserTime{};
+	if (::GetProcessTimes(
+			::GetCurrentProcess(),
+			&CreationTime,
+			&ExitTime,
+			&KernelTime,
+			&UserTime))
+	{
+		SYSTEMTIME SystemTime{};
+		if (::FileTimeToSystemTime(&CreationTime, &SystemTime))
+		{
+			return FDateTime(
+				SystemTime.wYear,
+				SystemTime.wMonth,
+				SystemTime.wDay,
+				SystemTime.wHour,
+				SystemTime.wMinute,
+				SystemTime.wSecond,
+				SystemTime.wMilliseconds).ToIso8601();
+		}
+	}
+#endif
+	return FDateTime::UtcNow().ToIso8601();
+}
+
 bool TryParseQueryBool(const TMap<FString, FString>& QueryParams, const FString& Name,
                        TOptional<bool>& OutValue, FString& OutError)
 {
@@ -373,8 +408,9 @@ FUEAIIntegrationServer::FUEAIIntegrationServer(
 		MakeUnique<UEAIIntegration::Workflow::FWorkflowRuntime>(InRegistry))
 	, ServerInstanceId(
 		FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower))
-	, ProcessStartTimeUtc(FDateTime::UtcNow().ToIso8601())
+	, ProcessStartTimeUtc(CurrentProcessStartTimeUtc())
 {
+	ClientActivityService.SetServerInstanceId(ServerInstanceId);
 }
 
 FUEAIIntegrationServer::~FUEAIIntegrationServer()

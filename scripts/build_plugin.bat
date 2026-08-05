@@ -134,7 +134,7 @@ set CLI_BUILD_DIR=%TEMP%\UE_AI_integration-cli-%RANDOM%-%RANDOM%
 set CLI_TESTS=OFF
 if /I "%UEAI_RUN_PORTABLE_TESTS%"=="1" set CLI_TESTS=ON
 echo.
-echo Building and packaging ue and ue-workflow CLIs ^(portable tests: %CLI_TESTS%^)...
+echo Building and packaging ue-cli and ue-workflow-cli ^(portable tests: %CLI_TESTS%^)...
 cmake -S "%PLUGIN_ROOT%" -B "%CLI_BUILD_DIR%" -DUE_WORKFLOW_BUILD_TESTS=%CLI_TESTS% -DUE_WORKFLOW_BUILD_CLI=ON
 if %ERRORLEVEL% neq 0 (
     if exist "%CLI_BUILD_DIR%" rmdir /s /q "%CLI_BUILD_DIR%"

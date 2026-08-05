@@ -128,7 +128,13 @@ public:
 
 		FString LoadError;
 		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(Name, LoadError);
-		if (!BP) return FMCPToolResult::Error(LoadError);
+		if (!BP)
+		{
+			return FMCPToolResult::Error(
+				LoadError,
+				TEXT("asset_not_found"),
+				404);
+		}
 
 		return FMCPToolResult::Ok(MCPHelpers::SerializeBlueprint(BP));
 	}

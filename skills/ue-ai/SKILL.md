@@ -1,6 +1,6 @@
 ---
 name: ue-ai
-description: Route Unreal Engine work through the UE_AI_integration MCP, native CLIs, Workflow, Recipe Runner, and packaged domain Skills. Use whenever an agent must inspect, modify, debug, test, profile, recover, or automate a UE 5.3-5.7 project with UE_AI_integration; when choosing among ue_status, ue_context, ue_skills, the six UE domain tools, ue_workflow, ue, and ue-workflow; or when a UE request should be delegated to a Blueprint, UMG, asset, world, landscape, rendering, performance, Trace, or recovery Skill.
+description: Route Unreal Engine work through the UE_AI_integration MCP, native CLIs, Workflow, Recipe Runner, and packaged domain Skills. Use whenever an agent must inspect, modify, debug, test, profile, recover, or automate a UE 5.3-5.7 project with UE_AI_integration; when choosing among ue_status, ue_context, ue_skills, the six UE domain tools, ue_workflow, ue-cli, and ue-workflow-cli; or when a UE request should be delegated to a Blueprint, UMG, asset, world, landscape, rendering, performance, Trace, or recovery Skill.
 ---
 
 # UE AI entrypoint
@@ -39,7 +39,7 @@ packaged domain Skills or between MCP and CLI entry points.
 ## Discover the exact API
 
 Before every capability call, obtain its current schema through
-`ue_context.operation` or `ue help <capability-id> --json`. Check:
+`ue_context.operation` or `ue-cli help <capability-id> --json`. Check:
 
 - live availability and unavailable reasons;
 - `effects`, `risk`, `destructive`, and `expensive` metadata;
@@ -62,7 +62,7 @@ is available.
   Trace capture, cook/package, or PIE automation.
 - Use local backends for project/config inspection, UE 5.3 package-header
   inspection, SAL planning, or Trace analysis while Editor is closed.
-- Use `ue` and `ue-workflow` only when MCP is unavailable, the user requests a
+- Use `ue-cli` and `ue-workflow-cli` only when MCP is unavailable, the user requests a
   CLI, or a terminal/release workflow requires them.
 
 Generate and reuse a stable `requestId` for retryable commands. Re-plan after

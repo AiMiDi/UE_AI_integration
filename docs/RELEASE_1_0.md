@@ -16,8 +16,8 @@ The 1.0 safety layers are:
 - an installable `$ue-ai` client entry Skill that declares the local MCP
   dependency and routes to packaged domain Skills without becoming an
   execution authority;
-- `ue doctor --full`, redacted diagnostic bundles, atomic instance discovery,
-  and `ue test-tools`;
+- `ue-cli doctor --full`, redacted diagnostic bundles, atomic instance discovery,
+  and `ue-cli test-tools`;
 - bounded Recipe v2 execution with checkpoint/resume/cancel, approvals,
   source-control preflight, and reverse compensation;
 - capability schema v3 effects/lifecycle/tombstones;

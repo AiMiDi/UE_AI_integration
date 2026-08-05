@@ -119,7 +119,7 @@ cli_tests="OFF"
 if [[ "${UEAI_RUN_PORTABLE_TESTS:-0}" == "1" ]]; then
     cli_tests="ON"
 fi
-echo "Building and packaging native ue and ue-workflow CLIs (portable tests: ${cli_tests})..."
+echo "Building and packaging native ue-cli and ue-workflow-cli (portable tests: ${cli_tests})..."
 cmake \
     -S "${plugin_root}" \
     -B "${cli_build_dir}" \
@@ -141,8 +141,8 @@ echo "========================================"
 echo
 echo "Plugin built to: ${output_path}"
 echo "Native CLIs:"
-echo "  ${output_path}/CLI/bin/ue"
-echo "  ${output_path}/CLI/bin/ue-workflow"
+echo "  ${output_path}/CLI/bin/ue-cli"
+echo "  ${output_path}/CLI/bin/ue-workflow-cli"
 if [[ "${cli_tests}" == "ON" ]]; then
     echo "Portable CTest gate: PASSED"
 else

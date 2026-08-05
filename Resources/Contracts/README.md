@@ -1,7 +1,7 @@
 # Shared engineering contracts
 
 These schemas define the stable result shapes shared by the UE HTTP API,
-the MCP bridge, and the standalone `ue <capability>` CLI:
+the MCP bridge, and the standalone `ue-cli <capability>` CLI:
 
 - `ue.job.v1`: durable long-running work and its terminal result.
 - `ue.artifact.v1`: bounded artifact metadata with optional on-demand base64 content.

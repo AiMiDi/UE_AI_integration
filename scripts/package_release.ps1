@@ -46,8 +46,8 @@ if (-not (Test-Path -LiteralPath $StagingRoot -PathType Container)) {
 
 $required = @(
     'UE_AI_integration.uplugin',
-    'CLI/bin/ue.exe',
-    'CLI/bin/ue-workflow.exe',
+    'CLI/bin/ue-cli.exe',
+    'CLI/bin/ue-workflow-cli.exe',
     'MCP/package.json',
     'MCP/dist/index.js',
     'MCP/dist/local-capability-cli.js',

@@ -8,7 +8,7 @@ project(
 )
 
 option(UE_WORKFLOW_BUILD_TESTS "Build UE Workflow tests" ON)
-option(UE_WORKFLOW_BUILD_CLI "Build the ue and ue-workflow executables" ON)
+option(UE_WORKFLOW_BUILD_CLI "Build the ue-cli and ue-workflow-cli executables" ON)
 
 include(CTest)
 include(GNUInstallDirs)
@@ -20,17 +20,17 @@ endif()
 
 install(
     DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Capabilities/"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow/Capabilities"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow-cli/Capabilities"
 )
 install(
     DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Contracts/"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow/Contracts/Engineering"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow-cli/Contracts/Engineering"
 )
 install(
     DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/skills/"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow/Skills"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow-cli/Skills"
 )
 install(
     DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/Recipes/"
-    DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow/Recipes"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/ue-workflow-cli/Recipes"
 )

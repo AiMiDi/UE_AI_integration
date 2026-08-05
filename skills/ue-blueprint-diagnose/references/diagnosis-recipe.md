@@ -25,7 +25,7 @@ content, so never use it as the default.
    and runtime `runId` from the same Editor process.
 
 Always call `ue_context` before constructing parameters. For CLI usage,
-`ue help <operation> --json` is equivalent; add `--live-schema` only when an
+`ue-cli help <operation> --json` is equivalent; add `--live-schema` only when an
 exact online schema and availability check is required.
 
 ## Interpretation

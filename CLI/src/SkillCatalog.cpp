@@ -970,7 +970,7 @@ std::optional<std::filesystem::path> ResolveSkillRoot(
             const auto bin = executable.parent_path();
             candidates.push_back(bin / ".." / ".." / "skills");
             candidates.push_back(
-                bin / ".." / "share" / "ue-workflow" / "Skills");
+                bin / ".." / "share" / "ue-workflow-cli" / "Skills");
         }
         if (std::string_view(UE_CLI_SOURCE_ROOT).size() > 0)
         {

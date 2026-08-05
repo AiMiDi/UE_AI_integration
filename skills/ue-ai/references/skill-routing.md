@@ -45,10 +45,10 @@ different domain.
 
 Use this sequence when MCP is unavailable or a terminal workflow is requested:
 
-1. `ue doctor --full --json`
-2. `ue skills --query <intent> --json`
-3. `ue help <capability-id> --json`
-4. `ue <capability-id> ... --json`, `ue recipe ...`, or `ue-workflow ...`
+1. `ue-cli doctor --full --json`
+2. `ue-cli skills --query <intent> --json`
+3. `ue-cli help <capability-id> --json`
+4. `ue-cli <capability-id> ... --json`, `ue-cli recipe ...`, or `ue-workflow-cli ...`
 5. Run the same read-only verification required by the selected Skill.
 
 Do not assume every local MCP backend is available through the short CLI;

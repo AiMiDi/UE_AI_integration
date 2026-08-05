@@ -64,7 +64,7 @@ function Invoke-UeCapability {
 
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $startInfo
-    Assert-Condition ($process.Start()) "Failed to start ue CLI."
+    Assert-Condition ($process.Start()) "Failed to start ue-cli."
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
     $serialized = $Parameters | ConvertTo-Json -Depth 64 -Compress
@@ -74,18 +74,18 @@ function Invoke-UeCapability {
     $stdout = $stdoutTask.Result.Trim()
     $stderr = $stderrTask.Result.Trim()
     if ($process.ExitCode -ne 0) {
-        throw "ue $Capability failed with exit $($process.ExitCode). stderr=$stderr stdout=$stdout"
+        throw "ue-cli $Capability failed with exit $($process.ExitCode). stderr=$stderr stdout=$stdout"
     }
     Assert-Condition (-not [string]::IsNullOrWhiteSpace($stdout)) `
-        "ue $Capability returned no JSON. stderr=$stderr"
+        "ue-cli $Capability returned no JSON. stderr=$stderr"
     try {
         $envelope = $stdout | ConvertFrom-Json
     }
     catch {
-        throw "ue $Capability returned invalid JSON. stderr=$stderr stdout=$stdout"
+        throw "ue-cli $Capability returned invalid JSON. stderr=$stderr stdout=$stdout"
     }
     Assert-Condition ([bool]$envelope.ok) `
-        "ue $Capability returned ok=false. stderr=$stderr stdout=$stdout"
+        "ue-cli $Capability returned ok=false. stderr=$stderr stdout=$stdout"
     return $envelope
 }
 

@@ -23,6 +23,43 @@
           "engineVersion": {
             "type": "string",
             "default": "5.3"
+          },
+          "detail": {
+            "type": "string",
+            "enum": ["summary", "tables", "full"],
+            "default": "summary"
+          },
+          "sections": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": ["names", "imports", "exports", "assetRegistry", "dependencies"]
+            }
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "default": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256,
+            "default": 64
+          },
+          "targetTokens": {
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 32768,
+            "default": 2048
+          },
+          "maxBytes": {
+            "type": "integer",
+            "minimum": 4096,
+            "maximum": 1048576,
+            "default": 65536
           }
         },
         "required": [
@@ -75,6 +112,43 @@
           "engineVersion": {
             "type": "string",
             "default": "5.3"
+          },
+          "detail": {
+            "type": "string",
+            "enum": ["summary", "tables", "full"],
+            "default": "summary"
+          },
+          "sections": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": ["names", "imports", "exports", "assetRegistry", "dependencies"]
+            }
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "default": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256,
+            "default": 64
+          },
+          "targetTokens": {
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 32768,
+            "default": 2048
+          },
+          "maxBytes": {
+            "type": "integer",
+            "minimum": 4096,
+            "maximum": 1048576,
+            "default": 65536
           }
         },
         "required": [
@@ -1250,7 +1324,7 @@
       "id": "production.lease.acquire",
       "domain": "production",
       "kind": "command",
-      "description": "Acquire or renew a 30-second session-bound advisory lease; cross-owner override requires the conflict planDigest.",
+      "description": "Acquire or renew a 30-second advisory lease bound to the authenticated caller session; cross-owner override requires the conflict planDigest.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1263,10 +1337,6 @@
               "performance"
             ]
           },
-          "sessionId": {
-            "type": "string",
-            "minLength": 1
-          },
           "override": {
             "type": "boolean",
             "default": false
@@ -1277,8 +1347,7 @@
           }
         },
         "required": [
-          "type",
-          "sessionId"
+          "type"
         ],
         "additionalProperties": false
       },
@@ -1305,7 +1374,7 @@
       "id": "production.lease.release",
       "domain": "production",
       "kind": "command",
-      "description": "Release an advisory lease owned by the supplied live session.",
+      "description": "Release an advisory lease owned by the authenticated caller session.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1317,15 +1386,10 @@
               "editorRestart",
               "performance"
             ]
-          },
-          "sessionId": {
-            "type": "string",
-            "minLength": 1
           }
         },
         "required": [
-          "type",
-          "sessionId"
+          "type"
         ],
         "additionalProperties": false
       },
@@ -2380,6 +2444,10 @@
           },
           "uproject": {
             "type": "string"
+          },
+          "engineRoot": {
+            "type": "string",
+            "minLength": 3
           }
         },
         "required": [
@@ -2660,7 +2728,7 @@
       "id": "production.recipe.resume",
       "domain": "production",
       "kind": "command",
-      "description": "Resume a checkpointed Recipe only when approvePlanDigest matches the persisted pending approval.",
+      "description": "Resume an interrupted or approval-paused Recipe when the Recipe plan digest matches; pending write or high-risk steps also require their own approveStepDigest.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2669,6 +2737,10 @@
             "pattern": "^recipe-run-[a-f0-9-]{36}$"
           },
           "approvePlanDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "approveStepDigest": {
             "type": "string",
             "pattern": "^sha256:[0-9a-f]{64}$"
           }

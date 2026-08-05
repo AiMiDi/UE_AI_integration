@@ -28,12 +28,12 @@ execute_process(
     ERROR_VARIABLE error_output
 )
 if(NOT result EQUAL 0)
-    message(FATAL_ERROR "Installed ue-workflow doctor failed: ${output}${error_output}")
+    message(FATAL_ERROR "Installed ue-workflow-cli doctor failed: ${output}${error_output}")
 endif()
 
 file(TO_CMAKE_PATH "${UE_WORKFLOW_INSTALL_ROOT}" normalized_install_root)
-string(FIND "${output}" "${normalized_install_root}/share/ue-workflow/Contracts" contract_index)
-string(FIND "${output}" "${normalized_install_root}/bin/../share/ue-workflow/Contracts" relative_contract_index)
+string(FIND "${output}" "${normalized_install_root}/share/ue-workflow-cli/Contracts" contract_index)
+string(FIND "${output}" "${normalized_install_root}/bin/../share/ue-workflow-cli/Contracts" relative_contract_index)
 if(contract_index EQUAL -1 AND relative_contract_index EQUAL -1)
     message(FATAL_ERROR "Installed CLI did not resolve relocatable share contracts: ${output}")
 endif()
@@ -45,9 +45,9 @@ execute_process(
     ERROR_VARIABLE short_error
 )
 if(NOT short_result EQUAL 0)
-    message(FATAL_ERROR "Installed ue version failed: ${short_output}${short_error}")
+    message(FATAL_ERROR "Installed ue-cli version failed: ${short_output}${short_error}")
 endif()
-string(FIND "${short_output}" "\"executable\":\"ue\"" short_executable_index)
+string(FIND "${short_output}" "\"executable\":\"ue-cli\"" short_executable_index)
 if(short_executable_index EQUAL -1)
     message(FATAL_ERROR "Installed short-operation CLI is invalid: ${short_output}")
 endif()
@@ -59,17 +59,17 @@ execute_process(
     ERROR_VARIABLE catalog_error
 )
 if(NOT catalog_result EQUAL 0)
-    message(FATAL_ERROR "Installed ue catalog failed: ${catalog_output}${catalog_error}")
+    message(FATAL_ERROR "Installed ue-cli catalog failed: ${catalog_output}${catalog_error}")
 endif()
 string(FIND "${catalog_output}" "\"source\":\"local\"" local_source_index)
 string(FIND "${catalog_output}" "\"total\":" total_index)
-string(FIND "${catalog_output}" "share/ue-workflow/Capabilities" root_index)
+string(FIND "${catalog_output}" "share/ue-workflow-cli/Capabilities" root_index)
 if(
     local_source_index EQUAL -1
     OR total_index EQUAL -1
     OR root_index EQUAL -1
 )
-    message(FATAL_ERROR "Installed ue did not resolve its local catalog: ${catalog_output}")
+    message(FATAL_ERROR "Installed ue-cli did not resolve its local catalog: ${catalog_output}")
 endif()
 
 execute_process(
@@ -79,11 +79,11 @@ execute_process(
     ERROR_VARIABLE skills_error
 )
 if(NOT skills_result EQUAL 0)
-    message(FATAL_ERROR "Installed ue skills failed: ${skills_output}${skills_error}")
+    message(FATAL_ERROR "Installed ue-cli skills failed: ${skills_output}${skills_error}")
 endif()
 string(FIND "${skills_output}" "\"source\":\"local\"" skills_source_index)
 string(FIND "${skills_output}" "\"total\":" skills_total_index)
-string(FIND "${skills_output}" "share/ue-workflow/Skills" skills_root_index)
+string(FIND "${skills_output}" "share/ue-workflow-cli/Skills" skills_root_index)
 if(
     skills_source_index EQUAL -1
     OR skills_total_index EQUAL -1
@@ -117,18 +117,18 @@ execute_process(
 )
 if(NOT path_catalog_result EQUAL 0)
     message(FATAL_ERROR
-        "PATH-launched ue catalog failed: "
+        "PATH-launched ue-cli catalog failed: "
         "${path_catalog_output}${path_catalog_error}"
     )
 endif()
 string(FIND
     "${path_catalog_output}"
-    "${normalized_install_root}/share/ue-workflow/Capabilities"
+    "${normalized_install_root}/share/ue-workflow-cli/Capabilities"
     path_catalog_root_index
 )
 if(path_catalog_root_index EQUAL -1)
     message(FATAL_ERROR
-        "PATH-launched ue did not resolve installed capabilities: "
+        "PATH-launched ue-cli did not resolve installed capabilities: "
         "${path_catalog_output}"
     )
 endif()
@@ -146,18 +146,18 @@ execute_process(
 )
 if(NOT path_skills_result EQUAL 0)
     message(FATAL_ERROR
-        "PATH-launched ue skills failed: "
+        "PATH-launched ue-cli skills failed: "
         "${path_skills_output}${path_skills_error}"
     )
 endif()
 string(FIND
     "${path_skills_output}"
-    "${normalized_install_root}/share/ue-workflow/Skills"
+    "${normalized_install_root}/share/ue-workflow-cli/Skills"
     path_skills_root_index
 )
 if(path_skills_root_index EQUAL -1)
     message(FATAL_ERROR
-        "PATH-launched ue did not resolve installed skills: "
+        "PATH-launched ue-cli did not resolve installed skills: "
         "${path_skills_output}"
     )
 endif()

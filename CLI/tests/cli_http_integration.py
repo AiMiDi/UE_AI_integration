@@ -635,7 +635,7 @@ def main() -> int:
         assert registrations
         assert all(
             registration["clientKind"] == "cli"
-            and registration["name"] == "ue-workflow"
+            and registration["name"] == "ue-workflow-cli"
             and registration["version"] == "1.0.0"
             and registration["transport"] == "http"
             and isinstance(registration["pid"], int)
@@ -710,7 +710,7 @@ def main() -> int:
     session_request_headers = request_headers[:-1]
     assert all(
         header["callerType"] == "cli"
-        and header["caller"] == "ue-workflow"
+        and header["caller"] == "ue-workflow-cli"
         and header["callerVersion"] == "1.0.0"
         and header["invocationId"].startswith("cli-")
         and header["processId"].isdigit()
@@ -742,7 +742,7 @@ def main() -> int:
     fallback_header = request_headers[-1]
     assert fallback_header["sessionId"] == ""
     assert fallback_header["callerType"] == "cli"
-    assert fallback_header["caller"] == "ue-workflow"
+    assert fallback_header["caller"] == "ue-workflow-cli"
     assert fallback_header["invocationId"].startswith("cli-")
     assert capability_requests == [
         {

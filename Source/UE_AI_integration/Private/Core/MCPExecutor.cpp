@@ -464,6 +464,21 @@ bool FMCPExecutor::PrepareExecution(
 			MakeValidationDetails(ParamErrors));
 		return false;
 	}
+	if (Context.Capability == TEXT("production.lease.acquire")
+		|| Context.Capability == TEXT("production.lease.release"))
+	{
+		if (Context.CallerSessionId.IsEmpty())
+		{
+			OutFailure = FMCPResult::Fail(
+				TEXT("client_session_required"),
+				TEXT("Lease operations require a registered caller session."),
+				401);
+			return false;
+		}
+		OutEffectiveParams->SetStringField(
+			TEXT("__callerSessionId"),
+			Context.CallerSessionId);
+	}
 	return true;
 }
 

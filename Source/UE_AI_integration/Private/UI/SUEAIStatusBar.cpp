@@ -503,7 +503,7 @@ TSharedRef<SWidget> SUEAIStatusBarWidget::MakeMenuContent()
 					const FString Name = JsonString(
 						Invocation,
 						TEXT("name"),
-						TEXT("ue"));
+						TEXT("ue-cli"));
 					const FString Command = JsonString(
 						Invocation,
 						TEXT("command"));

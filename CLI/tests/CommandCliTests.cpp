@@ -205,7 +205,7 @@ int main()
             "catalogLookup",
             "--json",
         },
-        catalog_root / "bin" / "ue",
+        catalog_root / "bin" / "ue-cli",
         capability_input,
         capability_output,
         capability_error);
@@ -361,20 +361,20 @@ int main()
             "summary",
             "--json",
         },
-        catalog_root / "bin" / "ue",
+        catalog_root / "bin" / "ue-cli",
         command_input,
         command_output,
         command_error);
     Require(
         command_result == 0,
-        "ue skills command failed: " + command_error.str());
+        "ue-cli skills command failed: " + command_error.str());
     const json command_envelope = json::parse(command_output.str());
     Require(
         command_envelope["data"]["total"] == 1,
-        "ue skills filters must retain the matching skill");
+        "ue-cli skills filters must retain the matching skill");
     Require(
         command_envelope["data"]["source"] == "local",
-        "ue skills must report a local source");
+        "ue-cli skills must report a local source");
     Require(
         command_envelope["data"]["skills"][0]["recipes"][0]
                 ["operations"][0]
@@ -395,7 +395,7 @@ int main()
             "unrelated words diagnose asset",
             "--json",
         },
-        catalog_root / "bin" / "ue",
+        catalog_root / "bin" / "ue-cli",
         phrase_input,
         phrase_output,
         phrase_error);
@@ -411,11 +411,11 @@ int main()
     std::ostringstream help_error;
     const int help_result = ue::command::Run(
         { "skills", "--help" },
-        catalog_root / "bin" / "ue",
+        catalog_root / "bin" / "ue-cli",
         help_input,
         help_output,
         help_error);
-    Require(help_result == 0, "ue skills --help failed");
+    Require(help_result == 0, "ue-cli skills --help failed");
     Require(
         help_output.str().find("--operation") != std::string::npos,
         "skill help must document discovery filters");
@@ -433,7 +433,7 @@ int main()
             (skill_root / "does-not-exist").string(),
             "--json",
         },
-        catalog_root / "bin" / "ue",
+        catalog_root / "bin" / "ue-cli",
         operation_help_input,
         operation_help_output,
         operation_help_error);
@@ -470,7 +470,7 @@ int main()
             "1",
             "--json",
         },
-        catalog_root / "bin" / "ue",
+        catalog_root / "bin" / "ue-cli",
         full_input,
         full_output,
         full_error);
@@ -497,7 +497,7 @@ int main()
             "--live-schema",
             "--json",
         },
-        catalog_root / "bin" / "ue",
+        catalog_root / "bin" / "ue-cli",
         shell_input,
         shell_output,
         shell_error);

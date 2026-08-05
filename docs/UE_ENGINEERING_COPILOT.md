@@ -1,6 +1,6 @@
 # UE Engineering Copilot
 
-`UE Engineering Copilot` 在现有 UE MCP 与 `ue-workflow` 之上补齐工程分析和
+`UE Engineering Copilot` 在现有 UE MCP 与 `ue-workflow-cli` 之上补齐工程分析和
 生产验证闭环。它不把所有能力塞进 Workflow：单资产或确定的多资产连续编辑
 使用 UE Workflow DSL；性能采样、Trace、测试、Cook、Package、BuildGraph
 等长任务使用 Durable Job；查询和交互式调试继续使用单次 capability。
@@ -8,10 +8,10 @@
 ## CLI 与 MCP 的能力关系
 
 - MCP 的十二个稳定工具负责 Skill 加载、发现、查询、执行和 Workflow 入口。
-- `ue <capability>` 在线获取精确 schema 后通过同一 `/api/execute` 合同调用
+- `ue-cli <capability>` 在线获取精确 schema 后通过同一 `/api/execute` 合同调用
   Editor，因此短操作 CLI 的能力范围与领域 MCP 相同；它不经过 Workflow DSL。
-- `ue-workflow validate` 与非执行型 Core plan 可离线运行；用于审批执行的计划
-  必须由 `plan --connect` 绑定 Editor 资产基线。Workflow、普通 `ue` capability
+- `ue-workflow-cli validate` 与非执行型 Core plan 可离线运行；用于审批执行的计划
+  必须由 `plan --connect` 绑定 Editor 资产基线。Workflow、普通 `ue-cli` capability
   和 Editor Job 要求连接 Editor；manifest 声明 `localTrace` 的 Trace
   import/query/export/open 可由 `UEAITraceWorker` 在 Editor 关闭时执行。
 - UE Workflow 只接纳 manifest 中声明为 `editStep` 的确定资产连续编辑；v1

@@ -32,6 +32,8 @@ function parseRaw(arguments_) {
             result.endpoint = value;
         else if (name === "approve-plan")
             result.approvePlan = value;
+        else if (name === "approve-step")
+            result.approveStep = value;
         else if (name === "inputs")
             result.inputs = JSON.parse(value);
         else if (name === "inputs-file")
@@ -87,7 +89,7 @@ export async function main() {
             else if (args.command === "resume") {
                 if (!args.approvePlan)
                     throw new UEApiError({ code: "approval_required", message: "resume requires --approve-plan." });
-                data = runner.resume(args.runId, args.approvePlan);
+                data = runner.resume(args.runId, args.approvePlan, args.approveStep);
             }
             else if (args.command === "cancel")
                 data = runner.cancel(args.runId);

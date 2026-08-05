@@ -36,6 +36,12 @@ export const UE_WORKFLOW_SECTIONS = [
 export const UE_WORKFLOW_TOOL_SCHEMA = z
   .object({
     action: z.enum(UE_WORKFLOW_ACTIONS),
+    requestId: z
+      .string()
+      .min(1)
+      .max(160)
+      .refine((value) => value.trim().length > 0, "Must not be blank")
+      .optional(),
     workflow: z
       .record(z.unknown())
       .optional()
@@ -145,6 +151,14 @@ export const UE_WORKFLOW_INPUT_SCHEMA = UE_WORKFLOW_TOOL_SCHEMA
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message: "saveOnSuccess and confirmWrite are only accepted for execute",
+      });
+    }
+
+    if (request.action !== "execute" && request.requestId !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["requestId"],
+        message: "requestId is only accepted for execute",
       });
     }
 

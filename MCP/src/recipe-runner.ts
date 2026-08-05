@@ -27,15 +27,19 @@ import {
 
 export const RECIPE_SCHEMA = "ue.recipe.v2";
 export const RECIPE_PLAN_SCHEMA = "ue.recipe-plan.v2";
-export const RECIPE_RUN_SCHEMA = "ue.recipe-run.v1";
+export const RECIPE_RUN_SCHEMA = "ue.recipe-run.v2";
+const LEGACY_RECIPE_RUN_SCHEMA = "ue.recipe-run.v1";
 const MAX_STEPS = 64;
 const MAX_POLL_ATTEMPTS = 100;
 const MAX_POLL_INTERVAL_MS = 30_000;
 const MAX_LOG_CHARS = 8_192;
+const WORKER_HEARTBEAT_MS = 2_000;
+const WORKER_LEASE_MS = 10_000;
 
 type JsonObject = Record<string, unknown>;
 type RunStatus =
   | "running"
+  | "interrupted"
   | "awaitingApproval"
   | "completed"
   | "failed"
@@ -98,7 +102,7 @@ export interface RecipeValidation {
 
 interface StepState {
   id: string;
-  status: "pending" | "running" | "completed" | "failed" | "compensated";
+  status: "pending" | "dispatching" | "running" | "completed" | "failed" | "compensated";
   attempts: number;
   startedAt?: string;
   completedAt?: string;
@@ -119,6 +123,10 @@ export interface RecipeRunState extends JsonObject {
   createdAt: string;
   updatedAt: string;
   heartbeatAt: string;
+  workerPid?: number;
+  workerInstanceId?: string;
+  workerHeartbeatAt?: string;
+  workerLeaseExpiresAt?: string;
   lastProgressAt: string;
   lastLog: string;
   nextStep: number;
@@ -202,15 +210,70 @@ function readRun(runId: string, env?: NodeJS.ProcessEnv): RecipeRunState {
     });
   }
   const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-  if (!isObject(parsed) || parsed.schema !== RECIPE_RUN_SCHEMA) {
+  if (
+    !isObject(parsed) ||
+    (parsed.schema !== RECIPE_RUN_SCHEMA && parsed.schema !== LEGACY_RECIPE_RUN_SCHEMA)
+  ) {
     throw new UEApiError({
       code: "recipe_run_corrupt",
       message: `Recipe run ${runId} has an invalid journal.`,
     });
   }
-  const state = parsed as RecipeRunState;
+  const state = parsed as unknown as RecipeRunState;
+  let changed = false;
+  if (parsed.schema === LEGACY_RECIPE_RUN_SCHEMA) {
+    state.schema = RECIPE_RUN_SCHEMA;
+    if (state.status === "running") {
+      state.status = "interrupted";
+      state.phase = "interrupted";
+      state.lastLog = "Migrated a non-terminal v1 journal to interrupted; explicit resume is required.";
+    }
+    for (const step of state.steps ?? []) {
+      if (step.status === "running") step.status = "dispatching";
+    }
+    changed = true;
+  }
   state.approvedSteps ??= [];
+  state.compensations ??= [];
+  if (
+    state.status === "running" &&
+    typeof state.workerLeaseExpiresAt === "string" &&
+    Date.parse(state.workerLeaseExpiresAt) <= Date.now() &&
+    !processIsAlive(state.workerPid)
+  ) {
+    state.status = "interrupted";
+    state.phase = "interrupted";
+    state.updatedAt = now();
+    state.lastProgressAt = state.updatedAt;
+    state.lastLog = "Recipe Worker heartbeat lease expired and its process is no longer alive.";
+    changed = true;
+  }
+  if (changed) writeAtomic(path, state);
   return state;
+}
+
+function processIsAlive(pid: number | undefined): boolean {
+  if (!Number.isInteger(pid) || (pid ?? 0) <= 0) return false;
+  try {
+    process.kill(pid!, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function workerLeaseMs(env: NodeJS.ProcessEnv = process.env): number {
+  if (env.UEAI_RECIPE_TEST_MODE === "1") {
+    const requested = Number(env.UEAI_RECIPE_TEST_LEASE_MS);
+    if (Number.isFinite(requested)) {
+      return Math.min(WORKER_LEASE_MS, Math.max(100, requested));
+    }
+  }
+  return WORKER_LEASE_MS;
+}
+
+function leaseExpiry(env: NodeJS.ProcessEnv = process.env): string {
+  return new Date(Date.now() + workerLeaseMs(env)).toISOString();
 }
 
 function updateRun(
@@ -463,14 +526,52 @@ function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
 
-function spawnWorker(runId: string, endpoint: string, env: NodeJS.ProcessEnv): void {
+function spawnWorker(
+  state: RecipeRunState,
+  endpoint: string,
+  env: NodeJS.ProcessEnv,
+): void {
   const script = fileURLToPath(import.meta.url).replace(/\.ts$/, ".js");
-  const child = fork(script, ["--worker", runId, "--endpoint", endpoint], {
-    detached: true,
-    stdio: "ignore",
-    env,
-  });
-  child.unref();
+  const workerInstanceId = randomUUID();
+  const timestamp = now();
+  state.workerInstanceId = workerInstanceId;
+  state.workerPid = undefined;
+  state.workerHeartbeatAt = timestamp;
+  state.workerLeaseExpiresAt = leaseExpiry(env);
+  updateRun(state, "Recipe Worker lease is being created.", env);
+  try {
+    const child = fork(
+      script,
+      [
+        "--worker",
+        state.runId,
+        "--worker-instance",
+        workerInstanceId,
+        "--endpoint",
+        endpoint,
+      ],
+      {
+        detached: true,
+        stdio: "ignore",
+        env,
+      },
+    );
+    state.workerPid = child.pid;
+    state.workerHeartbeatAt = now();
+    state.workerLeaseExpiresAt = leaseExpiry(env);
+    updateRun(state, "Recipe Worker started and acquired its heartbeat lease.", env);
+    child.unref();
+  } catch (error) {
+    state.status = "interrupted";
+    state.phase = "interrupted";
+    state.workerLeaseExpiresAt = now();
+    updateRun(
+      state,
+      `Recipe Worker could not start: ${error instanceof Error ? error.message : String(error)}`,
+      env,
+    );
+    throw error;
+  }
 }
 
 export class RecipeRunner {
@@ -534,7 +635,7 @@ export class RecipeRunner {
       ...(approvalMissing ? { awaitingApproval: { stepId: "$plan", reason: "recipePlan", planDigest: validation.planDigest } } : {}),
     };
     updateRun(state, undefined, this.env);
-    if (!approvalMissing) spawnWorker(runId, this.endpoint, this.env);
+    if (!approvalMissing) spawnWorker(state, this.endpoint, this.env);
     return state;
   }
 
@@ -542,20 +643,44 @@ export class RecipeRunner {
     return readRun(runId, this.env);
   }
 
-  resume(runId: string, approvePlanDigest: string): RecipeRunState {
+  resume(
+    runId: string,
+    approvePlanDigest: string,
+    approveStepDigest?: string,
+  ): RecipeRunState {
     const state = readRun(runId, this.env);
-    if (state.status !== "awaitingApproval") throw new UEApiError({ code: "recipe_not_awaiting_approval", message: "Recipe run is not awaiting approval." });
-    const expected = state.awaitingApproval?.planDigest ?? state.planDigest;
-    if (approvePlanDigest !== expected) throw new UEApiError({ code: "plan_digest_mismatch", message: "approvePlanDigest does not match the pending Recipe plan." });
+    if (state.status === "running") {
+      throw new UEApiError({
+        code: "recipe_run_active",
+        message: "Recipe run still has an active Worker lease.",
+        details: {
+          workerPid: state.workerPid,
+          workerInstanceId: state.workerInstanceId,
+          workerLeaseExpiresAt: state.workerLeaseExpiresAt,
+        },
+      });
+    }
+    if (state.status !== "awaitingApproval" && state.status !== "interrupted") {
+      throw new UEApiError({ code: "recipe_not_resumable", message: "Recipe run is neither interrupted nor awaiting approval." });
+    }
+    if (approvePlanDigest !== state.planDigest) {
+      throw new UEApiError({ code: "plan_digest_mismatch", message: "approvePlanDigest does not match the persisted Recipe plan." });
+    }
     const approvedStepId = state.awaitingApproval?.stepId;
     if (approvedStepId && approvedStepId !== "$plan" && !state.approvedSteps.includes(approvedStepId)) {
+      if (approveStepDigest !== state.awaitingApproval?.planDigest) {
+        throw new UEApiError({
+          code: "approval_mismatch",
+          message: "approveStepDigest does not match the pending Workflow or high-risk step digest.",
+        });
+      }
       state.approvedSteps.push(approvedStepId);
     }
     state.status = "running";
     state.phase = "resuming";
     state.awaitingApproval = undefined;
     updateRun(state, "Recipe approval accepted; resuming from the persisted checkpoint.", this.env);
-    spawnWorker(runId, this.endpoint, this.env);
+    spawnWorker(state, this.endpoint, this.env);
     return state;
   }
 
@@ -638,8 +763,34 @@ async function invokeStep(
       workflow: materialize(step.workflow, context) as JsonObject,
       approvePlanDigest: approvedDigest,
       confirmWrite: true,
+      requestId: `${state.runId}-${step.id}`,
     };
-    return client.workflow(request);
+    const result = await client.workflow(request);
+    if (
+      process.env.UEAI_RECIPE_TEST_MODE === "1" &&
+      process.env.UEAI_RECIPE_TEST_EXIT_AFTER_WORKFLOW_ACK === step.id
+    ) {
+      process.exit(87);
+    }
+    if (
+      result.idempotentReplay === true &&
+      typeof result.runId === "string" &&
+      result.status === "running"
+    ) {
+      return client.workflow({ action: "resume", runId: result.runId });
+    }
+    if (
+      result.idempotentReplay === true &&
+      typeof result.status === "string" &&
+      ["failed", "cancelled", "rollbackFailed"].includes(result.status)
+    ) {
+      throw new UEApiError({
+        code: "workflow_terminal_failure",
+        message: `Workflow request ${request.requestId} already reached terminal state ${result.status}; it will not be replayed.`,
+        details: result,
+      });
+    }
+    return result;
   }
   if (step.kind === "sourceControlCheckout") {
     return client.execute(
@@ -690,16 +841,52 @@ async function compensate(
   }
 }
 
-export async function executeRecipeRun(runId: string, endpoint?: string): Promise<void> {
+export async function executeRecipeRun(
+  runId: string,
+  endpoint?: string,
+  workerInstanceId?: string,
+): Promise<void> {
   const state = readRun(runId);
   if (state.status !== "running") return;
+  if (
+    typeof workerInstanceId !== "string" ||
+    workerInstanceId.length === 0 ||
+    state.workerInstanceId !== workerInstanceId
+  ) {
+    throw new UEApiError({
+      code: "recipe_worker_lease_mismatch",
+      message: "Recipe Worker does not own the persisted Worker lease.",
+    });
+  }
+  state.workerPid = process.pid;
+  state.workerHeartbeatAt = now();
+  state.workerLeaseExpiresAt = leaseExpiry();
+  updateRun(state);
+  const heartbeatTimer = setInterval(() => {
+    try {
+      const latest = readRun(runId);
+      if (
+        latest.status !== "running" ||
+        latest.workerInstanceId !== workerInstanceId
+      ) {
+        return;
+      }
+      latest.workerPid = process.pid;
+      latest.workerHeartbeatAt = now();
+      latest.workerLeaseExpiresAt = leaseExpiry();
+      updateRun(latest);
+    } catch {
+      // A corrupt or removed journal cannot be safely renewed.
+    }
+  }, WORKER_HEARTBEAT_MS);
+  heartbeatTimer.unref();
   const client = new UEClient({ baseUrl: endpoint });
   await client.startSession({ name: "ue-recipe-runner", version: "1.0.0" });
   const completed = state.recipe.steps.slice(0, state.nextStep).filter((_, index) => state.steps[index]?.status === "completed");
   const stepOutputs = Object.fromEntries(state.steps.filter((step) => step.output !== undefined).map((step) => [step.id, { output: step.output }]));
   const context: JsonObject = { inputs: state.inputs, steps: stepOutputs };
   try {
-    for (; state.nextStep < state.recipe.steps.length; state.nextStep += 1) {
+    for (; state.nextStep < state.recipe.steps.length;) {
       const latest = readRun(runId);
       if (latest.cancelRequested) {
         state.status = "cancelled";
@@ -711,7 +898,7 @@ export async function executeRecipeRun(runId: string, endpoint?: string): Promis
       }
       const step = state.recipe.steps[state.nextStep]!;
       const stepState = state.steps[state.nextStep]!;
-      stepState.status = "running";
+      stepState.status = "dispatching";
       stepState.startedAt = now();
       state.phase = `step:${step.id}`;
       updateRun(state, `Starting ${step.kind} step ${step.id}.`);
@@ -741,7 +928,14 @@ export async function executeRecipeRun(runId: string, endpoint?: string): Promis
       if (step.kind === "workflow") stepState.workflowReceipt = output;
       (context.steps as JsonObject)[step.id] = { output };
       completed.push(step);
+      state.nextStep += 1;
       updateRun(state, `Completed step ${step.id}.`);
+      if (
+        process.env.UEAI_RECIPE_TEST_MODE === "1" &&
+        process.env.UEAI_RECIPE_TEST_EXIT_AFTER_STEP === step.id
+      ) {
+        process.exit(86);
+      }
     }
     state.status = "completed";
     state.phase = "completed";
@@ -757,22 +951,39 @@ export async function executeRecipeRun(runId: string, endpoint?: string): Promis
     updateRun(state, payload.message);
     if (state.status === "failed") await compensate(client, state, completed, context);
   } finally {
+    clearInterval(heartbeatTimer);
+    try {
+      const latest = readRun(runId);
+      if (latest.workerInstanceId === workerInstanceId) {
+        latest.workerPid = undefined;
+        latest.workerLeaseExpiresAt = now();
+        updateRun(latest);
+      }
+    } catch {
+      // Terminal cleanup must not replace the primary Runner result.
+    }
     await client.stopSession();
   }
 }
 
 if (process.argv[2] === "--worker") {
   const runId = process.argv[3];
+  const workerInstanceIndex = process.argv.indexOf("--worker-instance");
+  const workerInstanceId = workerInstanceIndex >= 0 ? process.argv[workerInstanceIndex + 1] : undefined;
   const endpointIndex = process.argv.indexOf("--endpoint");
   const endpoint = endpointIndex >= 0 ? process.argv[endpointIndex + 1] : undefined;
   if (runId) {
-    void executeRecipeRun(runId, endpoint).catch((error) => {
+    void executeRecipeRun(runId, endpoint, workerInstanceId).catch((error) => {
       try {
         const state = readRun(runId);
-        state.status = "failed";
-        state.phase = "failed";
-        state.error = errorPayload(error);
-        updateRun(state, state.error.message);
+        if (state.workerInstanceId === workerInstanceId) {
+          state.status = "interrupted";
+          state.phase = "interrupted";
+          state.error = errorPayload(error);
+          state.workerPid = undefined;
+          state.workerLeaseExpiresAt = now();
+          updateRun(state, state.error.message);
+        }
       } catch {
         // A missing/corrupt journal is already terminal and cannot be repaired.
       }

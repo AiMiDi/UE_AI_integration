@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
 
@@ -318,6 +319,107 @@ def main():
             expected=2,
         )
         assert conflict["error"]["code"] == "execution_backend_conflict"
+
+        bundle = root / "offline-bundle"
+        (bundle / "CLI" / "bin").mkdir(parents=True)
+        shutil_source = args.source_root.resolve()
+        shutil.copy2(args.cli, bundle / "CLI" / "bin" / "ue-cli.exe")
+        workflow_cli = args.cli.parent / "ue-workflow-cli.exe"
+        if not workflow_cli.exists():
+            raise AssertionError(f"missing sibling Workflow CLI: {workflow_cli}")
+        shutil.copy2(
+            workflow_cli, bundle / "CLI" / "bin" / "ue-workflow-cli.exe"
+        )
+        shutil.copy2(
+            shutil_source / "UE_AI_integration.uplugin",
+            bundle / "UE_AI_integration.uplugin",
+        )
+        shutil.copytree(shutil_source / "Resources", bundle / "Resources")
+        shutil.copytree(shutil_source / "skills", bundle / "skills")
+        shutil.copytree(shutil_source / "Recipes", bundle / "Recipes")
+        (bundle / "scripts").mkdir()
+        shutil.copy2(
+            shutil_source / "scripts" / "mcp_stdio_smoke.mjs",
+            bundle / "scripts" / "mcp_stdio_smoke.mjs",
+        )
+        (bundle / "MCP").mkdir()
+        shutil.copy2(
+            shutil_source / "MCP" / "package.json",
+            bundle / "MCP" / "package.json",
+        )
+        shutil.copytree(
+            shutil_source / "MCP" / "dist", bundle / "MCP" / "dist"
+        )
+        shutil.copytree(
+            shutil_source / "MCP" / "node_modules",
+            bundle / "MCP" / "node_modules",
+        )
+
+        diagnostic_environment = os.environ.copy()
+        diagnostic_environment["UEAI_TRACE_WORKER"] = str(args.worker)
+        diagnostic_environment["UEAI_TRACE_TRANSPORT"] = "stdio"
+        diagnostic_environment["UEAI_TRACE_CONTRACT_ROOT"] = str(
+            shutil_source
+        )
+        diagnostic_environment["UE_ENGINE_VERSION"] = "5.3"
+        diagnostic_environment["UE_PORT"] = "1"
+        contract_digest, provider_digest = trace_contract_digests(
+            shutil_source
+        )
+        diagnostic_environment["FAKE_TRACE_CONTRACT_DIGEST"] = contract_digest
+        diagnostic_environment["FAKE_TRACE_PROVIDER_DIGEST"] = provider_digest
+
+        offline_tools = subprocess.run(
+            [
+                str(bundle / "CLI" / "bin" / "ue-cli.exe"),
+                "test-tools",
+                "--bundle",
+                str(bundle),
+                "--json",
+            ],
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            env=diagnostic_environment,
+            timeout=30,
+        )
+        if offline_tools.returncode != 0:
+            raise AssertionError(
+                f"offline test-tools failed: stdout={offline_tools.stdout!r} stderr={offline_tools.stderr!r}"
+            )
+        offline_payload = json.loads(offline_tools.stdout)
+        assert offline_payload["data"]["schema"] == "ue.test-tools.v2"
+        assert offline_payload["data"]["status"] == "partial"
+        assert offline_payload["ok"] is True
+        checks = {
+            check["id"]: check for check in offline_payload["data"]["checks"]
+        }
+        assert checks["mcp.stdio"]["status"] == "passed"
+        assert checks["editor.health"]["status"] == "skipped"
+        assert checks["editor.readonly"]["status"] == "skipped"
+
+        required_editor = subprocess.run(
+            [
+                str(bundle / "CLI" / "bin" / "ue-cli.exe"),
+                "test-tools",
+                "--bundle",
+                str(bundle),
+                "--require-editor",
+                "--endpoint",
+                "http://127.0.0.1:1",
+                "--json",
+            ],
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            env=diagnostic_environment,
+            timeout=30,
+        )
+        assert required_editor.returncode != 0
+        required_payload = json.loads(required_editor.stdout)
+        assert required_payload["data"]["schema"] == "ue.test-tools.v2"
+        assert required_payload["data"]["status"] == "failed"
+        assert required_payload["ok"] is False
 
         mismatched_doctor = run(
             args.cli,

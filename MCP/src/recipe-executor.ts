@@ -55,6 +55,9 @@ export class RecipeRunnerExecutor implements CapabilityExecutor {
       return this.runner.resume(
         runId,
         params.approvePlanDigest,
+        typeof params.approveStepDigest === "string"
+          ? params.approveStepDigest
+          : undefined,
       ) as unknown as UEExecuteData;
     }
     if (id === "production.recipe.cancel") {

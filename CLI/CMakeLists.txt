@@ -59,6 +59,7 @@ endif()
 add_executable(ue-workflow
     src/main.cpp
 )
+set_target_properties(ue-workflow PROPERTIES OUTPUT_NAME "ue-workflow-cli")
 
 add_library(UECommandCliCore STATIC
     src/CapabilityCatalog.cpp
@@ -69,6 +70,7 @@ add_library(UECommandCliCore STATIC
 add_executable(ue
     src/short_main.cpp
 )
+set_target_properties(ue PROPERTIES OUTPUT_NAME "ue-cli")
 
 target_compile_features(UECommandCliCore PUBLIC cxx_std_20)
 target_include_directories(UECommandCliCore
@@ -313,8 +315,8 @@ if(UE_WORKFLOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(
         NAME ue_workflow_cli_installed_doctor
         COMMAND "${CMAKE_COMMAND}"
-            "-DUE_WORKFLOW_EXECUTABLE=${CMAKE_BINARY_DIR}/install-smoke/${CMAKE_INSTALL_BINDIR}/ue-workflow${CMAKE_EXECUTABLE_SUFFIX}"
-            "-DUE_SHORT_CLI_EXECUTABLE=${CMAKE_BINARY_DIR}/install-smoke/${CMAKE_INSTALL_BINDIR}/ue${CMAKE_EXECUTABLE_SUFFIX}"
+            "-DUE_WORKFLOW_EXECUTABLE=${CMAKE_BINARY_DIR}/install-smoke/${CMAKE_INSTALL_BINDIR}/ue-workflow-cli${CMAKE_EXECUTABLE_SUFFIX}"
+            "-DUE_SHORT_CLI_EXECUTABLE=${CMAKE_BINARY_DIR}/install-smoke/${CMAKE_INSTALL_BINDIR}/ue-cli${CMAKE_EXECUTABLE_SUFFIX}"
             "-DUE_WORKFLOW_INSTALL_ROOT=${CMAKE_BINARY_DIR}/install-smoke"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/InstalledSmoke.cmake"
     )

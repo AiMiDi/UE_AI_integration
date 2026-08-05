@@ -14,6 +14,7 @@ interface CliArguments {
   runId?: string;
   endpoint?: string;
   approvePlan?: string;
+  approveStep?: string;
   inputs?: Record<string, unknown>;
   json: boolean;
 }
@@ -35,6 +36,7 @@ function parseRaw(arguments_: string[]): CliArguments {
     else if (name === "run-id") result.runId = value;
     else if (name === "endpoint") result.endpoint = value;
     else if (name === "approve-plan") result.approvePlan = value;
+    else if (name === "approve-step") result.approveStep = value;
     else if (name === "inputs") result.inputs = JSON.parse(value) as Record<string, unknown>;
     else if (name === "inputs-file") result.inputs = JSON.parse(readFileSync(resolve(value), "utf8")) as Record<string, unknown>;
     else throw new Error(`Unknown option --${name}.`);
@@ -83,7 +85,7 @@ export async function main(): Promise<number> {
       if (args.command === "status") data = runner.status(args.runId);
       else if (args.command === "resume") {
         if (!args.approvePlan) throw new UEApiError({ code: "approval_required", message: "resume requires --approve-plan." });
-        data = runner.resume(args.runId, args.approvePlan);
+        data = runner.resume(args.runId, args.approvePlan, args.approveStep);
       }
       else if (args.command === "cancel") data = runner.cancel(args.runId);
       else data = runner.result(args.runId);

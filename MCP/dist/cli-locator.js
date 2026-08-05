@@ -98,7 +98,7 @@ function locateCli(spec, options) {
 }
 export function locateWorkflowCli(options = {}) {
     return locateCli({
-        command: "ue-workflow",
+        command: "ue-workflow-cli",
         environmentKey: "UE_WORKFLOW_CLI",
         developmentBuilds: [
             "build-eval-workflow",
@@ -110,7 +110,7 @@ export function locateWorkflowCli(options = {}) {
 }
 export function locateShortCli(options = {}) {
     return locateCli({
-        command: "ue",
+        command: "ue-cli",
         environmentKey: "UE_CLI",
         developmentBuilds: [
             "build-short-cli",

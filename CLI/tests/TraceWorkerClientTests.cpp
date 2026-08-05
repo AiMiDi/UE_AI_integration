@@ -225,7 +225,7 @@ int main(int argc, char** argv)
     std::filesystem::create_directories(packaged_worker.parent_path());
     std::ofstream(packaged_worker).put('\0');
     const auto packaged = ue::trace::ResolveWorker(
-        root / "CLI" / "bin" / "ue");
+        root / "CLI" / "bin" / "ue-cli");
     Require(
         packaged.path.has_value()
             && std::filesystem::equivalent(

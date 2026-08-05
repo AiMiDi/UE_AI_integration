@@ -70,6 +70,24 @@ constexpr int32 MaxPreparedPlanCacheEntries = 64;
 constexpr double PreparedPlanCacheTtlSeconds = 10.0 * 60.0;
 constexpr int64 MaxRecoveryStorageBytes = 20LL * 1024LL * 1024LL * 1024LL;
 
+TSharedPtr<FJsonObject> MakeWorkflowIdempotencyPayload(
+	const TSharedPtr<FJsonObject>& Request)
+{
+	TSharedPtr<FJsonObject> Payload = MakeShared<FJsonObject>();
+	for (const TCHAR* Field : {
+		TEXT("workflow"),
+		TEXT("approvePlanDigest"),
+		TEXT("saveOnSuccess"),
+		TEXT("confirmWrite")})
+	{
+		if (const TSharedPtr<FJsonValue>* Value = Request->Values.Find(Field))
+		{
+			Payload->SetField(Field, *Value);
+		}
+	}
+	return Payload;
+}
+
 int64 DirectorySizeBytes(const FString& Directory)
 {
 	TArray<FString> Files;
@@ -1930,6 +1948,7 @@ FMCPResult FWorkflowRuntime::HandleRequest(
 	    TEXT("action"),  TEXT("workflow"),      TEXT("approvePlanDigest"),
 	    TEXT("runId"),   TEXT("saveOnSuccess"), TEXT("confirmWrite"),
 	    TEXT("details"), TEXT("detailLevel"),   TEXT("sections"),
+	    TEXT("requestId"),
 	};
 	for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Request->Values)
 	{
@@ -1987,6 +2006,7 @@ FMCPResult FWorkflowRuntime::HandleRequest(
 		ActionFields.Add(TEXT("approvePlanDigest"));
 		ActionFields.Add(TEXT("saveOnSuccess"));
 		ActionFields.Add(TEXT("confirmWrite"));
+		ActionFields.Add(TEXT("requestId"));
 	}
 	else if (Action == TEXT("status") || Action == TEXT("resume"))
 	{
@@ -2022,6 +2042,30 @@ FMCPResult FWorkflowRuntime::HandleRequest(
 					TEXT("Field '%s' must be a boolean."),
 					BoolField),
 				422);
+		}
+	}
+	if (Request->HasField(TEXT("requestId")))
+	{
+		FString RequestId;
+		if (!Request->TryGetStringField(TEXT("requestId"), RequestId)
+			|| RequestId.IsEmpty() || RequestId.Len() > 160)
+		{
+			return FMCPResult::Fail(
+				TEXT("invalid_params"),
+				TEXT("Field 'requestId' must be a non-empty string of at most 160 characters."),
+				422);
+		}
+		for (const TCHAR Character : RequestId)
+		{
+			if (!FChar::IsAlnum(Character)
+				&& Character != TEXT('-') && Character != TEXT('_')
+				&& Character != TEXT('.') && Character != TEXT(':'))
+			{
+				return FMCPResult::Fail(
+					TEXT("invalid_params"),
+					TEXT("Field 'requestId' contains an unsupported character."),
+					422);
+			}
 		}
 	}
 
@@ -2411,7 +2455,7 @@ bool FWorkflowRuntime::VerifyPlanAssetPreconditions(
 			TEXT("asset_precondition_required"),
 			TEXT(
 				"Execute requires an Editor-prepared plan; run "
-				"'ue-workflow plan --connect' first."),
+				"'ue-workflow-cli plan --connect' first."),
 			409);
 		return false;
 	}
@@ -2734,7 +2778,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(const TSharedPtr<FJsonObject>& Requ
 		Details->SetBoolField(TEXT("executionReady"), false);
 		Details->SetStringField(
 			TEXT("guidance"),
-			TEXT("Run 'ue-workflow plan --connect' and approve its planDigest."));
+			TEXT("Run 'ue-workflow-cli plan --connect' and approve its planDigest."));
 		return FMCPResult::Fail(
 			TEXT("plan_approval_required"),
 			TEXT(
@@ -2752,7 +2796,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(const TSharedPtr<FJsonObject>& Requ
 			CorePlanDigest);
 		Details->SetStringField(
 			TEXT("guidance"),
-			TEXT("Run 'ue-workflow plan --connect' before executing."));
+			TEXT("Run 'ue-workflow-cli plan --connect' before executing."));
 		Details->SetBoolField(TEXT("executionReady"), false);
 		return FMCPResult::Fail(
 			TEXT("asset_precondition_required"),
@@ -2761,6 +2805,38 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(const TSharedPtr<FJsonObject>& Requ
 				"and is not bound to current Editor assets."),
 			409,
 			Details);
+	}
+
+	FString RequestId;
+	Request->TryGetStringField(TEXT("requestId"), RequestId);
+	const FString RequestPayloadDigest = RequestId.IsEmpty()
+		? FString()
+		: UEAIIntegration::Infrastructure::DigestJson(
+			MakeWorkflowIdempotencyPayload(Request));
+	if (!RequestId.IsEmpty())
+	{
+		FRunRecord Existing;
+		if (FindRunByRequestId(RequestId, Existing))
+		{
+			if (Existing.PlanDigest != ApprovedDigest
+				|| Existing.RequestPayloadDigest != RequestPayloadDigest)
+			{
+				TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+				Details->SetStringField(TEXT("requestId"), RequestId);
+				Details->SetStringField(TEXT("existingRunId"), Existing.RunId);
+				Details->SetStringField(TEXT("existingPlanDigest"), Existing.PlanDigest);
+				Details->SetStringField(TEXT("requestedPlanDigest"), ApprovedDigest);
+				return FMCPResult::Fail(
+					TEXT("idempotency_conflict"),
+					TEXT("The Workflow requestId is already bound to a different payload or plan."),
+					409,
+					Details);
+			}
+			TSharedPtr<FJsonObject> Result = Existing.ToResultJson(Options);
+			Result->SetStringField(TEXT("requestId"), RequestId);
+			Result->SetBoolField(TEXT("idempotentReplay"), true);
+			return FMCPResult::Ok(Result);
+		}
 	}
 
 	TSharedPtr<FJsonObject> Plan;
@@ -2778,7 +2854,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(const TSharedPtr<FJsonObject>& Requ
 			TEXT("guidance"),
 			TEXT(
 				"The prepared plan expired or belongs to another Editor "
-				"session; run 'ue-workflow plan --connect' again."));
+				"session; run 'ue-workflow-cli plan --connect' again."));
 		return FMCPResult::Fail(
 			TEXT("asset_precondition_required"),
 			TEXT(
@@ -2893,6 +2969,8 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflow(const TSharedPtr<FJsonObject>& Requ
 
 	FRunRecord Record;
 	Record.RunId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	Record.RequestId = RequestId;
+	Record.RequestPayloadDigest = RequestPayloadDigest;
 	Record.ServerInstanceId = ServerInstanceId;
 	Record.WorkflowId =
 		GetStringField(*NormalizedWorkflow, TEXT("workflowId"));
@@ -3516,6 +3594,13 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 	FRunRecord Record;
 	Record.RunId =
 		FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	Request->TryGetStringField(TEXT("requestId"), Record.RequestId);
+	if (!Record.RequestId.IsEmpty())
+	{
+		Record.RequestPayloadDigest =
+			UEAIIntegration::Infrastructure::DigestJson(
+				MakeWorkflowIdempotencyPayload(Request));
+	}
 	Record.ServerInstanceId = ServerInstanceId;
 	Record.WorkflowId =
 		GetStringField(*NormalizedWorkflow, TEXT("workflowId"));
@@ -6381,6 +6466,8 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToJournalJson() const
 	TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
 	Json->SetStringField(TEXT("schema"), TEXT("ue.workflow-run.v1"));
 	Json->SetStringField(TEXT("runId"), RunId);
+	Json->SetStringField(TEXT("requestId"), RequestId);
+	Json->SetStringField(TEXT("requestPayloadDigest"), RequestPayloadDigest);
 	Json->SetStringField(TEXT("serverInstanceId"), ServerInstanceId);
 	Json->SetStringField(TEXT("workflowId"), WorkflowId);
 	Json->SetStringField(TEXT("dslVersion"), DslVersion);
@@ -6496,6 +6583,7 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToReceiptJson() const
 	TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
 	Json->SetStringField(TEXT("schema"), TEXT("ue.workflow-run.v1"));
 	Json->SetStringField(TEXT("runId"), RunId);
+	Json->SetStringField(TEXT("requestId"), RequestId);
 	Json->SetStringField(TEXT("serverInstanceId"), ServerInstanceId);
 	Json->SetStringField(TEXT("workflowId"), WorkflowId);
 	Json->SetStringField(TEXT("dslVersion"), DslVersion);
@@ -6569,6 +6657,10 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson(
 	TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
 	Json->SetStringField(TEXT("schema"), TEXT("ue.workflow-result.v1"));
 	Json->SetStringField(TEXT("runId"), RunId);
+	if (!RequestId.IsEmpty())
+	{
+		Json->SetStringField(TEXT("requestId"), RequestId);
+	}
 	Json->SetStringField(TEXT("workflowId"), WorkflowId);
 	Json->SetStringField(TEXT("dslVersion"), DslVersion);
 	Json->SetStringField(TEXT("scopeAsset"), ScopeAsset);
@@ -6966,6 +7058,10 @@ bool FWorkflowRuntime::FRunRecord::FromJson(
 		return false;
 	}
 	Json->TryGetStringField(TEXT("serverInstanceId"), OutRecord.ServerInstanceId);
+	Json->TryGetStringField(TEXT("requestId"), OutRecord.RequestId);
+	Json->TryGetStringField(
+		TEXT("requestPayloadDigest"),
+		OutRecord.RequestPayloadDigest);
 	Json->TryGetStringField(TEXT("workflowId"), OutRecord.WorkflowId);
 	Json->TryGetStringField(TEXT("dslVersion"), OutRecord.DslVersion);
 	Json->TryGetStringField(
@@ -7137,6 +7233,53 @@ bool FWorkflowRuntime::LoadRun(
 		&& FRunRecord::FromJson(Json, OutRecord);
 }
 
+bool FWorkflowRuntime::FindRunByRequestId(
+	const FString& RequestId,
+	FRunRecord& OutRecord) const
+{
+	if (RequestId.IsEmpty())
+	{
+		return false;
+	}
+	for (const TPair<FString, FRunRecord>& Pair : Runs)
+	{
+		if (Pair.Value.RequestId == RequestId)
+		{
+			OutRecord = Pair.Value;
+			return true;
+		}
+	}
+
+	TArray<FString> JournalFiles;
+	IFileManager::Get().FindFiles(
+		JournalFiles,
+		*FPaths::Combine(JournalDirectory, TEXT("*.json")),
+		true,
+		false);
+	JournalFiles.Sort();
+	const int32 MaximumJournalScan = FMath::Min(JournalFiles.Num(), 4096);
+	for (int32 Index = 0; Index < MaximumJournalScan; ++Index)
+	{
+		FString JsonString;
+		if (!FFileHelper::LoadFileToString(
+				JsonString,
+				*FPaths::Combine(JournalDirectory, JournalFiles[Index])))
+		{
+			continue;
+		}
+		TSharedPtr<FJsonObject> Json;
+		FRunRecord Candidate;
+		if (ParseJsonObject(JsonString, Json)
+			&& FRunRecord::FromJson(Json, Candidate)
+			&& Candidate.RequestId == RequestId)
+		{
+			OutRecord = MoveTemp(Candidate);
+			return true;
+		}
+	}
+	return false;
+}
+
 bool FWorkflowRuntime::SaveRun(
 	const FRunRecord& Record,
 	FString& OutError) const
@@ -7191,6 +7334,7 @@ bool FWorkflowRuntime::SaveRun(
 	Recovery->SetStringField(TEXT("kind"), TEXT("workflow"));
 	Recovery->SetStringField(TEXT("changeSetId"), Record.RunId);
 	Recovery->SetStringField(TEXT("runId"), Record.RunId);
+	Recovery->SetStringField(TEXT("requestId"), Record.RequestId);
 	Recovery->SetStringField(TEXT("status"), Record.Status);
 	Recovery->SetStringField(TEXT("durability"), Record.Durability);
 	Recovery->SetStringField(TEXT("rollbackDurability"), Record.Durability);

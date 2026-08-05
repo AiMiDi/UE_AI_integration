@@ -52,6 +52,7 @@ public:
 	static constexpr int32 ExpiresAfterMs = 15000;
 
 	FClientActivityService() = default;
+	void SetServerInstanceId(const FString& InServerInstanceId);
 	static void SetActiveService(FClientActivityService* Service);
 	static FClientActivityService* GetActiveService();
 
@@ -174,6 +175,7 @@ private:
 	};
 	struct FLease
 	{
+		FString LeaseId;
 		FString Type;
 		FString OwnerSessionId;
 		FString AcquiredAtUtc;
@@ -239,6 +241,7 @@ private:
 	TMap<FString, FSession> Sessions;
 	TMap<FString, FString> SessionByInstanceId;
 	TMap<FString, FLease> Leases;
+	FString ServerInstanceId;
 	TArray<TSharedPtr<FJsonObject>> LeaseAudit;
 	TArray<FCliInvocation> CliInvocations;
 	TArray<FActivity> Activities;

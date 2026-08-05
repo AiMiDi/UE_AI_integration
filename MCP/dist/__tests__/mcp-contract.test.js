@@ -92,6 +92,7 @@ test("registers exactly twelve MCP tools without contacting Unreal Editor", () =
     }
     assert.deepEqual(Object.keys(registeredToolMap.ue_workflow?.inputSchema?.shape ?? {}), [
         "action",
+        "requestId",
         "workflow",
         "approvePlanDigest",
         "runId",
@@ -103,10 +104,10 @@ test("registers exactly twelve MCP tools without contacting Unreal Editor", () =
     ]);
     assert.equal(networkCalls, 0);
 });
-test("locates ue-workflow offline with deterministic precedence", () => {
+test("locates ue-workflow-cli offline with deterministic precedence", () => {
     const fixturePluginRoot = resolve("fixture-plugin");
     const moduleUrl = pathToFileURL(join(fixturePluginRoot, "MCP", "dist", "cli-locator.js")).href;
-    const executableName = process.platform === "win32" ? "ue-workflow.exe" : "ue-workflow";
+    const executableName = process.platform === "win32" ? "ue-workflow-cli.exe" : "ue-workflow-cli";
     const configured = resolve("custom-tools", executableName);
     const packaged = join(fixturePluginRoot, "CLI", "bin", executableName);
     const configuredResult = locateWorkflowCli({
@@ -141,10 +142,10 @@ test("locates ue-workflow offline with deterministic precedence", () => {
     assert.equal(missingResult.source, "not_found");
     assert.match(missingResult.guidance, /UE_WORKFLOW_CLI/);
 });
-test("locates the short-operation ue CLI via UE_CLI and packaged layout", () => {
+test("locates the short-operation ue-cli via UE_CLI and packaged layout", () => {
     const fixturePluginRoot = resolve("fixture-plugin");
     const moduleUrl = pathToFileURL(join(fixturePluginRoot, "MCP", "dist", "cli-locator.js")).href;
-    const executableName = process.platform === "win32" ? "ue.exe" : "ue";
+    const executableName = process.platform === "win32" ? "ue-cli.exe" : "ue-cli";
     const configured = resolve("custom-tools", executableName);
     const packaged = join(fixturePluginRoot, "CLI", "bin", executableName);
     const configuredResult = locateShortCli({
@@ -184,16 +185,16 @@ test("ue_cli preserves workflow fields and adds a shortCli locator result", asyn
         guidance: "fixture",
     };
     const runtime = createMcpServer({
-        cliLocator: () => ({ ...base, command: "ue-workflow" }),
-        shortCliLocator: () => ({ ...base, command: "ue" }),
+        cliLocator: () => ({ ...base, command: "ue-workflow-cli" }),
+        shortCliLocator: () => ({ ...base, command: "ue-cli" }),
     });
     const registeredToolMap = runtime.server._registeredTools;
     const response = await registeredToolMap.ue_cli.handler({}, {});
     const text = response.content[0]?.text;
     assert.equal(typeof text, "string");
     const payload = JSON.parse(text ?? "{}");
-    assert.equal(payload.command, "ue-workflow");
-    assert.equal(payload.shortCli.command, "ue");
+    assert.equal(payload.command, "ue-workflow-cli");
+    assert.equal(payload.shortCli.command, "ue-cli");
 });
 test("pages and filters capability summaries without emitting schemas by default", async () => {
     const catalog = loadCapabilityCatalog();
@@ -380,6 +381,7 @@ test("validates ue_workflow action-specific inputs without accepting file paths"
     }).success, true);
     assert.equal(UE_WORKFLOW_INPUT_SCHEMA.safeParse({
         action: "execute",
+        requestId: "recipe-run-test-step-write",
         workflow,
         approvePlanDigest: "sha256:test",
         saveOnSuccess: true,
@@ -401,6 +403,7 @@ test("validates ue_workflow action-specific inputs without accepting file paths"
         { action: "resume", runId: "run-1", workflow },
         { action: "plan", workflow, file: "workflow.json" },
         { action: "plan", workflow, runId: "run-1" },
+        { action: "plan", workflow, requestId: "not-an-execute" },
         { action: "validate", workflow, approvePlanDigest: "not-applicable" },
         {
             action: "plan",
@@ -416,6 +419,7 @@ test("validates ue_workflow action-specific inputs without accepting file paths"
         error.details !== undefined);
     assert.deepEqual(Object.keys(UE_WORKFLOW_TOOL_SCHEMA.shape), [
         "action",
+        "requestId",
         "workflow",
         "approvePlanDigest",
         "runId",

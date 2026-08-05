@@ -40,7 +40,9 @@ export class RecipeRunnerExecutor {
                     message: "Recipe resume requires approvePlanDigest.",
                 });
             }
-            return this.runner.resume(runId, params.approvePlanDigest);
+            return this.runner.resume(runId, params.approvePlanDigest, typeof params.approveStepDigest === "string"
+                ? params.approveStepDigest
+                : undefined);
         }
         if (id === "production.recipe.cancel") {
             return this.runner.cancel(runId);
