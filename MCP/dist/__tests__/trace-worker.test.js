@@ -82,6 +82,14 @@ if (process.argv.includes("--stdio")) {
   process.exitCode = 2;
 }`;
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+function removeTemporaryDirectory(directory) {
+    rmSync(directory, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+    });
+}
 function fakeWorkerBundle(directory) {
     const root = join(directory, "Plugin");
     const platform = process.platform === "win32"
@@ -198,7 +206,7 @@ test("locates packaged and source-built Trace Workers deterministically", () => 
         assert.equal(built.engineVersion, "5.3");
     }
     finally {
-        rmSync(directory, { recursive: true, force: true });
+        removeTemporaryDirectory(directory);
     }
 });
 test("binds service endpoints to the canonical Engine directory", () => {
@@ -216,7 +224,7 @@ test("binds service endpoints to the canonical Engine directory", () => {
         assert.notEqual(endpointA, endpointB);
     }
     finally {
-        rmSync(directory, { recursive: true, force: true });
+        removeTemporaryDirectory(directory);
     }
 });
 test("reuses the user-scoped Trace Worker service and keeps stdio diagnostic fallback", async () => {
@@ -259,7 +267,7 @@ test("reuses the user-scoped Trace Worker service and keeps stdio diagnostic fal
     }
     finally {
         await allowFakeServiceToExit();
-        rmSync(directory, { recursive: true, force: true });
+        removeTemporaryDirectory(directory);
     }
 });
 test("fails closed when UEAI_TRACE_WORKER has no Worker-bundled Resources", async () => {
@@ -282,7 +290,7 @@ test("fails closed when UEAI_TRACE_WORKER has no Worker-bundled Resources", asyn
             /Worker-bundled contract resources/.test(error.message));
     }
     finally {
-        rmSync(directory, { recursive: true, force: true });
+        removeTemporaryDirectory(directory);
     }
 });
 test("rejects a valid but divergent Worker resource bundle", async () => {
@@ -308,7 +316,7 @@ test("rejects a valid but divergent Worker resource bundle", async () => {
             /do not match the MCP-owned resources/.test(error.message));
     }
     finally {
-        rmSync(directory, { recursive: true, force: true });
+        removeTemporaryDirectory(directory);
     }
 });
 test("validates every trusted Trace contract resource before accepting its digest", async (t) => {
@@ -393,7 +401,7 @@ test("validates every trusted Trace contract resource before accepting its diges
                     /missing, invalid, or outside/.test(error.message));
             }
             finally {
-                rmSync(directory, { recursive: true, force: true });
+                removeTemporaryDirectory(directory);
             }
         });
     }
@@ -418,7 +426,7 @@ test("rejects handshake digests that differ from validated bundled Resources", a
             /digest does not match/.test(error.message));
     }
     finally {
-        rmSync(directory, { recursive: true, force: true });
+        removeTemporaryDirectory(directory);
     }
 });
 test("restricts MCP imports to Saved, Worker store, and declared roots", async () => {
@@ -461,7 +469,7 @@ test("restricts MCP imports to Saved, Worker store, and declared roots", async (
     }
     finally {
         await allowFakeServiceToExit();
-        rmSync(directory, { recursive: true, force: true });
+        removeTemporaryDirectory(directory);
     }
 });
 test("routes declared localTrace capabilities and honors explicit backend selection", async () => {
