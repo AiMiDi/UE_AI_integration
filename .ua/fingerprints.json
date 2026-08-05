@@ -1,11 +1,11 @@
 {
   "version": "1.0.0",
-  "gitCommitHash": "d7d882d453f74de259a7084f48e7d2c46b13404c",
-  "generatedAt": "2026-08-04T18:46:43.616Z",
+  "gitCommitHash": "93284c559f6beda10868ca637746efcdf315a8bd",
+  "generatedAt": "2026-08-05T03:55:51.585Z",
   "files": {
     ".claude-plugin/plugin.json": {
       "filePath": ".claude-plugin/plugin.json",
-      "contentHash": "72b29a878d399dab08f8a4dbcd4d400f25221b9bec3d56075688528d656eb14b",
+      "contentHash": "93fcb6161edd35cdb1f44eefa7371228ffb418bed8802f0b7e5a722f5bb9089a",
       "functions": [],
       "classes": [],
       "imports": [],
@@ -45,12 +45,12 @@
     },
     "CLI/CMakeLists.txt": {
       "filePath": "CLI/CMakeLists.txt",
-      "contentHash": "3c2b320d650711e351e9afec96c4be099c33d1dd0ce81f1db1f0e2f32be99b9b",
+      "contentHash": "071c8db00fe4ed70e35d5c3601c0475d522f10fe712145644d5f079583d0aee0",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 315,
+      "totalLines": 316,
       "hasStructuralAnalysis": false
     },
     "CLI/include/UEApiClient/UEApiClient.h": {
@@ -208,7 +208,7 @@
     },
     "CLI/include/UECommandCli/CapabilityCatalog.h": {
       "filePath": "CLI/include/UECommandCli/CapabilityCatalog.h",
-      "contentHash": "18da39e8b5b5e37efaea2e4e64ac58e4f3903a02da5b5e859984b1deb1e5e32f",
+      "contentHash": "1824ae3b67048cb4fd4b6c0dc740ee85ada4f034bf5638cc0c839e667c236490",
       "functions": [],
       "classes": [
         {
@@ -221,11 +221,13 @@
           ],
           "properties": [
             "Find",
+            "FindTombstone",
             "root_",
-            "descriptors_"
+            "descriptors_",
+            "tombstones_"
           ],
           "exported": true,
-          "lineCount": 25
+          "lineCount": 27
         }
       ],
       "imports": [
@@ -272,7 +274,7 @@
         "Size",
         "CapabilityCatalog"
       ],
-      "totalLines": 47,
+      "totalLines": 49,
       "hasStructuralAnalysis": true
     },
     "CLI/include/UECommandCli/CommandCli.h": {
@@ -356,6 +358,41 @@
       "totalLines": 56,
       "hasStructuralAnalysis": true
     },
+    "CLI/include/UECommandCli/RecipeCliAdapter.h": {
+      "filePath": "CLI/include/UECommandCli/RecipeCliAdapter.h",
+      "contentHash": "df0599ca7dd0b80e3aa85cf6b0a2fc6db1d4949d76d8549fe09319438ab406cb",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "filesystem",
+          "specifiers": [
+            "filesystem"
+          ]
+        },
+        {
+          "source": "iosfwd",
+          "specifiers": [
+            "iosfwd"
+          ]
+        },
+        {
+          "source": "string",
+          "specifiers": [
+            "string"
+          ]
+        },
+        {
+          "source": "vector",
+          "specifiers": [
+            "vector"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 22,
+      "hasStructuralAnalysis": true
+    },
     "CLI/include/UECommandCli/SkillCatalog.h": {
       "filePath": "CLI/include/UECommandCli/SkillCatalog.h",
       "contentHash": "7cfc59803c96508d9de689d59b36e1d29b2a01140d59b55a5aa6f971d2e1d2d8",
@@ -430,7 +467,7 @@
     },
     "CLI/include/UETraceWorker/TraceWorkerClient.h": {
       "filePath": "CLI/include/UETraceWorker/TraceWorkerClient.h",
-      "contentHash": "6a869f5720c3e75e8e0837f1b1b656f32d1c0b282d1b63b5d4186ab644c2709a",
+      "contentHash": "244ebcd1bd2f55872875180b7e7539864683783d1503372cf127935e9ee728a9",
       "functions": [],
       "classes": [
         {
@@ -467,6 +504,7 @@
         {
           "name": "WorkerClient",
           "methods": [
+            "Transport",
             "Invoke",
             "InvokeOneShot",
             "InvokeTraceImport",
@@ -479,7 +517,7 @@
             "transport_"
           ],
           "exported": true,
-          "lineCount": 33
+          "lineCount": 34
         }
       ],
       "imports": [
@@ -523,17 +561,18 @@
       "exports": [
         "WorkerLocation",
         "WorkerResult",
+        "Transport",
         "Invoke",
         "InvokeOneShot",
         "InvokeTraceImport",
         "WorkerClient"
       ],
-      "totalLines": 87,
+      "totalLines": 88,
       "hasStructuralAnalysis": true
     },
     "CLI/src/CapabilityCatalog.cpp": {
       "filePath": "CLI/src/CapabilityCatalog.cpp",
-      "contentHash": "b9b0ba02ddaa3145dea498a0eba1c87c47e1a4d909c5d925aae11c95d4399542",
+      "contentHash": "c5c2e9c81df7b309207e1329462b03a799ea6e723f559f53aee1bba6786e3794",
       "functions": [
         {
           "name": "Environment",
@@ -582,7 +621,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 63
+          "lineCount": 69
         },
         {
           "name": "Load",
@@ -614,7 +653,7 @@
           ],
           "returnType": "std::optional<CapabilityCatalog>",
           "exported": true,
-          "lineCount": 64
+          "lineCount": 95
         },
         {
           "name": "Size",
@@ -693,12 +732,12 @@
         "Size",
         "ResolveCapabilityRoot"
       ],
-      "totalLines": 511,
+      "totalLines": 556,
       "hasStructuralAnalysis": true
     },
     "CLI/src/CommandCli.cpp": {
       "filePath": "CLI/src/CommandCli.cpp",
-      "contentHash": "5d45e22a9e34b2e1b4391df904efa145811340b8e5be4d13137911b3c9ce2e14",
+      "contentHash": "42a2809f0c0a8ec90ab85a5fea3ce6f81d22f9c441a6580ca04676c47ff177fd",
       "functions": [
         {
           "name": "Environment",
@@ -758,7 +797,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 198
+          "lineCount": 218
         },
         {
           "name": "PrintGeneralHelp",
@@ -767,7 +806,7 @@
           ],
           "returnType": "void",
           "exported": true,
-          "lineCount": 26
+          "lineCount": 33
         },
         {
           "name": "PrintTraceHelp",
@@ -824,7 +863,7 @@
           ],
           "returnType": "void",
           "exported": true,
-          "lineCount": 58
+          "lineCount": 59
         },
         {
           "name": "NormalizeTraceShortcut",
@@ -959,7 +998,7 @@
           ],
           "returnType": "ParsedEnvelope",
           "exported": true,
-          "lineCount": 18
+          "lineCount": 19
         },
         {
           "name": "InvokeTraceWorkerImport",
@@ -1149,7 +1188,7 @@
           ],
           "returnType": "int",
           "exported": true,
-          "lineCount": 78
+          "lineCount": 80
         },
         {
           "name": "Lower",
@@ -1176,7 +1215,7 @@
           ],
           "returnType": "json",
           "exported": true,
-          "lineCount": 23
+          "lineCount": 27
         },
         {
           "name": "ParseWorkerEnvelope",
@@ -1237,7 +1276,7 @@
           ],
           "returnType": "int",
           "exported": true,
-          "lineCount": 270
+          "lineCount": 314
         },
         {
           "name": "ArrayContainsString",
@@ -1381,7 +1420,114 @@
           ],
           "returnType": "std::optional<json>",
           "exported": true,
-          "lineCount": 91
+          "lineCount": 109
+        },
+        {
+          "name": "DiagnosticCheck",
+          "params": [
+            "id",
+            "status",
+            "code"
+          ],
+          "returnType": "json",
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "InferBundleRoot",
+          "params": [
+            "options",
+            "catalog"
+          ],
+          "returnType": "std::filesystem::path",
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "RedactedPathLabel",
+          "params": [
+            "path"
+          ],
+          "returnType": "std::string",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "ReadJsonFileBounded",
+          "params": [
+            "path"
+          ],
+          "returnType": "json",
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "DefaultInstanceRoot",
+          "params": [],
+          "returnType": "std::filesystem::path",
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "InspectInstanceRecords",
+          "params": [
+            "selected"
+          ],
+          "returnType": "json",
+          "exported": true,
+          "lineCount": 60
+        },
+        {
+          "name": "WriteDiagnosticBundle",
+          "params": [
+            "output_path",
+            "envelope"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 40
+        },
+        {
+          "name": "RunDoctor",
+          "params": [
+            "options",
+            "catalog",
+            "skill_catalog",
+            "client",
+            "trace_worker",
+            "output",
+            "error"
+          ],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 186
+        },
+        {
+          "name": "RunTestTools",
+          "params": [
+            "options",
+            "catalog",
+            "skill_catalog",
+            "client",
+            "trace_worker",
+            "output",
+            "error"
+          ],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 67
+        },
+        {
+          "name": "RunMcpSurfaceStatus",
+          "params": [
+            "catalog",
+            "client",
+            "json_output",
+            "output"
+          ],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 56
         },
         {
           "name": "ExecuteOptions",
@@ -1397,7 +1543,7 @@
           ],
           "returnType": "int",
           "exported": true,
-          "lineCount": 488
+          "lineCount": 552
         },
         {
           "name": "Tokenize",
@@ -1437,7 +1583,7 @@
           ],
           "returnType": "int",
           "exported": true,
-          "lineCount": 196
+          "lineCount": 262
         },
         {
           "name": "Run",
@@ -1474,10 +1620,13 @@
             "live_schema",
             "raw_options",
             "trace_arguments",
-            "trace_doctor"
+            "trace_doctor",
+            "doctor_full",
+            "bundle_root",
+            "instance"
           ],
           "exported": true,
-          "lineCount": 22
+          "lineCount": 25
         },
         {
           "name": "ParsedEnvelope",
@@ -1578,6 +1727,12 @@
           "source": "UECommandCli/CapabilityCatalog.h",
           "specifiers": [
             "UECommandCli/CapabilityCatalog.h"
+          ]
+        },
+        {
+          "source": "UECommandCli/RecipeCliAdapter.h",
+          "specifiers": [
+            "UECommandCli/RecipeCliAdapter.h"
           ]
         },
         {
@@ -1804,18 +1959,28 @@
         "LoadLocalCatalog",
         "LoadLocalSkillCatalog",
         "ResolveDescriptor",
+        "DiagnosticCheck",
+        "InferBundleRoot",
+        "RedactedPathLabel",
+        "ReadJsonFileBounded",
+        "DefaultInstanceRoot",
+        "InspectInstanceRecords",
+        "WriteDiagnosticBundle",
+        "RunDoctor",
+        "RunTestTools",
+        "RunMcpSurfaceStatus",
         "ExecuteOptions",
         "Tokenize",
         "RunShell",
         "Run",
         "Run"
       ],
-      "totalLines": 4799,
+      "totalLines": 5540,
       "hasStructuralAnalysis": true
     },
     "CLI/src/main.cpp": {
       "filePath": "CLI/src/main.cpp",
-      "contentHash": "0efbea1618864698d439fcd2e7d7947ba38332dc3f0673b6c13569f6aaebcae0",
+      "contentHash": "cf9ba3308024680bd60c3d4c9f248e107ae5632d22e9c01874d08763676b3d34",
       "functions": [
         {
           "name": "environment",
@@ -2281,6 +2446,143 @@
       "totalLines": 1825,
       "hasStructuralAnalysis": true
     },
+    "CLI/src/RecipeCliAdapter.cpp": {
+      "filePath": "CLI/src/RecipeCliAdapter.cpp",
+      "contentHash": "3bbc9392d0a50e4e0089da2ed06e5278257f8ce521941672a9256644f4c7b5ab",
+      "functions": [
+        {
+          "name": "Environment",
+          "params": [
+            "name"
+          ],
+          "returnType": "std::optional<std::string>",
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "LocateRecipeCli",
+          "params": [
+            "executable"
+          ],
+          "returnType": "std::filesystem::path",
+          "exported": true,
+          "lineCount": 39
+        },
+        {
+          "name": "LocateSalCli",
+          "params": [
+            "executable"
+          ],
+          "returnType": "std::filesystem::path",
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "Quote",
+          "params": [
+            "path"
+          ],
+          "returnType": "std::string",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "RunRecipeCliAdapter",
+          "params": [
+            "arguments",
+            "executable",
+            "error"
+          ],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 48
+        },
+        {
+          "name": "RunSalCliAdapter",
+          "params": [
+            "arguments",
+            "executable",
+            "error"
+          ],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 30
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "UECommandCli/RecipeCliAdapter.h",
+          "specifiers": [
+            "UECommandCli/RecipeCliAdapter.h"
+          ]
+        },
+        {
+          "source": "nlohmann/json.hpp",
+          "specifiers": [
+            "nlohmann/json.hpp"
+          ]
+        },
+        {
+          "source": "chrono",
+          "specifiers": [
+            "chrono"
+          ]
+        },
+        {
+          "source": "cstdlib",
+          "specifiers": [
+            "cstdlib"
+          ]
+        },
+        {
+          "source": "filesystem",
+          "specifiers": [
+            "filesystem"
+          ]
+        },
+        {
+          "source": "fstream",
+          "specifiers": [
+            "fstream"
+          ]
+        },
+        {
+          "source": "optional",
+          "specifiers": [
+            "optional"
+          ]
+        },
+        {
+          "source": "random",
+          "specifiers": [
+            "random"
+          ]
+        },
+        {
+          "source": "string",
+          "specifiers": [
+            "string"
+          ]
+        },
+        {
+          "source": "vector",
+          "specifiers": [
+            "vector"
+          ]
+        }
+      ],
+      "exports": [
+        "Environment",
+        "LocateRecipeCli",
+        "LocateSalCli",
+        "Quote",
+        "RunRecipeCliAdapter",
+        "RunSalCliAdapter"
+      ],
+      "totalLines": 210,
+      "hasStructuralAnalysis": true
+    },
     "CLI/src/short_main.cpp": {
       "filePath": "CLI/src/short_main.cpp",
       "contentHash": "e4db1b120983e5e43d14744647a6a975937407c919f292176b18ab366cc30f0c",
@@ -2381,7 +2683,7 @@
     },
     "CLI/src/SkillCatalog.cpp": {
       "filePath": "CLI/src/SkillCatalog.cpp",
-      "contentHash": "47fbb51ea75043963c3b3b43575939347ccd717265a82e42b4daec2b0f68c123",
+      "contentHash": "427575f89ad3a106d52ddc6bb9d4d4a707f9c7b8b3e30966358b89771ea02cb9",
       "functions": [
         {
           "name": "Environment",
@@ -2504,7 +2806,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 540
+          "lineCount": 544
         },
         {
           "name": "Load",
@@ -2611,12 +2913,12 @@
         "Size",
         "ResolveSkillRoot"
       ],
-      "totalLines": 1012,
+      "totalLines": 1016,
       "hasStructuralAnalysis": true
     },
     "CLI/src/TraceWorkerClient.cpp": {
       "filePath": "CLI/src/TraceWorkerClient.cpp",
-      "contentHash": "82c405c1ec4056d0d5e994cf3590b7adaee80f865e29ea3f75f85d09827909d7",
+      "contentHash": "db97ece0296f3f3110aa30eb15cd4c6704a49a8b0a616c135af8dd98667bbaa1",
       "functions": [
         {
           "name": "Environment",
@@ -2866,6 +3168,13 @@
           "lineCount": 9
         },
         {
+          "name": "Transport",
+          "params": [],
+          "returnType": "WorkerTransport",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
           "name": "Invoke",
           "params": [
             "request_json"
@@ -3035,13 +3344,14 @@
         "ResolveWorker",
         "ResolveServiceEndpoint",
         "WorkerClient",
+        "Transport",
         "Invoke",
         "InvokeOneShot",
         "InvokeTraceImport",
         "InvokeService",
         "InvokeStdio"
       ],
-      "totalLines": 1768,
+      "totalLines": 1773,
       "hasStructuralAnalysis": true
     },
     "CLI/src/UEApiClient.cpp": {
@@ -3685,7 +3995,7 @@
     },
     "CLI/tests/cli_http_integration.py": {
       "filePath": "CLI/tests/cli_http_integration.py",
-      "contentHash": "09db62859ed314fcc1857fcd7e90e1dd884b422e111bf62510dd56e2296f6fd7",
+      "contentHash": "7df8f19e7cabc35d650a6d7871ac3f52854caba007dff23f8468e3b8fd341af1",
       "functions": [
         {
           "name": "main",
@@ -3774,7 +4084,7 @@
     },
     "CLI/tests/CommandCliTests.cpp": {
       "filePath": "CLI/tests/CommandCliTests.cpp",
-      "contentHash": "258757a3d14a73cfe43712a67a972d4b2797dfc3c7fda1d5201904afbc360e57",
+      "contentHash": "136b8ae351c0879ed08c4f1e2b6c74407a3155c1df1e577f3ffb46a634818bdf",
       "functions": [
         {
           "name": "Require",
@@ -3798,7 +4108,7 @@
           "params": [],
           "returnType": "int",
           "exported": true,
-          "lineCount": 671
+          "lineCount": 682
         }
       ],
       "classes": [],
@@ -3881,7 +4191,7 @@
         "Descriptor",
         "main"
       ],
-      "totalLines": 727,
+      "totalLines": 738,
       "hasStructuralAnalysis": true
     },
     "CLI/tests/InstalledSmoke.cmake": {
@@ -3906,14 +4216,14 @@
     },
     "CLI/tests/short_cli_http_integration.py": {
       "filePath": "CLI/tests/short_cli_http_integration.py",
-      "contentHash": "c9c8e689fa0129769786fd6a0245f3cc36c054d6e655c82f63b645e694f77e5c",
+      "contentHash": "c2a42e8c6497937325adc6b7557fb4896a52b23d10f521004e0275edff94e4d6",
       "functions": [
         {
           "name": "main",
           "params": [],
           "returnType": "int",
           "exported": true,
-          "lineCount": 1264
+          "lineCount": 1275
         }
       ],
       "classes": [],
@@ -4008,12 +4318,12 @@
       "exports": [
         "main"
       ],
-      "totalLines": 1287,
+      "totalLines": 1298,
       "hasStructuralAnalysis": true
     },
     "CLI/tests/trace_cli_routing.py": {
       "filePath": "CLI/tests/trace_cli_routing.py",
-      "contentHash": "4b3c192f567375759549cb967606d1884f9e07a6ddfb3b4a2ccb8243566ce504",
+      "contentHash": "3a267b6a6a8b517d8ee448bcb8ffab39b831d3b16f8e088939a9937e3f71eaf4",
       "functions": [
         {
           "name": "descriptor",
@@ -4024,7 +4334,7 @@
             "execution"
           ],
           "exported": true,
-          "lineCount": 19
+          "lineCount": 30
         },
         {
           "name": "trace_contract_digests",
@@ -4052,7 +4362,7 @@
           "name": "main",
           "params": [],
           "exported": true,
-          "lineCount": 235
+          "lineCount": 237
         }
       ],
       "classes": [],
@@ -4106,7 +4416,7 @@
         "run",
         "main"
       ],
-      "totalLines": 325,
+      "totalLines": 338,
       "hasStructuralAnalysis": true
     },
     "CLI/tests/TraceWorkerClientTests.cpp": {
@@ -4252,7 +4562,7 @@
     },
     "CLI/tests/TraceWorkerFixture.cpp": {
       "filePath": "CLI/tests/TraceWorkerFixture.cpp",
-      "contentHash": "7d9f98dbe6cc225e59ad9d4cb7a467b3a4e0eb2a5fb6fa65580aab0f4a6c5c3e",
+      "contentHash": "5f4de5833e1d20ff24a9f45690c754e17b5a5924c3b778734319ea345a7919c8",
       "functions": [
         {
           "name": "EncodeLength",
@@ -4411,23 +4721,33 @@
     },
     "CMakeLists.txt": {
       "filePath": "CMakeLists.txt",
-      "contentHash": "e8e818b09d3e22d6d0e0406c98a87a59ef21fd19f72c337d3f8b1b80f7d5194c",
+      "contentHash": "e702b4e22154315b5e22e2a230ba73a10feac05033455dcb70b4c3c57fddaf93",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 33,
+      "totalLines": 37,
       "hasStructuralAnalysis": false
     },
     "Config/FilterPlugin.ini": {
       "filePath": "Config/FilterPlugin.ini",
-      "contentHash": "bf450d06b0a39981252d8e42a204a3b2927e9fbe919bc3bbedbaaa2ee402150c",
+      "contentHash": "56cff8ecb3fdce19ea582496a8934de2850d847bfdfdd4634dbe375fa9070cb5",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 52,
+      "totalLines": 56,
       "hasStructuralAnalysis": false
+    },
+    "docs/CAPABILITY_SCHEMA_V3_MIGRATION.md": {
+      "filePath": "docs/CAPABILITY_SCHEMA_V3_MIGRATION.md",
+      "contentHash": "86754389e82c1c8bbb1e88c5a9973d23f6a4e51cf3cfcd14a5d8b4a8d969e9fe",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 49,
+      "hasStructuralAnalysis": true
     },
     "docs/CAPABILITY_SEARCH_AND_UNICODE.md": {
       "filePath": "docs/CAPABILITY_SEARCH_AND_UNICODE.md",
@@ -4457,6 +4777,16 @@
       "imports": [],
       "exports": [],
       "totalLines": 70,
+      "hasStructuralAnalysis": true
+    },
+    "docs/RELEASE_1_0.md": {
+      "filePath": "docs/RELEASE_1_0.md",
+      "contentHash": "6922f5c1932e48607496d2adf6199c0ae48fa8b13836323b12c02ff61f6c4da2",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 30,
       "hasStructuralAnalysis": true
     },
     "docs/UE_AGENT_SKILLS.md": {
@@ -4541,7 +4871,7 @@
     },
     "MCP/package.json": {
       "filePath": "MCP/package.json",
-      "contentHash": "a9030667660414a0ed74fb18f9047736726510626d63239b58d66413c1380ba3",
+      "contentHash": "92d1a7d1d2617785a33d02252bb424c40397b7d788ea43bf644c0d8dc7b976b2",
       "functions": [],
       "classes": [],
       "imports": [],
@@ -4551,7 +4881,7 @@
     },
     "MCP/src/__tests__/capability-catalog.test.ts": {
       "filePath": "MCP/src/__tests__/capability-catalog.test.ts",
-      "contentHash": "24d3cdd4fc382f88c6dbf28fece130cfaea795c830ea8bfa27150e59ac80f422",
+      "contentHash": "2a439ef11dcfae90d3cc3d128c205328010054ef214f61d0c064ab5cfb5d06b3",
       "functions": [
         {
           "name": "createTemporaryDirectory",
@@ -4606,7 +4936,7 @@
         }
       ],
       "exports": [],
-      "totalLines": 386,
+      "totalLines": 380,
       "hasStructuralAnalysis": true
     },
     "MCP/src/__tests__/capability-search.test.ts": {
@@ -4654,7 +4984,7 @@
     },
     "MCP/src/__tests__/mcp-contract.test.ts": {
       "filePath": "MCP/src/__tests__/mcp-contract.test.ts",
-      "contentHash": "bbc8fe883fd73535d96f9568a0d7a430d51792983a8d882134d4bfacd9731bbf",
+      "contentHash": "86a856871d16b26279b4a53629c8472519fa22a6e5fda48f68b32a449fc15a53",
       "functions": [],
       "classes": [],
       "imports": [
@@ -4746,12 +5076,110 @@
         }
       ],
       "exports": [],
-      "totalLines": 1347,
+      "totalLines": 1356,
+      "hasStructuralAnalysis": true
+    },
+    "MCP/src/__tests__/roadmap.test.ts": {
+      "filePath": "MCP/src/__tests__/roadmap.test.ts",
+      "contentHash": "a7641de7f3dde02ff261d1144a81201de11c2252fda7a0f9fd063d19a833ed5d",
+      "functions": [
+        {
+          "name": "fixtureProject",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "ue53PackageWithRegistryTag",
+          "params": [],
+          "returnType": "Buffer",
+          "exported": false,
+          "lineCount": 25
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:assert/strict",
+          "specifiers": [
+            "assert"
+          ]
+        },
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "mkdtempSync",
+            "mkdirSync",
+            "writeFileSync"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "join"
+          ]
+        },
+        {
+          "source": "node:os",
+          "specifiers": [
+            "tmpdir"
+          ]
+        },
+        {
+          "source": "node:test",
+          "specifiers": [
+            "test"
+          ]
+        },
+        {
+          "source": "../capability-catalog.js",
+          "specifiers": [
+            "loadCapabilityCatalog"
+          ]
+        },
+        {
+          "source": "../project-executor.js",
+          "specifiers": [
+            "LocalAssetExecutor",
+            "LocalProjectExecutor"
+          ]
+        },
+        {
+          "source": "../development-bridge.js",
+          "specifiers": [
+            "DevelopmentBridgeExecutor"
+          ]
+        },
+        {
+          "source": "../recipe-runner.js",
+          "specifiers": [
+            "validateRecipe"
+          ]
+        },
+        {
+          "source": "../sal-runner.js",
+          "specifiers": [
+            "parseSalSource",
+            "salLint",
+            "salPlan"
+          ]
+        },
+        {
+          "source": "../ue-bridge.js",
+          "specifiers": [
+            "UEApiError",
+            "UEClient"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 172,
       "hasStructuralAnalysis": true
     },
     "MCP/src/__tests__/skill-catalog.test.ts": {
       "filePath": "MCP/src/__tests__/skill-catalog.test.ts",
-      "contentHash": "e94ed5b3556c75cca9248d85b3887fab1233fe96c9ceb13a9a5383dc60e277cc",
+      "contentHash": "c6b48273958d4102e9a77b1bceea01bf7399e0e8eb3a4c1fd27c3fa171004dcb",
       "functions": [
         {
           "name": "textPayload",
@@ -4802,6 +5230,7 @@
         {
           "source": "../capability-catalog.js",
           "specifiers": [
+            "capabilityIsReadOnly",
             "loadCapabilityCatalog"
           ]
         },
@@ -4834,12 +5263,12 @@
         }
       ],
       "exports": [],
-      "totalLines": 458,
+      "totalLines": 460,
       "hasStructuralAnalysis": true
     },
     "MCP/src/__tests__/trace-worker.test.ts": {
       "filePath": "MCP/src/__tests__/trace-worker.test.ts",
-      "contentHash": "61dd7b4663973f653538c1b6c213b5d7a2e2430030e3c09b1645679ff13ce946",
+      "contentHash": "bbef124f1db877ca26dcd4bf2053c4a1d62482d4ca726449d6815db0b54ce374",
       "functions": [
         {
           "name": "serviceEndpoint",
@@ -4971,9 +5400,225 @@
       "totalLines": 857,
       "hasStructuralAnalysis": true
     },
+    "MCP/src/asset-worker.ts": {
+      "filePath": "MCP/src/asset-worker.ts",
+      "contentHash": "d38178ca521fb3fddebedac1cb79179fef08f5f707280608d2e21d59c392cc17",
+      "functions": [
+        {
+          "name": "failure",
+          "params": [
+            "code",
+            "message"
+          ],
+          "returnType": "{ code: string; message: string }",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "sha256",
+          "params": [
+            "bytes"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "readPrefix",
+          "params": [
+            "path",
+            "maximum"
+          ],
+          "returnType": "Buffer",
+          "exported": false,
+          "lineCount": 17
+        },
+        {
+          "name": "headerPath",
+          "params": [
+            "requestedPath"
+          ],
+          "returnType": "{ headerPath: string; companion?: JsonObject }",
+          "exported": false,
+          "lineCount": 17
+        },
+        {
+          "name": "engineVersion",
+          "params": [
+            "reader",
+            "label"
+          ],
+          "returnType": "JsonObject",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "parseSummary",
+          "params": [
+            "reader"
+          ],
+          "returnType": "ParsedSummary",
+          "exported": false,
+          "lineCount": 127
+        },
+        {
+          "name": "nextOffset",
+          "params": [
+            "summary",
+            "offset"
+          ],
+          "returnType": "number",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "tableDescriptor",
+          "params": [
+            "bytes",
+            "summary",
+            "count",
+            "offset"
+          ],
+          "returnType": "JsonObject",
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "parseNames",
+          "params": [
+            "bytes",
+            "summary"
+          ],
+          "returnType": "JsonObject",
+          "exported": false,
+          "lineCount": 24
+        },
+        {
+          "name": "nameAt",
+          "params": [
+            "names",
+            "index",
+            "number"
+          ],
+          "returnType": "string | null",
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "parseNameList",
+          "params": [
+            "bytes",
+            "summary"
+          ],
+          "returnType": "string[]",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "parseDependencies",
+          "params": [
+            "bytes",
+            "summary",
+            "names"
+          ],
+          "returnType": "JsonObject",
+          "exported": false,
+          "lineCount": 40
+        },
+        {
+          "name": "parseAssetRegistry",
+          "params": [
+            "bytes",
+            "summary"
+          ],
+          "returnType": "JsonObject",
+          "exported": false,
+          "lineCount": 41
+        },
+        {
+          "name": "normalizedDigest",
+          "params": [
+            "value"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "summary",
+          "params": [
+            "path",
+            "requestedEngineVersion"
+          ],
+          "returnType": "JsonObject",
+          "exported": false,
+          "lineCount": 30
+        },
+        {
+          "name": "diff",
+          "params": [
+            "left",
+            "right"
+          ],
+          "returnType": "JsonObject",
+          "exported": false,
+          "lineCount": 13
+        }
+      ],
+      "classes": [
+        {
+          "name": "PackageReader",
+          "methods": [
+            "constructor",
+            "require",
+            "seek",
+            "skip",
+            "i32",
+            "u32",
+            "u16",
+            "i64",
+            "guid",
+            "string",
+            "count"
+          ],
+          "properties": [
+            "position"
+          ],
+          "exported": false,
+          "lineCount": 78
+        }
+      ],
+      "imports": [
+        {
+          "source": "node:crypto",
+          "specifiers": [
+            "createHash"
+          ]
+        },
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "closeSync",
+            "existsSync",
+            "openSync",
+            "readSync",
+            "statSync"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "extname"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 518,
+      "hasStructuralAnalysis": true
+    },
     "MCP/src/capability-catalog.ts": {
       "filePath": "MCP/src/capability-catalog.ts",
-      "contentHash": "f7e68498fa8f3c7b849ba06ec5cda730a7adba7afadd65964f938db395114a07",
+      "contentHash": "7e2511ad24a422db1b424d006bc5dd395c24f4112f12fc2426f884d17b5e372f",
       "functions": [
         {
           "name": "isRecord",
@@ -5036,6 +5681,15 @@
           "lineCount": 19
         },
         {
+          "name": "capabilityIsReadOnly",
+          "params": [
+            "capability"
+          ],
+          "returnType": "boolean",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
           "name": "parseSearchMetadata",
           "params": [
             "value",
@@ -5063,7 +5717,7 @@
           ],
           "returnType": "CapabilityExecutionMetadata | undefined",
           "exported": false,
-          "lineCount": 48
+          "lineCount": 53
         },
         {
           "name": "parseCapability",
@@ -5075,7 +5729,7 @@
           ],
           "returnType": "CapabilityDescriptor",
           "exported": false,
-          "lineCount": 127
+          "lineCount": 164
         },
         {
           "name": "parseManifest",
@@ -5086,7 +5740,7 @@
           ],
           "returnType": "CapabilityManifest",
           "exported": false,
-          "lineCount": 30
+          "lineCount": 43
         },
         {
           "name": "loadCapabilityCatalog",
@@ -5113,17 +5767,19 @@
           "methods": [
             "constructor",
             "get",
+            "removed",
             "forDomain",
             "summary"
           ],
           "properties": [
             "manifests",
             "capabilities",
+            "tombstones",
             "byId",
             "byDomain"
           ],
           "exported": true,
-          "lineCount": 74
+          "lineCount": 87
         }
       ],
       "imports": [
@@ -5150,10 +5806,11 @@
         "CAPABILITY_DOMAINS",
         "DEFAULT_MANIFEST_DIR",
         "CapabilityManifestError",
+        "capabilityIsReadOnly",
         "CapabilityCatalog",
         "loadCapabilityCatalog"
       ],
-      "totalLines": 690,
+      "totalLines": 791,
       "hasStructuralAnalysis": true
     },
     "MCP/src/capability-search.ts": {
@@ -5390,9 +6047,168 @@
       "totalLines": 211,
       "hasStructuralAnalysis": true
     },
+    "MCP/src/development-bridge.ts": {
+      "filePath": "MCP/src/development-bridge.ts",
+      "contentHash": "11e1b821144ea6db67ec881419d96aba3115e622ff6ab6285e06a17f8451cb9c",
+      "functions": [
+        {
+          "name": "inside",
+          "params": [
+            "root",
+            "candidate"
+          ],
+          "returnType": "boolean",
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "projectRoot",
+          "params": [
+            "params"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "processAlive",
+          "params": [
+            "pid"
+          ],
+          "returnType": "boolean",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "discoveryDirectory",
+          "params": [
+            "root"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "parseRecord",
+          "params": [
+            "path"
+          ],
+          "returnType": "DiscoveryRecord | undefined",
+          "exported": false,
+          "lineCount": 23
+        },
+        {
+          "name": "records",
+          "params": [
+            "root"
+          ],
+          "returnType": "DiscoveryRecord[]",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "recordFor",
+          "params": [
+            "root",
+            "params"
+          ],
+          "returnType": "DiscoveryRecord",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "publicTarget",
+          "params": [
+            "record"
+          ],
+          "returnType": "JsonObject",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "plan",
+          "params": [
+            "record",
+            "scope"
+          ],
+          "returnType": "JsonObject",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "send",
+          "params": [
+            "record",
+            "request",
+            "context"
+          ],
+          "returnType": "Promise<JsonObject>",
+          "exported": false,
+          "lineCount": 60
+        }
+      ],
+      "classes": [
+        {
+          "name": "DevelopmentBridgeExecutor",
+          "methods": [
+            "execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 24
+        }
+      ],
+      "imports": [
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "existsSync",
+            "readFileSync",
+            "readdirSync",
+            "realpathSync",
+            "statSync"
+          ]
+        },
+        {
+          "source": "node:net",
+          "specifiers": [
+            "createConnection"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "isAbsolute",
+            "join",
+            "relative",
+            "resolve",
+            "sep"
+          ]
+        },
+        {
+          "source": "./domain-router.js",
+          "specifiers": [
+            "CapabilityExecutionContext",
+            "CapabilityExecutor"
+          ]
+        },
+        {
+          "source": "./ue-bridge.js",
+          "specifiers": [
+            "UEApiError",
+            "UEExecuteData"
+          ]
+        }
+      ],
+      "exports": [
+        "DevelopmentBridgeExecutor"
+      ],
+      "totalLines": 223,
+      "hasStructuralAnalysis": true
+    },
     "MCP/src/domain-router.ts": {
       "filePath": "MCP/src/domain-router.ts",
-      "contentHash": "6bcc68543e2230f6b49bff120784b5501b3c42071a76bf88ceb88a7a79cd1f51",
+      "contentHash": "6154e97934e3064728e652e08ef66503a2948379c81db8751797050d5359409d",
       "functions": [
         {
           "name": "isLocalTraceOwnedId",
@@ -5431,7 +6247,7 @@
           ],
           "returnType": "CapabilityDescriptor",
           "exported": true,
-          "lineCount": 27
+          "lineCount": 35
         },
         {
           "name": "runDomainOperation",
@@ -5441,11 +6257,12 @@
             "domain",
             "operation",
             "params",
-            "requestId"
+            "requestId",
+            "context"
           ],
           "returnType": "Promise<MCPResponse>",
           "exported": true,
-          "lineCount": 16
+          "lineCount": 22
         }
       ],
       "classes": [
@@ -5458,7 +6275,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 120
+          "lineCount": 154
         }
       ],
       "imports": [
@@ -5494,7 +6311,7 @@
         "validateDomainOperation",
         "runDomainOperation"
       ],
-      "totalLines": 260,
+      "totalLines": 313,
       "hasStructuralAnalysis": true
     },
     "MCP/src/helpers.ts": {
@@ -5640,8 +6457,21 @@
     },
     "MCP/src/mcp-server.ts": {
       "filePath": "MCP/src/mcp-server.ts",
-      "contentHash": "c568261acd1992ed35ef02e0094e31e2aa93bae1ae978f0c7c94420dfac38d0c",
+      "contentHash": "eb77c7cef5a2d106c2fc92cfd4181c8741b2c2b6184f884b403840435eeb20d5",
       "functions": [
+        {
+          "name": "withMcpProgress",
+          "params": [
+            "signal",
+            "progressToken",
+            "notify",
+            "phase",
+            "operation"
+          ],
+          "returnType": "Promise<T>",
+          "exported": false,
+          "lineCount": 36
+        },
         {
           "name": "resolveLocalCapabilities",
           "params": [
@@ -5650,7 +6480,7 @@
           ],
           "returnType": "RankedCapability[]",
           "exported": false,
-          "lineCount": 39
+          "lineCount": 47
         },
         {
           "name": "capabilityMatch",
@@ -5660,7 +6490,7 @@
           ],
           "returnType": "CapabilitySearchMatch | undefined | false",
           "exported": false,
-          "lineCount": 26
+          "lineCount": 31
         },
         {
           "name": "summarizeCapability",
@@ -5668,7 +6498,7 @@
             "ranked"
           ],
           "exported": false,
-          "lineCount": 19
+          "lineCount": 21
         },
         {
           "name": "fullCapability",
@@ -5699,7 +6529,7 @@
           ],
           "returnType": "Promise<MCPResponse>",
           "exported": true,
-          "lineCount": 65
+          "lineCount": 69
         },
         {
           "name": "handleContext",
@@ -5709,7 +6539,7 @@
           ],
           "returnType": "MCPResponse",
           "exported": true,
-          "lineCount": 35
+          "lineCount": 37
         },
         {
           "name": "createMcpServer",
@@ -5718,7 +6548,7 @@
           ],
           "returnType": "UEAIIntegrationMcpServer",
           "exported": true,
-          "lineCount": 270
+          "lineCount": 303
         }
       ],
       "classes": [],
@@ -5821,6 +6651,31 @@
           "specifiers": [
             "TraceWorkerClient"
           ]
+        },
+        {
+          "source": "./recipe-executor.js",
+          "specifiers": [
+            "RecipeRunnerExecutor"
+          ]
+        },
+        {
+          "source": "./project-executor.js",
+          "specifiers": [
+            "LocalAssetExecutor",
+            "LocalProjectExecutor"
+          ]
+        },
+        {
+          "source": "./sal-executor.js",
+          "specifiers": [
+            "SalExecutor"
+          ]
+        },
+        {
+          "source": "./development-bridge.js",
+          "specifiers": [
+            "DevelopmentBridgeExecutor"
+          ]
         }
       ],
       "exports": [
@@ -5829,12 +6684,829 @@
         "handleContext",
         "createMcpServer"
       ],
-      "totalLines": 615,
+      "totalLines": 731,
+      "hasStructuralAnalysis": true
+    },
+    "MCP/src/project-executor.ts": {
+      "filePath": "MCP/src/project-executor.ts",
+      "contentHash": "98b46b3c27ca2478a8c5e626b5056f3842207d77314df658cdd6cc83287f4b3c",
+      "functions": [
+        {
+          "name": "inside",
+          "params": [
+            "root",
+            "candidate"
+          ],
+          "returnType": "boolean",
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "projectRoot",
+          "params": [
+            "params"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "boundedText",
+          "params": [
+            "path"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "resolveProjectFile",
+          "params": [
+            "root",
+            "value",
+            "extensions"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "uproject",
+          "params": [
+            "root",
+            "requested"
+          ],
+          "returnType": "{ path: string; data: JsonObject }",
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "parseIni",
+          "params": [
+            "text"
+          ],
+          "returnType": "Record<string, Record<string, string>>",
+          "exported": false,
+          "lineCount": 15
+        },
+        {
+          "name": "sha256",
+          "params": [
+            "value"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        }
+      ],
+      "classes": [
+        {
+          "name": "LocalProjectExecutor",
+          "methods": [
+            "execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 50
+        },
+        {
+          "name": "LocalAssetExecutor",
+          "methods": [
+            "execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 33
+        }
+      ],
+      "imports": [
+        {
+          "source": "node:crypto",
+          "specifiers": [
+            "createHash"
+          ]
+        },
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "existsSync",
+            "readFileSync",
+            "readdirSync",
+            "realpathSync",
+            "statSync"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "basename",
+            "dirname",
+            "extname",
+            "isAbsolute",
+            "relative",
+            "resolve",
+            "sep"
+          ]
+        },
+        {
+          "source": "node:child_process",
+          "specifiers": [
+            "spawn"
+          ]
+        },
+        {
+          "source": "node:url",
+          "specifiers": [
+            "fileURLToPath"
+          ]
+        },
+        {
+          "source": "./domain-router.js",
+          "specifiers": [
+            "CapabilityExecutionContext",
+            "CapabilityExecutor"
+          ]
+        },
+        {
+          "source": "./ue-bridge.js",
+          "specifiers": [
+            "UEApiError",
+            "UEExecuteData"
+          ]
+        }
+      ],
+      "exports": [
+        "LocalProjectExecutor",
+        "LocalAssetExecutor"
+      ],
+      "totalLines": 166,
+      "hasStructuralAnalysis": true
+    },
+    "MCP/src/recipe-cli.ts": {
+      "filePath": "MCP/src/recipe-cli.ts",
+      "contentHash": "b2b2c52c4b3da9bbf2f63f999973e5ed8c6b139efefaeb752ebe21042bda92b4",
+      "functions": [
+        {
+          "name": "parseRaw",
+          "params": [
+            "arguments_"
+          ],
+          "returnType": "CliArguments",
+          "exported": false,
+          "lineCount": 23
+        },
+        {
+          "name": "parseArguments",
+          "params": [],
+          "returnType": "CliArguments",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "loadRecipe",
+          "params": [
+            "path"
+          ],
+          "returnType": "unknown",
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "envelope",
+          "params": [
+            "data"
+          ],
+          "returnType": "Record<string, unknown>",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "print",
+          "params": [
+            "value",
+            "pretty"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "main",
+          "params": [],
+          "returnType": "Promise<number>",
+          "exported": true,
+          "lineCount": 31
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "readFileSync"
+          ]
+        },
+        {
+          "source": "node:process",
+          "specifiers": [
+            "process"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "resolve"
+          ]
+        },
+        {
+          "source": "node:url",
+          "specifiers": [
+            "pathToFileURL"
+          ]
+        },
+        {
+          "source": "./recipe-runner.js",
+          "specifiers": [
+            "RecipeRunner"
+          ]
+        },
+        {
+          "source": "./ue-bridge.js",
+          "specifiers": [
+            "UEApiError"
+          ]
+        }
+      ],
+      "exports": [
+        "main"
+      ],
+      "totalLines": 106,
+      "hasStructuralAnalysis": true
+    },
+    "MCP/src/recipe-executor.ts": {
+      "filePath": "MCP/src/recipe-executor.ts",
+      "contentHash": "e29c3d22448652df24fd2487928e326b1e908f1d1fae1f0e58bb1ff95786602c",
+      "functions": [],
+      "classes": [
+        {
+          "name": "RecipeRunnerExecutor",
+          "methods": [
+            "constructor",
+            "execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 64
+        }
+      ],
+      "imports": [
+        {
+          "source": "./domain-router.js",
+          "specifiers": [
+            "CapabilityExecutionContext",
+            "CapabilityExecutor"
+          ]
+        },
+        {
+          "source": "./recipe-runner.js",
+          "specifiers": [
+            "RecipeRunner"
+          ]
+        },
+        {
+          "source": "./ue-bridge.js",
+          "specifiers": [
+            "UEApiError",
+            "UEExecuteData"
+          ]
+        }
+      ],
+      "exports": [
+        "RecipeRunnerExecutor"
+      ],
+      "totalLines": 72,
+      "hasStructuralAnalysis": true
+    },
+    "MCP/src/recipe-runner.ts": {
+      "filePath": "MCP/src/recipe-runner.ts",
+      "contentHash": "8aa45015cbd2bfd4ef573aba77ec361b07f2932caf24e675711dc4f04804673e",
+      "functions": [
+        {
+          "name": "isObject",
+          "params": [
+            "value"
+          ],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "canonical",
+          "params": [
+            "value"
+          ],
+          "returnType": "unknown",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "digest",
+          "params": [
+            "value"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "now",
+          "params": [],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "recipeRoot",
+          "params": [
+            "env"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "runPath",
+          "params": [
+            "runId",
+            "env"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "writeAtomic",
+          "params": [
+            "path",
+            "value"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "readRun",
+          "params": [
+            "runId",
+            "env"
+          ],
+          "returnType": "RecipeRunState",
+          "exported": false,
+          "lineCount": 19
+        },
+        {
+          "name": "updateRun",
+          "params": [
+            "state",
+            "message",
+            "env"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 13
+        },
+        {
+          "name": "descriptorReadOnly",
+          "params": [
+            "descriptor"
+          ],
+          "returnType": "boolean",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "defaultRetry",
+          "params": [
+            "value"
+          ],
+          "returnType": "RetryPolicy",
+          "exported": false,
+          "lineCount": 14
+        },
+        {
+          "name": "validationError",
+          "params": [
+            "diagnostics",
+            "path",
+            "code",
+            "message"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "validateCondition",
+          "params": [
+            "value",
+            "path",
+            "diagnostics"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 41
+        },
+        {
+          "name": "validateRecipe",
+          "params": [
+            "value",
+            "catalog"
+          ],
+          "returnType": "RecipeValidation",
+          "exported": true,
+          "lineCount": 112
+        },
+        {
+          "name": "lookup",
+          "params": [
+            "root",
+            "path"
+          ],
+          "returnType": "unknown",
+          "exported": false,
+          "lineCount": 8
+        },
+        {
+          "name": "evaluate",
+          "params": [
+            "condition",
+            "context"
+          ],
+          "returnType": "boolean",
+          "exported": false,
+          "lineCount": 15
+        },
+        {
+          "name": "materialize",
+          "params": [
+            "value",
+            "context"
+          ],
+          "returnType": "unknown",
+          "exported": false,
+          "lineCount": 6
+        },
+        {
+          "name": "errorPayload",
+          "params": [
+            "error"
+          ],
+          "returnType": "{ code: string; message: string }",
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "sleep",
+          "params": [
+            "milliseconds"
+          ],
+          "returnType": "Promise<void>",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "spawnWorker",
+          "params": [
+            "runId",
+            "endpoint",
+            "env"
+          ],
+          "returnType": "void",
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "invokeStep",
+          "params": [
+            "client",
+            "step",
+            "context",
+            "state"
+          ],
+          "returnType": "Promise<unknown>",
+          "exported": false,
+          "lineCount": 77
+        },
+        {
+          "name": "compensate",
+          "params": [
+            "client",
+            "state",
+            "completed",
+            "context"
+          ],
+          "returnType": "Promise<void>",
+          "exported": false,
+          "lineCount": 25
+        },
+        {
+          "name": "executeRecipeRun",
+          "params": [
+            "runId",
+            "endpoint"
+          ],
+          "returnType": "Promise<void>",
+          "exported": true,
+          "lineCount": 70
+        }
+      ],
+      "classes": [
+        {
+          "name": "RecipeRunner",
+          "methods": [
+            "constructor",
+            "validate",
+            "plan",
+            "start",
+            "status",
+            "resume",
+            "cancel",
+            "result",
+            "list"
+          ],
+          "properties": [
+            "catalog",
+            "env",
+            "endpoint"
+          ],
+          "exported": true,
+          "lineCount": 112
+        }
+      ],
+      "imports": [
+        {
+          "source": "node:crypto",
+          "specifiers": [
+            "createHash",
+            "randomUUID"
+          ]
+        },
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "existsSync",
+            "mkdirSync",
+            "readFileSync",
+            "readdirSync",
+            "renameSync",
+            "rmSync",
+            "writeFileSync"
+          ]
+        },
+        {
+          "source": "node:os",
+          "specifiers": [
+            "homedir",
+            "tmpdir"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "basename",
+            "dirname",
+            "resolve"
+          ]
+        },
+        {
+          "source": "node:child_process",
+          "specifiers": [
+            "fork"
+          ]
+        },
+        {
+          "source": "node:url",
+          "specifiers": [
+            "fileURLToPath"
+          ]
+        },
+        {
+          "source": "./capability-catalog.js",
+          "specifiers": [
+            "loadCapabilityCatalog",
+            "capabilityIsReadOnly",
+            "CapabilityCatalog",
+            "CapabilityDescriptor"
+          ]
+        },
+        {
+          "source": "./ue-bridge.js",
+          "specifiers": [
+            "UEApiError",
+            "UEClient",
+            "UEWorkflowRequest"
+          ]
+        }
+      ],
+      "exports": [
+        "RECIPE_SCHEMA",
+        "RECIPE_PLAN_SCHEMA",
+        "RECIPE_RUN_SCHEMA",
+        "validateRecipe",
+        "RecipeRunner",
+        "executeRecipeRun"
+      ],
+      "totalLines": 783,
+      "hasStructuralAnalysis": true
+    },
+    "MCP/src/sal-cli.ts": {
+      "filePath": "MCP/src/sal-cli.ts",
+      "contentHash": "849f3d9132b18571629a3b95f6d644ba1f2ec492055cf924258e960f75215c4e",
+      "functions": [
+        {
+          "name": "args",
+          "params": [],
+          "returnType": "Record<string, string | boolean>",
+          "exported": false,
+          "lineCount": 11
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "readFileSync"
+          ]
+        },
+        {
+          "source": "./sal-runner.js",
+          "specifiers": [
+            "salLint",
+            "salPlan",
+            "salStub"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 32,
+      "hasStructuralAnalysis": true
+    },
+    "MCP/src/sal-executor.ts": {
+      "filePath": "MCP/src/sal-executor.ts",
+      "contentHash": "a5247d79f2e387bc33e36adc27363d9fc8227dd71592257be472c787ff8084ad",
+      "functions": [],
+      "classes": [
+        {
+          "name": "SalExecutor",
+          "methods": [
+            "execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 9
+        }
+      ],
+      "imports": [
+        {
+          "source": "./domain-router.js",
+          "specifiers": [
+            "CapabilityExecutor"
+          ]
+        },
+        {
+          "source": "./sal-runner.js",
+          "specifiers": [
+            "salLint",
+            "salPlan",
+            "salStub"
+          ]
+        },
+        {
+          "source": "./ue-bridge.js",
+          "specifiers": [
+            "UEApiError",
+            "UEExecuteData"
+          ]
+        }
+      ],
+      "exports": [
+        "SalExecutor"
+      ],
+      "totalLines": 14,
+      "hasStructuralAnalysis": true
+    },
+    "MCP/src/sal-runner.ts": {
+      "filePath": "MCP/src/sal-runner.ts",
+      "contentHash": "044a852cf68d1358cc03aaa4159a3a811d5abee476b592590b8c45aec7cccf40",
+      "functions": [
+        {
+          "name": "canonical",
+          "params": [
+            "value"
+          ],
+          "returnType": "unknown",
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "digest",
+          "params": [
+            "value"
+          ],
+          "returnType": "string",
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "parseSalSource",
+          "params": [
+            "source"
+          ],
+          "returnType": "JsonObject",
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "salStub",
+          "params": [],
+          "returnType": "JsonObject",
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "salLint",
+          "params": [
+            "source"
+          ],
+          "returnType": "JsonObject",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "salPlan",
+          "params": [
+            "source"
+          ],
+          "returnType": "JsonObject",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "readSalSource",
+          "params": [
+            "path"
+          ],
+          "returnType": "string",
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:crypto",
+          "specifiers": [
+            "createHash"
+          ]
+        },
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "readFileSync"
+          ]
+        },
+        {
+          "source": "./capability-catalog.js",
+          "specifiers": [
+            "loadCapabilityCatalog"
+          ]
+        },
+        {
+          "source": "./recipe-runner.js",
+          "specifiers": [
+            "validateRecipe"
+          ]
+        },
+        {
+          "source": "./ue-bridge.js",
+          "specifiers": [
+            "UEApiError"
+          ]
+        }
+      ],
+      "exports": [
+        "parseSalSource",
+        "salStub",
+        "salLint",
+        "salPlan",
+        "readSalSource"
+      ],
+      "totalLines": 73,
       "hasStructuralAnalysis": true
     },
     "MCP/src/skill-catalog.ts": {
       "filePath": "MCP/src/skill-catalog.ts",
-      "contentHash": "030455b618643c8decac4e57d64abba2e6665cc313d8f2815a1fcc664b08407a",
+      "contentHash": "02963a1739bc0ad49f8e3537b20d1ab384a1b7ab51ffeb6b44832ca1050d5690",
       "functions": [
         {
           "name": "isRecord",
@@ -5926,7 +7598,7 @@
           ],
           "returnType": "AgentSkillRecipeStep",
           "exported": false,
-          "lineCount": 77
+          "lineCount": 80
         },
         {
           "name": "parseRecipe",
@@ -6034,6 +7706,7 @@
           "source": "./capability-catalog.js",
           "specifiers": [
             "CAPABILITY_DOMAINS",
+            "capabilityIsReadOnly",
             "CapabilityCatalog",
             "CapabilityDescriptor",
             "CapabilityDomain"
@@ -6046,12 +7719,12 @@
         "AgentSkillCatalog",
         "loadAgentSkillCatalog"
       ],
-      "totalLines": 764,
+      "totalLines": 768,
       "hasStructuralAnalysis": true
     },
     "MCP/src/skill-router.ts": {
       "filePath": "MCP/src/skill-router.ts",
-      "contentHash": "cc8cf8bf810a4854d3f2733f2f4528aa23d7420861fc5b2dfad452cc37270c90",
+      "contentHash": "d17a124e56f407b1a515c3e89e4a5e04067010a6c0bc599ae9ed76b3b3f1163a",
       "functions": [
         {
           "name": "includesOperation",
@@ -6089,7 +7762,7 @@
             "recipe"
           ],
           "exported": false,
-          "lineCount": 108
+          "lineCount": 111
         },
         {
           "name": "requireSkill",
@@ -6137,6 +7810,7 @@
         {
           "source": "./capability-catalog.js",
           "specifiers": [
+            "capabilityIsReadOnly",
             "CapabilityDomain"
           ]
         },
@@ -6168,12 +7842,12 @@
       "exports": [
         "handleAgentSkills"
       ],
-      "totalLines": 344,
+      "totalLines": 347,
       "hasStructuralAnalysis": true
     },
     "MCP/src/trace-worker.ts": {
       "filePath": "MCP/src/trace-worker.ts",
-      "contentHash": "785b82d877eea9c85ea74c82366121c8053e9ee75534ca5f111ae8c05e5862b9",
+      "contentHash": "e77457194732c75974652255a5455eb3a3e60d48bdba3849f69c31c3e5acc123",
       "functions": [
         {
           "name": "engineMajorMinor",
@@ -6483,7 +8157,7 @@
             "serviceStarting"
           ],
           "exported": true,
-          "lineCount": 611
+          "lineCount": 667
         }
       ],
       "imports": [
@@ -6551,12 +8225,12 @@
         "deriveTraceWorkerEndpoint",
         "TraceWorkerClient"
       ],
-      "totalLines": 1523,
+      "totalLines": 1579,
       "hasStructuralAnalysis": true
     },
     "MCP/src/ue-bridge.ts": {
       "filePath": "MCP/src/ue-bridge.ts",
-      "contentHash": "89fb32f0161a1ebdfc062f4eb5004bd69317650f75dd16577249790f4f96567a",
+      "contentHash": "fff931116d7f8106962e165be2604db81907330bf76dd3050a2dfaf7144fa9ab",
       "functions": [
         {
           "name": "parsePositiveInteger",
@@ -6614,6 +8288,7 @@
             "workflow",
             "request",
             "requestOnce",
+            "cancelExecution",
             "tryRegister",
             "maintainSession",
             "scheduleMaintenance",
@@ -6632,7 +8307,7 @@
             "registrationBackoffIndex"
           ],
           "exported": true,
-          "lineCount": 373
+          "lineCount": 434
         }
       ],
       "imports": [
@@ -6671,32 +8346,34 @@
         "UEClient",
         "ueClient"
       ],
-      "totalLines": 602,
+      "totalLines": 665,
       "hasStructuralAnalysis": true
     },
     "MCP/src/workflow-router.ts": {
       "filePath": "MCP/src/workflow-router.ts",
-      "contentHash": "9ac0d9358c700895a0ca35ba9de144a32ca31af7957fbd10ed216b5f19471029",
+      "contentHash": "cb712a505541d4c54930e2b2e8ab2336624ef36e74a697bab8a38b594b7d20aa",
       "functions": [
         {
           "name": "runWorkflowAction",
           "params": [
             "executor",
-            "request"
+            "request",
+            "signal"
           ],
           "returnType": "Promise<MCPResponse>",
           "exported": true,
-          "lineCount": 10
+          "lineCount": 11
         },
         {
           "name": "handleWorkflowInput",
           "params": [
             "executor",
-            "value"
+            "value",
+            "signal"
           ],
           "returnType": "Promise<MCPResponse>",
           "exported": true,
-          "lineCount": 10
+          "lineCount": 15
         },
         {
           "name": "parseWorkflowInput",
@@ -6743,7 +8420,7 @@
         "handleWorkflowInput",
         "parseWorkflowInput"
       ],
-      "totalLines": 206,
+      "totalLines": 215,
       "hasStructuralAnalysis": true
     },
     "MCP/tsconfig.json": {
@@ -6807,7 +8484,7 @@
     },
     "README_EN.md": {
       "filePath": "README_EN.md",
-      "contentHash": "7b93ce73afcd65ecbea7d8c517cae6a5a5ac9a31913685d2c76d2ef5b9a14abf",
+      "contentHash": "502ca4476f890398a2629692cba3a750b44292ec6ed6f433c072b3779926e007",
       "functions": [],
       "classes": [],
       "imports": [],
@@ -6817,7 +8494,7 @@
     },
     "README.md": {
       "filePath": "README.md",
-      "contentHash": "8a069895fbe0f2bbddde29a042b9b42fbf575861d8b5f2716d66ced37d4a6873",
+      "contentHash": "ff05dd0d9fc7ff8aaa91f474cc762246af546ff8e0d84d332c1232d7630f7226",
       "functions": [],
       "classes": [],
       "imports": [],
@@ -6825,64 +8502,84 @@
       "totalLines": 428,
       "hasStructuralAnalysis": true
     },
-    "Resources/Capabilities/ai.json": {
-      "filePath": "Resources/Capabilities/ai.json",
-      "contentHash": "b32206a5aa8bd2d9dad4179cc639d77ec10cd34b1700171108df67363bd86804",
+    "Recipes/examples/read-only.sal": {
+      "filePath": "Recipes/examples/read-only.sal",
+      "contentHash": "9868817b72bf9d4e7c9bc7b4e5e3ec4fb33d980efa9af6b8472c3f6b22cc67b2",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 380,
+      "totalLines": 16,
+      "hasStructuralAnalysis": false
+    },
+    "Recipes/ue-recovery-operator.recipe.json": {
+      "filePath": "Recipes/ue-recovery-operator.recipe.json",
+      "contentHash": "6af6f8e9f1673e4e4e335266219da8a595b6da357b7b8437f88e55e016e7150d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 38,
+      "hasStructuralAnalysis": true
+    },
+    "Resources/Capabilities/ai.json": {
+      "filePath": "Resources/Capabilities/ai.json",
+      "contentHash": "0cb35630fd78482536fc757ba19cf964c68e4d4293768ffbb6803a18de445f23",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 753,
       "hasStructuralAnalysis": true
     },
     "Resources/Capabilities/animation.json": {
       "filePath": "Resources/Capabilities/animation.json",
-      "contentHash": "e937e5682d4df9f43a943e49930aedd35656cc7317c7f97da601d2f0306e0a9e",
+      "contentHash": "1b4ce0f712e054ab303cc2e01d75944b9a009e0ac8b556017e6382a511be701e",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 554,
+      "totalLines": 974,
       "hasStructuralAnalysis": true
     },
     "Resources/Capabilities/blueprint.json": {
       "filePath": "Resources/Capabilities/blueprint.json",
-      "contentHash": "98fdffbe1847b288dcc27f0717049acb6f5f92a693c5ff7da498d43171a6b66a",
+      "contentHash": "ee66d5d43ca7573cc306bed84f168ce6dca7515cacb63d44ff6119ac8f192685",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 4040,
+      "totalLines": 5237,
       "hasStructuralAnalysis": true
     },
     "Resources/Capabilities/content.json": {
       "filePath": "Resources/Capabilities/content.json",
-      "contentHash": "e9af20995bc053bc5b7d1c2b97c02087f93e85e539502fd1dc7b2bf14585103c",
+      "contentHash": "2f796f8b6ca5d4e9c6ec02ca2824174f26b248c11f7d07a24705c3b4cef4fef6",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 4135,
+      "totalLines": 5036,
       "hasStructuralAnalysis": true
     },
     "Resources/Capabilities/production.json": {
       "filePath": "Resources/Capabilities/production.json",
-      "contentHash": "6681757fdbfecbc3ed08bdd96fa53393364770afc910bff283db7c71aaf1343e",
+      "contentHash": "b2e31f473413eb43a60c84d72c1ef5936c5692e66d08b887830a4c1e29f2499f",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 3145,
+      "totalLines": 7068,
       "hasStructuralAnalysis": true
     },
     "Resources/Capabilities/scene.json": {
       "filePath": "Resources/Capabilities/scene.json",
-      "contentHash": "e523482041088a94953882aec0065e7902af68eb1ed08ab26559ee5af6c195db",
+      "contentHash": "80abe6626c6246a7bda7323c49d44e98d76ff6beea87e2e9dcf9f431ad5a083a",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 3616,
+      "totalLines": 5725,
       "hasStructuralAnalysis": true
     },
     "Resources/Contracts/canonical-json-vectors.v1.json": {
@@ -6905,6 +8602,16 @@
       "totalLines": 136,
       "hasStructuralAnalysis": true
     },
+    "Resources/Contracts/development-bridge.v1.json": {
+      "filePath": "Resources/Contracts/development-bridge.v1.json",
+      "contentHash": "80d179110aa61dea3c8abdb5ecb900a5e68b9cbd8be838b1be7763fea46f8468",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 36,
+      "hasStructuralAnalysis": true
+    },
     "Resources/Contracts/README.md": {
       "filePath": "Resources/Contracts/README.md",
       "contentHash": "a54dbe7b4ade22a28aea743a1e421b13f0a363183633838a76d71d3583132408",
@@ -6913,6 +8620,16 @@
       "imports": [],
       "exports": [],
       "totalLines": 18,
+      "hasStructuralAnalysis": true
+    },
+    "Resources/Contracts/recipe.schema.v2.json": {
+      "filePath": "Resources/Contracts/recipe.schema.v2.json",
+      "contentHash": "11b439489973ab1e341e956282fc1e47d73d3a9f3dd788bd4f8305f2a3fe2c8a",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 56,
       "hasStructuralAnalysis": true
     },
     "Resources/Contracts/ue.agent-skill.v1.schema.json": {
@@ -7095,14 +8812,210 @@
       "totalLines": 33,
       "hasStructuralAnalysis": true
     },
+    "scripts/add_coordination_capabilities.mjs": {
+      "filePath": "scripts/add_coordination_capabilities.mjs",
+      "contentHash": "789c06dd46f449fb7a12070b781e51e4dce527d7a1b32c2042f03b794b3d5bba",
+      "functions": [
+        {
+          "name": "make",
+          "params": [
+            "id",
+            "kind",
+            "description",
+            "properties",
+            "required"
+          ],
+          "exported": false,
+          "lineCount": 8
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "readFileSync",
+            "writeFileSync"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "resolve"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 26,
+      "hasStructuralAnalysis": true
+    },
+    "scripts/add_image_policy.mjs": {
+      "filePath": "scripts/add_image_policy.mjs",
+      "contentHash": "d280fd85ff6dec8f429a8e6ffcf3465a99cb61715a44357f622f498e15db1921",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "readFileSync",
+            "readdirSync",
+            "writeFileSync"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "resolve"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 26,
+      "hasStructuralAnalysis": true
+    },
+    "scripts/add_offline_capabilities.mjs": {
+      "filePath": "scripts/add_offline_capabilities.mjs",
+      "contentHash": "8200934125317f34b41484bc35cff022e3002f4f754a0684aa4568abacc9d76d",
+      "functions": [
+        {
+          "name": "descriptor",
+          "params": [
+            "id",
+            "description",
+            "backend",
+            "properties",
+            "required"
+          ],
+          "exported": false,
+          "lineCount": 12
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "readFileSync",
+            "writeFileSync"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "resolve"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 36,
+      "hasStructuralAnalysis": true
+    },
+    "scripts/add_runtime_bridge_capabilities.mjs": {
+      "filePath": "scripts/add_runtime_bridge_capabilities.mjs",
+      "contentHash": "7ad0c6e572aca013713f25cc0aec7528f1bbe5f15394350efa77803c7a1f9175",
+      "functions": [
+        {
+          "name": "make",
+          "params": [
+            "id",
+            "kind",
+            "description",
+            "properties",
+            "required",
+            "external"
+          ],
+          "exported": false,
+          "lineCount": 12
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "readFileSync",
+            "writeFileSync"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "resolve"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 38,
+      "hasStructuralAnalysis": true
+    },
+    "scripts/add_sal_capabilities.mjs": {
+      "filePath": "scripts/add_sal_capabilities.mjs",
+      "contentHash": "cad67c91be4882363c8d56be4084f1b9e28a18b8c85af5a1448fc46a52d56ae9",
+      "functions": [
+        {
+          "name": "make",
+          "params": [
+            "id",
+            "description",
+            "properties"
+          ],
+          "exported": false,
+          "lineCount": 12
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "readFileSync",
+            "writeFileSync"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "resolve"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 30,
+      "hasStructuralAnalysis": true
+    },
+    "scripts/apply_blueprint_v3_contract.mjs": {
+      "filePath": "scripts/apply_blueprint_v3_contract.mjs",
+      "contentHash": "8020a558ce513f2554af8c48b617b10bfa4ccc4f78bcf9473f9a3840337cd16a",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "readFileSync",
+            "writeFileSync"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "resolve"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 90,
+      "hasStructuralAnalysis": true
+    },
     "scripts/build_plugin.bat": {
       "filePath": "scripts/build_plugin.bat",
-      "contentHash": "49515d96a9a7ca47312445a0ab96e10cbdca065dac2c2c5cb7c94e847997e06d",
+      "contentHash": "83df1aeea50e6c8e52faa6eefbfb847363736946e3bb4ade016e8adef2ce1930",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 168,
+      "totalLines": 173,
       "hasStructuralAnalysis": false
     },
     "scripts/build_plugin.sh": {
@@ -7187,6 +9100,95 @@
       "totalLines": 559,
       "hasStructuralAnalysis": false
     },
+    "scripts/mcp_stdio_smoke.mjs": {
+      "filePath": "scripts/mcp_stdio_smoke.mjs",
+      "contentHash": "ceaa325bafd3003c93f3ece11e19624ff973f4dfa3ab3354ac86051e38f40c40",
+      "functions": [
+        {
+          "name": "fail",
+          "params": [
+            "message"
+          ],
+          "exported": false,
+          "lineCount": 4
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "fs"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "path"
+          ]
+        },
+        {
+          "source": "node:process",
+          "specifiers": [
+            "process"
+          ]
+        },
+        {
+          "source": "node:url",
+          "specifiers": [
+            "pathToFileURL"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 69,
+      "hasStructuralAnalysis": true
+    },
+    "scripts/migrate_capabilities_v3.mjs": {
+      "filePath": "scripts/migrate_capabilities_v3.mjs",
+      "contentHash": "051056d443e22080aa91ecb561389e997694cf57ee4aa40b93c7a388126b6051",
+      "functions": [
+        {
+          "name": "effectsFor",
+          "params": [
+            "capability",
+            "readOnly"
+          ],
+          "exported": false,
+          "lineCount": 18
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "node:fs",
+          "specifiers": [
+            "readFileSync",
+            "readdirSync",
+            "writeFileSync"
+          ]
+        },
+        {
+          "source": "node:path",
+          "specifiers": [
+            "resolve"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 55,
+      "hasStructuralAnalysis": true
+    },
+    "scripts/package_release.ps1": {
+      "filePath": "scripts/package_release.ps1",
+      "contentHash": "a8259fa05e143e99f32a5e3dda7ff82c78e8a3297924bcea1d54ade99816a2e3",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 126,
+      "hasStructuralAnalysis": false
+    },
     "scripts/setup.sh": {
       "filePath": "scripts/setup.sh",
       "contentHash": "80db77a3c9b6af005cf3d8f6c76463277c29cf11b2decb947af19922a8f7468d",
@@ -7209,12 +9211,22 @@
     },
     "scripts/test_install_plugin_preflight.ps1": {
       "filePath": "scripts/test_install_plugin_preflight.ps1",
-      "contentHash": "c9793ff85a433aec8d77dcbb41bc8736caf704538c267fca1142b4466b6c5e61",
+      "contentHash": "83db4238fa257060f4ec976be36d8e568f9d9fd875a21072b6ecff825f49f2ee",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
       "totalLines": 367,
+      "hasStructuralAnalysis": false
+    },
+    "scripts/test_release_bundle.ps1": {
+      "filePath": "scripts/test_release_bundle.ps1",
+      "contentHash": "b98ca1285c885978bbe094d6a1fe4735aee90def4f59b4e6cffef886c4a3da75",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 152,
       "hasStructuralAnalysis": false
     },
     "scripts/test_trace_semantic_golden.ps1": {
@@ -7239,7 +9251,7 @@
     },
     "scripts/validate_capabilities.mjs": {
       "filePath": "scripts/validate_capabilities.mjs",
-      "contentHash": "b468844f0d36c14c264d47418223066ab06fe2a296b7161d0938464d675c2a12",
+      "contentHash": "055acb1b9015aec473b5764f3a727c58e3f753dd2dd3788c7dba0b638a7f7076",
       "functions": [
         {
           "name": "fail",
@@ -7282,7 +9294,7 @@
             "location"
           ],
           "exported": false,
-          "lineCount": 28
+          "lineCount": 36
         },
         {
           "name": "listFilesRecursive",
@@ -7316,12 +9328,12 @@
         }
       ],
       "exports": [],
-      "totalLines": 746,
+      "totalLines": 794,
       "hasStructuralAnalysis": true
     },
     "scripts/validate_skills.mjs": {
       "filePath": "scripts/validate_skills.mjs",
-      "contentHash": "228b8287b7de714f8c970850c00fc9d61502d0f5464c1fa7ab5b48bf8bcb3b4b",
+      "contentHash": "a20becde4d52bd833f2083a4540be2e43ecdc0e4b2549ee40c744c9ada1c2fae",
       "functions": [
         {
           "name": "fail",
@@ -7372,7 +9384,7 @@
             "capabilities"
           ],
           "exported": false,
-          "lineCount": 234
+          "lineCount": 238
         }
       ],
       "classes": [],
@@ -7405,12 +9417,12 @@
         }
       ],
       "exports": [],
-      "totalLines": 375,
+      "totalLines": 379,
       "hasStructuralAnalysis": true
     },
     "skills/setup-ue5/SKILL.md": {
       "filePath": "skills/setup-ue5/SKILL.md",
-      "contentHash": "8a739d171f452978251b6a8f251786621b251d1edaf5e123228b0baa0eadfad6",
+      "contentHash": "944394af7a3643fcb782626cd8bde3a22b3d4952fa496f9f570ff34cc9b6fe4b",
       "functions": [],
       "classes": [],
       "imports": [],
@@ -7658,6 +9670,46 @@
       "totalLines": 108,
       "hasStructuralAnalysis": true
     },
+    "skills/ue-recovery-operator/agents/openai.yaml": {
+      "filePath": "skills/ue-recovery-operator/agents/openai.yaml",
+      "contentHash": "584938b91c4c8261b601e345858c0a4b88e39ce1f3cece92a677259eea2118f2",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 5,
+      "hasStructuralAnalysis": true
+    },
+    "skills/ue-recovery-operator/references/recovery-contract.md": {
+      "filePath": "skills/ue-recovery-operator/references/recovery-contract.md",
+      "contentHash": "6628ea89478cced002671d4c6092c2946b3182ee7eaf1f45c29b2ae4b9319772",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 41,
+      "hasStructuralAnalysis": true
+    },
+    "skills/ue-recovery-operator/skill.json": {
+      "filePath": "skills/ue-recovery-operator/skill.json",
+      "contentHash": "c83ae7639683381d8cfeac456442364a89c6da69d9be38d5a8844bce7eec34cb",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 138,
+      "hasStructuralAnalysis": true
+    },
+    "skills/ue-recovery-operator/SKILL.md": {
+      "filePath": "skills/ue-recovery-operator/SKILL.md",
+      "contentHash": "da5c14c522b8eba2d78459384e4111f7d79d216d9f0ced55502b3ef071228a7c",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 46,
+      "hasStructuralAnalysis": true
+    },
     "skills/ue-render-debug-capture/agents/openai.yaml": {
       "filePath": "skills/ue-render-debug-capture/agents/openai.yaml",
       "contentHash": "2d5fbd4191001df19dac55a88292a1d14aa613d6fc77aa5139332e4c6a334c8f",
@@ -7820,7 +9872,7 @@
     },
     "Source/UE_AI_integration/Private/Core/MCPCapabilityCatalog.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Core/MCPCapabilityCatalog.cpp",
-      "contentHash": "09ea5db52d5913e58216c67eba166f1b65dd856d037b52e61cf8f608545321c6",
+      "contentHash": "3d751eac0cae3a79c7786e16cbbc6f33152776ad2e0c897847fde798fbe0b026",
       "functions": [
         {
           "name": "AddError",
@@ -7947,7 +9999,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 245
+          "lineCount": 291
         },
         {
           "name": "IsDottedCapabilityId",
@@ -7967,7 +10019,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 109
+          "lineCount": 153
         },
         {
           "name": "ValidateCapabilityParams",
@@ -8060,12 +10112,12 @@
         "LoadCapabilityCatalog",
         "ValidateCapabilityParams"
       ],
-      "totalLines": 965,
+      "totalLines": 1055,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Core/MCPCapabilityCatalog.h": {
       "filePath": "Source/UE_AI_integration/Private/Core/MCPCapabilityCatalog.h",
-      "contentHash": "36b2c2f3c732babc234b4084a2016577cd1e62d59170337181f26a1851b3bdde",
+      "contentHash": "78a1e25764653392b4c56b74f8f90f0df7e8b30f209220ca154dad1271658232",
       "functions": [],
       "classes": [
         {
@@ -8074,10 +10126,11 @@
           "properties": [
             "Descriptors",
             "InputSchemas",
+            "Tombstones",
             "DomainCounts"
           ],
           "exported": true,
-          "lineCount": 6
+          "lineCount": 7
         }
       ],
       "imports": [
@@ -8103,12 +10156,12 @@
       "exports": [
         "FCapabilityCatalogData"
       ],
-      "totalLines": 34,
+      "totalLines": 35,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Core/MCPExecutionTypes.h": {
       "filePath": "Source/UE_AI_integration/Private/Core/MCPExecutionTypes.h",
-      "contentHash": "b1d16a6e16820c9399a42437794bfaa8b385e8c35973076144bfedcf4f1509be",
+      "contentHash": "810a50a92535f6991686d294b2fc02374dc668e9115ec9d66635d7f002fd96c6",
       "functions": [
         {
           "name": "Ok",
@@ -8156,10 +10209,11 @@
           "properties": [
             "Capability",
             "Params",
-            "RequestId"
+            "RequestId",
+            "CallerSessionId"
           ],
           "exported": true,
-          "lineCount": 7
+          "lineCount": 9
         },
         {
           "name": "FMCPError",
@@ -8210,12 +10264,12 @@
         "Fail",
         "FMCPResult"
       ],
-      "totalLines": 69,
+      "totalLines": 71,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Core/MCPExecutor.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Core/MCPExecutor.cpp",
-      "contentHash": "644a2923a9682175ce4eeff1ec9a82aae0e2552434fcbed768c7d4fade5e2f97",
+      "contentHash": "4aaf7ce9af33d3217d674c5242169fb4b38ecc9149a2d9fa6947298285d19058",
       "functions": [
         {
           "name": "AllowsLegacyRequestIdOmission",
@@ -8225,6 +10279,25 @@
           "returnType": "bool",
           "exported": true,
           "lineCount": 6
+        },
+        {
+          "name": "HasWriteEffect",
+          "params": [
+            "Descriptor"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 24
+        },
+        {
+          "name": "ProtectedLeaseType",
+          "params": [
+            "Capability",
+            "Descriptor"
+          ],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 27
         },
         {
           "name": "FMCPExecutor",
@@ -8241,7 +10314,7 @@
           ],
           "returnType": "FMCPResult",
           "exported": true,
-          "lineCount": 31
+          "lineCount": 36
         },
         {
           "name": "BeginExecuteAsync",
@@ -8252,7 +10325,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 114
+          "lineCount": 120
         },
         {
           "name": "CancelAsyncOperations",
@@ -8264,6 +10337,16 @@
           "lineCount": 8
         },
         {
+          "name": "CancelAsyncOperation",
+          "params": [
+            "RequestId",
+            "Reason"
+          ],
+          "returnType": "FMCPResult",
+          "exported": true,
+          "lineCount": 35
+        },
+        {
           "name": "ExecuteUncached",
           "params": [
             "Context"
@@ -8271,6 +10354,16 @@
           "returnType": "FMCPResult",
           "exported": true,
           "lineCount": 12
+        },
+        {
+          "name": "CheckProtectedLease",
+          "params": [
+            "Context",
+            "OutFailure"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 38
         },
         {
           "name": "PrepareExecution",
@@ -8281,7 +10374,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 120
+          "lineCount": 134
         },
         {
           "name": "ConvertToolResult",
@@ -8347,6 +10440,12 @@
           ]
         },
         {
+          "source": "Infrastructure/ClientActivityService.h",
+          "specifiers": [
+            "Infrastructure/ClientActivityService.h"
+          ]
+        },
+        {
           "source": "Infrastructure/EngineeringContractUtils.h",
           "specifiers": [
             "Infrastructure/EngineeringContractUtils.h"
@@ -8367,11 +10466,15 @@
       ],
       "exports": [
         "AllowsLegacyRequestIdOmission",
+        "HasWriteEffect",
+        "ProtectedLeaseType",
         "FMCPExecutor",
         "Execute",
         "BeginExecuteAsync",
         "CancelAsyncOperations",
+        "CancelAsyncOperation",
         "ExecuteUncached",
+        "CheckProtectedLease",
         "PrepareExecution",
         "ConvertToolResult",
         "StoreIdempotencyResult",
@@ -8379,12 +10482,12 @@
         "MakeValidationDetails",
         "PruneIdempotencyCache"
       ],
-      "totalLines": 417,
+      "totalLines": 571,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Core/MCPExecutor.h": {
       "filePath": "Source/UE_AI_integration/Private/Core/MCPExecutor.h",
-      "contentHash": "a57f06d48718e63b384777f484aa49c59a702cb8e72ee955866c676e83eb6fba",
+      "contentHash": "c7af479d5f095e3fa1be912b27d07b5bc9f5e8cfb9d366d0773962ed48973b03",
       "functions": [],
       "classes": [
         {
@@ -8407,7 +10510,9 @@
             "Execute",
             "BeginExecuteAsync",
             "CancelAsyncOperations",
+            "CancelAsyncOperation",
             "ExecuteUncached",
+            "CheckProtectedLease",
             "PrepareExecution",
             "ConvertToolResult",
             "StoreIdempotencyResult",
@@ -8421,7 +10526,7 @@
             "InFlightRequests"
           ],
           "exported": true,
-          "lineCount": 51
+          "lineCount": 60
         }
       ],
       "imports": [
@@ -8444,14 +10549,15 @@
         "Execute",
         "BeginExecuteAsync",
         "CancelAsyncOperations",
+        "CancelAsyncOperation",
         "FMCPExecutor"
       ],
-      "totalLines": 61,
+      "totalLines": 70,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Core/MCPToolRegistry.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Core/MCPToolRegistry.cpp",
-      "contentHash": "a59bd23d06c1a38549b4746f6a8545a66ccd6b4d075c102f265bb8981b13b303",
+      "contentHash": "a64a3efb576fa9136ee0a1d11bb3fb4e1ec3735147bfa12c4ca156d3d48c5254",
       "functions": [
         {
           "name": "BeginDomainRegistration",
@@ -8509,11 +10615,21 @@
           "lineCount": 11
         },
         {
+          "name": "CancelAsyncTool",
+          "params": [
+            "Name",
+            "Reason"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 13
+        },
+        {
           "name": "LoadCapabilityManifests",
           "params": [],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 20
+          "lineCount": 21
         },
         {
           "name": "LoadCapabilityManifestsFromDirectory",
@@ -8522,7 +10638,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 50
+          "lineCount": 51
         },
         {
           "name": "ValidateParams",
@@ -8540,7 +10656,7 @@
           "params": [],
           "returnType": "void",
           "exported": true,
-          "lineCount": 38
+          "lineCount": 66
         }
       ],
       "classes": [],
@@ -8577,12 +10693,13 @@
         "ExecuteTool",
         "BeginExecuteToolAsync",
         "CancelAsyncTools",
+        "CancelAsyncTool",
         "LoadCapabilityManifests",
         "LoadCapabilityManifestsFromDirectory",
         "ValidateParams",
         "ValidateExactBindings"
       ],
-      "totalLines": 275,
+      "totalLines": 319,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Core/UEWorkflowCoreExternal.cpp": {
@@ -10556,7 +12673,7 @@
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/BlueprintGraphEditorSupport.h": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/BlueprintGraphEditorSupport.h",
-      "contentHash": "ace1a2f19d7b578010a12277ca61ef571dd359ca717534254655b2f126c67ecb",
+      "contentHash": "07000ad99201f8badb3c0bd400ce38839a947cb3cedb51edf4841ab0204828ec",
       "functions": [
         {
           "name": "Right",
@@ -10661,6 +12778,28 @@
           "lineCount": 11
         },
         {
+          "name": "GeometryFingerprintToJson",
+          "params": [
+            "Fingerprint"
+          ],
+          "returnType": "TSharedRef<FJsonObject>",
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "TryCaptureSettledEditorGeometry",
+          "params": [
+            "Context",
+            "RequestedNodes",
+            "OutBounds",
+            "OutFingerprint",
+            "OutError"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 117
+        },
+        {
           "name": "Contains",
           "params": [
             "Outer",
@@ -10722,6 +12861,21 @@
           ],
           "exported": true,
           "lineCount": 19
+        },
+        {
+          "name": "FEditorGeometryFingerprint",
+          "methods": [],
+          "properties": [
+            "ViewOffset",
+            "Zoom",
+            "ApplicationScale",
+            "DPIScale",
+            "PassCount",
+            "BoundsHash",
+            "bExact"
+          ],
+          "exported": true,
+          "lineCount": 10
         }
       ],
       "imports": [
@@ -10833,6 +12987,7 @@
         "Right",
         "Bottom",
         "FNodeBounds",
+        "FEditorGeometryFingerprint",
         "InvalidRequest",
         "NotFound",
         "EditorUnavailable",
@@ -10842,11 +12997,13 @@
         "TryParseNodeGuid",
         "TryGetNodeBounds",
         "BoundsToJson",
+        "GeometryFingerprintToJson",
+        "TryCaptureSettledEditorGeometry",
         "Contains",
         "Intersects",
         "ComputeGraphHash"
       ],
-      "totalLines": 586,
+      "totalLines": 747,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Graphs.cpp": {
@@ -11116,7 +13273,7 @@
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Mutation.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Blueprint_Mutation.cpp",
-      "contentHash": "0185b3826aa9cb15238033830a5c854cbc7c2865e17d9f59840c1e163891ebf0",
+      "contentHash": "7ea7ba609db4f4c4c103ad0d8f61f9e5c7fad555facddcc954c542a0aee549a3",
       "functions": [
         {
           "name": "GetCapabilityId",
@@ -11319,7 +13476,23 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 30
+          "lineCount": 31
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "Execute",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 29
         },
         {
           "name": "GetCapabilityId",
@@ -11376,7 +13549,7 @@
           ],
           "returnType": "void",
           "exported": true,
-          "lineCount": 16
+          "lineCount": 17
         }
       ],
       "classes": [
@@ -11471,14 +13644,24 @@
           "lineCount": 14
         },
         {
-          "name": "FTool_SetNodeComment",
+          "name": "FTool_SetCommentTitle",
           "methods": [
             "GetCapabilityId",
             "Execute"
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 39
+          "lineCount": 40
+        },
+        {
+          "name": "FTool_SetCommentBubble",
+          "methods": [
+            "GetCapabilityId",
+            "Execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 38
         },
         {
           "name": "FTool_RefreshAllNodes",
@@ -11853,7 +14036,10 @@
         "FTool_DuplicateNodes",
         "GetCapabilityId",
         "Execute",
-        "FTool_SetNodeComment",
+        "FTool_SetCommentTitle",
+        "GetCapabilityId",
+        "Execute",
+        "FTool_SetCommentBubble",
         "GetCapabilityId",
         "Execute",
         "FTool_RefreshAllNodes",
@@ -11865,7 +14051,7 @@
         "FTool_SetBlueprintDefault",
         "RegisterBlueprintMutationTools"
       ],
-      "totalLines": 1633,
+      "totalLines": 1674,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/BlueprintAssetLifecycle.cpp": {
@@ -12658,7 +14844,7 @@
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/BlueprintEditorLayout.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/BlueprintEditorLayout.cpp",
-      "contentHash": "249a615bfd20afc9f7da6dca7c4e59b7384a22527568566cd58989eb89b49040",
+      "contentHash": "2d54d44880bce4987e5d8cc851ddd3daaf75bd9750306b1d0c69df9229e5fd5c",
       "functions": [
         {
           "name": "InvalidRequest",
@@ -12785,6 +14971,78 @@
           "lineCount": 25
         },
         {
+          "name": "BoundsCenter",
+          "params": [
+            "Bounds"
+          ],
+          "returnType": "FVector2D",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "TryComputeGraphRegion",
+          "params": [
+            "Bounds",
+            "OutRegion"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "GetGraphNodes",
+          "params": [
+            "Graph"
+          ],
+          "returnType": "TArray<UEdGraphNode *>",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "RestoreSelection",
+          "params": [
+            "Context",
+            "Selection"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "CaptureStraightenBaseline",
+          "params": [
+            "Context",
+            "SelectedNodes",
+            "OutBaseline",
+            "OutError"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 84
+        },
+        {
+          "name": "ValidateStraightenResult",
+          "params": [
+            "Context",
+            "Baseline",
+            "AfterBounds",
+            "OutError"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 89
+        },
+        {
+          "name": "RestoreStraightenBaseline",
+          "params": [
+            "Context",
+            "Baseline"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 24
+        },
+        {
           "name": "GetCapabilityId",
           "params": [],
           "returnType": "FString",
@@ -12830,7 +15088,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 20
+          "lineCount": 112
         },
         {
           "name": "GetCapabilityId",
@@ -12892,6 +15150,46 @@
       ],
       "classes": [
         {
+          "name": "FNodeLayoutSnapshot",
+          "methods": [],
+          "properties": [
+            "X",
+            "Y",
+            "Width",
+            "Height"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "FStraightenConnectionSnapshot",
+          "methods": [],
+          "properties": [
+            "SourceNodeId",
+            "TargetNodeId",
+            "bHorizontal",
+            "DirectionSign",
+            "Span"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "FStraightenBaseline",
+          "methods": [],
+          "properties": [
+            "Nodes",
+            "Selection",
+            "Connections",
+            "Region",
+            "Geometry",
+            "GraphHash",
+            "bPackageDirty"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
           "name": "FTool_SetBlueprintSelection",
           "methods": [
             "GetCapabilityId",
@@ -12919,7 +15217,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 27
+          "lineCount": 119
         },
         {
           "name": "FTool_DistributeBlueprintSelection",
@@ -13008,6 +15306,12 @@
           ]
         },
         {
+          "source": "Editor.h",
+          "specifiers": [
+            "Editor.h"
+          ]
+        },
+        {
           "source": "Engine/Blueprint.h",
           "specifiers": [
             "Engine/Blueprint.h"
@@ -13052,6 +15356,16 @@
         "CapturePositions",
         "BuildLayoutResult",
         "HasConnectionBetweenSelectedNodes",
+        "FNodeLayoutSnapshot",
+        "FStraightenConnectionSnapshot",
+        "FStraightenBaseline",
+        "BoundsCenter",
+        "TryComputeGraphRegion",
+        "GetGraphNodes",
+        "RestoreSelection",
+        "CaptureStraightenBaseline",
+        "ValidateStraightenResult",
+        "RestoreStraightenBaseline",
         "GetCapabilityId",
         "Execute",
         "FTool_SetBlueprintSelection",
@@ -13072,13 +15386,41 @@
         "FTool_SetCommentBounds",
         "RegisterBlueprintEditorLayoutTools"
       ],
-      "totalLines": 576,
+      "totalLines": 954,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/BlueprintLayoutOrganize.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/Command/BlueprintLayoutOrganize.cpp",
-      "contentHash": "708a79590e38a738b23cdaf06e0d28d2ba1bed8782f881f4333cf939b6b7eb7b",
+      "contentHash": "777946ee8bfef97945513e28dad18c0fea61f176563e68dac61c7d9e6b823981",
       "functions": [
+        {
+          "name": "StableGroupKey",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "GetCommentGroupKey",
+          "params": [
+            "Graph",
+            "Comment"
+          ],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "SetCommentGroupKey",
+          "params": [
+            "Graph",
+            "Comment",
+            "GroupKey"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 20
+        },
         {
           "name": "ParseGroups",
           "params": [
@@ -13089,7 +15431,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 256
+          "lineCount": 347
         },
         {
           "name": "ResolveGroupNodes",
@@ -13160,6 +15502,78 @@
           "lineCount": 27
         },
         {
+          "name": "UpdateNativeComment",
+          "params": [
+            "Graph",
+            "Comment",
+            "Bounds",
+            "Text",
+            "GroupKey"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "StoredCommentBounds",
+          "params": [
+            "Comment"
+          ],
+          "returnType": "FNodeBounds",
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "IntersectsWithTolerance",
+          "params": [
+            "Left",
+            "Right",
+            "Tolerance"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "TranslateGroup",
+          "params": [
+            "Graph",
+            "Group",
+            "Comment",
+            "Delta",
+            "OutError"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 44
+        },
+        {
+          "name": "AvoidCommentOverlaps",
+          "params": [
+            "Editor",
+            "Graph",
+            "Groups",
+            "Execution",
+            "Tolerance",
+            "OutError"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 155
+        },
+        {
+          "name": "BuildCommentPreviews",
+          "params": [
+            "Graph",
+            "Groups",
+            "Execution",
+            "OutError"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 52
+        },
+        {
           "name": "ExecuteGroups",
           "params": [
             "Editor",
@@ -13170,7 +15584,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 123
+          "lineCount": 136
         },
         {
           "name": "CaptureNodeSnapshots",
@@ -13179,7 +15593,7 @@
           ],
           "returnType": "TMap<FGuid, FNodeSnapshot>",
           "exported": true,
-          "lineCount": 18
+          "lineCount": 31
         },
         {
           "name": "RestoreSnapshot",
@@ -13189,7 +15603,17 @@
           ],
           "returnType": "void",
           "exported": true,
-          "lineCount": 28
+          "lineCount": 47
+        },
+        {
+          "name": "SnapshotMatches",
+          "params": [
+            "Graph",
+            "Snapshots"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 39
         },
         {
           "name": "BuildPositionChanges",
@@ -13224,7 +15648,18 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 74
+          "lineCount": 81
+        },
+        {
+          "name": "ResolveCommentTargets",
+          "params": [
+            "Graph",
+            "Groups",
+            "OutError"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 110
         },
         {
           "name": "BuildLayoutPrediction",
@@ -13251,7 +15686,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 108
+          "lineCount": 144
         },
         {
           "name": "HasErrorDiagnostics",
@@ -13287,7 +15722,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 371
+          "lineCount": 399
         },
         {
           "name": "RegisterBlueprintLayoutOrganizeTools",
@@ -13312,17 +15747,25 @@
         },
         {
           "name": "FLayoutGroup",
-          "methods": [],
+          "methods": [
+            "StableGroupKey"
+          ],
           "properties": [
             "Id",
             "NodeIds",
             "Actions",
             "bCreateComment",
             "CommentText",
-            "CommentPadding"
+            "CommentPadding",
+            "CommentMode",
+            "CommentNodeId",
+            "CommentGroupKey",
+            "bAvoidOverlap",
+            "ResolvedCommentNodeId",
+            "bResolvedCommentExists"
           ],
           "exported": true,
-          "lineCount": 9
+          "lineCount": 20
         },
         {
           "name": "FNodeSnapshot",
@@ -13331,21 +15774,27 @@
             "X",
             "Y",
             "Width",
-            "Height"
+            "Height",
+            "bComment",
+            "CommentText",
+            "bHasCommentGroupKey",
+            "CommentGroupKey"
           ],
           "exported": true,
-          "lineCount": 7
+          "lineCount": 11
         },
         {
           "name": "FLayoutExecution",
           "methods": [],
           "properties": [
             "CreatedCommentIds",
+            "AffectedCommentIds",
             "CreatedCommentGroups",
+            "GroupCommentIds",
             "CommentPreviews"
           ],
           "exported": true,
-          "lineCount": 6
+          "lineCount": 8
         },
         {
           "name": "FLayoutPrediction",
@@ -13368,7 +15817,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 380
+          "lineCount": 408
         }
       ],
       "imports": [
@@ -13439,6 +15888,18 @@
           ]
         },
         {
+          "source": "UObject/MetaData.h",
+          "specifiers": [
+            "UObject/MetaData.h"
+          ]
+        },
+        {
+          "source": "UObject/Package.h",
+          "specifiers": [
+            "UObject/Package.h"
+          ]
+        },
+        {
           "source": "UObject/UObjectGlobals.h",
           "specifiers": [
             "UObject/UObjectGlobals.h"
@@ -13459,10 +15920,13 @@
       ],
       "exports": [
         "FLayoutAction",
+        "StableGroupKey",
         "FLayoutGroup",
         "FNodeSnapshot",
         "FLayoutExecution",
         "FLayoutPrediction",
+        "GetCommentGroupKey",
+        "SetCommentGroupKey",
         "ParseGroups",
         "ResolveGroupNodes",
         "TryBounds",
@@ -13470,12 +15934,20 @@
         "AlignNodes",
         "DistributeNodes",
         "HasSelectedConnection",
+        "UpdateNativeComment",
+        "StoredCommentBounds",
+        "IntersectsWithTolerance",
+        "TranslateGroup",
+        "AvoidCommentOverlaps",
+        "BuildCommentPreviews",
         "ExecuteGroups",
         "CaptureNodeSnapshots",
         "RestoreSnapshot",
+        "SnapshotMatches",
         "BuildPositionChanges",
         "BuildLayoutDiagnostics",
         "BuildGeometryFingerprint",
+        "ResolveCommentTargets",
         "BuildLayoutPrediction",
         "ApplyLayoutPrediction",
         "HasErrorDiagnostics",
@@ -13485,7 +15957,7 @@
         "FTool_OrganizeBlueprintLayout",
         "RegisterBlueprintLayoutOrganizeTools"
       ],
-      "totalLines": 1730,
+      "totalLines": 2446,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Command/Components.cpp": {
@@ -15475,7 +17947,7 @@
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Query/BlueprintAssetState.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/Query/BlueprintAssetState.cpp",
-      "contentHash": "ff32da962cbd9a64ebe429f88a7c7cccf47931959d2254269aa04f7d5bcb440e",
+      "contentHash": "304f11fd06c915638948db55a77e49f820a3c9cd7fc74218045f45f3c6e94a49",
       "functions": [
         {
           "name": "BlueprintAssetStateStatusName",
@@ -15500,7 +17972,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 48
+          "lineCount": 54
         },
         {
           "name": "RegisterBlueprintAssetStateTools",
@@ -15521,7 +17993,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 57
+          "lineCount": 63
         }
       ],
       "imports": [
@@ -15557,7 +18029,7 @@
         "FTool_GetBlueprintAssetDirtyState",
         "RegisterBlueprintAssetStateTools"
       ],
-      "totalLines": 97,
+      "totalLines": 103,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Query/BlueprintDebug.cpp": {
@@ -15789,7 +18261,7 @@
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Query/BlueprintGraphVisual.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/Query/BlueprintGraphVisual.cpp",
-      "contentHash": "17ea727f4a0697581043dc9b7410f5061c760f34d101da5dfde1e33c190a605e",
+      "contentHash": "d4d1f4b859560e3feda45be71f8517c626a45a9aef83d2292742caf25fa93056",
       "functions": [
         {
           "name": "CaptureDirectory",
@@ -15973,6 +18445,16 @@
           "lineCount": 17
         },
         {
+          "name": "BuildCaptureMetadataResult",
+          "params": [
+            "Metadata",
+            "Bytes"
+          ],
+          "returnType": "TSharedRef<FJsonObject>",
+          "exported": true,
+          "lineCount": 29
+        },
+        {
           "name": "LoadCaptureBytes",
           "params": [
             "Metadata",
@@ -16109,6 +18591,12 @@
           ]
         },
         {
+          "source": "Infrastructure/Sha256.h",
+          "specifiers": [
+            "Infrastructure/Sha256.h"
+          ]
+        },
+        {
           "source": "Misc/EngineVersion.h",
           "specifiers": [
             "Misc/EngineVersion.h"
@@ -16204,6 +18692,7 @@
         "BuildRenderFingerprint",
         "FindFingerprintMismatchReasons",
         "BuildImageResult",
+        "BuildCaptureMetadataResult",
         "LoadCaptureBytes",
         "GetCapabilityId",
         "Execute",
@@ -16213,7 +18702,7 @@
         "FTool_CompareBlueprintGraphCaptures",
         "RegisterBlueprintGraphVisualTools"
       ],
-      "totalLines": 1382,
+      "totalLines": 1419,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Query/Discovery.cpp": {
@@ -16441,7 +18930,7 @@
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Validation/BlueprintLayoutValidation.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Blueprint/Validation/BlueprintLayoutValidation.cpp",
-      "contentHash": "16762f66dd6c3de3b82a7c02954300f48668f2b09a66531b997ed57065e6a21a",
+      "contentHash": "a801fe84683c8356da434597bbe0b75e2c2dda5b4b756324545454fe25ea733d",
       "functions": [
         {
           "name": "MakeDiagnostic",
@@ -16454,6 +18943,44 @@
           "returnType": "TSharedRef<FJsonObject>",
           "exported": true,
           "lineCount": 18
+        },
+        {
+          "name": "BuildStoredGeometryFingerprint",
+          "params": [
+            "Nodes",
+            "BoundsByNode"
+          ],
+          "returnType": "TSharedRef<FJsonObject>",
+          "exported": true,
+          "lineCount": 40
+        },
+        {
+          "name": "AddGeometryEvidence",
+          "params": [
+            "Diagnostic",
+            "LeftNode",
+            "RightNode",
+            "Left",
+            "Right",
+            "MeasuredGap",
+            "RequiredGap",
+            "Tolerance",
+            "MeasurementAxis",
+            "GeometryFingerprint"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 38
+        },
+        {
+          "name": "MinimumOverlapDepth",
+          "params": [
+            "Left",
+            "Right"
+          ],
+          "returnType": "double",
+          "exported": true,
+          "lineCount": 14
         },
         {
           "name": "GetCapabilityId",
@@ -16469,7 +18996,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 382
+          "lineCount": 529
         },
         {
           "name": "RegisterBlueprintLayoutValidationTools",
@@ -16490,7 +19017,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 391
+          "lineCount": 538
         }
       ],
       "imports": [
@@ -16521,12 +19048,15 @@
       ],
       "exports": [
         "MakeDiagnostic",
+        "BuildStoredGeometryFingerprint",
+        "AddGeometryEvidence",
+        "MinimumOverlapDepth",
         "GetCapabilityId",
         "Execute",
         "FTool_ValidateBlueprintLayout",
         "RegisterBlueprintLayoutValidationTools"
       ],
-      "totalLines": 434,
+      "totalLines": 677,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Blueprint/Validation/DiffBlueprints.cpp": {
@@ -22552,7 +25082,7 @@
     },
     "Source/UE_AI_integration/Private/Domains/Production/Command/RuntimeValidation.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Domains/Production/Command/RuntimeValidation.cpp",
-      "contentHash": "8c924ceb68b746a238cc81ac9bdea1321d294ab847b55c962f832110d56ad5a9",
+      "contentHash": "5d4556afdf9d518e6919615c903c6231a9debccbcf72870171c2de93b85050e7",
       "functions": [
         {
           "name": "FProductionControllerTool",
@@ -22749,6 +25279,94 @@
           "returnType": "FString",
           "exported": true,
           "lineCount": 1
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Execute",
+          "params": [],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Execute",
+          "params": [],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Execute",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "GetCapabilityId",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "Execute",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 18
         },
         {
           "name": "GetCapabilityId",
@@ -23164,7 +25782,7 @@
           ],
           "returnType": "void",
           "exported": true,
-          "lineCount": 79
+          "lineCount": 87
         }
       ],
       "classes": [
@@ -23358,6 +25976,46 @@
           "properties": [],
           "exported": true,
           "lineCount": 6
+        },
+        {
+          "name": "FSessionRosterTool",
+          "methods": [
+            "GetCapabilityId",
+            "Execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "FLeaseStatusTool",
+          "methods": [
+            "GetCapabilityId",
+            "Execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "FLeaseAcquireTool",
+          "methods": [
+            "GetCapabilityId",
+            "Execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 31
+        },
+        {
+          "name": "FLeaseReleaseTool",
+          "methods": [
+            "GetCapabilityId",
+            "Execute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 23
         },
         {
           "name": "FTraceTargetListTool",
@@ -23783,6 +26441,42 @@
           "lineCount": 6
         },
         {
+          "name": "FSourceProviderTool",
+          "methods": [
+            "GetCapabilityId"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "FSourceRefreshTool",
+          "methods": [
+            "GetCapabilityId"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "FSourceCheckoutTool",
+          "methods": [
+            "GetCapabilityId"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "FSourceRevertUnchangedTool",
+          "methods": [
+            "GetCapabilityId"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
           "name": "FSourcePlanTool",
           "methods": [
             "GetCapabilityId"
@@ -23854,6 +26548,12 @@
           ]
         },
         {
+          "source": "Infrastructure/ClientActivityService.h",
+          "specifiers": [
+            "Infrastructure/ClientActivityService.h"
+          ]
+        },
+        {
           "source": "Tools/MCPToolBase.h",
           "specifiers": [
             "Tools/MCPToolBase.h"
@@ -23916,6 +26616,18 @@
         "FTraceStopTool",
         "GetCapabilityId",
         "FTraceAnalyzeTool",
+        "GetCapabilityId",
+        "Execute",
+        "FSessionRosterTool",
+        "GetCapabilityId",
+        "Execute",
+        "FLeaseStatusTool",
+        "GetCapabilityId",
+        "Execute",
+        "FLeaseAcquireTool",
+        "GetCapabilityId",
+        "Execute",
+        "FLeaseReleaseTool",
         "GetCapabilityId",
         "FTraceTargetListTool",
         "GetCapabilityId",
@@ -24011,6 +26723,14 @@
         "GetCapabilityId",
         "FSourceDiffTool",
         "GetCapabilityId",
+        "FSourceProviderTool",
+        "GetCapabilityId",
+        "FSourceRefreshTool",
+        "GetCapabilityId",
+        "FSourceCheckoutTool",
+        "GetCapabilityId",
+        "FSourceRevertUnchangedTool",
+        "GetCapabilityId",
         "FSourcePlanTool",
         "GetCapabilityId",
         "FSourceExecuteTool",
@@ -24026,7 +26746,7 @@
         "FHordeContextTool",
         "RegisterProductionRuntimeTools"
       ],
-      "totalLines": 570,
+      "totalLines": 685,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Domains/Production/Command/Sequencer.cpp": {
@@ -29949,7 +32669,7 @@
     },
     "Source/UE_AI_integration/Private/Infrastructure/ClientActivityService.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Infrastructure/ClientActivityService.cpp",
-      "contentHash": "445ad00bbc14b8949e21243d2f8b24560ac1b214922fa33e0965e89958e13721",
+      "contentHash": "e956379ac43eac6d6bb86b988aa353f0e26f7176a5a6287553a029740223b321",
       "functions": [
         {
           "name": "NewOpaqueId",
@@ -29997,6 +32717,26 @@
           "lineCount": 7
         },
         {
+          "name": "LeaseOverrideDigest",
+          "params": [
+            "Type",
+            "CurrentOwner",
+            "RequestedOwner"
+          ],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "SetActiveService",
+          "params": [
+            "Service"
+          ],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
           "name": "IsBoundedToken",
           "params": [
             "Value",
@@ -30036,7 +32776,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 17
+          "lineCount": 26
         },
         {
           "name": "UnregisterClient",
@@ -30046,14 +32786,14 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 39
+          "lineCount": 43
         },
         {
           "name": "DisconnectAllSessions",
           "params": [],
           "returnType": "void",
           "exported": true,
-          "lineCount": 19
+          "lineCount": 20
         },
         {
           "name": "BeginRequest",
@@ -30081,7 +32821,7 @@
           ],
           "returnType": "void",
           "exported": true,
-          "lineCount": 33
+          "lineCount": 41
         },
         {
           "name": "BeginActivity",
@@ -30229,6 +32969,50 @@
           "lineCount": 148
         },
         {
+          "name": "AcquireLease",
+          "params": [
+            "Type",
+            "SessionId",
+            "bOverride",
+            "ApprovePlanDigest",
+            "OutLease",
+            "OutError",
+            "OutHttpStatus"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 67
+        },
+        {
+          "name": "ReleaseLease",
+          "params": [
+            "Type",
+            "SessionId",
+            "OutError"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "CanAccessLease",
+          "params": [
+            "Type",
+            "SessionId",
+            "OutOwnerSessionId"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "MakeLeaseSnapshot",
+          "params": [],
+          "returnType": "TSharedPtr<FJsonObject>",
+          "exported": true,
+          "lineCount": 24
+        },
+        {
           "name": "GetOnlineMcpCount",
           "params": [],
           "returnType": "int32",
@@ -30290,6 +33074,12 @@
           ]
         },
         {
+          "source": "Infrastructure/Sha256.h",
+          "specifiers": [
+            "Infrastructure/Sha256.h"
+          ]
+        },
+        {
           "source": "Dom/JsonValue.h",
           "specifiers": [
             "Dom/JsonValue.h"
@@ -30338,6 +33128,8 @@
         "ReadString",
         "ReadCount",
         "IsTerminalRunStatus",
+        "LeaseOverrideDigest",
+        "SetActiveService",
         "IsBoundedToken",
         "Percentile",
         "RegisterClient",
@@ -30361,6 +33153,10 @@
         "InvocationToJson",
         "ActivityToJson",
         "MakeSnapshot",
+        "AcquireLease",
+        "ReleaseLease",
+        "CanAccessLease",
+        "MakeLeaseSnapshot",
         "GetOnlineMcpCount",
         "GetRunningCliCount",
         "GetLastExecutionResult",
@@ -30369,12 +33165,12 @@
         "PruneRunStatisticsLocked",
         "AddDurationSample"
       ],
-      "totalLines": 1201,
+      "totalLines": 1374,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Infrastructure/ClientActivityService.h": {
       "filePath": "Source/UE_AI_integration/Private/Infrastructure/ClientActivityService.h",
-      "contentHash": "fc06921b7e940629d57af0ea993f86d4c264303b173f1b61a2550fb1c7ec89f3",
+      "contentHash": "2fa7a3f7482d3365d1188f123942d6481025d645244097241625d8c3cc903bb2",
       "functions": [
         {
           "name": "FClientActivityService",
@@ -30421,6 +33217,7 @@
           "name": "FClientActivityService",
           "methods": [
             "FClientActivityService",
+            "SetActiveService",
             "RegisterClient",
             "Heartbeat",
             "UnregisterClient",
@@ -30438,6 +33235,10 @@
             "GetOnlineMcpCount",
             "GetRunningCliCount",
             "GetLastExecutionResult",
+            "AcquireLease",
+            "ReleaseLease",
+            "CanAccessLease",
+            "MakeLeaseSnapshot",
             "IsBoundedToken",
             "Percentile",
             "SessionToJson",
@@ -30461,17 +33262,20 @@
             "SessionTimeoutSeconds",
             "HeartbeatIntervalMs",
             "ExpiresAfterMs",
+            "GetActiveService",
             "FindActivityLocked",
             "Mutex",
             "Sessions",
             "SessionByInstanceId",
+            "Leases",
+            "LeaseAudit",
             "CliInvocations",
             "Activities",
             "Statistics",
             "RunTouchOrdinal"
           ],
           "exported": true,
-          "lineCount": 177
+          "lineCount": 206
         }
       ],
       "imports": [
@@ -30498,6 +33302,7 @@
         "FCallerContext",
         "FClientRegistration",
         "FClientActivityService",
+        "SetActiveService",
         "RegisterClient",
         "Heartbeat",
         "UnregisterClient",
@@ -30515,9 +33320,13 @@
         "GetOnlineMcpCount",
         "GetRunningCliCount",
         "GetLastExecutionResult",
+        "AcquireLease",
+        "ReleaseLease",
+        "CanAccessLease",
+        "MakeLeaseSnapshot",
         "FClientActivityService"
       ],
-      "totalLines": 220,
+      "totalLines": 249,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Infrastructure/Compatibility/UEVersionCompat.h": {
@@ -35006,7 +37815,7 @@
     },
     "Source/UE_AI_integration/Private/Infrastructure/ProductionJobRuntime.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Infrastructure/ProductionJobRuntime.cpp",
-      "contentHash": "442b1e8d596383b0fa5b63e97b2a0a8fa7bd42fccf027982e1b8013eaece00eb",
+      "contentHash": "caf7b68c0e6d1121951b15dcda98a32abd892ad80afa5a24f82ae1eb5f63bb6a",
       "functions": [
         {
           "name": "WaitForTraceWriterClose",
@@ -35317,7 +38126,7 @@
           ],
           "returnType": "FMCPToolResult",
           "exported": true,
-          "lineCount": 41
+          "lineCount": 45
         },
         {
           "name": "ComputeChangePlanDigest",
@@ -35861,6 +38670,71 @@
           "lineCount": 61
         },
         {
+          "name": "GetSourceControlProvider",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 40
+        },
+        {
+          "name": "ResolveProjectSourceControlFiles",
+          "params": [
+            "Params",
+            "OutFiles",
+            "OutError"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 69
+        },
+        {
+          "name": "RequirePerforceProvider",
+          "params": [
+            "OutProvider"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 21
+        },
+        {
+          "name": "MakeSourceControlState",
+          "params": [
+            "State"
+          ],
+          "returnType": "TSharedPtr<FJsonObject>",
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "RefreshSourceControlStatus",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 47
+        },
+        {
+          "name": "CheckoutSourceControlFiles",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 96
+        },
+        {
+          "name": "RevertUnchangedSourceControlFiles",
+          "params": [
+            "Params"
+          ],
+          "returnType": "FMCPToolResult",
+          "exported": true,
+          "lineCount": 41
+        },
+        {
           "name": "GetSourceControlStatus",
           "params": [
             "Params"
@@ -35994,7 +38868,7 @@
           ],
           "returnType": "TSharedPtr<FJsonObject>",
           "exported": true,
-          "lineCount": 121
+          "lineCount": 137
         },
         {
           "name": "MakeArtifactSummary",
@@ -36245,6 +39119,24 @@
           ]
         },
         {
+          "source": "ISourceControlModule.h",
+          "specifiers": [
+            "ISourceControlModule.h"
+          ]
+        },
+        {
+          "source": "ISourceControlProvider.h",
+          "specifiers": [
+            "ISourceControlProvider.h"
+          ]
+        },
+        {
+          "source": "ISourceControlState.h",
+          "specifiers": [
+            "ISourceControlState.h"
+          ]
+        },
+        {
           "source": "Misc/App.h",
           "specifiers": [
             "Misc/App.h"
@@ -36344,6 +39236,12 @@
           "source": "Serialization/JsonWriter.h",
           "specifiers": [
             "Serialization/JsonWriter.h"
+          ]
+        },
+        {
+          "source": "SourceControlOperations.h",
+          "specifiers": [
+            "SourceControlOperations.h"
           ]
         },
         {
@@ -36511,6 +39409,13 @@
         "StartPackage",
         "StartCommandlet",
         "GetSourceControlRepository",
+        "GetSourceControlProvider",
+        "ResolveProjectSourceControlFiles",
+        "RequirePerforceProvider",
+        "MakeSourceControlState",
+        "RefreshSourceControlStatus",
+        "CheckoutSourceControlFiles",
+        "RevertUnchangedSourceControlFiles",
         "GetSourceControlStatus",
         "GetSourceControlDiff",
         "PlanSourceControlChange",
@@ -36542,12 +39447,12 @@
         "RunGitSync",
         "DirectorySize"
       ],
-      "totalLines": 8847,
+      "totalLines": 9213,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Infrastructure/ProductionJobRuntime.h": {
       "filePath": "Source/UE_AI_integration/Private/Infrastructure/ProductionJobRuntime.h",
-      "contentHash": "a62c8aec1eabcbdbf646ebc3ff36d3899c7f8845087583e957111795e6960f77",
+      "contentHash": "d6457bc6eaaf0ea70fa7545539ad6d7e9e88d254f9bd2d4f55033c9658aff4fd",
       "functions": [],
       "classes": [
         {
@@ -36597,6 +39502,10 @@
             "GetSourceControlRepository",
             "GetSourceControlStatus",
             "GetSourceControlDiff",
+            "GetSourceControlProvider",
+            "RefreshSourceControlStatus",
+            "CheckoutSourceControlFiles",
+            "RevertUnchangedSourceControlFiles",
             "PlanSourceControlChange",
             "ExecuteSourceControlChange",
             "GetDdcStatus",
@@ -36663,7 +39572,7 @@
             "GetPIESession"
           ],
           "exported": true,
-          "lineCount": 341
+          "lineCount": 349
         }
       ],
       "imports": [
@@ -36710,7 +39619,7 @@
         "ValidatePIENetworkTraceStart",
         "FProductionJobRuntime"
       ],
-      "totalLines": 365,
+      "totalLines": 373,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Infrastructure/ProductionRuntimeController.cpp": {
@@ -41147,12 +44056,12 @@
     },
     "Source/UE_AI_integration/Private/Tests/BlueprintEditorLayoutTests.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Tests/BlueprintEditorLayoutTests.cpp",
-      "contentHash": "18609c2aece9073929adcdd06324830b7d0a544e3a9c5862082a7dbe4a7eb828",
+      "contentHash": "2c4ff7ec0a92e46b22207a5dc11f716c417630529c0052e22175c074fd7e2bde",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 1625,
+      "totalLines": 2065,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Tests/CapabilitySearchTests.cpp": {
@@ -41167,12 +44076,12 @@
     },
     "Source/UE_AI_integration/Private/Tests/ClientActivityServiceTests.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Tests/ClientActivityServiceTests.cpp",
-      "contentHash": "ec45cc531ac9a9eded01b42705d173f7af5f9b7ce42acad967963da9814a81c2",
+      "contentHash": "610becd573a325909cf44024e36b562b7cd5a3873ca47c9dc0194197aa2c9bce",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 1084,
+      "totalLines": 1134,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/Tests/ContentAssetSettingsTests.cpp": {
@@ -41430,7 +44339,7 @@
     },
     "Source/UE_AI_integration/Private/Transport/UEAIIntegrationServer.cpp": {
       "filePath": "Source/UE_AI_integration/Private/Transport/UEAIIntegrationServer.cpp",
-      "contentHash": "f9e78e46e0b056ed123ee38356920c5168ab7572931b7f356a446624d1622170",
+      "contentHash": "cf20741c8f78e93b61d14918eb3b84bb90ddcf5811ead09753da453e405e270d",
       "functions": [
         {
           "name": "TryParseQueryBool",
@@ -41486,7 +44395,7 @@
           ],
           "returnType": "TSharedPtr<FJsonObject>",
           "exported": true,
-          "lineCount": 26
+          "lineCount": 27
         },
         {
           "name": "ToUtf8String",
@@ -41590,7 +44499,7 @@
             "InBlueprintDebugService"
           ],
           "exported": true,
-          "lineCount": 15
+          "lineCount": 18
         },
         {
           "name": "~FUEAIIntegrationServer",
@@ -41614,14 +44523,14 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 191
+          "lineCount": 215
         },
         {
           "name": "Stop",
           "params": [],
           "returnType": "void",
           "exported": true,
-          "lineCount": 37
+          "lineCount": 43
         },
         {
           "name": "Tick",
@@ -41637,7 +44546,7 @@
           "params": [],
           "returnType": "void",
           "exported": true,
-          "lineCount": 193
+          "lineCount": 245
         },
         {
           "name": "HandleHealth",
@@ -41647,7 +44556,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 68
+          "lineCount": 73
         },
         {
           "name": "HandleCapabilities",
@@ -41657,7 +44566,7 @@
           ],
           "returnType": "bool",
           "exported": true,
-          "lineCount": 252
+          "lineCount": 310
         },
         {
           "name": "HandleExecute",
@@ -41668,6 +44577,16 @@
           "returnType": "bool",
           "exported": true,
           "lineCount": 186
+        },
+        {
+          "name": "HandleExecuteCancel",
+          "params": [
+            "Request",
+            "OnComplete"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 9
         },
         {
           "name": "HandleWorkflowHandshake",
@@ -41740,6 +44659,27 @@
           "returnType": "bool",
           "exported": true,
           "lineCount": 74
+        },
+        {
+          "name": "InstanceRecordPath",
+          "params": [],
+          "returnType": "FString",
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "WriteInstanceRecord",
+          "params": [],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 51
+        },
+        {
+          "name": "RemoveInstanceRecord",
+          "params": [],
+          "returnType": "void",
+          "exported": true,
+          "lineCount": 20
         },
         {
           "name": "UnbindRoutes",
@@ -41844,9 +44784,27 @@
           ]
         },
         {
+          "source": "HAL/FileManager.h",
+          "specifiers": [
+            "HAL/FileManager.h"
+          ]
+        },
+        {
           "source": "HAL/PlatformProperties.h",
           "specifiers": [
             "HAL/PlatformProperties.h"
+          ]
+        },
+        {
+          "source": "HAL/PlatformProcess.h",
+          "specifiers": [
+            "HAL/PlatformProcess.h"
+          ]
+        },
+        {
+          "source": "HAL/PlatformMisc.h",
+          "specifiers": [
+            "HAL/PlatformMisc.h"
           ]
         },
         {
@@ -41859,6 +44817,24 @@
           "source": "Misc/EngineVersion.h",
           "specifiers": [
             "Misc/EngineVersion.h"
+          ]
+        },
+        {
+          "source": "Misc/FileHelper.h",
+          "specifiers": [
+            "Misc/FileHelper.h"
+          ]
+        },
+        {
+          "source": "Misc/Guid.h",
+          "specifiers": [
+            "Misc/Guid.h"
+          ]
+        },
+        {
+          "source": "Misc/Paths.h",
+          "specifiers": [
+            "Misc/Paths.h"
           ]
         },
         {
@@ -41877,6 +44853,12 @@
           "source": "Serialization/JsonSerializer.h",
           "specifiers": [
             "Serialization/JsonSerializer.h"
+          ]
+        },
+        {
+          "source": "Serialization/JsonWriter.h",
+          "specifiers": [
+            "Serialization/JsonWriter.h"
           ]
         },
         {
@@ -41930,6 +44912,7 @@
         "HandleHealth",
         "HandleCapabilities",
         "HandleExecute",
+        "HandleExecuteCancel",
         "HandleWorkflowHandshake",
         "HandleWorkflow",
         "HandleClientRegister",
@@ -41937,13 +44920,16 @@
         "HandleClientUnregister",
         "HandleCallerObserved",
         "QueueRequest",
+        "InstanceRecordPath",
+        "WriteInstanceRecord",
+        "RemoveInstanceRecord",
         "UnbindRoutes",
         "SendJsonResponse",
         "SendSuccess",
         "SendError",
         "MakeValidationDetails"
       ],
-      "totalLines": 1773,
+      "totalLines": 2029,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Private/UEAIIntegrationModule.cpp": {
@@ -44121,7 +47107,7 @@
     },
     "Source/UE_AI_integration/Public/Tools/MCPToolRegistry.h": {
       "filePath": "Source/UE_AI_integration/Public/Tools/MCPToolRegistry.h",
-      "contentHash": "5783eb846c6faadbbc0bd185fd1e5cec4c7eaf69ca0d4ee35146cd7a42d6155f",
+      "contentHash": "a1e65431e2cb7aa43143d0526d4aca6f0454d669cf96763e52bf728656f8664c",
       "functions": [
         {
           "name": "IsReady",
@@ -44155,6 +47141,7 @@
             "ExecuteTool",
             "BeginExecuteToolAsync",
             "CancelAsyncTools",
+            "CancelAsyncTool",
             "LoadCapabilityManifests",
             "LoadCapabilityManifestsFromDirectory",
             "ValidateParams",
@@ -44169,6 +47156,7 @@
             "Tools",
             "CapabilityDescriptors",
             "CapabilitySchemas",
+            "CapabilityTombstones",
             "DomainCounts",
             "RegistrationErrors",
             "ValidationErrors",
@@ -44176,7 +47164,7 @@
             "bCatalogLoaded"
           ],
           "exported": true,
-          "lineCount": 80
+          "lineCount": 89
         }
       ],
       "imports": [
@@ -44200,6 +47188,7 @@
         "ExecuteTool",
         "BeginExecuteToolAsync",
         "CancelAsyncTools",
+        "CancelAsyncTool",
         "LoadCapabilityManifests",
         "LoadCapabilityManifestsFromDirectory",
         "ValidateParams",
@@ -44208,7 +47197,7 @@
         "GetCapabilityCount",
         "FMCPToolRegistry"
       ],
-      "totalLines": 87,
+      "totalLines": 96,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Public/UEAIIntegrationEditorSettings.h": {
@@ -44285,7 +47274,7 @@
     },
     "Source/UE_AI_integration/Public/UEAIIntegrationServer.h": {
       "filePath": "Source/UE_AI_integration/Public/UEAIIntegrationServer.h",
-      "contentHash": "f4bf52d0157a457b8ec4558b99b438eb4635f7270c6b0f9bd244fc13edfc8ebb",
+      "contentHash": "496b949138cb668461b1510245867b143fd6879639a6a6f6c0b97497c16687d6",
       "functions": [
         {
           "name": "IsRunning",
@@ -44377,6 +47366,7 @@
             "HandleHealth",
             "HandleCapabilities",
             "HandleExecute",
+            "HandleExecuteCancel",
             "HandleWorkflowHandshake",
             "HandleWorkflow",
             "HandleClientRegister",
@@ -44386,6 +47376,9 @@
             "ProcessOneRequest",
             "QueueRequest",
             "UnbindRoutes",
+            "WriteInstanceRecord",
+            "RemoveInstanceRecord",
+            "InstanceRecordPath",
             "SendJsonResponse",
             "SendSuccess",
             "SendError",
@@ -44401,10 +47394,12 @@
             "RouteHandles",
             "RequestQueue",
             "ListenPort",
-            "bIsRunning"
+            "bIsRunning",
+            "ServerInstanceId",
+            "ProcessStartTimeUtc"
           ],
           "exported": true,
-          "lineCount": 115
+          "lineCount": 123
         }
       ],
       "imports": [
@@ -44480,7 +47475,7 @@
         "PlanWorkflowDefinition",
         "FUEAIIntegrationServer"
       ],
-      "totalLines": 163,
+      "totalLines": 172,
       "hasStructuralAnalysis": true
     },
     "Source/UE_AI_integration/Public/UEAIIntegrationSubsystem.h": {
@@ -44639,7 +47634,7 @@
     },
     "Source/UE_AI_integration/UE_AI_integration.Build.cs": {
       "filePath": "Source/UE_AI_integration/UE_AI_integration.Build.cs",
-      "contentHash": "23dafb6f8c5882e08981fd70d5389421a9dc2e0a6cac2fbd951cdb5763942be4",
+      "contentHash": "8f02cc8602d33f68c7990fcdc5bb6fafa26748b24370c604f864211b9a9cce6b",
       "functions": [
         {
           "name": "UE_AI_integration",
@@ -44647,7 +47642,7 @@
             "Target"
           ],
           "exported": true,
-          "lineCount": 146
+          "lineCount": 147
         },
         {
           "name": "IsOptionalFeatureEnabled",
@@ -44669,7 +47664,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 191
+          "lineCount": 192
         }
       ],
       "imports": [
@@ -44702,7 +47697,63 @@
         "UE_AI_integration",
         "UE_AI_integration"
       ],
-      "totalLines": 197,
+      "totalLines": 198,
+      "hasStructuralAnalysis": true
+    },
+    "Source/UEAIDevelopmentBridge/Private/UEAIDevelopmentBridgeModule.cpp": {
+      "filePath": "Source/UEAIDevelopmentBridge/Private/UEAIDevelopmentBridgeModule.cpp",
+      "contentHash": "5c5f7f1f830c48e5fef576b7386c6a909e79598481f263a128f066863fac2a08",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "Modules/ModuleManager.h",
+          "specifiers": [
+            "Modules/ModuleManager.h"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 600,
+      "hasStructuralAnalysis": true
+    },
+    "Source/UEAIDevelopmentBridge/UEAIDevelopmentBridge.Build.cs": {
+      "filePath": "Source/UEAIDevelopmentBridge/UEAIDevelopmentBridge.Build.cs",
+      "contentHash": "401f10d90b39cf9a97a3401d1d0ec458f0ba634181693497b7689490d7d33eda",
+      "functions": [
+        {
+          "name": "UEAIDevelopmentBridge",
+          "params": [
+            "Target"
+          ],
+          "exported": true,
+          "lineCount": 25
+        }
+      ],
+      "classes": [
+        {
+          "name": "UEAIDevelopmentBridge",
+          "methods": [
+            "UEAIDevelopmentBridge"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 28
+        }
+      ],
+      "imports": [
+        {
+          "source": "UnrealBuildTool",
+          "specifiers": [
+            "UnrealBuildTool"
+          ]
+        }
+      ],
+      "exports": [
+        "UEAIDevelopmentBridge",
+        "UEAIDevelopmentBridge"
+      ],
+      "totalLines": 31,
       "hasStructuralAnalysis": true
     },
     "Source/UEAITraceAnalysisCore/Private/Tests/TraceAnalysisCoreContractTests.cpp": {
@@ -47353,7 +50404,7 @@
     },
     "Source/UEAITraceWorker/Private/TraceWorkerProtocol.cpp": {
       "filePath": "Source/UEAITraceWorker/Private/TraceWorkerProtocol.cpp",
-      "contentHash": "ad4d1fc9d9a8331e17fc3392b26582cdc819ae5ccde42de619239b617b4c96a4",
+      "contentHash": "eac000fd3fa2e765ce81de6b4cf836055845baf0d1aead0d82dc0b4b65a6312e",
       "functions": [
         {
           "name": "GetString",
@@ -48828,7 +51879,7 @@
     },
     "Source/UEAITraceWorker/UEAITraceWorker.Build.cs": {
       "filePath": "Source/UEAITraceWorker/UEAITraceWorker.Build.cs",
-      "contentHash": "c3e5a095a85528c019824860a4ae5ee1029b2ee0d31658a0b39ca7ccfc4ac2a2",
+      "contentHash": "c63b388cab8972cbdb0813f5d4d6c5425445755234ae0f33222422a5993817f7",
       "functions": [
         {
           "name": "Sha256Files",
@@ -49142,7 +52193,7 @@
     },
     "tests/test_health.py": {
       "filePath": "tests/test_health.py",
-      "contentHash": "f2e83409cf7728ecec9eb4766fc464907bc6b90b202d22f6c8bea6e8de9d94f8",
+      "contentHash": "ce38c11f1de322cdedb20f5617c630069fe34741b0f6b2b0a996cc0990eb66db",
       "functions": [
         {
           "name": "expected_catalog",
@@ -49346,12 +52397,12 @@
     },
     "UE_AI_integration.uplugin": {
       "filePath": "UE_AI_integration.uplugin",
-      "contentHash": "15b714ea8faf431a0bc908ae4a7063dac487d5446e6d67f59022af9f0efb2a2e",
+      "contentHash": "dec656a59c8ff8c7e86f8ec3d256971f5ed35ef372aee357644d87b9248f6408",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 56,
+      "totalLines": 64,
       "hasStructuralAnalysis": false
     },
     "Workflow/CMakeLists.txt": {
@@ -49631,7 +52682,7 @@
     },
     "Workflow/src/WorkflowCore.cpp": {
       "filePath": "Workflow/src/WorkflowCore.cpp",
-      "contentHash": "e0d8e834976f9c33f7673664321e7aa264e8ef1c8b335c9f711713162a34e9ea",
+      "contentHash": "731c13acc4a6951ccf9464eab83f60b1d13c08cd25bc2f172104995cc4a99723",
       "functions": [
         {
           "name": "update",
@@ -50095,7 +53146,7 @@
           ],
           "returnType": "Result",
           "exported": true,
-          "lineCount": 263
+          "lineCount": 269
         },
         {
           "name": "help",
@@ -50454,7 +53505,7 @@
             "v2_contract_set_digest_"
           ],
           "exported": true,
-          "lineCount": 2878
+          "lineCount": 2884
         }
       ],
       "imports": [
@@ -50638,7 +53689,7 @@
         "CanonicalizeJsonText",
         "CanonicalJsonSha256"
       ],
-      "totalLines": 4678,
+      "totalLines": 4684,
       "hasStructuralAnalysis": true
     },
     "Workflow/tests/fixtures/material.workflow.json": {
