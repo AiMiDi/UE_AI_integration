@@ -659,6 +659,13 @@ public:
 		}
 	}
 
+	FString GetDirtyWorldPackageSummary() const
+	{
+		TArray<FString> DirtyPackages;
+		CollectDirtyWorldPackages(World, DirtyPackages);
+		return FString::Join(DirtyPackages, TEXT(", "));
+	}
+
 private:
 	static void CollectDirtyWorldPackages(
 		UWorld* CandidateWorld,
@@ -1003,6 +1010,27 @@ private:
 			OutError =
 				TEXT("The reloaded Layer Info was not loaded from its separate on-disk package.");
 			return false;
+		}
+		TArray<FString> DirtyReloadedPackages;
+		CollectDirtyWorldPackages(World, DirtyReloadedPackages);
+		if (!DirtyReloadedPackages.IsEmpty())
+		{
+			if (!UEditorLoadingAndSavingUtils::SaveMap(World, PackageName))
+			{
+				OutError = FString::Printf(
+					TEXT("The reloaded World Partition fixture could not persist its clean recovery baseline: %s"),
+					*FString::Join(DirtyReloadedPackages, TEXT(", ")));
+				return false;
+			}
+			Package = World->GetOutermost();
+			CollectDirtyWorldPackages(World, DirtyReloadedPackages);
+			if (!DirtyReloadedPackages.IsEmpty())
+			{
+				OutError = FString::Printf(
+					TEXT("The reloaded World Partition fixture retained dirty recovery packages after save: %s"),
+					*FString::Join(DirtyReloadedPackages, TEXT(", ")));
+				return false;
+			}
 		}
 		bReloadedFromDisk = true;
 		return true;
@@ -1369,7 +1397,21 @@ bool ApplyLandscapeChange(
 	FString* OutRequestId = nullptr)
 {
 	FLandscapeWaterService& Service = FLandscapeWaterService::Get();
+	const FString DirtyBeforePlan = Fixture.GetDirtyWorldPackageSummary();
+	if (!DirtyBeforePlan.IsEmpty())
+	{
+		Test.AddInfo(
+			TEXT("Landscape fixture packages dirty before plan: ")
+			+ DirtyBeforePlan);
+	}
 	const FMCPToolResult Plan = Service.PlanChange(Params);
+	const FString DirtyAfterPlan = Fixture.GetDirtyWorldPackageSummary();
+	if (!DirtyAfterPlan.IsEmpty())
+	{
+		Test.AddInfo(
+			TEXT("Landscape fixture packages dirty after plan: ")
+			+ DirtyAfterPlan);
+	}
 	Test.TestTrue(TEXT("Landscape/Water change planning succeeds"), Plan.bSuccess);
 	if (!Plan.bSuccess || !Plan.Data.IsValid())
 	{
@@ -1705,11 +1747,19 @@ bool FLandscapeWaterChangeRecoveryTest::RunTest(const FString&)
 	}
 	TrackArtifact(RestartLossResult);
 	SetFixtureMaterial(OriginalMaterial);
+	Landscape->GetPackage()->SetDirtyFlag(false);
 	Service.SimulateEditorRestartForTest();
 	const FMCPToolResult RestartLossRollback = Service.RollbackChange(
 		MakeRollbackParams(
 			RestartLossResult->GetStringField(TEXT("runId")),
 			RestartLossRequestId));
+	if (!RestartLossRollback.bSuccess)
+	{
+		AddInfo(FString::Printf(
+			TEXT("Restart-discard rollback failed: %s (%s)"),
+			*RestartLossRollback.ErrorMessage,
+			*RestartLossRollback.ErrorCode));
+	}
 	TestTrue(
 		TEXT("A restart that discarded dirty-only changes is a verified rollback"),
 		RestartLossRollback.bSuccess);
@@ -1753,7 +1803,10 @@ bool FLandscapeWaterChangeRecoveryTest::RunTest(const FString&)
 				Failure.bSuccess);
 			if (Failure.bSuccess || !Failure.Data.IsValid())
 			{
-				AddError(TEXT("Injected failure did not return recovery details."));
+				AddError(FString::Printf(
+					TEXT("Injected failure did not return recovery details: %s (%s)"),
+					*Failure.ErrorMessage,
+					*Failure.ErrorCode));
 				return false;
 			}
 			OutFailureData = Failure.Data;
@@ -2028,6 +2081,13 @@ bool FLandscapeWaterWorldPartitionVerticalTest::RunTest(const FString&)
 		ConflictingRequest);
 	const FMCPToolResult ConflictingLayerPlan =
 		Service.PlanChange(ConflictingParams);
+	if (ConflictingLayerPlan.ErrorCode != TEXT("change_conflict"))
+	{
+		AddInfo(FString::Printf(
+			TEXT("Conflict fixture sourcePath='%s'; service error='%s'."),
+			*WeightPath,
+			*ConflictingLayerPlan.ErrorMessage));
+	}
 	TestFalse(
 		TEXT("A weight import and Layer Info replacement cannot target the same layer"),
 		ConflictingLayerPlan.bSuccess);

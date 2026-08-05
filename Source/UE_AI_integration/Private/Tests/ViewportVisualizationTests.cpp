@@ -557,7 +557,8 @@ bool WriteAsyncExecutorFixtureManifests(
 	for (const TCHAR* Domain : Domains)
 	{
 		TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
-		Root->SetNumberField(TEXT("schemaVersion"), 2);
+		Root->SetStringField(TEXT("schema"), TEXT("ue.capability-manifest.v3"));
+		Root->SetNumberField(TEXT("schemaVersion"), 3);
 		Root->SetStringField(TEXT("domain"), Domain);
 		TArray<TSharedPtr<FJsonValue>> Capabilities;
 		if (FString(Domain) == TEXT("scene"))
@@ -582,16 +583,35 @@ bool WriteAsyncExecutorFixtureManifests(
 			Schema->SetBoolField(TEXT("additionalProperties"), false);
 			Descriptor->SetObjectField(TEXT("inputSchema"), Schema);
 			TSharedRef<FJsonObject> Traits = MakeShared<FJsonObject>();
-			Traits->SetBoolField(TEXT("readOnly"), false);
 			Traits->SetBoolField(TEXT("destructive"), false);
 			Traits->SetBoolField(TEXT("expensive"), false);
 			Descriptor->SetObjectField(TEXT("traits"), Traits);
+			TSharedRef<FJsonObject> Effects = MakeShared<FJsonObject>();
+			Effects->SetStringField(TEXT("asset"), TEXT("none"));
+			Effects->SetStringField(TEXT("world"), TEXT("none"));
+			Effects->SetStringField(TEXT("editorSession"), TEXT("write"));
+			Effects->SetStringField(TEXT("external"), TEXT("none"));
+			Descriptor->SetObjectField(TEXT("effects"), Effects);
+			TSharedRef<FJsonObject> Lifecycle = MakeShared<FJsonObject>();
+			Lifecycle->SetStringField(TEXT("status"), TEXT("active"));
+			Lifecycle->SetStringField(TEXT("since"), TEXT("1.0.0"));
+			Lifecycle->SetStringField(
+				TEXT("canonicalId"),
+				TEXT("scene.test.async"));
+			Descriptor->SetObjectField(TEXT("lifecycle"), Lifecycle);
+			TSharedRef<FJsonObject> Execution = MakeShared<FJsonObject>();
+			Execution->SetArrayField(
+				TEXT("backends"),
+				{ MakeShared<FJsonValueString>(TEXT("editor")) });
+			Execution->SetStringField(TEXT("preferred"), TEXT("editor"));
+			Descriptor->SetObjectField(TEXT("execution"), Execution);
 			TSharedRef<FJsonObject> Output = MakeShared<FJsonObject>();
 			Output->SetStringField(TEXT("kind"), TEXT("json"));
 			Descriptor->SetObjectField(TEXT("output"), Output);
 			Capabilities.Add(MakeShared<FJsonValueObject>(Descriptor));
 		}
 		Root->SetArrayField(TEXT("capabilities"), Capabilities);
+		Root->SetArrayField(TEXT("tombstones"), {});
 		FString Json;
 		const TSharedRef<TJsonWriter<>> Writer =
 			TJsonWriterFactory<>::Create(&Json);

@@ -566,7 +566,8 @@ bool CaptureHeight(
 		return false;
 	}
 	OutData.SetNumZeroed(OutWidth * OutHeight);
-	FLandscapeEditDataInterface Edit(Target.Info.Get());
+	FLandscapeEditDataInterface Edit(Target.Info.Get(), false);
+	Edit.SetShouldDirtyPackage(false);
 	Edit.GetHeightDataFast(
 		OutExtent.Min.X,
 		OutExtent.Min.Y,
@@ -592,7 +593,8 @@ bool CaptureWeight(
 		return false;
 	}
 	OutData.SetNumZeroed(OutWidth * OutHeight);
-	FLandscapeEditDataInterface Edit(Target.Info.Get());
+	FLandscapeEditDataInterface Edit(Target.Info.Get(), false);
+	Edit.SetShouldDirtyPackage(false);
 	Edit.GetWeightDataFast(
 		LayerInfo,
 		OutExtent.Min.X,
@@ -722,10 +724,12 @@ bool ResolveImportPath(
 
 FString ArtifactRoot()
 {
-	return FPaths::Combine(
+	FString Root = FPaths::ConvertRelativePathToFull(FPaths::Combine(
 		FPaths::ProjectSavedDir(),
 		TEXT("UE_AI_integration"),
-		TEXT("Landscape"));
+		TEXT("Landscape")));
+	FPaths::NormalizeDirectoryName(Root);
+	return Root;
 }
 
 FString SanitizeFileStem(FString Value, const FString& Fallback)
@@ -3584,6 +3588,14 @@ bool RestorePackageFileBackups(
 				TEXT("Package recovery copy for '%s' is missing or corrupt."),
 				*Backup.PackageName);
 			return false;
+		}
+		TArray<uint8> CurrentBytes;
+		if (FFileHelper::LoadFileToArray(
+				CurrentBytes,
+				*Backup.OriginalPath)
+			&& HashBytes(CurrentBytes) == Backup.Sha256)
+		{
+			continue;
 		}
 		const FString TemporaryPath = FString::Printf(
 			TEXT("%s.ueai-restore-%s.tmp"),

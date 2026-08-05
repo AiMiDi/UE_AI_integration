@@ -13,6 +13,7 @@
 #include "Misc/Base64.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
+#include "Rendering/DrawElements.h"
 #include "RenderingThread.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableText.h"
@@ -24,6 +25,20 @@ using UEAIIntegration::Infrastructure::FRuntimeSceneService;
 using UEAIIntegration::Infrastructure::FRuntimeServiceResult;
 using UEAIIntegration::Infrastructure::FPIESessionController;
 using UEAIIntegration::Infrastructure::FSlateRuntimeInputService;
+
+namespace
+{
+void PrimeWindowHitTestGrid(const TSharedRef<SWindow>& Window)
+{
+	FSlateWindowElementList WindowElements(Window);
+	Window->PaintWindow(
+		FPlatformTime::Seconds(),
+		0.0f,
+		WindowElements,
+		FWidgetStyle(),
+		true);
+}
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRuntimeSessionGenerationTest,
@@ -180,14 +195,16 @@ bool FRuntimeInputGameThreadNoDeadlockTest::RunTest(const FString& Parameters)
 				SAssignNew(RawText, SEditableText)
 			]
 		];
-	FSlateApplication::Get().AddWindow(Window, false);
+	// Raw screen-coordinate input is routed through Slate's interactive-window
+	// hit test. The fixture must therefore be visible before its cached geometry
+	// is used; a hidden window can report geometry but can never receive the
+	// pointer event.
+	FSlateApplication::Get().AddWindow(Window, true);
 	ON_SCOPE_EXIT
 	{
-		Window->RequestDestroyWindow();
-		FSlateApplication::Get().Tick();
+		FSlateApplication::Get().DestroyWindowImmediately(Window);
 	};
-	FSlateApplication::Get().Tick();
-	Window->SlatePrepass();
+	PrimeWindowHitTestGrid(Window);
 
 	FSlateRuntimeInputService Input;
 	const double StartSeconds = FPlatformTime::Seconds();
@@ -301,14 +318,14 @@ bool FRuntimePointerSequenceStressTest::RunTest(const FString& Parameters)
 					})
 			]
 		];
-	FSlateApplication::Get().AddWindow(Window, false);
+	// Pointer sequences intentionally exercise the native Slate hit-test path,
+	// which only considers visible interactive top-level windows.
+	FSlateApplication::Get().AddWindow(Window, true);
 	ON_SCOPE_EXIT
 	{
-		Window->RequestDestroyWindow();
-		FSlateApplication::Get().Tick();
+		FSlateApplication::Get().DestroyWindowImmediately(Window);
 	};
-	FSlateApplication::Get().Tick();
-	Window->SlatePrepass();
+	PrimeWindowHitTestGrid(Window);
 
 	FRuntimeSceneService Service;
 	Service.PrepareNextSession();
