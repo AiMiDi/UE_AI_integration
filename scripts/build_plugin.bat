@@ -95,7 +95,12 @@ if %ERRORLEVEL% neq 0 exit /b 1
 call npm audit --omit=dev --prefix "%PLUGIN_ROOT%\MCP"
 if %ERRORLEVEL% neq 0 exit /b 1
 
-call "%UAT%" BuildPlugin -Plugin="%PLUGIN_PATH%" -Package="%OUTPUT_PATH%" -TargetPlatforms=Win64 -Rocket
+set "UAT_MODE_ARGS="
+if /I "%UEAI_USE_PRECOMPILED_UAT%"=="1" (
+    echo Using precompiled AutomationTool and AutomationScript modules.
+    set "UAT_MODE_ARGS=-NoCompileUAT -NoCompile"
+)
+call "%UAT%" %UAT_MODE_ARGS% BuildPlugin -Plugin="%PLUGIN_PATH%" -Package="%OUTPUT_PATH%" -TargetPlatforms=Win64 -Rocket
 
 if %ERRORLEVEL% neq 0 (
     echo.
