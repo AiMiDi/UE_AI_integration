@@ -95,6 +95,12 @@ if %ERRORLEVEL% neq 0 exit /b 1
 call npm audit --omit=dev --prefix "%PLUGIN_ROOT%\MCP"
 if %ERRORLEVEL% neq 0 exit /b 1
 
+if not "%UEAI_UBT_IDLE_TIMEOUT_SECONDS%"=="" (
+    echo Waiting for a stable UnrealBuildTool idle window...
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%PLUGIN_ROOT%\scripts\wait_for_ubt_idle.ps1" -EngineRoot "%ENGINE_PATH%" -TimeoutSeconds "%UEAI_UBT_IDLE_TIMEOUT_SECONDS%" -StableSeconds 10
+    if errorlevel 1 exit /b 1
+)
+
 set "UAT_MODE_ARGS="
 if /I "%UEAI_USE_PRECOMPILED_UAT%"=="1" (
     echo Using precompiled AutomationTool and AutomationScript modules.
