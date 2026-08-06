@@ -39,7 +39,7 @@ async function expectError(action, code) {
 async function waitFor(predicate, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const value = predicate();
+    const value = await predicate();
     if (value) return value;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
   }
@@ -193,7 +193,15 @@ async function runOnline() {
     );
     const sessionCompleted = await waitFor(() => {
       const value = sessionRunner.status(sessionStarted.runId);
-      return value.status === "completed" ? value : undefined;
+      const stopped = value.compensations?.some(
+        (item) => item.stepId === "$pie.stop" && item.ok === true,
+      );
+      const released = value.compensations?.some(
+        (item) => item.stepId === "$pie.lease" && item.ok === true,
+      );
+      return value.status === "completed" && stopped && released
+        ? value
+        : undefined;
     }, 30_000);
     assert.equal(sessionCompleted.steps[0].attempts, 1);
     assert.equal(sessionCompleted.session?.runnerStartedPie, true);
@@ -210,17 +218,16 @@ async function runOnline() {
       ),
       "Session Recipe did not release its caller-bound PIE lease.",
     );
-    const pieAfterRecipe = await clientA.execute(
-      "scene.pie.status",
-      {},
-      `session-recipe-pie-status-${randomUUID()}`,
-    );
-    assert.ok(
-      ["stopped", "idle", "none", "inactive"].includes(
-        String(pieAfterRecipe.state).toLowerCase(),
-      ),
-      `Runner-owned PIE remained active: ${JSON.stringify(pieAfterRecipe)}`,
-    );
+    const pieAfterRecipe = await waitFor(async () => {
+      const status = await clientA.execute(
+        "scene.pie.status",
+        {},
+        `session-recipe-pie-status-${randomUUID()}`,
+      );
+      return ["stopped", "idle", "none", "inactive"].includes(
+        String(status.state).toLowerCase(),
+      ) ? status : undefined;
+    }, 20_000);
     evidence.sessionRecipe = {
       runId: sessionCompleted.runId,
       planDigest: sessionCompleted.planDigest,
@@ -356,6 +363,20 @@ async function runOnline() {
       detailLevel: "standard",
     });
     assert.equal(levelRollback.rollbackVerified, true);
+    const levelExecuteAsset = levelExecute.receipt?.assetSet?.[0];
+    const levelRollbackAsset = levelRollback.receipt?.assetSet?.[0];
+    const workflowPackageSha256Before = String(
+      levelExecuteAsset?.packageSha256Before ?? levelExecuteAsset?.snapshotSha256 ?? "",
+    );
+    const workflowPackageSha256AfterRollback = String(
+      levelRollbackAsset?.currentPackageSha256 ?? "",
+    );
+    assert.match(workflowPackageSha256Before, /^sha256:[0-9a-f]{64}$/);
+    assert.equal(
+      workflowPackageSha256AfterRollback,
+      workflowPackageSha256Before,
+      "Level Blueprint Workflow did not restore the exact staged map package.",
+    );
     const levelRestored = await clientA.execute(
       "blueprint.graph.get",
       { name: levelMap, graph: "EventGraph", geometryMode: "stored" },
@@ -374,6 +395,8 @@ async function runOnline() {
       packageExtension: levelPlanAssets[0]?.packageExtension,
       operations: 2,
       rollbackVerified: levelRollback.rollbackVerified,
+      workflowPackageSha256Before,
+      workflowPackageSha256AfterRollback,
       restoredNodeCount: levelRestored.nodes?.length,
     };
 

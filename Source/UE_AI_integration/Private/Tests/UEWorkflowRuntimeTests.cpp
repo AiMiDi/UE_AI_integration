@@ -1663,6 +1663,82 @@ bool FUEWorkflowFailureRollbackTest::RunTest(const FString& Parameters)
 		TEXT("Failed createIfMissing workflow leaves no asset"),
 		AssetExistsWithoutLoading(AssetPath));
 	CleanupAsset(AssetPath);
+
+	const FString SuccessfulAssetPath = UniqueAssetPath(
+		TEXT("BP_CreateScopeAllowed"));
+	{
+		UEAIIntegration::Workflow::FWorkflowRuntime SuccessRuntime(
+			*Subsystem->GetRegistry());
+		TSharedPtr<FJsonObject> VariableParams = MakeShared<FJsonObject>();
+		VariableParams->SetStringField(TEXT("variableName"), TEXT("AcceptanceFlag"));
+		VariableParams->SetStringField(TEXT("variableType"), TEXT("Boolean"));
+		const TSharedPtr<FJsonObject> SuccessfulWorkflow = MakeWorkflow(
+			TEXT("create-scope-allowed"),
+			MakeScope(TEXT("blueprint"), SuccessfulAssetPath, true),
+			{MakeShared<FJsonValueObject>(MakeOperation(
+				TEXT("addVariable"),
+				TEXT("blueprint.variable.add"),
+				VariableParams))});
+		const FMCPResult SuccessfulPlan = PlanWorkflow(
+			SuccessRuntime,
+			SuccessfulWorkflow);
+		FString SuccessfulDigest;
+		TestTrue(TEXT("Successful createIfMissing workflow plans"),
+			GetPlanDigest(SuccessfulPlan, SuccessfulDigest));
+		const FMCPResult SuccessfulResult = ExecuteWorkflow(
+			SuccessRuntime,
+			SuccessfulWorkflow,
+			SuccessfulDigest,
+			true);
+		TestTrue(TEXT("Declared createIfMissing package is not a scope escape"),
+			SuccessfulResult.bOk);
+		if (!SuccessfulResult.bOk)
+		{
+			AddError(SuccessfulResult.Error.Code + TEXT(": ")
+				+ SuccessfulResult.Error.Message);
+		}
+		else
+		{
+			TSharedPtr<FJsonObject> RollbackRequest = MakeShared<FJsonObject>();
+			RollbackRequest->SetStringField(TEXT("action"), TEXT("rollback"));
+			RollbackRequest->SetStringField(
+				TEXT("runId"),
+				SuccessfulResult.Data->GetStringField(TEXT("runId")));
+			RollbackRequest->SetStringField(
+				TEXT("approvePlanDigest"),
+				SuccessfulDigest);
+			const FMCPResult RollbackResult =
+				SuccessRuntime.HandleRequest(RollbackRequest);
+			TestTrue(
+				TEXT("Successful createIfMissing workflow rolls back"),
+				RollbackResult.bOk);
+			if (RollbackResult.bOk)
+			{
+				TestTrue(
+					TEXT("Create rollback is verified"),
+					RollbackResult.Data->GetBoolField(TEXT("rollbackVerified")));
+			}
+			TestFalse(
+				TEXT("Create rollback removes registry and disk visibility"),
+				AssetExistsWithoutLoading(SuccessfulAssetPath));
+
+			TSharedPtr<FJsonObject> GetParams = MakeShared<FJsonObject>();
+			GetParams->SetStringField(TEXT("name"), SuccessfulAssetPath);
+			const FMCPToolResult GetAfterRollback =
+				Subsystem->GetRegistry()->ExecuteTool(
+					TEXT("blueprint.asset.get"),
+					GetParams);
+			TestFalse(
+				TEXT("Public Blueprint read-back rejects the rolled-back asset"),
+				GetAfterRollback.bSuccess);
+			TestEqual(
+				TEXT("Rolled-back Blueprint has stable not-found code"),
+				GetAfterRollback.ErrorCode,
+				FString(TEXT("asset_not_found")));
+		}
+	}
+	TestTrue(TEXT("Successful createIfMissing fixture is removed"),
+		CleanupAsset(SuccessfulAssetPath));
 	return true;
 }
 

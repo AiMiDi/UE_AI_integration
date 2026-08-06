@@ -93,7 +93,7 @@ function Invoke-OwnedAutomation {
         [string]$LogPath
     )
     $argumentLine = ('"' + $Project + '" -unattended -nop4 -NoSplash -NoSound -NoLiveCoding ' +
-        '-ExecCmds="Automation RunTests ' + $TestName + '; Automation Quit" ' +
+        '-ExecCmds="Automation RunTests ' + $TestName + '" ' +
         '-TestExit="Automation Test Queue Empty" -abslog="' + $LogPath + '"')
     $process = Start-Process -FilePath $Editor -ArgumentList $argumentLine -PassThru -WindowStyle Hidden
     Assert-Condition ($null -ne $process -and $process.Id -gt 0) 'The owned Automation Editor did not start.'
@@ -105,9 +105,9 @@ function Invoke-OwnedAutomation {
     try {
         Assert-Condition ($process.WaitForExit(180000)) "Automation timed out: $TestName"
         Assert-Condition ($process.ExitCode -eq 0) "Automation Editor failed with exit code $($process.ExitCode): $TestName"
-        $completed = @(Select-String -LiteralPath $LogPath -Pattern ('Test Completed.*' + [regex]::Escape($TestName.Split('.')[-1])) -ErrorAction SilentlyContinue)
-        $failed = @(Select-String -LiteralPath $LogPath -Pattern 'Result=\{(Failed|失败)\}|Automation:.*Error' -ErrorAction SilentlyContinue)
-        Assert-Condition ($completed.Count -gt 0 -and $failed.Count -eq 0) "Automation did not pass: $TestName"
+        $completionPattern = 'Test Completed.*Result=\{(Success|Succeeded|成功)\}.*Path=\{' + [regex]::Escape($TestName) + '\}'
+        $passed = @(Select-String -LiteralPath $LogPath -Pattern $completionPattern -ErrorAction SilentlyContinue)
+        Assert-Condition ($passed.Count -gt 0) "Automation did not pass: $TestName"
     }
     finally {
         Stop-OwnedEditor $owned
@@ -163,8 +163,11 @@ function Stop-OwnedRecipeWorkers {
     foreach ($journal in Get-ChildItem -LiteralPath $RecipeRoot -Recurse -File -Filter run.json -ErrorAction SilentlyContinue) {
         try { $state = Get-Content -LiteralPath $journal.FullName -Raw -Encoding UTF8 | ConvertFrom-Json }
         catch { continue }
-        if ($null -eq $state.workerPid -or [int]$state.workerPid -le 0) { continue }
-        $pidValue = [int]$state.workerPid
+        $workerPidProperty = $state.PSObject.Properties['workerPid']
+        if ($null -eq $workerPidProperty -or
+            $null -eq $workerPidProperty.Value -or
+            [int]$workerPidProperty.Value -le 0) { continue }
+        $pidValue = [int]$workerPidProperty.Value
         $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
         if ($null -eq $process) { continue }
         $cim = Get-CimInstance Win32_Process -Filter "ProcessId=$pidValue" -ErrorAction SilentlyContinue
@@ -203,6 +206,7 @@ $evidence = $null
 $ownedEditor = $null
 $previousPort = $env:UE_PORT
 $previousEngineRoot = $env:UEAI_ENGINE_ROOT
+$previousFusionPhotoCompat = $env:UEAI_RC_REGISTER_FUSION_PHOTO_CVAR
 
 New-Item -ItemType Directory -Path $extractRoot, $fixtureRoot, $recipeRoot -Force | Out-Null
 try {
@@ -269,6 +273,8 @@ DefaultGraphicsRHI=DefaultGraphicsRHI_DX12
     }
     Assert-Condition (Test-Path -LiteralPath (Join-Path $fixtureRoot 'Content\UEAI\Acceptance\LevelBlueprintFixture.umap') -PathType Leaf) 'Level Blueprint acceptance map was not generated.'
     $baseline = Get-PersistentFingerprint $fixtureRoot
+    $levelMapRelative = 'Content/UEAI/Acceptance/LevelBlueprintFixture.umap'
+    $levelMapInitialSha256 = [string]$baseline[$levelMapRelative]
 
     $ue = Join-Path $bundleRoot 'CLI\bin\ue-cli.exe'
     $offlineTools = Invoke-JsonCommand $ue @('test-tools', '--bundle', $bundleRoot, '--json')
@@ -278,6 +284,7 @@ DefaultGraphicsRHI=DefaultGraphicsRHI_DX12
     $endpoint = "http://127.0.0.1:$port"
     $env:UE_PORT = [string]$port
     $env:UEAI_ENGINE_ROOT = $enginePath
+    $env:UEAI_RC_REGISTER_FUSION_PHOTO_CVAR = '1'
     $firstLog = Join-Path $testRoot 'UnrealEditor-first.log'
     $ownedEditor = Start-OwnedEditor $editorPath $projectFile $firstLog
     $firstHealth = Wait-EditorHealth $endpoint $ownedEditor
@@ -303,7 +310,21 @@ DefaultGraphicsRHI=DefaultGraphicsRHI_DX12
         'recipe-resume', $bundleRoot, $endpoint, $recipeRoot,
         [string]$recipeStart.runId, [string]$recipeStart.planDigest)
 
+    # Finalize the owned Editor before hashing logs and persistent files. The
+    # active logging device keeps the second log open until process exit, and
+    # the acceptance baseline is defined at the same stopped-Editor boundary
+    # used by installation/release gates.
+    Stop-OwnedEditor $ownedEditor
+    $ownedEditor = $null
     $after = Get-PersistentFingerprint $fixtureRoot
+    # The direct compatibility scenario performs two successful writes
+    # (add, then delete). UE package serialization is not byte-stable across
+    # successful saves even when the graph returns to the same logical state.
+    # The following Workflow must still restore its exact staged .umap bytes.
+    $levelMapFinalSha256 = [string]$after[$levelMapRelative]
+    $levelWorkflowBaselineSha256 = ([string]$online.levelBlueprint.workflowPackageSha256Before) -replace '^sha256:', ''
+    Assert-Condition ($levelMapFinalSha256 -ceq $levelWorkflowBaselineSha256) 'Level Blueprint Workflow did not restore the exact staged map package.'
+    $baseline[$levelMapRelative] = $levelMapFinalSha256
     Assert-FingerprintEqual $baseline $after
     $evidence = [ordered]@{
         ok = $true
@@ -324,6 +345,8 @@ DefaultGraphicsRHI=DefaultGraphicsRHI_DX12
         sessionRecipe = $online.sessionRecipe
         workflow = $online.workflow
         levelBlueprint = $online.levelBlueprint
+        levelMapInitialSha256 = $levelMapInitialSha256
+        levelMapFinalSha256 = $levelMapFinalSha256
         recipe = $recipeResume
         logs = @(
             @{ name = 'first-editor'; sha256 = (Get-FileHash -LiteralPath $firstLog -Algorithm SHA256).Hash.ToLowerInvariant() },
@@ -347,6 +370,7 @@ finally {
         }
         $env:UE_PORT = $previousPort
         $env:UEAI_ENGINE_ROOT = $previousEngineRoot
+        $env:UEAI_RC_REGISTER_FUSION_PHOTO_CVAR = $previousFusionPhotoCompat
         if (-not $KeepFixture -and (Test-Path -LiteralPath $testRoot)) {
             $resolvedTestRoot = [IO.Path]::GetFullPath($testRoot)
             Assert-Condition ($resolvedTestRoot.StartsWith($temporaryBase + [IO.Path]::DirectorySeparatorChar + 'ueai-rc-ue53-', [StringComparison]::OrdinalIgnoreCase)) 'Refusing to remove a non-owned test directory.'

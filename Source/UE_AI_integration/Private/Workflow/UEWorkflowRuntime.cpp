@@ -1,6 +1,7 @@
 #include "Workflow/UEWorkflowRuntime.h"
 
 #include "AssetRegistry/AssetData.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/ActorComponent.h"
@@ -1616,12 +1617,22 @@ bool DeleteWorkflowAsset(
 	{
 		return false;
 	}
+	const FString PackageName =
+		FPackageName::ObjectPathToPackageName(AssetPath);
 	UObject* Asset = LoadAssetWithoutLogging(AssetPath);
-	UPackage* Package = Asset ? Asset->GetOutermost() : nullptr;
-	if (Asset)
+	UPackage* Package = Asset
+		? Asset->GetOutermost()
+		: FindPackage(nullptr, *PackageName);
+	if (IsValid(Asset))
 	{
+		FAssetRegistryModule::AssetDeleted(Asset);
+		Asset->ClearFlags(RF_Public | RF_Standalone);
 		const TArray<UObject*> Objects = {Asset};
 		ObjectTools::DeleteObjectsUnchecked(Objects);
+		if (IsValid(Asset))
+		{
+			Asset->MarkAsGarbage();
+		}
 	}
 	const FString Filename = PackageFilenameForAsset(AssetPath, ScopeKind);
 	const bool bFileRemoved =
@@ -1630,6 +1641,7 @@ bool DeleteWorkflowAsset(
 		|| IFileManager::Get().Delete(*Filename, false, true, true);
 	if (Package)
 	{
+		Package->SetDirtyFlag(false);
 		IAssetRegistry::GetChecked().PackageDeleted(Package);
 	}
 	return bFileRemoved && !AssetExistsWithoutLogging(AssetPath);
@@ -4421,6 +4433,15 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 			AssetValue.IsValid() && AssetValue->Type == EJson::Object
 				? AssetValue->AsObject()
 				: nullptr;
+		const FString DeclaredAsset = GetStringField(
+			AssetRecord,
+			TEXT("asset"));
+		if (FPackageName::IsValidLongPackageName(DeclaredAsset))
+		{
+			// createIfMissing scopes do not have a UObject until their
+			// initializer runs, but the declared package is still in-scope.
+			ScopePackages.Add(DeclaredAsset);
+		}
 		if (UObject* Asset = LoadWorkflowLogicalAsset(AssetRecord))
 		{
 			ScopePackages.Add(Asset->GetOutermost()->GetName());
@@ -6816,7 +6837,11 @@ FMCPResult FWorkflowRuntime::RollbackV2(
 					|| CurrentPackageHash != PackageHashBefore
 				: bPackageExists;
 
-		if (!bRestored || bPackageNeedsRestore)
+		// A newly-created scope must always pass through the durable absence
+		// restore. Undo can remove the file and make the logical object invalid
+		// while leaving stale in-memory Asset Registry data behind; skipping the
+		// cleanup in that state makes public read-back rediscover a ghost asset.
+		if (!bExistedBefore || !bRestored || bPackageNeedsRestore)
 		{
 			FString RestoreError;
 			bRestored = RestoreWorkflowAssetFile(AssetRecord, RestoreError);

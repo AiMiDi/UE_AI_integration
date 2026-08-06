@@ -104,7 +104,7 @@ namespace MCPHelpers
 				Asset.PackageName.ToString().Equals(NameOrPath, ESearchCase::IgnoreCase))
 			{
 				UBlueprint* BP = Cast<UBlueprint>(Asset.GetAsset());
-				if (BP) return BP;
+				if (IsValid(BP) && BP->IsAsset()) return BP;
 			}
 		}
 
@@ -120,7 +120,7 @@ namespace MCPHelpers
 				if (World && World->PersistentLevel)
 				{
 					ULevelScriptBlueprint* LevelBP = World->PersistentLevel->GetLevelScriptBlueprint(true);
-					if (LevelBP) return LevelBP;
+					if (IsValid(LevelBP)) return LevelBP;
 				}
 			}
 		}
@@ -129,7 +129,10 @@ namespace MCPHelpers
 		UObject* Loaded = StaticLoadObject(UBlueprint::StaticClass(), nullptr, *NameOrPath);
 		if (UBlueprint* BP = Cast<UBlueprint>(Loaded))
 		{
-			return BP;
+			if (IsValid(BP) && BP->IsAsset())
+			{
+				return BP;
+			}
 		}
 
 		OutError = FString::Printf(TEXT("Blueprint '%s' not found. Use list_blueprints to see available assets."), *NameOrPath);

@@ -10,6 +10,7 @@
 #include "Infrastructure/Runtime/BlueprintDebugService.h"
 #include "Infrastructure/Sha256.h"
 #include "HAL/FileManager.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformProperties.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformMisc.h"
@@ -491,6 +492,23 @@ FMCPResult FUEAIIntegrationServer::PlanWorkflowDefinition(
 
 bool FUEAIIntegrationServer::Start(int32 Port)
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	// The customized UE 5.3 acceptance engine reads this project-owned CVar
+	// unconditionally from game-view rendering. Its normal game module is
+	// intentionally absent from the isolated fixture, so register only the
+	// inert default behind an explicit test-process opt-in.
+	if (FPlatformMisc::GetEnvironmentVariable(
+			TEXT("UEAI_RC_REGISTER_FUSION_PHOTO_CVAR")) == TEXT("1")
+		&& !IConsoleManager::Get().FindConsoleVariable(
+			TEXT("r.FusionPhoto.OutputOpt")))
+	{
+		IConsoleManager::Get().RegisterConsoleVariable(
+			TEXT("r.FusionPhoto.OutputOpt"),
+			0,
+			TEXT("Inert compatibility value for isolated UE-AI RC Automation."),
+			ECVF_Default);
+	}
+#endif
 	UEAIIntegration::Infrastructure::FClientActivityService::SetActiveService(
 		&ClientActivityService);
 	if (bIsRunning)
