@@ -242,6 +242,20 @@ try {
     }
     [IO.File]::WriteAllText($projectFile, ($projectDefinition | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
     New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'Content'), (Join-Path $fixtureRoot 'Config'), (Join-Path $fixtureRoot 'Plugins') -Force | Out-Null
+    # This source-built UE 5.3 baseline is qualified with DX12/SM6. A bare
+    # content-only project otherwise falls back to PCD3D_SM5 and can compile a
+    # separate, unqualified global-shader surface before the plugin loads.
+    $fixtureEngineConfig = @'
+[/Script/WindowsTargetPlatform.WindowsTargetSettings]
+DefaultGraphicsRHI=DefaultGraphicsRHI_DX12
+-D3D12TargetedShaderFormats=PCD3D_SM5
++D3D12TargetedShaderFormats=PCD3D_SM6
+-D3D11TargetedShaderFormats=PCD3D_SM5
+'@
+    [IO.File]::WriteAllText(
+        (Join-Path $fixtureRoot 'Config\DefaultEngine.ini'),
+        $fixtureEngineConfig,
+        [Text.UTF8Encoding]::new($false))
     Copy-Item -LiteralPath $bundleRoot -Destination (Join-Path $fixtureRoot 'Plugins\UE_AI_integration') -Recurse
     $previousPrepareLevelMap = $env:UEAI_RC_PREPARE_LEVEL_MAP
     try {
@@ -256,6 +270,10 @@ try {
     Assert-Condition (Test-Path -LiteralPath (Join-Path $fixtureRoot 'Content\UEAI\Acceptance\LevelBlueprintFixture.umap') -PathType Leaf) 'Level Blueprint acceptance map was not generated.'
     $baseline = Get-PersistentFingerprint $fixtureRoot
 
+    $ue = Join-Path $bundleRoot 'CLI\bin\ue-cli.exe'
+    $offlineTools = Invoke-JsonCommand $ue @('test-tools', '--bundle', $bundleRoot, '--json')
+    Assert-Condition ($offlineTools.ok -eq $true -and $offlineTools.data.schema -eq 'ue.test-tools.v2' -and $offlineTools.data.status -eq 'partial') 'Offline test-tools did not return partial success.'
+
     $port = Get-FreeLoopbackPort
     $endpoint = "http://127.0.0.1:$port"
     $env:UE_PORT = [string]$port
@@ -264,11 +282,8 @@ try {
     $ownedEditor = Start-OwnedEditor $editorPath $projectFile $firstLog
     $firstHealth = Wait-EditorHealth $endpoint $ownedEditor
 
-    $ue = Join-Path $bundleRoot 'CLI\bin\ue-cli.exe'
     $doctor = Invoke-JsonCommand $ue @('doctor', '--full', '--bundle', $bundleRoot, '--endpoint', $endpoint, '--json')
     Assert-Condition ($doctor.ok -eq $true -and $doctor.data.schema -eq 'ue.doctor.v3') 'Online doctor v3 failed.'
-    $offlineTools = Invoke-JsonCommand $ue @('test-tools', '--bundle', $bundleRoot, '--json')
-    Assert-Condition ($offlineTools.ok -eq $true -and $offlineTools.data.schema -eq 'ue.test-tools.v2' -and $offlineTools.data.status -eq 'partial') 'Offline test-tools did not return partial success.'
     $onlineTools = Invoke-JsonCommand $ue @('test-tools', '--require-editor', '--bundle', $bundleRoot, '--endpoint', $endpoint, '--json')
     Assert-Condition ($onlineTools.ok -eq $true -and $onlineTools.data.status -eq 'passed') 'Online test-tools --require-editor failed.'
 
@@ -335,7 +350,14 @@ finally {
         if (-not $KeepFixture -and (Test-Path -LiteralPath $testRoot)) {
             $resolvedTestRoot = [IO.Path]::GetFullPath($testRoot)
             Assert-Condition ($resolvedTestRoot.StartsWith($temporaryBase + [IO.Path]::DirectorySeparatorChar + 'ueai-rc-ue53-', [StringComparison]::OrdinalIgnoreCase)) 'Refusing to remove a non-owned test directory.'
-            Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
+            try {
+                Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
+            }
+            catch {
+                # Never replace the primary acceptance failure with a cleanup
+                # error (for example while CrashReportClient releases a dump).
+                Write-Warning "Owned RC fixture cleanup was deferred: $($_.Exception.Message)"
+            }
         }
     }
 }

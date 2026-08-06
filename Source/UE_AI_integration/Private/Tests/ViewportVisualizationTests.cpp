@@ -757,7 +757,19 @@ bool FViewportVisualizationAsyncExecutorTest::RunTest(
 				CancelResult.Emplace(MoveTemp(Result));
 			},
 			CancelImmediate));
-	Executor.CancelAsyncOperations(TEXT("Server stopped for Automation."));
+	const FMCPResult CancelAck = Executor.CancelAsyncOperation(
+		CancelContext.RequestId,
+		TEXT("Server stopped for Automation."));
+	TestTrue(TEXT("Per-request cancellation returns an acknowledgement"),
+		CancelAck.bOk && CancelAck.Data.IsValid());
+	if (CancelAck.Data.IsValid())
+	{
+		TestEqual(TEXT("Cancel ACK retains the exact capability after synchronous completion"),
+			CancelAck.Data->GetStringField(TEXT("capability")),
+			FString(TEXT("scene.test.async")));
+		TestTrue(TEXT("Cancel ACK marks cancellation pending"),
+			CancelAck.Data->GetBoolField(TEXT("cancelPending")));
+	}
 	TestEqual(
 		TEXT("Cancellation completes the request exactly once"),
 		CancelCompletionCount,
@@ -767,6 +779,15 @@ bool FViewportVisualizationAsyncExecutorTest::RunTest(
 		CancelResult.IsSet()
 			&& !CancelResult->bOk
 			&& CancelResult->Error.Code == TEXT("request_cancelled"));
+	FMCPResult CancelCached;
+	TestFalse(TEXT("Cancelled request retry is served from cache"),
+		Executor.BeginExecuteAsync(
+			CancelContext,
+			[](FMCPResult&& Result) {},
+			CancelCached));
+	TestEqual(TEXT("Cancelled request retry preserves canonical result"),
+		CancelCached.Error.Code,
+		FString(TEXT("request_cancelled")));
 	return true;
 }
 

@@ -265,14 +265,18 @@ FMCPResult FMCPExecutor::CancelAsyncOperation(
 		Data->SetStringField(TEXT("state"), TEXT("notInFlight"));
 		return FMCPResult::Ok(Data);
 	}
+	// Cancellation may synchronously complete the tool, which removes this
+	// request from InFlightRequests. Copy all acknowledgement data before
+	// dispatching the cancellation instead of retaining a map-value pointer.
+	const FString Capability = InFlight->Capability;
 	const bool bAccepted = Registry.CancelAsyncTool(
-		InFlight->Capability,
+		Capability,
 		Reason.IsEmpty()
 			? TEXT("The MCP client cancelled the request.")
 			: Reason);
 	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
 	Data->SetStringField(TEXT("requestId"), RequestId);
-	Data->SetStringField(TEXT("capability"), InFlight->Capability);
+	Data->SetStringField(TEXT("capability"), Capability);
 	Data->SetBoolField(TEXT("cancelPending"), bAccepted);
 	Data->SetStringField(
 		TEXT("state"),
