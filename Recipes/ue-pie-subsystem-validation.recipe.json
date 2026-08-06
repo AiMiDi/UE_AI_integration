@@ -1,0 +1,178 @@
+{
+  "schema": "ue.recipe.v2",
+  "id": "ue-pie-subsystem-validation",
+  "version": "1.0.0",
+  "description": "Run a bounded, generation-bound PIE subsystem validation with actor discovery, begin/submit/status/finalize calls, waits, visual evidence, logs, and cancel compensation.",
+  "inputs": {
+    "actorClass": { "type": "string" },
+    "actorName": { "type": "string" },
+    "actorPath": { "type": "string" },
+    "actorLimit": { "type": "integer", "minimum": 1, "maximum": 256 },
+    "subsystemClass": { "type": "string" },
+    "subsystemName": { "type": "string" },
+    "subsystemPath": { "type": "string" },
+    "beginFunction": { "type": "string" },
+    "beginArguments": { "type": "object" },
+    "submitFunction": { "type": "string" },
+    "submitArguments": { "type": "object" },
+    "statusFunction": { "type": "string" },
+    "statusArguments": { "type": "object" },
+    "finalizeFunction": { "type": "string" },
+    "finalizeArguments": { "type": "object" },
+    "cancelFunction": { "type": "string" },
+    "cancelArguments": { "type": "object" },
+    "viewReadyPredicate": { "type": "object" },
+    "terminalPredicate": { "type": "object" },
+    "waitTimeoutMs": { "type": "integer", "minimum": 1, "maximum": 120000 },
+    "waitPollIntervalMs": { "type": "integer", "minimum": 1, "maximum": 1000 },
+    "captureWidth": { "type": "integer", "minimum": 1, "maximum": 4096 },
+    "captureHeight": { "type": "integer", "minimum": 1, "maximum": 4096 },
+    "logLines": { "type": "integer", "minimum": 1, "maximum": 2000 },
+    "logFilter": { "type": "string" }
+  },
+  "sessionPolicy": {
+    "requirePieStopped": true,
+    "runnerStartsPie": true,
+    "lease": "pie",
+    "editorInstanceBound": true
+  },
+  "steps": [
+    {
+      "id": "actors",
+      "kind": "sessionCapability",
+      "capability": "scene.runtime.object.find",
+      "params": {
+        "class": "$inputs.actorClass",
+        "name": "$inputs.actorName",
+        "path": "$inputs.actorPath",
+        "limit": "$inputs.actorLimit"
+      }
+    },
+    {
+      "id": "subsystem",
+      "kind": "sessionCapability",
+      "capability": "scene.runtime.object.find",
+      "params": {
+        "class": "$inputs.subsystemClass",
+        "name": "$inputs.subsystemName",
+        "path": "$inputs.subsystemPath",
+        "limit": 1
+      }
+    },
+    {
+      "id": "begin",
+      "kind": "sessionCapability",
+      "capability": "scene.runtime.object.call",
+      "params": {
+        "objectRef": "$steps.subsystem.output.objects.0.objectRef",
+        "function": "$inputs.beginFunction",
+        "arguments": "$inputs.beginArguments"
+      },
+      "compensate": {
+        "kind": "sessionCapability",
+        "capability": "scene.runtime.object.call",
+        "params": {
+          "objectRef": "$steps.subsystem.output.objects.0.objectRef",
+          "function": "$inputs.cancelFunction",
+          "arguments": "$inputs.cancelArguments"
+        }
+      }
+    },
+    {
+      "id": "view-wait-start",
+      "kind": "sessionCapability",
+      "capability": "scene.runtime.wait.until",
+      "params": {
+        "sessionId": "$steps.subsystem.output.objects.0.objectRef.sessionId",
+        "generation": "$steps.subsystem.output.objects.0.objectRef.generation",
+        "predicate": "$inputs.viewReadyPredicate",
+        "timeoutMs": "$inputs.waitTimeoutMs",
+        "pollIntervalMs": "$inputs.waitPollIntervalMs"
+      }
+    },
+    {
+      "id": "view-wait",
+      "kind": "poll",
+      "poll": {
+        "capability": "scene.runtime.wait.get",
+        "params": { "waitId": "$steps.view-wait-start.output.waitId" },
+        "until": { "equals": { "path": "poll.output.status", "value": "completed" } },
+        "maxAttempts": 100,
+        "intervalMs": 250
+      }
+    },
+    {
+      "id": "submit",
+      "kind": "sessionCapability",
+      "capability": "scene.runtime.object.call",
+      "params": {
+        "objectRef": "$steps.subsystem.output.objects.0.objectRef",
+        "function": "$inputs.submitFunction",
+        "arguments": "$inputs.submitArguments"
+      }
+    },
+    {
+      "id": "status",
+      "kind": "sessionCapability",
+      "capability": "scene.runtime.object.call",
+      "params": {
+        "objectRef": "$steps.subsystem.output.objects.0.objectRef",
+        "function": "$inputs.statusFunction",
+        "arguments": "$inputs.statusArguments"
+      }
+    },
+    {
+      "id": "terminal-wait-start",
+      "kind": "sessionCapability",
+      "capability": "scene.runtime.wait.until",
+      "params": {
+        "sessionId": "$steps.subsystem.output.objects.0.objectRef.sessionId",
+        "generation": "$steps.subsystem.output.objects.0.objectRef.generation",
+        "predicate": "$inputs.terminalPredicate",
+        "timeoutMs": "$inputs.waitTimeoutMs",
+        "pollIntervalMs": "$inputs.waitPollIntervalMs"
+      }
+    },
+    {
+      "id": "terminal-wait",
+      "kind": "poll",
+      "poll": {
+        "capability": "scene.runtime.wait.get",
+        "params": { "waitId": "$steps.terminal-wait-start.output.waitId" },
+        "until": { "equals": { "path": "poll.output.status", "value": "completed" } },
+        "maxAttempts": 100,
+        "intervalMs": 250
+      }
+    },
+    {
+      "id": "finalize",
+      "kind": "sessionCapability",
+      "capability": "scene.runtime.object.call",
+      "params": {
+        "objectRef": "$steps.subsystem.output.objects.0.objectRef",
+        "function": "$inputs.finalizeFunction",
+        "arguments": "$inputs.finalizeArguments"
+      }
+    },
+    {
+      "id": "capture",
+      "kind": "sessionCapability",
+      "capability": "scene.runtime.viewport.capture",
+      "params": {
+        "sessionId": "$steps.subsystem.output.objects.0.objectRef.sessionId",
+        "generation": "$steps.subsystem.output.objects.0.objectRef.generation",
+        "width": "$inputs.captureWidth",
+        "height": "$inputs.captureHeight"
+      }
+    },
+    {
+      "id": "logs",
+      "kind": "sessionCapability",
+      "capability": "scene.output_log.get",
+      "params": {
+        "lines": "$inputs.logLines",
+        "filter": "$inputs.logFilter"
+      }
+    }
+  ]
+}

@@ -587,6 +587,107 @@ int main()
                 != std::string::npos,
         "missing required skill operations must fail catalog load");
 
+    const auto repository_root = std::filesystem::path(__FILE__)
+        .parent_path().parent_path().parent_path();
+    const auto diagnostic_root = std::filesystem::temp_directory_path()
+        / ("ue-command-doctor-"
+            + std::to_string(
+                std::chrono::steady_clock::now()
+                    .time_since_epoch().count()));
+    const auto instance_root = diagnostic_root / "instances";
+    const auto saved_root = diagnostic_root / "Project" / "Saved";
+    const auto marker_path =
+        saved_root / "UEAIIntegration" / "last-request.json";
+    const std::string diagnostic_instance_id =
+        "01234567-89ab-cdef-0123-456789abcdef";
+    const auto crash_path = saved_root / "Crashes"
+        / "UECC-Test" / "CrashContext.runtime-xml";
+    std::filesystem::create_directories(marker_path.parent_path());
+    std::filesystem::create_directories(crash_path.parent_path());
+    {
+        std::ofstream marker(marker_path, std::ios::trunc);
+        marker << json({
+            { "schema", "ue.request-marker.v1" },
+            { "requestId", "request-without-params" },
+            { "capability", "blueprint.node.add" },
+            { "serverInstanceId", diagnostic_instance_id },
+            { "processId", 4294967294ULL },
+            { "startedAt", "2026-08-06T00:00:00.000Z" },
+            { "phase", "dispatch" },
+            { "status", "running" },
+        }).dump();
+    }
+    std::filesystem::last_write_time(
+        marker_path,
+        std::filesystem::file_time_type::clock::now()
+            - std::chrono::seconds(2));
+    {
+        std::ofstream crash(crash_path, std::ios::trunc);
+        crash << "<RuntimeCrashDescription/>";
+    }
+    std::filesystem::create_directories(instance_root);
+    {
+        std::ofstream record(
+            instance_root / (diagnostic_instance_id + ".json"),
+            std::ios::trunc);
+        record << json({
+            { "schema", "ue.editor-instance.v1" },
+            { "serverInstanceId", diagnostic_instance_id },
+            { "pid", 4294967294ULL },
+            { "processStartTime", "2026-08-06T00:00:00.000Z" },
+            { "endpoint", "http://127.0.0.1:65534" },
+            { "projectSavedPath", saved_root.string() },
+            { "requestMarkerPath", marker_path.string() },
+            { "crashRootPath", (saved_root / "Crashes").string() },
+        }).dump();
+    }
+#if defined(_WIN32)
+    _putenv_s("UEAI_INSTANCE_ROOT", instance_root.string().c_str());
+#else
+    setenv("UEAI_INSTANCE_ROOT", instance_root.string().c_str(), 1);
+#endif
+    std::istringstream doctor_input;
+    std::ostringstream doctor_output;
+    std::ostringstream doctor_error;
+    const int doctor_result = ue::command::Run(
+        {
+            "doctor",
+            "--capability-root",
+            (repository_root / "Resources" / "Capabilities").string(),
+            "--skill-root",
+            (repository_root / "skills").string(),
+            "--no-clean-stale-instances",
+            "--json",
+        },
+        repository_root / "CLI" / "bin" / "ue-cli.exe",
+        doctor_input,
+        doctor_output,
+        doctor_error);
+#if defined(_WIN32)
+    _putenv_s("UEAI_INSTANCE_ROOT", "");
+#else
+    unsetenv("UEAI_INSTANCE_ROOT");
+#endif
+    Require(doctor_result == 0,
+        "offline doctor fixture failed: " + doctor_error.str());
+    const json doctor = json::parse(doctor_output.str());
+    const json& instance = doctor["data"]["instances"]["records"][0];
+    Require(instance["status"] == "stale",
+        "missing process must classify the instance as stale");
+    Require(instance["lastRequest"]["requestId"]
+            == "request-without-params"
+        && instance["lastRequest"]["capability"]
+            == "blueprint.node.add",
+        "doctor must correlate the bounded request marker");
+    Require(instance["crashContext"]
+            == "Saved/Crashes/UECC-Test/CrashContext.runtime-xml",
+        "doctor must report only the relative crash artifact path");
+    Require(doctor_output.str().find(saved_root.string())
+            == std::string::npos,
+        "doctor must not expose the absolute project Saved path");
+    std::error_code diagnostic_remove_error;
+    std::filesystem::remove_all(diagnostic_root, diagnostic_remove_error);
+
     std::error_code catalog_remove_error;
     std::filesystem::remove_all(
         catalog_root,

@@ -214,6 +214,65 @@ int main()
             multi_asset_plan_again["planDigest"],
         "v2 plan digest is deterministic");
 
+    json level_blueprint = {
+        { "dsl", "ue.workflow" },
+        { "dslVersion", "2.0" },
+        { "workflowKind", "assetEdit" },
+        { "workflowId", "level-blueprint-safe-edit" },
+        { "scopes", {
+            { "level", {
+                { "kind", "levelBlueprint" },
+                { "asset", "/Game/Automation/Maps/L_Workflow" },
+                { "createIfMissing", false },
+            } },
+        } },
+        { "persistence", "dirtyOnly" },
+        { "operations", json::array({
+            {
+                { "id", "addEvent" },
+                { "type", "blueprint.node.add" },
+                { "scope", "level" },
+                { "params", {
+                    { "graph", "EventGraph" },
+                    { "nodeType", "CustomEvent" },
+                    { "eventName", "WorkflowGeneratedEvent" },
+                } },
+            },
+        }) },
+    };
+    const auto level_blueprint_plan =
+        parse_result(engine.PlanJson(level_blueprint.dump()));
+    require(
+        level_blueprint_plan["ok"] == true
+            && level_blueprint_plan["assetSet"].size() == 1
+            && level_blueprint_plan["assetSet"][0]["kind"]
+                == "levelBlueprint",
+        "levelBlueprint graph edit plans as an existing map-backed scope");
+    require(
+        level_blueprint_plan["initializers"].empty(),
+        "levelBlueprint never synthesizes an asset initializer");
+    require(
+        level_blueprint_plan["finalizers"].size() == 4
+            && level_blueprint_plan["finalizers"][0]["operationType"]
+                == "blueprint.asset.compile",
+        "levelBlueprint retains compile, asset/graph read-back, and diff finalizers");
+
+    auto forbidden_level_blueprint = level_blueprint;
+    forbidden_level_blueprint["operations"][0]["type"] =
+        "blueprint.component.add";
+    forbidden_level_blueprint["operations"][0]["params"] = {
+        { "componentName", "ForbiddenComponent" },
+        { "componentClass", "/Script/Engine.SceneComponent" },
+    };
+    const auto forbidden_level_blueprint_result =
+        parse_result(engine.PlanJson(forbidden_level_blueprint.dump()));
+    require(
+        forbidden_level_blueprint_result["ok"] == false
+            && has_diagnostic(
+                forbidden_level_blueprint_result,
+                "operation_scope_mismatch"),
+        "levelBlueprint rejects component and other world-shape operations");
+
     auto cyclic_v2 = json::parse(multi_asset_text);
     cyclic_v2["operations"][1]["dependsOn"] =
         json::array({ "createConsumerGraph" });

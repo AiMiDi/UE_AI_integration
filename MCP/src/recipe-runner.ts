@@ -18,6 +18,7 @@ import {
   capabilityIsReadOnly,
   type CapabilityCatalog,
   type CapabilityDescriptor,
+  type CapabilityDomain,
 } from "./capability-catalog.js";
 import {
   UEApiError,
@@ -55,6 +56,7 @@ export interface RecipeStep extends JsonObject {
   id: string;
   kind:
     | "capability"
+    | "sessionCapability"
     | "workflow"
     | "poll"
     | "condition"
@@ -74,7 +76,7 @@ export interface RecipeStep extends JsonObject {
   };
   retry?: Partial<RetryPolicy>;
   compensate?: {
-    kind: "capability" | "workflow";
+    kind: "capability" | "sessionCapability" | "workflow";
     capability?: string;
     params?: JsonObject;
     runId?: string;
@@ -88,7 +90,26 @@ export interface RecipeDefinition extends JsonObject {
   id: string;
   version: string;
   inputs?: JsonObject;
+  sessionPolicy?: {
+    requirePieStopped: true;
+    runnerStartsPie: true;
+    lease: "pie";
+    editorInstanceBound: true;
+  };
   steps: RecipeStep[];
+}
+
+interface RecipeSessionBinding extends JsonObject {
+  catalogDigest: string;
+  serverInstanceId: string;
+  processId?: number;
+  processStartTime?: string;
+  plannedPieState: string;
+  plannedPieGeneration?: number;
+  activePieGeneration?: number;
+  activePieSessionId?: string;
+  leaseId?: string;
+  runnerStartedPie: boolean;
 }
 
 export interface RecipeValidation {
@@ -144,6 +165,7 @@ export interface RecipeRunState extends JsonObject {
   result?: unknown;
   error?: { code: string; message: string };
   compensations: Array<{ stepId: string; ok: boolean; output?: unknown; error?: unknown }>;
+  session?: RecipeSessionBinding;
 }
 
 function isObject(value: unknown): value is JsonObject {
@@ -294,6 +316,98 @@ function descriptorReadOnly(descriptor: CapabilityDescriptor): boolean {
   return capabilityIsReadOnly(descriptor);
 }
 
+function descriptorSessionSafe(descriptor: CapabilityDescriptor): boolean {
+  return descriptor.traits.sessionSafe === true
+    && descriptor.effects.asset !== "write"
+    && descriptor.effects.external !== "write";
+}
+
+export function recipeHasSessionSteps(value: unknown): boolean {
+  return isObject(value)
+    && Array.isArray(value.steps)
+    && value.steps.some((step) => isObject(step) && step.kind === "sessionCapability");
+}
+
+function capabilityCatalogDigest(catalog: CapabilityCatalog): string {
+  return digest(
+    ["blueprint", "scene", "content", "animation", "ai", "production"]
+      .flatMap((domain) => catalog.forDomain(domain as CapabilityDomain))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+  );
+}
+
+function pieState(value: unknown): string {
+  if (!isObject(value)) return "unknown";
+  for (const key of ["state", "status", "pieState"]) {
+    if (typeof value[key] === "string") return value[key] as string;
+  }
+  return "unknown";
+}
+
+function pieGeneration(value: unknown): number | undefined {
+  if (!isObject(value)) return undefined;
+  for (const key of ["generation", "pieGeneration"]) {
+    const candidate = value[key];
+    if (Number.isInteger(candidate) && Number(candidate) >= 0) return Number(candidate);
+  }
+  return undefined;
+}
+
+function pieSessionId(value: unknown): string | undefined {
+  if (!isObject(value)) return undefined;
+  for (const key of ["sessionId", "pieSessionId"]) {
+    if (typeof value[key] === "string" && value[key] !== "") return value[key] as string;
+  }
+  return undefined;
+}
+
+function pieIsStopped(value: unknown): boolean {
+  return ["stopped", "idle", "none", "inactive"].includes(
+    pieState(value).toLowerCase(),
+  );
+}
+
+function assertSessionReferences(
+  value: unknown,
+  binding: RecipeSessionBinding,
+  path = "params",
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertSessionReferences(item, binding, `${path}.${index}`));
+    return;
+  }
+  if (!isObject(value)) return;
+  if (typeof value.sessionId === "string" && Number.isInteger(value.generation)) {
+    if (binding.activePieGeneration !== undefined
+      && Number(value.generation) !== binding.activePieGeneration) {
+      throw new UEApiError({
+        code: "recipe_pie_generation_conflict",
+        message: `Session reference ${path} belongs to a different PIE generation.`,
+        details: {
+          expectedGeneration: binding.activePieGeneration,
+          actualGeneration: value.generation,
+          path,
+        },
+      });
+    }
+    if (binding.activePieSessionId !== undefined
+      && value.sessionId !== binding.activePieSessionId) {
+      throw new UEApiError({
+        code: "recipe_pie_generation_conflict",
+        message: `Session reference ${path} belongs to a different PIE session.`,
+        details: {
+          expectedSessionId: binding.activePieSessionId,
+          actualSessionId: value.sessionId,
+          path,
+        },
+      });
+    }
+  }
+  for (const [key, item] of Object.entries(value)) {
+    assertSessionReferences(item, binding, `${path}.${key}`);
+  }
+}
+
 function defaultRetry(value: Partial<RetryPolicy> | undefined): RetryPolicy {
   return {
     maxAttempts: Math.min(5, Math.max(1, Number(value?.maxAttempts ?? 1))),
@@ -333,6 +447,7 @@ function validateCondition(
   value: unknown,
   path: string,
   diagnostics: RecipeValidation["diagnostics"],
+  allowPollOutput = false,
 ): void {
   if (!isObject(value)) {
     validationError(diagnostics, path, "condition_invalid", "Condition must be an object.");
@@ -350,11 +465,11 @@ function validateCondition(
       validationError(diagnostics, path, "condition_invalid", `${operator} must contain 1-16 conditions.`);
       return;
     }
-    children.forEach((child, index) => validateCondition(child, `${path}/${operator}/${index}`, diagnostics));
+    children.forEach((child, index) => validateCondition(child, `${path}/${operator}/${index}`, diagnostics, allowPollOutput));
     return;
   }
   if (operator === "not") {
-    validateCondition(value.not, `${path}/not`, diagnostics);
+    validateCondition(value.not, `${path}/not`, diagnostics, allowPollOutput);
     return;
   }
   if (!["equals", "notEquals", "exists"].includes(operator ?? "")) {
@@ -366,8 +481,10 @@ function validateCondition(
     validationError(diagnostics, path, "condition_invalid", `${operator} requires a path.`);
     return;
   }
-  if (!/^(inputs|steps)\.[A-Za-z0-9_.-]+$/.test(expression.path)) {
-    validationError(diagnostics, `${path}/${operator}/path`, "condition_path_forbidden", "Condition paths may read only inputs and prior step outputs.");
+  const allowedPath = /^(inputs|steps)\.[A-Za-z0-9_.-]+$/.test(expression.path)
+    || (allowPollOutput && /^poll\.output(?:\.[A-Za-z0-9_.-]+)*$/.test(expression.path));
+  if (!allowedPath) {
+    validationError(diagnostics, `${path}/${operator}/path`, "condition_path_forbidden", "Condition paths may read only inputs, prior step outputs, and the current poll output.");
   }
 }
 
@@ -379,7 +496,7 @@ export function validateRecipe(
   if (!isObject(value)) {
     return { ok: false, schema: "ue.recipe-validation.v2", diagnostics: [{ path: "", code: "recipe_invalid", message: "Recipe must be an object." }] };
   }
-  const allowedRoot = new Set(["schema", "id", "version", "inputs", "steps", "description"]);
+  const allowedRoot = new Set(["schema", "id", "version", "inputs", "steps", "description", "sessionPolicy"]);
   for (const field of Object.keys(value)) {
     if (!allowedRoot.has(field)) validationError(diagnostics, `/${field}`, "recipe_field_forbidden", `Unknown Recipe field ${field}.`);
   }
@@ -388,6 +505,20 @@ export function validateRecipe(
   if (typeof value.version !== "string" || value.version.length === 0) validationError(diagnostics, "/version", "recipe_version_invalid", "version is required.");
   if (!Array.isArray(value.steps) || value.steps.length === 0 || value.steps.length > MAX_STEPS) {
     validationError(diagnostics, "/steps", "recipe_steps_invalid", `steps must contain 1-${MAX_STEPS} entries.`);
+  }
+  const hasSessionSteps = recipeHasSessionSteps(value);
+  if (hasSessionSteps) {
+    const policy = value.sessionPolicy;
+    if (!isObject(policy)
+      || policy.requirePieStopped !== true
+      || policy.runnerStartsPie !== true
+      || policy.lease !== "pie"
+      || policy.editorInstanceBound !== true
+      || Object.keys(policy).some((field) => !["requirePieStopped", "runnerStartsPie", "lease", "editorInstanceBound"].includes(field))) {
+      validationError(diagnostics, "/sessionPolicy", "recipe_session_policy_required", "Session Recipes require the fixed stopped-PIE, Runner-owned PIE lease policy.");
+    }
+  } else if (value.sessionPolicy !== undefined) {
+    validationError(diagnostics, "/sessionPolicy", "recipe_session_policy_unused", "sessionPolicy requires at least one sessionCapability step.");
   }
   const ids = new Set<string>();
   let requiresApproval = false;
@@ -401,11 +532,11 @@ export function validateRecipe(
       if (typeof raw.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(raw.id)) validationError(diagnostics, `${path}/id`, "recipe_step_id_invalid", "Step id is invalid.");
       else if (ids.has(raw.id)) validationError(diagnostics, `${path}/id`, "recipe_step_id_duplicate", "Step id is duplicated.");
       else ids.add(raw.id);
-      if (!["capability", "workflow", "poll", "condition", "approval", "sourceControlCheckout"].includes(String(raw.kind))) {
+      if (!["capability", "sessionCapability", "workflow", "poll", "condition", "approval", "sourceControlCheckout"].includes(String(raw.kind))) {
         validationError(diagnostics, `${path}/kind`, "recipe_step_kind_forbidden", "Unsupported step kind; arbitrary scripts and loops are forbidden.");
         return;
       }
-      if (["workflow", "approval"].includes(String(raw.kind)) || raw.highRisk === true) requiresApproval = true;
+      if (["sessionCapability", "workflow", "approval"].includes(String(raw.kind)) || raw.highRisk === true) requiresApproval = true;
       const retry = defaultRetry(isObject(raw.retry) ? raw.retry : undefined);
       if (isObject(raw.retry)
         && raw.retry.maxAttempts !== undefined
@@ -416,6 +547,11 @@ export function validateRecipe(
         const descriptor = typeof raw.capability === "string" ? catalog.get(raw.capability) : undefined;
         if (!descriptor) validationError(diagnostics, `${path}/capability`, "capability_not_found", "Capability is not present in the local catalog.");
         else if (!descriptorReadOnly(descriptor)) validationError(diagnostics, `${path}/capability`, "recipe_direct_write_forbidden", "Direct Recipe capability steps must be asset/world read-only; use Workflow for writes.");
+      }
+      if (raw.kind === "sessionCapability") {
+        const descriptor = typeof raw.capability === "string" ? catalog.get(raw.capability) : undefined;
+        if (!descriptor) validationError(diagnostics, `${path}/capability`, "capability_not_found", "Capability is not present in the local catalog.");
+        else if (!descriptorSessionSafe(descriptor)) validationError(diagnostics, `${path}/capability`, "recipe_session_capability_forbidden", "Session Recipe steps require traits.sessionSafe=true and cannot write assets or external state.");
       }
       if (raw.kind === "sourceControlCheckout" && raw.capability !== undefined && raw.capability !== "production.source_control.checkout") {
         validationError(diagnostics, `${path}/capability`, "source_control_operation_forbidden", "Only production.source_control.checkout is allowed here.");
@@ -433,15 +569,19 @@ export function validateRecipe(
           const interval = Number(raw.poll.intervalMs);
           if (!Number.isInteger(attempts) || attempts < 1 || attempts > MAX_POLL_ATTEMPTS) validationError(diagnostics, `${path}/poll/maxAttempts`, "poll_unbounded", `Poll maxAttempts must be 1-${MAX_POLL_ATTEMPTS}.`);
           if (!Number.isInteger(interval) || interval < 100 || interval > MAX_POLL_INTERVAL_MS) validationError(diagnostics, `${path}/poll/intervalMs`, "poll_interval_invalid", `Poll intervalMs must be 100-${MAX_POLL_INTERVAL_MS}.`);
-          validateCondition(raw.poll.until, `${path}/poll/until`, diagnostics);
+          validateCondition(raw.poll.until, `${path}/poll/until`, diagnostics, true);
         }
       }
       if (raw.kind === "condition") validateCondition(raw.condition, `${path}/condition`, diagnostics);
       if (raw.compensate !== undefined) {
-        if (!isObject(raw.compensate) || !["capability", "workflow"].includes(String(raw.compensate.kind))) validationError(diagnostics, `${path}/compensate`, "compensation_invalid", "Compensation must be a capability or Workflow action.");
+        if (!isObject(raw.compensate) || !["capability", "sessionCapability", "workflow"].includes(String(raw.compensate.kind))) validationError(diagnostics, `${path}/compensate`, "compensation_invalid", "Compensation must be a capability, sessionCapability, or Workflow action.");
         if (isObject(raw.compensate) && raw.compensate.kind === "capability") {
           const descriptor = typeof raw.compensate.capability === "string" ? catalog.get(raw.compensate.capability) : undefined;
           if (!descriptor || !descriptorReadOnly(descriptor)) validationError(diagnostics, `${path}/compensate/capability`, "compensation_write_forbidden", "Write compensation must use Workflow rollback, not a direct capability.");
+        }
+        if (isObject(raw.compensate) && raw.compensate.kind === "sessionCapability") {
+          const descriptor = typeof raw.compensate.capability === "string" ? catalog.get(raw.compensate.capability) : undefined;
+          if (!descriptor || !descriptorSessionSafe(descriptor)) validationError(diagnostics, `${path}/compensate/capability`, "compensation_session_capability_forbidden", "Session compensation requires a sessionSafe capability.");
         }
         if (
           isObject(raw.compensate) &&
@@ -487,6 +627,12 @@ export function validateRecipe(
 function lookup(root: unknown, path: string): unknown {
   let current = root;
   for (const segment of path.split(".")) {
+    if (Array.isArray(current)) {
+      const index = Number(segment);
+      if (!Number.isInteger(index) || index < 0 || index >= current.length) return undefined;
+      current = current[index];
+      continue;
+    }
     if (!isObject(current) || !(segment in current)) return undefined;
     current = current[segment];
   }
@@ -513,6 +659,19 @@ function materialize(value: unknown, context: JsonObject): unknown {
   if (Array.isArray(value)) return value.map((item) => materialize(item, context));
   if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, materialize(item, context)]));
   if (typeof value === "string" && /^\$(inputs|steps)\.[A-Za-z0-9_.-]+$/.test(value)) return lookup(context, value.slice(1));
+  return value;
+}
+
+function materializeInputs(value: unknown, inputs: JsonObject): unknown {
+  if (Array.isArray(value)) return value.map((item) => materializeInputs(item, inputs));
+  if (isObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, materializeInputs(item, inputs)]),
+    );
+  }
+  if (typeof value === "string" && /^\$inputs\.[A-Za-z0-9_.-]+$/.test(value)) {
+    return lookup({ inputs }, value.slice(1));
+  }
   return value;
 }
 
@@ -589,9 +748,23 @@ export class RecipeRunner {
     return validateRecipe(recipe, this.catalog);
   }
 
-  plan(recipe: unknown): JsonObject {
-    const validation = this.validate(recipe);
-    if (!validation.ok) throw new UEApiError({ code: "recipe_invalid", message: "Recipe validation failed.", details: validation.diagnostics });
+  private prepare(recipe: unknown, inputs: JsonObject): RecipeValidation & { planDigest?: string } {
+    const materializedRecipe = materializeInputs(recipe, inputs);
+    const validation = validateRecipe(materializedRecipe, this.catalog);
+    if (validation.ok && validation.normalized) {
+      validation.planDigest = digest({
+        schema: RECIPE_PLAN_SCHEMA,
+        recipe: validation.normalized,
+        inputs,
+      });
+    }
+    return validation;
+  }
+
+  private planResult(
+    validation: RecipeValidation,
+    extra: JsonObject = {},
+  ): JsonObject {
     return {
       schema: RECIPE_PLAN_SCHEMA,
       recipeId: validation.normalized?.id,
@@ -599,14 +772,71 @@ export class RecipeRunner {
       planDigest: validation.planDigest,
       requiresApproval: validation.requiresApproval,
       stepCount: validation.normalized?.steps.length,
-      allowedStepKinds: ["capability", "workflow", "poll", "condition", "approval", "sourceControlCheckout"],
+      allowedStepKinds: ["capability", "sessionCapability", "workflow", "poll", "condition", "approval", "sourceControlCheckout"],
       maximumAttempts: 5,
       arbitraryScripts: false,
+      ...extra,
     };
   }
 
-  start(recipe: unknown, inputs: JsonObject = {}, approvePlanDigest?: string): RecipeRunState {
-    const validation = this.validate(recipe);
+  plan(recipe: unknown, inputs: JsonObject = {}): JsonObject {
+    if (recipeHasSessionSteps(recipe)) {
+      throw new UEApiError({
+        code: "recipe_online_plan_required",
+        message: "Session Recipes must be planned online against one Editor instance and stopped PIE generation.",
+      });
+    }
+    const validation = this.prepare(recipe, inputs);
+    if (!validation.ok) throw new UEApiError({ code: "recipe_invalid", message: "Recipe validation failed.", details: validation.diagnostics });
+    return this.planResult(validation);
+  }
+
+  async planOnline(recipe: unknown, inputs: JsonObject = {}): Promise<JsonObject> {
+    const validation = this.prepare(recipe, inputs);
+    if (!validation.ok || !validation.normalized) throw new UEApiError({ code: "recipe_invalid", message: "Recipe validation failed.", details: validation.diagnostics });
+    if (!recipeHasSessionSteps(validation.normalized)) return this.planResult(validation);
+    const client = new UEClient({ baseUrl: this.endpoint });
+    await client.startSession({ name: "ue-recipe-planner", version: "1.0.0" });
+    try {
+      const health = await client.getHealth();
+      const pie = await client.execute("scene.pie.status", {}, `recipe-plan-pie-${randomUUID()}`);
+      if (!pieIsStopped(pie)) {
+        throw new UEApiError({
+          code: "recipe_pie_must_be_stopped",
+          message: "Session Recipe planning requires PIE to be stopped.",
+          details: pie,
+        });
+      }
+      const binding: RecipeSessionBinding = {
+        catalogDigest: capabilityCatalogDigest(this.catalog),
+        serverInstanceId: String(health.serverInstanceId ?? ""),
+        ...(Number.isInteger(health.processId) ? { processId: Number(health.processId) } : {}),
+        ...(typeof health.processStartTime === "string" ? { processStartTime: health.processStartTime } : {}),
+        plannedPieState: pieState(pie),
+        ...(pieGeneration(pie) === undefined ? {} : { plannedPieGeneration: pieGeneration(pie) }),
+        runnerStartedPie: false,
+      };
+      if (binding.serverInstanceId === "") {
+        throw new UEApiError({ code: "recipe_editor_identity_unavailable", message: "Editor health did not expose serverInstanceId." });
+      }
+      validation.planDigest = digest({
+        schema: RECIPE_PLAN_SCHEMA,
+        recipe: validation.normalized,
+        inputs,
+        session: binding,
+      });
+      return this.planResult(validation, { online: true, session: binding });
+    } finally {
+      await client.stopSession();
+    }
+  }
+
+  private startPrepared(
+    validation: RecipeValidation,
+    inputs: JsonObject,
+    approvePlanDigest?: string,
+    session?: RecipeSessionBinding,
+  ): RecipeRunState {
     if (!validation.ok || !validation.normalized || !validation.planDigest) throw new UEApiError({ code: "recipe_invalid", message: "Recipe validation failed.", details: validation.diagnostics });
     const approvalMissing = validation.requiresApproval && approvePlanDigest !== validation.planDigest;
     const timestamp = now();
@@ -632,11 +862,37 @@ export class RecipeRunner {
       cancelPending: false,
       approvedSteps: [],
       compensations: [],
+      ...(session === undefined ? {} : { session }),
       ...(approvalMissing ? { awaitingApproval: { stepId: "$plan", reason: "recipePlan", planDigest: validation.planDigest } } : {}),
     };
     updateRun(state, undefined, this.env);
     if (!approvalMissing) spawnWorker(state, this.endpoint, this.env);
     return state;
+  }
+
+  start(recipe: unknown, inputs: JsonObject = {}, approvePlanDigest?: string): RecipeRunState {
+    if (recipeHasSessionSteps(recipe)) {
+      throw new UEApiError({ code: "recipe_online_plan_required", message: "Session Recipes must use the online plan/start path." });
+    }
+    return this.startPrepared(this.prepare(recipe, inputs), inputs, approvePlanDigest);
+  }
+
+  async startOnline(recipe: unknown, inputs: JsonObject = {}, approvePlanDigest?: string): Promise<RecipeRunState> {
+    const plan = await this.planOnline(recipe, inputs);
+    const planDigest = String(plan.planDigest ?? "");
+    if (approvePlanDigest !== planDigest) {
+      throw new UEApiError({
+        code: "approval_required",
+        message: "Session Recipe start requires the exact online materialized planDigest.",
+        details: { planDigest },
+      });
+    }
+    const validation = this.prepare(recipe, inputs);
+    validation.planDigest = planDigest;
+    const session = isObject(plan.session)
+      ? plan.session as RecipeSessionBinding
+      : undefined;
+    return this.startPrepared(validation, inputs, approvePlanDigest, session);
   }
 
   status(runId: string): RecipeRunState {
@@ -799,7 +1055,7 @@ async function invokeStep(
       `${state.runId}-${step.id}`,
     );
   }
-  if (step.kind === "capability") {
+  if (step.kind === "capability" || step.kind === "sessionCapability") {
     return client.execute(step.capability!, materialize(step.params ?? {}, context) as JsonObject, `${state.runId}-${step.id}`);
   }
   const poll = step.poll!;
@@ -824,13 +1080,21 @@ async function compensate(
   for (const step of completed.reverse()) {
     if (!step.compensate) continue;
     try {
+      const compensationParams = materialize(
+        step.compensate.params ?? {},
+        context,
+      ) as JsonObject;
+      if (state.session && step.compensate.kind === "sessionCapability") {
+        await assertSessionGeneration(client, state);
+        assertSessionReferences(compensationParams, state.session, `compensate.${step.id}`);
+      }
       const output = step.compensate.kind === "workflow"
         ? await client.workflow({
             action: "rollback",
             runId: String(materialize(step.compensate.runId, context)),
             approvePlanDigest: step.compensate.approvePlanDigest,
           })
-        : await client.execute(step.compensate.capability!, materialize(step.compensate.params ?? {}, context) as JsonObject, `${state.runId}-${step.id}-compensate`);
+        : await client.execute(step.compensate.capability!, compensationParams, `${state.runId}-${step.id}-compensate`);
       state.compensations.push({ stepId: step.id, ok: true, output });
       const found = state.steps.find((item) => item.id === step.id);
       if (found) found.status = "compensated";
@@ -839,6 +1103,182 @@ async function compensate(
     }
     updateRun(state, `Compensation processed for ${step.id}.`);
   }
+}
+
+async function assertSessionGeneration(
+  client: UEClient,
+  state: RecipeRunState,
+): Promise<void> {
+  if (!state.session || state.session.activePieGeneration === undefined) return;
+  const health = await client.getHealth();
+  if (String(health.serverInstanceId ?? "") !== state.session.serverInstanceId) {
+    throw new UEApiError({
+      code: "recipe_session_plan_stale",
+      message: "The Editor instance changed after the Session Recipe was planned.",
+      details: {
+        plannedServerInstanceId: state.session.serverInstanceId,
+        currentServerInstanceId: health.serverInstanceId,
+      },
+    });
+  }
+  const current = await client.execute(
+    "scene.pie.status",
+    {},
+    `${state.runId}-pie-generation-check-${state.nextStep}`,
+  );
+  if (pieGeneration(current) !== state.session.activePieGeneration
+    || pieIsStopped(current)) {
+    throw new UEApiError({
+      code: "recipe_pie_generation_conflict",
+      message: "PIE generation changed before the Session Recipe step was dispatched.",
+      details: {
+        expectedGeneration: state.session.activePieGeneration,
+        actualGeneration: pieGeneration(current),
+        state: pieState(current),
+      },
+    });
+  }
+}
+
+async function prepareSessionExecution(
+  client: UEClient,
+  state: RecipeRunState,
+): Promise<void> {
+  if (!state.session) return;
+  const health = await client.getHealth();
+  if (String(health.serverInstanceId ?? "") !== state.session.serverInstanceId) {
+    throw new UEApiError({
+      code: "recipe_session_plan_stale",
+      message: "Session Recipe resume is bound to the Editor instance used during online planning.",
+      details: {
+        plannedServerInstanceId: state.session.serverInstanceId,
+        currentServerInstanceId: health.serverInstanceId,
+      },
+    });
+  }
+
+  const current = await client.execute(
+    "scene.pie.status",
+    {},
+    `${state.runId}-pie-preflight`,
+  );
+  if (state.session.activePieGeneration !== undefined) {
+    if (pieIsStopped(current)
+      || pieGeneration(current) !== state.session.activePieGeneration) {
+      throw new UEApiError({
+        code: "recipe_pie_generation_conflict",
+        message: "Interrupted Session Recipe cannot resume into a different PIE generation.",
+        details: {
+          expectedGeneration: state.session.activePieGeneration,
+          actualGeneration: pieGeneration(current),
+          state: pieState(current),
+        },
+      });
+    }
+  } else {
+    if (!pieIsStopped(current)
+      || (state.session.plannedPieGeneration !== undefined
+        && pieGeneration(current) !== state.session.plannedPieGeneration)) {
+      throw new UEApiError({
+        code: "recipe_session_plan_stale",
+        message: "PIE state changed after the Session Recipe was planned.",
+        details: {
+          plannedState: state.session.plannedPieState,
+          plannedGeneration: state.session.plannedPieGeneration,
+          currentState: pieState(current),
+          currentGeneration: pieGeneration(current),
+        },
+      });
+    }
+  }
+
+  const lease = await client.execute(
+    "production.lease.acquire",
+    { type: "pie" },
+    `${state.runId}-pie-lease`,
+  );
+  state.session.leaseId = typeof lease.leaseId === "string"
+    ? lease.leaseId
+    : undefined;
+  let startedByThisCall = false;
+  try {
+    if (state.session.activePieGeneration === undefined) {
+      await client.execute("scene.pie.start", {}, `${state.runId}-pie-start`);
+      startedByThisCall = true;
+      let started: JsonObject | undefined;
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        const candidate = await client.execute(
+          "scene.pie.status",
+          {},
+          `${state.runId}-pie-start-status-${Date.now()}`,
+        );
+        if (!pieIsStopped(candidate) && pieGeneration(candidate) !== undefined) {
+          started = candidate;
+          break;
+        }
+        await sleep(100);
+      }
+      if (!started) {
+        throw new UEApiError({
+          code: "recipe_pie_start_timeout",
+          message: "Runner-owned PIE did not reach an active generation within 15 seconds.",
+        });
+      }
+      state.session.activePieGeneration = pieGeneration(started);
+      state.session.activePieSessionId = pieSessionId(started);
+      state.session.runnerStartedPie = true;
+    }
+    updateRun(state, `Session Recipe owns PIE generation ${state.session.activePieGeneration}.`);
+  } catch (error) {
+    if (startedByThisCall) {
+      try {
+        await client.execute("scene.pie.stop", {}, `${state.runId}-pie-start-failure-stop`);
+      } catch {
+        // The primary start/preflight error remains authoritative.
+      }
+    }
+    try {
+      await client.execute(
+        "production.lease.release",
+        { type: "pie" },
+        `${state.runId}-pie-start-failure-lease-release`,
+      );
+    } catch {
+      // Session unregister is the final lease cleanup fallback.
+    }
+    throw error;
+  }
+}
+
+async function cleanupSessionExecution(
+  client: UEClient,
+  state: RecipeRunState,
+): Promise<void> {
+  if (!state.session) return;
+  if (state.session.runnerStartedPie) {
+    try {
+      await client.execute("scene.pie.stop", {}, `${state.runId}-pie-stop`);
+      state.compensations.push({
+        stepId: "$pie.stop",
+        ok: true,
+        output: { generation: state.session.activePieGeneration },
+      });
+    } catch (error) {
+      state.compensations.push({ stepId: "$pie.stop", ok: false, error: errorPayload(error) });
+    }
+  }
+  try {
+    await client.execute(
+      "production.lease.release",
+      { type: "pie" },
+      `${state.runId}-pie-lease-release`,
+    );
+    state.compensations.push({ stepId: "$pie.lease", ok: true });
+  } catch (error) {
+    state.compensations.push({ stepId: "$pie.lease", ok: false, error: errorPayload(error) });
+  }
+  updateRun(state, "Runner-owned PIE and lease cleanup completed.");
 }
 
 export async function executeRecipeRun(
@@ -885,16 +1325,18 @@ export async function executeRecipeRun(
   const completed = state.recipe.steps.slice(0, state.nextStep).filter((_, index) => state.steps[index]?.status === "completed");
   const stepOutputs = Object.fromEntries(state.steps.filter((step) => step.output !== undefined).map((step) => [step.id, { output: step.output }]));
   const context: JsonObject = { inputs: state.inputs, steps: stepOutputs };
+  let sessionPrepared = false;
   try {
+    await prepareSessionExecution(client, state);
+    sessionPrepared = state.session !== undefined;
     for (; state.nextStep < state.recipe.steps.length;) {
       const latest = readRun(runId);
       if (latest.cancelRequested) {
-        state.status = "cancelled";
-        state.phase = "cancelled";
         state.cancelRequested = true;
-        state.cancelPending = false;
-        updateRun(state, "Recipe cancelled at a safe step boundary.");
-        return;
+        throw new UEApiError({
+          code: "recipe_cancelled",
+          message: "Recipe cancellation reached a safe step boundary.",
+        });
       }
       const step = state.recipe.steps[state.nextStep]!;
       const stepState = state.steps[state.nextStep]!;
@@ -909,6 +1351,13 @@ export async function executeRecipeRun(
         stepState.attempts = attempt;
         updateRun(state, `Executing ${step.id}, attempt ${attempt}/${retry.maxAttempts}.`);
         try {
+          if (state.session && (step.kind === "sessionCapability" || step.kind === "poll")) {
+            await assertSessionGeneration(client, state);
+            const parameters = step.kind === "poll"
+              ? materialize(step.poll?.params ?? {}, context)
+              : materialize(step.params ?? {}, context);
+            assertSessionReferences(parameters, state.session, `steps.${step.id}`);
+          }
           output = await invokeStep(client, step, context, state);
           if ((state.status as RunStatus) === "awaitingApproval") return;
           succeeded = true;
@@ -948,10 +1397,12 @@ export async function executeRecipeRun(
     state.status = payload.code === "recipe_cancelled" ? "cancelled" : "failed";
     state.phase = state.status;
     state.error = payload;
+    state.cancelPending = false;
     updateRun(state, payload.message);
-    if (state.status === "failed") await compensate(client, state, completed, context);
+    await compensate(client, state, completed, context);
   } finally {
     clearInterval(heartbeatTimer);
+    if (sessionPrepared) await cleanupSessionExecution(client, state);
     try {
       const latest = readRun(runId);
       if (latest.workerInstanceId === workerInstanceId) {

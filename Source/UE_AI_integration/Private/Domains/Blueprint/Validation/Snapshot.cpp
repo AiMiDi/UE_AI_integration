@@ -343,7 +343,7 @@ public:
 
 		bool bSaved = false;
 		if (!bDryRun && Reconnected > 0)
-			bSaved = MCPHelpers::SaveBlueprintPackage(BP);
+			bSaved = MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("status"), TEXT("ok"));

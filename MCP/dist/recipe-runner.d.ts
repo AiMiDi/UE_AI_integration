@@ -11,7 +11,7 @@ interface RetryPolicy {
 }
 export interface RecipeStep extends JsonObject {
     id: string;
-    kind: "capability" | "workflow" | "poll" | "condition" | "approval" | "sourceControlCheckout";
+    kind: "capability" | "sessionCapability" | "workflow" | "poll" | "condition" | "approval" | "sourceControlCheckout";
     capability?: string;
     params?: JsonObject;
     workflow?: JsonObject;
@@ -26,7 +26,7 @@ export interface RecipeStep extends JsonObject {
     };
     retry?: Partial<RetryPolicy>;
     compensate?: {
-        kind: "capability" | "workflow";
+        kind: "capability" | "sessionCapability" | "workflow";
         capability?: string;
         params?: JsonObject;
         runId?: string;
@@ -39,7 +39,25 @@ export interface RecipeDefinition extends JsonObject {
     id: string;
     version: string;
     inputs?: JsonObject;
+    sessionPolicy?: {
+        requirePieStopped: true;
+        runnerStartsPie: true;
+        lease: "pie";
+        editorInstanceBound: true;
+    };
     steps: RecipeStep[];
+}
+interface RecipeSessionBinding extends JsonObject {
+    catalogDigest: string;
+    serverInstanceId: string;
+    processId?: number;
+    processStartTime?: string;
+    plannedPieState: string;
+    plannedPieGeneration?: number;
+    activePieGeneration?: number;
+    activePieSessionId?: string;
+    leaseId?: string;
+    runnerStartedPie: boolean;
 }
 export interface RecipeValidation {
     ok: boolean;
@@ -107,7 +125,9 @@ export interface RecipeRunState extends JsonObject {
         output?: unknown;
         error?: unknown;
     }>;
+    session?: RecipeSessionBinding;
 }
+export declare function recipeHasSessionSteps(value: unknown): boolean;
 export declare function validateRecipe(value: unknown, catalog?: CapabilityCatalog): RecipeValidation;
 export declare class RecipeRunner {
     private readonly catalog;
@@ -119,8 +139,13 @@ export declare class RecipeRunner {
         endpoint?: string;
     });
     validate(recipe: unknown): RecipeValidation;
-    plan(recipe: unknown): JsonObject;
+    private prepare;
+    private planResult;
+    plan(recipe: unknown, inputs?: JsonObject): JsonObject;
+    planOnline(recipe: unknown, inputs?: JsonObject): Promise<JsonObject>;
+    private startPrepared;
     start(recipe: unknown, inputs?: JsonObject, approvePlanDigest?: string): RecipeRunState;
+    startOnline(recipe: unknown, inputs?: JsonObject, approvePlanDigest?: string): Promise<RecipeRunState>;
     status(runId: string): RecipeRunState;
     resume(runId: string, approvePlanDigest: string, approveStepDigest?: string): RecipeRunState;
     cancel(runId: string): RecipeRunState;

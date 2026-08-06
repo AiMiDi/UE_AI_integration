@@ -80,6 +80,7 @@ target_include_directories(UECommandCliCore
 )
 target_compile_definitions(UECommandCliCore PRIVATE
     UE_CLI_VERSION="${PROJECT_VERSION}"
+    UE_SOURCE_REVISION="${UE_SOURCE_REVISION}"
     UE_CLI_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
 )
 target_link_libraries(
@@ -107,6 +108,7 @@ target_include_directories(ue-workflow PRIVATE
 )
 target_compile_definitions(ue-workflow PRIVATE
     UE_WORKFLOW_VERSION="${PROJECT_VERSION}"
+    UE_SOURCE_REVISION="${UE_SOURCE_REVISION}"
     UE_WORKFLOW_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
 )
 

@@ -85,6 +85,35 @@ function Stop-OwnedEditor {
     $candidate.WaitForExit(10000) | Out-Null
 }
 
+function Invoke-OwnedAutomation {
+    param(
+        [string]$Editor,
+        [string]$Project,
+        [string]$TestName,
+        [string]$LogPath
+    )
+    $argumentLine = ('"' + $Project + '" -unattended -nop4 -NoSplash -NoSound -NoLiveCoding ' +
+        '-ExecCmds="Automation RunTests ' + $TestName + '; Automation Quit" ' +
+        '-TestExit="Automation Test Queue Empty" -abslog="' + $LogPath + '"')
+    $process = Start-Process -FilePath $Editor -ArgumentList $argumentLine -PassThru -WindowStyle Hidden
+    Assert-Condition ($null -ne $process -and $process.Id -gt 0) 'The owned Automation Editor did not start.'
+    $owned = [ordered]@{
+        Process = $process
+        Id = $process.Id
+        StartTimeUtc = $process.StartTime.ToUniversalTime()
+    }
+    try {
+        Assert-Condition ($process.WaitForExit(180000)) "Automation timed out: $TestName"
+        Assert-Condition ($process.ExitCode -eq 0) "Automation Editor failed with exit code $($process.ExitCode): $TestName"
+        $completed = @(Select-String -LiteralPath $LogPath -Pattern ('Test Completed.*' + [regex]::Escape($TestName.Split('.')[-1])) -ErrorAction SilentlyContinue)
+        $failed = @(Select-String -LiteralPath $LogPath -Pattern 'Result=\{(Failed|失败)\}|Automation:.*Error' -ErrorAction SilentlyContinue)
+        Assert-Condition ($completed.Count -gt 0 -and $failed.Count -eq 0) "Automation did not pass: $TestName"
+    }
+    finally {
+        Stop-OwnedEditor $owned
+    }
+}
+
 function Wait-EditorHealth {
     param([string]$Endpoint, $Owned, [int]$TimeoutSeconds = 120)
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -214,6 +243,17 @@ try {
     [IO.File]::WriteAllText($projectFile, ($projectDefinition | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
     New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'Content'), (Join-Path $fixtureRoot 'Config'), (Join-Path $fixtureRoot 'Plugins') -Force | Out-Null
     Copy-Item -LiteralPath $bundleRoot -Destination (Join-Path $fixtureRoot 'Plugins\UE_AI_integration') -Recurse
+    $previousPrepareLevelMap = $env:UEAI_RC_PREPARE_LEVEL_MAP
+    try {
+        $env:UEAI_RC_PREPARE_LEVEL_MAP = '1'
+        Invoke-OwnedAutomation $editorPath $projectFile `
+            'UE_AI_integration.Acceptance.PrepareLevelBlueprintMap' `
+            (Join-Path $testRoot 'UnrealEditor-prepare-level.log')
+    }
+    finally {
+        $env:UEAI_RC_PREPARE_LEVEL_MAP = $previousPrepareLevelMap
+    }
+    Assert-Condition (Test-Path -LiteralPath (Join-Path $fixtureRoot 'Content\UEAI\Acceptance\LevelBlueprintFixture.umap') -PathType Leaf) 'Level Blueprint acceptance map was not generated.'
     $baseline = Get-PersistentFingerprint $fixtureRoot
 
     $port = Get-FreeLoopbackPort
@@ -232,7 +272,7 @@ try {
     $onlineTools = Invoke-JsonCommand $ue @('test-tools', '--require-editor', '--bundle', $bundleRoot, '--endpoint', $endpoint, '--json')
     Assert-Condition ($onlineTools.ok -eq $true -and $onlineTools.data.status -eq 'passed') 'Online test-tools --require-editor failed.'
 
-    $online = Invoke-NodeAcceptance $node $acceptanceHelper @('online', $bundleRoot, $endpoint)
+    $online = Invoke-NodeAcceptance $node $acceptanceHelper @('online', $bundleRoot, $endpoint, $recipeRoot)
     $assetRelative = ([string]$online.workflow.asset).TrimStart('/').Replace('/', [IO.Path]::DirectorySeparatorChar) + '.uasset'
     $assetFile = Join-Path (Join-Path $fixtureRoot 'Content') ($assetRelative -replace '^Game[\\/]', '')
     Assert-Condition (-not (Test-Path -LiteralPath $assetFile)) "Rollback left the temporary asset on disk: $assetFile"
@@ -266,7 +306,9 @@ try {
         testToolsOnline = $onlineTools.data
         cancel = $online.cancel
         lease = $online.lease
+        sessionRecipe = $online.sessionRecipe
         workflow = $online.workflow
+        levelBlueprint = $online.levelBlueprint
         recipe = $recipeResume
         logs = @(
             @{ name = 'first-editor'; sha256 = (Get-FileHash -LiteralPath $firstLog -Algorithm SHA256).Hash.ToLowerInvariant() },

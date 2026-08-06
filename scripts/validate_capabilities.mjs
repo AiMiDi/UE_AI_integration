@@ -322,6 +322,12 @@ for (const [domain, baselineCount] of Object.entries(baselineCounts)) {
           fail(`${location}.traits.${trait} must be boolean`);
         }
       }
+      if (
+        Object.hasOwn(capability.traits, "sessionSafe") &&
+        typeof capability.traits.sessionSafe !== "boolean"
+      ) {
+        fail(`${location}.traits.sessionSafe must be boolean when present`);
+      }
     }
     if (!isPlainObject(capability.effects)) {
       fail(`${location}.effects must be an object`);

@@ -124,6 +124,7 @@
       "admission": "editStep",
       "scopeKinds": [
         "blueprint",
+        "levelBlueprint",
         "widgetBlueprint"
       ],
       "scopeParameters": [
@@ -157,6 +158,7 @@
       "admission": "editStep",
       "scopeKinds": [
         "blueprint",
+        "levelBlueprint",
         "widgetBlueprint"
       ],
       "scopeParameters": [
@@ -215,6 +217,7 @@
       "admission": "editStep",
       "scopeKinds": [
         "blueprint",
+        "levelBlueprint",
         "widgetBlueprint"
       ],
       "scopeParameters": [
@@ -254,6 +257,7 @@
       "admission": "editStep",
       "scopeKinds": [
         "blueprint",
+        "levelBlueprint",
         "widgetBlueprint"
       ],
       "scopeParameters": [
@@ -287,6 +291,7 @@
       "admission": "editStep",
       "scopeKinds": [
         "blueprint",
+        "levelBlueprint",
         "widgetBlueprint"
       ],
       "scopeParameters": [
@@ -313,10 +318,11 @@
         }
       }
     },
-    "blueprint.node.comment.set": {
+    "blueprint.comment.title.set": {
       "admission": "editStep",
       "scopeKinds": [
         "blueprint",
+        "levelBlueprint",
         "widgetBlueprint"
       ],
       "scopeParameters": [
@@ -331,11 +337,64 @@
           "success": {
             "type": "boolean"
           },
-          "oldComment": {
+          "oldTitle": {
             "type": "string"
           },
-          "newComment": {
+          "title": {
             "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.comment.bubble.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint",
+        "levelBlueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "blueprint.comment.bounds.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "blueprint",
+        "levelBlueprint",
+        "widgetBlueprint"
+      ],
+      "scopeParameters": [
+        "blueprint"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
           },
           "saved": {
             "type": "boolean"
@@ -347,6 +406,7 @@
       "admission": "editStep",
       "scopeKinds": [
         "blueprint",
+        "levelBlueprint",
         "widgetBlueprint"
       ],
       "scopeParameters": [
@@ -364,8 +424,14 @@
           "oldValue": {
             "type": "string"
           },
-          "newValue": {
+          "pinType": {
+            "type": "object"
+          },
+          "serializedValue": {
             "type": "string"
+          },
+          "readBack": {
+            "type": "object"
           },
           "saved": {
             "type": "boolean"
@@ -377,6 +443,7 @@
       "admission": "editStep",
       "scopeKinds": [
         "blueprint",
+        "levelBlueprint",
         "widgetBlueprint"
       ],
       "scopeParameters": [
@@ -471,6 +538,7 @@
       "admission": "editStep",
       "scopeKinds": [
         "blueprint",
+        "levelBlueprint",
         "widgetBlueprint"
       ],
       "scopeParameters": [
@@ -523,6 +591,7 @@
       "admission": "finalizer",
       "scopeKinds": [
         "blueprint",
+        "levelBlueprint",
         "widgetBlueprint"
       ],
       "scopeParameters": [
@@ -536,6 +605,7 @@
       "admission": "observeOnly",
       "scopeKinds": [
         "blueprint",
+        "levelBlueprint",
         "widgetBlueprint"
       ],
       "scopeParameters": [
@@ -549,6 +619,7 @@
       "admission": "observeOnly",
       "scopeKinds": [
         "blueprint",
+        "levelBlueprint",
         "widgetBlueprint"
       ],
       "scopeParameters": [
@@ -1100,6 +1171,23 @@
         },
         "variables": {
           "operationType": "blueprint.asset.get"
+        }
+      }
+    },
+    "levelBlueprint": {
+      "defaultReadBack": [
+        "asset",
+        "graphs"
+      ],
+      "compile": {
+        "operationType": "blueprint.asset.compile"
+      },
+      "readBack": {
+        "asset": {
+          "operationType": "blueprint.asset.get"
+        },
+        "graphs": {
+          "operationType": "blueprint.graph.get"
         }
       }
     },

@@ -2,7 +2,7 @@ import type {
   CapabilityExecutionContext,
   CapabilityExecutor,
 } from "./domain-router.js";
-import { RecipeRunner } from "./recipe-runner.js";
+import { RecipeRunner, recipeHasSessionSteps } from "./recipe-runner.js";
 import { UEApiError, type UEExecuteData } from "./ue-bridge.js";
 
 export class RecipeRunnerExecutor implements CapabilityExecutor {
@@ -24,16 +24,19 @@ export class RecipeRunnerExecutor implements CapabilityExecutor {
       return this.runner.validate(params.recipe) as unknown as UEExecuteData;
     }
     if (id === "production.recipe.plan") {
-      return this.runner.plan(params.recipe);
+      const inputs = (params.inputs ?? {}) as Record<string, unknown>;
+      return recipeHasSessionSteps(params.recipe)
+        ? await this.runner.planOnline(params.recipe, inputs)
+        : this.runner.plan(params.recipe, inputs);
     }
     if (id === "production.recipe.start") {
-      return this.runner.start(
-        params.recipe,
-        (params.inputs ?? {}) as Record<string, unknown>,
-        typeof params.approvePlanDigest === "string"
-          ? params.approvePlanDigest
-          : undefined,
-      ) as unknown as UEExecuteData;
+      const inputs = (params.inputs ?? {}) as Record<string, unknown>;
+      const approval = typeof params.approvePlanDigest === "string"
+        ? params.approvePlanDigest
+        : undefined;
+      return (recipeHasSessionSteps(params.recipe)
+        ? await this.runner.startOnline(params.recipe, inputs, approval)
+        : this.runner.start(params.recipe, inputs, approval)) as unknown as UEExecuteData;
     }
     const runId = params.runId;
     if (typeof runId !== "string" || runId.length === 0) {

@@ -13,6 +13,7 @@
 #include "Engine/World.h"
 #include "Engine/Level.h"
 #include "Engine/LevelScriptBlueprint.h"
+#include "Infrastructure/BlueprintPersistence.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -283,20 +284,20 @@ namespace MCPHelpers
 
 	inline bool SaveBlueprintPackage(UBlueprint* BP)
 	{
-		if (!BP) return false;
+		UEAIIntegration::Infrastructure::FBlueprintPersistenceError Error;
+		return UEAIIntegration::Infrastructure::SaveBlueprintPackage(
+			BP,
+			nullptr,
+			Error);
+	}
 
-		// Compile first
-		FKismetEditorUtilities::CompileBlueprint(BP);
-
-		UPackage* Package = BP->GetPackage();
-		if (!Package) return false;
-
-		FString PackageFilename = FPackageName::LongPackageNameToFilename(
-			Package->GetName(), FPackageName::GetAssetPackageExtension());
-
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		return UPackage::SavePackage(Package, BP, *PackageFilename, SaveArgs);
+	inline bool CompileAndSaveBlueprintPackage(UBlueprint* BP)
+	{
+		UEAIIntegration::Infrastructure::FBlueprintPersistenceError Error;
+		return UEAIIntegration::Infrastructure::CompileAndSaveBlueprintPackage(
+			BP,
+			nullptr,
+			Error);
 	}
 
 	inline bool SaveGenericPackage(UObject* Asset)

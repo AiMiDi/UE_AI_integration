@@ -254,6 +254,7 @@
         "admission": "observeOnly",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "transactionDomain": "asset",
@@ -905,6 +906,7 @@
         "admission": "editStep",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "scopeParameters": [
@@ -940,6 +942,7 @@
         "admission": "editStep",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "transactionDomain": "asset",
@@ -1057,6 +1060,7 @@
         "admission": "editStep",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "transactionDomain": "asset",
@@ -2260,6 +2264,7 @@
         "admission": "editStep",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "transactionDomain": "asset",
@@ -2889,6 +2894,7 @@
         "admission": "editStep",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "transactionDomain": "asset",
@@ -3095,6 +3101,7 @@
         "admission": "observeOnly",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "transactionDomain": "asset",
@@ -3820,6 +3827,7 @@
         "admission": "editStep",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "transactionDomain": "asset",
@@ -3985,6 +3993,7 @@
         "admission": "observeOnly",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "transactionDomain": "asset",
@@ -4126,6 +4135,7 @@
         "admission": "editStep",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "transactionDomain": "asset",
@@ -4178,6 +4188,7 @@
         "admission": "editStep",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "scopeParameters": [
@@ -4294,6 +4305,7 @@
         "admission": "editStep",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "transactionDomain": "asset",
@@ -4455,6 +4467,7 @@
         "admission": "editStep",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "transactionDomain": "asset",
@@ -4495,14 +4508,57 @@
           },
           "value": {
             "type": "string",
-            "description": "New default value"
+            "description": "Raw UE pin default value. Mutually exclusive with typedValue."
+          },
+          "typedValue": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "value"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "Vector",
+                  "Rotator",
+                  "Transform",
+                  "LinearColor"
+                ]
+              },
+              "value": {
+                "type": "object"
+              }
+            },
+            "description": "Typed struct default. Vector uses x/y/z; Rotator uses pitch/yaw/roll; Transform uses translation/rotation/scale3D; LinearColor uses r/g/b/a."
           }
         },
         "required": [
           "blueprint",
           "nodeId",
-          "pinName",
-          "value"
+          "pinName"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "value"
+            ],
+            "not": {
+              "required": [
+                "typedValue"
+              ]
+            }
+          },
+          {
+            "required": [
+              "typedValue"
+            ],
+            "not": {
+              "required": [
+                "value"
+              ]
+            }
+          }
         ],
         "additionalProperties": false
       },
@@ -4511,12 +4567,43 @@
         "expensive": false
       },
       "output": {
-        "kind": "json"
+        "kind": "json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "success",
+            "pinType",
+            "serializedValue",
+            "readBack"
+          ],
+          "properties": {
+            "success": {
+              "type": "boolean"
+            },
+            "pinType": {
+              "type": "object"
+            },
+            "normalizedValue": {},
+            "serializedValue": {
+              "type": "string"
+            },
+            "readBack": {
+              "type": "object"
+            },
+            "saved": {
+              "type": "boolean"
+            },
+            "deferredCompile": {
+              "type": "boolean"
+            }
+          }
+        }
       },
       "dsl": {
         "admission": "editStep",
         "scopeKinds": [
           "blueprint",
+          "levelBlueprint",
           "widgetBlueprint"
         ],
         "transactionDomain": "asset",

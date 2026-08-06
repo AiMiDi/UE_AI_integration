@@ -115,6 +115,9 @@ private:
 		FString CheckpointId;
 		FString LastCompletedOperationId;
 		FString SnapshotDigest;
+		FString SnapshotId;
+		FString FailurePhase;
+		FString CauseCode;
 		int32 NextInitializerIndex = 0;
 		int32 NextOperationIndex = 0;
 		int32 NextFinalizerIndex = 0;
@@ -127,6 +130,10 @@ private:
 		bool bMemorySnapshotRestored = false;
 		bool bRollbackAvailable = false;
 		bool bRollbackVerified = false;
+		bool bMutationStarted = false;
+		bool bJournalPersisted = false;
+		bool bRollbackAttempted = false;
+		bool bEditorSessionReloaded = false;
 		TArray<TSharedPtr<FJsonValue>> Operations;
 		TArray<TSharedPtr<FJsonValue>> Finalizers;
 		TArray<TSharedPtr<FJsonValue>> DirtyPackages;

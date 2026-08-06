@@ -446,6 +446,41 @@ def main() -> int:
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if action == "execute" and request.get("sections") == [
+                "diagnostics"
+            ]:
+                failed_receipt = {
+                    "schema": "ue.workflow-run.v1",
+                    "runId": "run-cli-failed-receipt",
+                    "planDigest": bound_plan_digest,
+                    "contractSetDigest": contract_digest,
+                    "status": "failed",
+                    "failurePhase": "snapshot",
+                    "causeCode": "snapshot_unavailable",
+                    "snapshotId": "run-cli-failed-receipt:baseline",
+                    "mutationStarted": False,
+                    "journalPersisted": True,
+                    "rollback": {
+                        "attempted": False,
+                        "status": "notNeeded",
+                        "verified": True,
+                    },
+                }
+                failed_result = dict(failed_receipt)
+                failed_result["schema"] = "ue.workflow-result.v1"
+                failed_result["receipt"] = failed_receipt
+                self.send_json(
+                    500,
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "snapshot_unavailable",
+                            "message": "Synthetic admitted-run failure.",
+                            "details": failed_result,
+                        },
+                    },
+                )
+                return
             statuses = {
                 "execute": "pending",
                 "status": "running",
@@ -609,6 +644,40 @@ def main() -> int:
             final_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             assert final_receipt["status"] == "rolledBack"
 
+            failed_receipt_path = Path(temporary) / "failed-receipt.json"
+            admitted_failure = subprocess.run(
+                common
+                + [
+                    "execute",
+                    "--file",
+                    args.fixture,
+                    "--approve-plan",
+                    bound_plan_digest,
+                    "--receipt",
+                    str(failed_receipt_path),
+                    "--section",
+                    "diagnostics",
+                    "--endpoint",
+                    endpoint,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            assert admitted_failure.returncode == 5
+            failed_receipt = json.loads(
+                failed_receipt_path.read_text(encoding="utf-8")
+            )
+            assert failed_receipt["status"] == "failed"
+            assert failed_receipt["failurePhase"] == "snapshot"
+            assert failed_receipt["causeCode"] == "snapshot_unavailable"
+            assert failed_receipt["journalPersisted"] is True
+            assert failed_receipt["rollback"] == {
+                "attempted": False,
+                "status": "notNeeded",
+                "verified": True,
+            }
+
             capabilities = run(
                 *capability_query,
                 "--connect",
@@ -687,6 +756,8 @@ def main() -> int:
         "resume",
         "rollback",
         "plan",
+        "execute",
+        "plan",
     ]
     assert workflow_requests[1]["detailLevel"] == "summary"
     assert workflow_requests[2]["detailLevel"] == "summary"
@@ -707,6 +778,7 @@ def main() -> int:
         workflow_requests[6]["approvePlanDigest"]
         == bound_plan_digest
     )
+    assert workflow_requests[8]["sections"] == ["diagnostics"]
     session_request_headers = request_headers[:-1]
     assert all(
         header["callerType"] == "cli"

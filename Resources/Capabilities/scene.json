@@ -871,7 +871,8 @@
       },
       "traits": {
         "destructive": false,
-        "expensive": false
+        "expensive": false,
+        "sessionSafe": true
       },
       "output": {
         "kind": "json"
@@ -943,7 +944,8 @@
       },
       "traits": {
         "destructive": true,
-        "expensive": false
+        "expensive": false,
+        "sessionSafe": true
       },
       "output": {
         "kind": "json"
@@ -979,7 +981,8 @@
       },
       "traits": {
         "destructive": true,
-        "expensive": false
+        "expensive": false,
+        "sessionSafe": true
       },
       "output": {
         "kind": "json"
@@ -1940,7 +1943,8 @@
       },
       "traits": {
         "destructive": false,
-        "expensive": false
+        "expensive": false,
+        "sessionSafe": true
       },
       "output": {
         "kind": "json"
@@ -2095,7 +2099,8 @@
       },
       "traits": {
         "destructive": false,
-        "expensive": false
+        "expensive": false,
+        "sessionSafe": true
       },
       "output": {
         "kind": "json"
@@ -2159,7 +2164,8 @@
       },
       "traits": {
         "destructive": false,
-        "expensive": false
+        "expensive": false,
+        "sessionSafe": true
       },
       "output": {
         "kind": "json"
@@ -2289,7 +2295,8 @@
       },
       "traits": {
         "destructive": true,
-        "expensive": false
+        "expensive": false,
+        "sessionSafe": true
       },
       "output": {
         "kind": "json"
@@ -3390,7 +3397,8 @@
       },
       "traits": {
         "destructive": false,
-        "expensive": true
+        "expensive": true,
+        "sessionSafe": true
       },
       "output": {
         "kind": "image"
@@ -3507,7 +3515,8 @@
       },
       "traits": {
         "destructive": false,
-        "expensive": false
+        "expensive": false,
+        "sessionSafe": true
       },
       "output": {
         "kind": "json"
@@ -3544,7 +3553,8 @@
       },
       "traits": {
         "destructive": false,
-        "expensive": false
+        "expensive": false,
+        "sessionSafe": true
       },
       "output": {
         "kind": "json"

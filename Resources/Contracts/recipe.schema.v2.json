@@ -10,6 +10,17 @@
     "version": { "type": "string", "minLength": 1, "maxLength": 64 },
     "description": { "type": "string", "maxLength": 1024 },
     "inputs": { "type": "object" },
+    "sessionPolicy": {
+      "type": "object",
+      "properties": {
+        "requirePieStopped": { "const": true },
+        "runnerStartsPie": { "const": true },
+        "lease": { "const": "pie" },
+        "editorInstanceBound": { "const": true }
+      },
+      "required": ["requirePieStopped", "runnerStartsPie", "lease", "editorInstanceBound"],
+      "additionalProperties": false
+    },
     "steps": {
       "type": "array",
       "minItems": 1,
@@ -19,7 +30,7 @@
         "required": ["id", "kind"],
         "properties": {
           "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
-          "kind": { "enum": ["capability", "workflow", "poll", "condition", "approval", "sourceControlCheckout"] },
+          "kind": { "enum": ["capability", "sessionCapability", "workflow", "poll", "condition", "approval", "sourceControlCheckout"] },
           "capability": { "type": "string", "maxLength": 192 },
           "params": { "type": "object" },
           "workflow": { "type": "object" },
@@ -35,7 +46,18 @@
             },
             "additionalProperties": false
           },
-          "compensate": { "type": "object" },
+          "compensate": {
+            "type": "object",
+            "properties": {
+              "kind": { "enum": ["capability", "sessionCapability", "workflow"] },
+              "capability": { "type": "string", "maxLength": 192 },
+              "params": { "type": "object" },
+              "runId": { "type": "string" },
+              "approvePlanDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          },
           "highRisk": { "type": "boolean" }
         },
         "not": {

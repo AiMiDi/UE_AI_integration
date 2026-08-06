@@ -19,6 +19,10 @@ stdio bridge，让 Codex CLI、Claude Code 等 MCP 客户端查询或修改 Blue
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
 - 专用 PIE 生命周期、Runtime 对象/Widget/Delegate/真实输入与 Scenario 能力。
 - Blueprint/UMG 写入返回编译、保存、重载和读回验证证据。
+- LevelScriptBlueprint 以 `UWorld/.umap` 安全持久化；多步骤修改使用
+  `levelBlueprint` Workflow scope，失败始终形成 receipt 并验证回滚。
+- Vector、Rotator、Transform、LinearColor Pin 支持 typed setter；运行态 Recipe
+  绑定调用方 PIE lease、Editor instance 和 PIE generation。
 - 统一的 HTTP envelope、状态码和参数错误模型。
 - 查询、命令与校验分层，所有 UObject 操作进入 Game Thread 队列。
 - MCP 的 Editor backend 只连接已经运行的 Unreal Editor，不负责启动或关闭

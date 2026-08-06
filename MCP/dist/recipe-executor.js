@@ -1,4 +1,4 @@
-import { RecipeRunner } from "./recipe-runner.js";
+import { RecipeRunner, recipeHasSessionSteps } from "./recipe-runner.js";
 import { UEApiError } from "./ue-bridge.js";
 export class RecipeRunnerExecutor {
     runner;
@@ -16,12 +16,19 @@ export class RecipeRunnerExecutor {
             return this.runner.validate(params.recipe);
         }
         if (id === "production.recipe.plan") {
-            return this.runner.plan(params.recipe);
+            const inputs = (params.inputs ?? {});
+            return recipeHasSessionSteps(params.recipe)
+                ? await this.runner.planOnline(params.recipe, inputs)
+                : this.runner.plan(params.recipe, inputs);
         }
         if (id === "production.recipe.start") {
-            return this.runner.start(params.recipe, (params.inputs ?? {}), typeof params.approvePlanDigest === "string"
+            const inputs = (params.inputs ?? {});
+            const approval = typeof params.approvePlanDigest === "string"
                 ? params.approvePlanDigest
-                : undefined);
+                : undefined;
+            return (recipeHasSessionSteps(params.recipe)
+                ? await this.runner.startOnline(params.recipe, inputs, approval)
+                : this.runner.start(params.recipe, inputs, approval));
         }
         const runId = params.runId;
         if (typeof runId !== "string" || runId.length === 0) {

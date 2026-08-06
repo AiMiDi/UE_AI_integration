@@ -20,10 +20,11 @@ structured result + recipe verify operations
           See Results
 ```
 
-Skill 不是新的任意编排器。`ue_skills` 不连接 Editor，也没有 `run` action；
-recipe 不包含循环、条件、脚本、参数 schema 或数据绑定。精确参数始终来自
-`ue_context` 或 `ue-cli help`，写入仍经过 capability 的 `confirmWrite`、
-Workflow 的 plan digest、事务、readback 和 rollback。
+Skill 不是新的任意执行器。`ue_skills` 不连接 Editor，也没有 `run` action；
+Skill 内嵌的指导 recipe 只负责路由。独立 Recipe v2 Runner 只接受有界 poll、
+受限条件、审批、补偿和显式数据绑定，不接受任意脚本或无限循环。精确参数始终
+来自 `ue_context` 或 `ue-cli help`，资产写入仍经过 Workflow 的 plan digest、
+事务、readback 和 rollback。
 
 ## 客户端入口 Skill
 
@@ -60,6 +61,7 @@ bash ./scripts/install_entry_skill.sh --client claude
 | `ue-asset-migration` | 资产移动与重构 | dependency audit → plan → exact digest execute → graph/diff readback → optional rollback |
 | `ue-world-partition-validate` | 大世界只读验证 | applicability → cells/sources/audit → Data Layer/HLOD/PCG evidence |
 | `ue-landscape-authoring` | Landscape/Water 确定性变更 | applicability → export/snapshot → change plan → execute → validate/diff → rollback |
+| `ue-recovery-operator` | Editor/Worker/源码控制恢复 | bounded retry → reconnect/checkpoint → explicit restart approval → final acceptance |
 
 每个包自包含：
 
@@ -128,6 +130,23 @@ verify operation，不会重复暴露 save、rollback 或其他写操作。
 
 只允许读取 `skill.json` 已声明且仍位于该 Skill 目录内的文件；绝对路径、
 `..` 和符号链接越界被拒绝。
+
+## Level Blueprint 与 Session Recipe
+
+关卡蓝图的多步骤修改必须使用 Workflow v2 的 `levelBlueprint` scope。逻辑目标
+是 `ULevelScriptBlueprint`，持久化目标是其 Persistent Level 的 `UWorld/.umap`；
+Workflow 只允许 graph/node/pin/comment/layout 变化，检测到 Actor、External
+Actor 或其他 package 逃逸时自动失败并回滚。普通 `blueprint` scope 指向 map
+会返回 `workflow_scope_kind_mismatch`。
+
+直接 node/pin/comment 请求仍保留兼容入口，但仅提供单请求保护：compile、save
+或 read-back 失败时恢复内存图、Dirty 和磁盘 package。多个相关写步骤不要逐条
+调用，必须由 Workflow 持有完整事务。
+
+运行态验证使用 `Recipes/ue-pie-subsystem-validation.recipe.json`。它只允许
+manifest 明确标记为 `sessionSafe` 的能力，plan digest 绑定 materialized inputs、
+能力目录、Editor instance 和 PIE 状态；Runner 自己取得 PIE lease、启动并拥有
+generation，拒绝旧 objectRef、迟到回调和跨 Editor 恢复。
 
 ## CLI 用法
 

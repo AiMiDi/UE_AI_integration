@@ -2635,6 +2635,9 @@
         "properties": {
           "recipe": {
             "type": "object"
+          },
+          "inputs": {
+            "type": "object"
           }
         },
         "required": [

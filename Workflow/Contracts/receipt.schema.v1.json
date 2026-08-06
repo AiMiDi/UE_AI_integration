@@ -36,6 +36,40 @@
         "completed",
         "rolledBack"
       ]
+    },
+    "failurePhase": {
+      "type": "string"
+    },
+    "causeCode": {
+      "type": "string"
+    },
+    "snapshotId": {
+      "type": "string"
+    },
+    "mutationStarted": {
+      "type": "boolean"
+    },
+    "journalPersisted": {
+      "type": "boolean"
+    },
+    "rollback": {
+      "type": "object",
+      "required": [
+        "attempted",
+        "status",
+        "verified"
+      ],
+      "properties": {
+        "attempted": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "verified": {
+          "type": "boolean"
+        }
+      }
     }
   }
 }

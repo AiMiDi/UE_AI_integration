@@ -94,7 +94,7 @@ public:
 		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params);
 		const bool bSaved =
 			UEAIIntegration::Workflow::ShouldSaveImmediately(Params)
-			&& MCPHelpers::SaveBlueprintPackage(BP);
+			&& MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
@@ -159,7 +159,7 @@ public:
 		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params);
 		const bool bSaved =
 			UEAIIntegration::Workflow::ShouldSaveImmediately(Params)
-			&& MCPHelpers::SaveBlueprintPackage(BP);
+			&& MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
@@ -276,7 +276,7 @@ public:
 			}
 		}
 
-		bool bSaved = MCPHelpers::SaveBlueprintPackage(BP);
+		bool bSaved = MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
@@ -455,7 +455,7 @@ public:
 		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params);
 		const bool bSaved =
 			UEAIIntegration::Workflow::ShouldSaveImmediately(Params)
-			&& MCPHelpers::SaveBlueprintPackage(BP);
+			&& MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);

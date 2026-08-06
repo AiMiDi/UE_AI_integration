@@ -161,6 +161,222 @@ async function runOnline() {
       releasedOnUnregister: true,
     };
 
+    assert.ok(recipeRoot, "online acceptance requires a temporary Recipe root.");
+    const sessionRecipe = {
+      schema: "ue.recipe.v2",
+      id: "rc-session-pie-lifecycle",
+      version: "1.0.0",
+      sessionPolicy: {
+        requirePieStopped: true,
+        runnerStartsPie: true,
+        lease: "pie",
+        editorInstanceBound: true,
+      },
+      steps: [
+        {
+          id: "status",
+          kind: "sessionCapability",
+          capability: "scene.pie.status",
+          params: {},
+        },
+      ],
+    };
+    const sessionRunner = new RecipeRunner({
+      env: { ...process.env, UEAI_RECIPE_ROOT: resolve(recipeRoot) },
+      endpoint,
+    });
+    const sessionPlan = await sessionRunner.planOnline(sessionRecipe, {});
+    const sessionStarted = await sessionRunner.startOnline(
+      sessionRecipe,
+      {},
+      String(sessionPlan.planDigest),
+    );
+    const sessionCompleted = await waitFor(() => {
+      const value = sessionRunner.status(sessionStarted.runId);
+      return value.status === "completed" ? value : undefined;
+    }, 30_000);
+    assert.equal(sessionCompleted.steps[0].attempts, 1);
+    assert.equal(sessionCompleted.session?.runnerStartedPie, true);
+    assert.ok(Number.isInteger(sessionCompleted.session?.activePieGeneration));
+    assert.ok(
+      sessionCompleted.compensations.some(
+        (item) => item.stepId === "$pie.stop" && item.ok === true,
+      ),
+      "Session Recipe did not stop its owned PIE generation.",
+    );
+    assert.ok(
+      sessionCompleted.compensations.some(
+        (item) => item.stepId === "$pie.lease" && item.ok === true,
+      ),
+      "Session Recipe did not release its caller-bound PIE lease.",
+    );
+    const pieAfterRecipe = await clientA.execute(
+      "scene.pie.status",
+      {},
+      `session-recipe-pie-status-${randomUUID()}`,
+    );
+    assert.ok(
+      ["stopped", "idle", "none", "inactive"].includes(
+        String(pieAfterRecipe.state).toLowerCase(),
+      ),
+      `Runner-owned PIE remained active: ${JSON.stringify(pieAfterRecipe)}`,
+    );
+    evidence.sessionRecipe = {
+      runId: sessionCompleted.runId,
+      planDigest: sessionCompleted.planDigest,
+      serverInstanceId: sessionCompleted.session?.serverInstanceId,
+      generation: sessionCompleted.session?.activePieGeneration,
+      firstAttempts: sessionCompleted.steps[0].attempts,
+      compensationCount: sessionCompleted.compensations.length,
+      pieStopped: true,
+    };
+
+    const levelMap = "/Game/UEAI/Acceptance/LevelBlueprintFixture";
+    await clientA.execute(
+      "scene.level.open",
+      { levelPath: levelMap },
+      `level-open-${randomUUID()}`,
+    );
+    const baselineLevelGraph = await clientA.execute(
+      "blueprint.graph.get",
+      { name: levelMap, graph: "EventGraph", geometryMode: "stored" },
+      `level-baseline-${randomUUID()}`,
+    );
+    const baselineLevelNodes = Array.isArray(baselineLevelGraph.nodes)
+      ? baselineLevelGraph.nodes.length
+      : 0;
+    const directComment = `RC2 direct 中文 + symbols !@# ${randomUUID()}`;
+    const directAdd = await clientA.execute(
+      "blueprint.node.add",
+      {
+        blueprint: levelMap,
+        graph: "EventGraph",
+        nodeType: "Comment",
+        comment: directComment,
+        posX: 256,
+        posY: 128,
+      },
+      `level-direct-add-${randomUUID()}`,
+    );
+    assert.equal(directAdd.saved, true);
+    assert.equal(directAdd.compiled, true);
+    const directReadBack = await clientA.execute(
+      "blueprint.graph.get",
+      { name: levelMap, graph: "EventGraph", geometryMode: "stored" },
+      `level-direct-readback-${randomUUID()}`,
+    );
+    assert.ok(
+      directReadBack.nodes?.some((node) => node?.nodeId === directAdd.nodeId),
+      "Direct Level Blueprint node add was not visible in graph read-back.",
+    );
+    const directDelete = await clientA.execute(
+      "blueprint.node.delete",
+      { blueprint: levelMap, nodeId: directAdd.nodeId },
+      `level-direct-delete-${randomUUID()}`,
+    );
+    assert.equal(directDelete.saved, true);
+    const cleanedDirectGraph = await clientA.execute(
+      "blueprint.graph.get",
+      { name: levelMap, graph: "EventGraph", geometryMode: "stored" },
+      `level-direct-clean-${randomUUID()}`,
+    );
+    assert.equal(cleanedDirectGraph.nodes?.length, baselineLevelNodes);
+    assert.equal(
+      cleanedDirectGraph.nodes?.some((node) => node?.nodeId === directAdd.nodeId),
+      false,
+    );
+
+    const levelSuffix = randomUUID().replaceAll("-", "");
+    const levelWorkflow = {
+      dsl: "ue.workflow",
+      dslVersion: "2.0",
+      workflowKind: "assetEdit",
+      workflowId: `accept-level-blueprint-${levelSuffix}`,
+      scopes: {
+        level: { kind: "levelBlueprint", asset: levelMap },
+      },
+      persistence: "dirtyOnly",
+      operations: [
+        {
+          id: "addFirstComment",
+          type: "blueprint.node.add",
+          scope: "level",
+          params: {
+            graph: "EventGraph",
+            nodeType: "Comment",
+            comment: `RC2 Workflow A ${levelSuffix}`,
+            posX: 512,
+            posY: 128,
+          },
+        },
+        {
+          id: "addSecondComment",
+          type: "blueprint.node.add",
+          scope: "level",
+          params: {
+            graph: "EventGraph",
+            nodeType: "Comment",
+            comment: `RC2 Workflow B ${levelSuffix}`,
+            posX: 1024,
+            posY: 128,
+          },
+        },
+      ],
+    };
+    const levelPlan = await clientA.workflow({
+      action: "plan",
+      workflow: levelWorkflow,
+      detailLevel: "standard",
+    });
+    assert.match(String(levelPlan.planDigest), /^sha256:[0-9a-f]{64}$/);
+    const levelPlanAssets = levelPlan.preconditions?.assets ?? [];
+    assert.equal(levelPlanAssets.length, 1);
+    assert.equal(levelPlanAssets[0]?.packageType, "map");
+    assert.equal(levelPlanAssets[0]?.packageExtension, ".umap");
+    const levelExecute = await clientA.workflow({
+      action: "execute",
+      requestId: `accept-level-workflow-${levelSuffix}`,
+      workflow: levelWorkflow,
+      approvePlanDigest: levelPlan.planDigest,
+      confirmWrite: true,
+      saveOnSuccess: true,
+      detailLevel: "standard",
+    });
+    assert.equal(levelExecute.status, "completed");
+    const levelMutated = await clientA.execute(
+      "blueprint.graph.get",
+      { name: levelMap, graph: "EventGraph", geometryMode: "stored" },
+      `level-workflow-readback-${randomUUID()}`,
+    );
+    assert.equal(levelMutated.nodes?.length, baselineLevelNodes + 2);
+    const levelRollback = await clientA.workflow({
+      action: "rollback",
+      runId: levelExecute.runId,
+      approvePlanDigest: levelPlan.planDigest,
+      detailLevel: "standard",
+    });
+    assert.equal(levelRollback.rollbackVerified, true);
+    const levelRestored = await clientA.execute(
+      "blueprint.graph.get",
+      { name: levelMap, graph: "EventGraph", geometryMode: "stored" },
+      `level-workflow-restored-${randomUUID()}`,
+    );
+    assert.equal(levelRestored.nodes?.length, baselineLevelNodes);
+    evidence.levelBlueprint = {
+      map: levelMap,
+      directNodeId: directAdd.nodeId,
+      directSaved: directAdd.saved,
+      directReadBack: true,
+      directCleanupSaved: directDelete.saved,
+      runId: levelExecute.runId,
+      planDigest: levelPlan.planDigest,
+      packageType: levelPlanAssets[0]?.packageType,
+      packageExtension: levelPlanAssets[0]?.packageExtension,
+      operations: 2,
+      rollbackVerified: levelRollback.rollbackVerified,
+      restoredNodeCount: levelRestored.nodes?.length,
+    };
+
     const suffix = randomUUID().replaceAll("-", "");
     const asset = `/Game/UEAI/Acceptance/BP_WriteRollback_${suffix}`;
     await expectError(

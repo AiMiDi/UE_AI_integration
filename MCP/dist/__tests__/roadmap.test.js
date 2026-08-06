@@ -124,6 +124,42 @@ test("requires source-control checkout before every controlled Workflow write", 
     assert.equal(withCheckout.ok, true);
     assert.equal(withCheckout.requiresApproval, true);
 });
+test("admits only explicitly session-safe capabilities into Session Recipes", () => {
+    const policy = {
+        requirePieStopped: true,
+        runnerStartsPie: true,
+        lease: "pie",
+        editorInstanceBound: true,
+    };
+    const unsafe = validateRecipe({
+        schema: "ue.recipe.v2",
+        id: "unsafe-session-capability",
+        version: "1.0.0",
+        sessionPolicy: policy,
+        steps: [{
+                id: "write",
+                kind: "sessionCapability",
+                capability: "scene.runtime.object.set",
+                params: {},
+            }],
+    });
+    assert.equal(unsafe.ok, false);
+    assert.ok(unsafe.diagnostics.some((diagnostic) => diagnostic.code === "recipe_session_capability_forbidden"));
+    const safe = validateRecipe({
+        schema: "ue.recipe.v2",
+        id: "safe-session-capability",
+        version: "1.0.0",
+        sessionPolicy: policy,
+        steps: [{
+                id: "call",
+                kind: "sessionCapability",
+                capability: "scene.runtime.object.call",
+                params: {},
+            }],
+    });
+    assert.equal(safe.ok, true);
+    assert.equal(safe.requiresApproval, true);
+});
 test("keeps offline project/config reads inside the explicit project root", async () => {
     const root = fixtureProject();
     const executor = new LocalProjectExecutor();
@@ -357,6 +393,294 @@ test("recovers the Workflow acknowledgement gap with a stable requestId", async 
         assert.equal(workflowWrites, 1);
         assert.equal(workflowRuns.size, 1);
         assert.equal(runner.result(started.runId).steps[0]?.attempts, 1);
+    }
+    finally {
+        await new Promise((resolvePromise) => server.close(() => resolvePromise()));
+    }
+});
+test("binds Session Recipe plans to materialized inputs, catalog, Editor, and stopped PIE", async () => {
+    let pie = { state: "stopped", generation: 7 };
+    const server = createServer(async (request, response) => {
+        let text = "";
+        for await (const chunk of request)
+            text += String(chunk);
+        const payload = text === "" ? {} : JSON.parse(text);
+        let status = 200;
+        let data = {};
+        if (request.url === "/api/v1/clients/register") {
+            data = { sessionId: randomUUID(), heartbeatIntervalMs: 5_000, expiresAfterMs: 30_000 };
+        }
+        else if (request.url === "/api/health") {
+            data = {
+                serverInstanceId: "editor-session-plan",
+                processId: process.pid,
+                processStartTime: "2026-08-06T00:00:00Z",
+            };
+        }
+        else if (request.url === "/api/execute"
+            && payload.capability === "scene.pie.status") {
+            data = pie;
+        }
+        const body = JSON.stringify({ ok: status < 400, data });
+        response.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) });
+        response.end(body);
+    });
+    await new Promise((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const runner = new RecipeRunner({ endpoint: `http://127.0.0.1:${address.port}` });
+    const recipe = {
+        schema: "ue.recipe.v2",
+        id: "online-plan-binding",
+        version: "1.0.0",
+        sessionPolicy: {
+            requirePieStopped: true,
+            runnerStartsPie: true,
+            lease: "pie",
+            editorInstanceBound: true,
+        },
+        steps: [{
+                id: "call",
+                kind: "sessionCapability",
+                capability: "scene.runtime.object.call",
+                params: { function: "$inputs.functionName", objectRef: "$inputs.objectRef" },
+            }],
+    };
+    try {
+        const first = await runner.planOnline(recipe, {
+            functionName: "BeginFixture",
+            objectRef: { sessionId: "future", generation: 8, objectId: "fixture" },
+        });
+        const repeated = await runner.planOnline(recipe, {
+            functionName: "BeginFixture",
+            objectRef: { sessionId: "future", generation: 8, objectId: "fixture" },
+        });
+        const changed = await runner.planOnline(recipe, {
+            functionName: "CancelFixture",
+            objectRef: { sessionId: "future", generation: 8, objectId: "fixture" },
+        });
+        assert.equal(first.planDigest, repeated.planDigest);
+        assert.notEqual(first.planDigest, changed.planDigest);
+        const binding = first.session;
+        assert.equal(binding.serverInstanceId, "editor-session-plan");
+        assert.equal(binding.plannedPieGeneration, 7);
+        assert.match(String(binding.catalogDigest), /^sha256:[a-f0-9]{64}$/);
+        pie = { state: "running", generation: 8, sessionId: "pie-active" };
+        await assert.rejects(runner.planOnline(recipe, { functionName: "BeginFixture", objectRef: {} }), (error) => error instanceof UEApiError && error.code === "recipe_pie_must_be_stopped");
+    }
+    finally {
+        await new Promise((resolvePromise) => server.close(() => resolvePromise()));
+    }
+});
+test("fails a Session Recipe lease conflict before starting PIE", async () => {
+    let pieStartCalls = 0;
+    const server = createServer(async (request, response) => {
+        let text = "";
+        for await (const chunk of request)
+            text += String(chunk);
+        const payload = text === "" ? {} : JSON.parse(text);
+        let status = 200;
+        let envelope;
+        if (request.url === "/api/v1/clients/register") {
+            envelope = { ok: true, data: { sessionId: randomUUID(), heartbeatIntervalMs: 5_000, expiresAfterMs: 30_000 } };
+        }
+        else if (request.url === "/api/health") {
+            envelope = { ok: true, data: { serverInstanceId: "editor-lease-conflict", processId: process.pid } };
+        }
+        else if (request.url === "/api/execute" && payload.capability === "scene.pie.status") {
+            envelope = { ok: true, data: { state: "stopped", generation: 3 } };
+        }
+        else if (request.url === "/api/execute" && payload.capability === "production.lease.acquire") {
+            status = 409;
+            envelope = { ok: false, error: { code: "lease_conflict", message: "PIE lease is owned by another session." } };
+        }
+        else {
+            if (request.url === "/api/execute" && payload.capability === "scene.pie.start")
+                pieStartCalls += 1;
+            envelope = { ok: true, data: {} };
+        }
+        const body = JSON.stringify(envelope);
+        response.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) });
+        response.end(body);
+    });
+    await new Promise((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const root = mkdtempSync(join(tmpdir(), "ueai-session-lease-conflict-"));
+    const env = {
+        ...process.env,
+        UEAI_RECIPE_ROOT: root,
+        UEAI_RECIPE_TEST_MODE: "1",
+        UEAI_RECIPE_TEST_LEASE_MS: "1000",
+    };
+    const runner = new RecipeRunner({ env, endpoint: `http://127.0.0.1:${address.port}` });
+    const recipe = {
+        schema: "ue.recipe.v2",
+        id: "session-lease-conflict",
+        version: "1.0.0",
+        sessionPolicy: {
+            requirePieStopped: true,
+            runnerStartsPie: true,
+            lease: "pie",
+            editorInstanceBound: true,
+        },
+        steps: [{ id: "find", kind: "sessionCapability", capability: "scene.runtime.object.find", params: { class: "Fixture" } }],
+    };
+    const waitFor = async (predicate, timeoutMs = 10_000) => {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            if (predicate())
+                return;
+            await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+        }
+        assert.fail("Timed out waiting for Session Recipe lease conflict.");
+    };
+    try {
+        const plan = await runner.planOnline(recipe);
+        const started = await runner.startOnline(recipe, {}, String(plan.planDigest));
+        await waitFor(() => ["failed", "cancelled"].includes(runner.status(started.runId).status));
+        const failed = runner.result(started.runId);
+        assert.equal(failed.error?.code, "lease_conflict");
+        assert.equal(pieStartCalls, 0);
+    }
+    finally {
+        await new Promise((resolvePromise) => server.close(() => resolvePromise()));
+    }
+});
+test("resumes a Session Recipe only in the same PIE generation and rejects stale objectRefs before dispatch", async () => {
+    let pieState = "stopped";
+    let generation = 20;
+    let sessionId = "";
+    let staleReference = false;
+    let pieStartCalls = 0;
+    let findCalls = 0;
+    let functionCalls = 0;
+    const server = createServer(async (request, response) => {
+        let text = "";
+        for await (const chunk of request)
+            text += String(chunk);
+        const payload = text === "" ? {} : JSON.parse(text);
+        const capability = String(payload.capability ?? "");
+        const params = (payload.params ?? {});
+        let data = {};
+        if (request.url === "/api/v1/clients/register") {
+            data = { sessionId: randomUUID(), heartbeatIntervalMs: 5_000, expiresAfterMs: 30_000 };
+        }
+        else if (request.url === "/api/health") {
+            data = { serverInstanceId: "editor-session-resume", processId: process.pid };
+        }
+        else if (request.url === "/api/execute" && capability === "scene.pie.status") {
+            data = { state: pieState, generation, ...(sessionId === "" ? {} : { sessionId }) };
+        }
+        else if (request.url === "/api/execute" && capability === "production.lease.acquire") {
+            data = { leaseId: `lease-${generation}` };
+        }
+        else if (request.url === "/api/execute" && capability === "production.lease.release") {
+            data = { released: true };
+        }
+        else if (request.url === "/api/execute" && capability === "scene.pie.start") {
+            pieStartCalls += 1;
+            generation += 1;
+            sessionId = `pie-${generation}`;
+            pieState = "running";
+            data = { requested: true };
+        }
+        else if (request.url === "/api/execute" && capability === "scene.pie.stop") {
+            pieState = "stopped";
+            data = { requested: true };
+        }
+        else if (request.url === "/api/execute" && capability === "scene.runtime.object.find") {
+            findCalls += 1;
+            data = {
+                objects: [{
+                        objectRef: {
+                            sessionId,
+                            generation: staleReference ? generation - 1 : generation,
+                            objectId: "00000000-0000-0000-0000-000000000001",
+                        },
+                        name: "FixtureSubsystem",
+                    }],
+                count: 1,
+            };
+        }
+        else if (request.url === "/api/execute" && capability === "scene.runtime.object.call") {
+            functionCalls += 1;
+            data = { called: true, function: params.function };
+        }
+        const body = JSON.stringify({ ok: true, data });
+        response.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) });
+        response.end(body);
+    });
+    await new Promise((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const root = mkdtempSync(join(tmpdir(), "ueai-session-resume-"));
+    const env = {
+        ...process.env,
+        UEAI_RECIPE_ROOT: root,
+        UEAI_RECIPE_TEST_MODE: "1",
+        UEAI_RECIPE_TEST_LEASE_MS: "1000",
+        UEAI_RECIPE_TEST_EXIT_AFTER_STEP: "find",
+    };
+    const runner = new RecipeRunner({ env, endpoint: `http://127.0.0.1:${address.port}` });
+    const recipe = {
+        schema: "ue.recipe.v2",
+        id: "session-generation-recovery",
+        version: "1.0.0",
+        sessionPolicy: {
+            requirePieStopped: true,
+            runnerStartsPie: true,
+            lease: "pie",
+            editorInstanceBound: true,
+        },
+        steps: [
+            { id: "find", kind: "sessionCapability", capability: "scene.runtime.object.find", params: { class: "FixtureSubsystem" } },
+            {
+                id: "call",
+                kind: "sessionCapability",
+                capability: "scene.runtime.object.call",
+                params: {
+                    objectRef: "$steps.find.output.objects.0.objectRef",
+                    function: "$inputs.functionName",
+                    arguments: {},
+                },
+            },
+        ],
+    };
+    const waitFor = async (predicate, timeoutMs = 10_000) => {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            if (predicate())
+                return;
+            await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+        }
+        assert.fail("Timed out waiting for Session Recipe generation recovery.");
+    };
+    try {
+        const inputs = { functionName: "FinalizeFixture" };
+        const plan = await runner.planOnline(recipe, inputs);
+        const started = await runner.startOnline(recipe, inputs, String(plan.planDigest));
+        await waitFor(() => runner.status(started.runId).status === "interrupted");
+        const interrupted = runner.status(started.runId);
+        assert.equal(interrupted.steps[0]?.status, "completed");
+        assert.equal(interrupted.steps[0]?.attempts, 1);
+        assert.equal(interrupted.session?.activePieGeneration, generation);
+        delete env.UEAI_RECIPE_TEST_EXIT_AFTER_STEP;
+        runner.resume(started.runId, started.planDigest);
+        await waitFor(() => runner.status(started.runId).status === "completed");
+        const completed = runner.result(started.runId);
+        assert.equal(completed.steps[0]?.attempts, 1);
+        assert.equal(completed.steps[1]?.attempts, 1);
+        assert.equal(pieStartCalls, 1);
+        assert.equal(findCalls, 1);
+        assert.equal(functionCalls, 1);
+        staleReference = true;
+        const stalePlan = await runner.planOnline(recipe, inputs);
+        const staleRun = await runner.startOnline(recipe, inputs, String(stalePlan.planDigest));
+        await waitFor(() => runner.status(staleRun.runId).status === "failed");
+        const staleResult = runner.result(staleRun.runId);
+        assert.equal(staleResult.error?.code, "recipe_pie_generation_conflict");
+        assert.equal(functionCalls, 1, "stale objectRef must be rejected before object.call dispatch");
     }
     finally {
         await new Promise((resolvePromise) => server.close(() => resolvePromise()));

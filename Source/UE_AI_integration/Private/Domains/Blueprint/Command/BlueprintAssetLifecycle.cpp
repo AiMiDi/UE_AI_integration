@@ -303,29 +303,22 @@ public:
 			return FMCPToolResult::Ok(Result);
 		}
 
-		const FString Extension = Package->ContainsMap()
-			? FPackageName::GetMapPackageExtension()
-			: FPackageName::GetAssetPackageExtension();
-		const FString Filename =
-			FPackageName::LongPackageNameToFilename(
-				Package->GetName(),
-				Extension);
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
-		const bool bSaved = UPackage::SavePackage(
-			Package,
-			Blueprint,
-			*Filename,
-			SaveArgs);
+		UEAIIntegration::Infrastructure::FBlueprintPersistenceTarget
+			PersistenceTarget;
+		UEAIIntegration::Infrastructure::FBlueprintPersistenceError
+			PersistenceError;
+		const bool bSaved =
+			UEAIIntegration::Infrastructure::SaveBlueprintPackage(
+				Blueprint,
+				&PersistenceTarget,
+				PersistenceError);
 		const bool bVerified = bSaved && !Package->IsDirty();
 		if (!bSaved)
 		{
 			return FMCPToolResult::Error(
-				FString::Printf(
-					TEXT("Failed to save Blueprint package '%s'."),
-					*Package->GetName()),
-				TEXT("asset_save_failed"),
-				500);
+				PersistenceError.Message,
+				PersistenceError.Code,
+				PersistenceError.HttpStatus);
 		}
 
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
@@ -333,7 +326,13 @@ public:
 			TEXT("blueprint"),
 			Blueprint->GetPathName());
 		Result->SetStringField(TEXT("package"), Package->GetName());
-		Result->SetStringField(TEXT("filename"), Filename);
+		Result->SetStringField(
+			TEXT("filename"),
+			PersistenceTarget.Filename);
+		Result->SetStringField(
+			TEXT("packageKind"),
+			UEAIIntegration::Infrastructure::BlueprintPackageKindName(
+				PersistenceTarget.Kind));
 		Result->SetBoolField(TEXT("saved"), true);
 		Result->SetBoolField(TEXT("skipped"), false);
 		Result->SetBoolField(TEXT("dirtyBefore"), bDirtyBefore);

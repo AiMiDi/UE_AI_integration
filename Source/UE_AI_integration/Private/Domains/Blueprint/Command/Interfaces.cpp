@@ -135,7 +135,7 @@ public:
 		}
 
 		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
-		bool bSaved = MCPHelpers::SaveBlueprintPackage(BP);
+		bool bSaved = MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
@@ -204,7 +204,7 @@ public:
 		FTopLevelAssetPath InterfacePath = FoundInterface->GetClassPathName();
 		FBlueprintEditorUtils::RemoveInterface(BP, InterfacePath, bPreserveFunctions);
 		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
-		bool bSaved = MCPHelpers::SaveBlueprintPackage(BP);
+		bool bSaved = MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);

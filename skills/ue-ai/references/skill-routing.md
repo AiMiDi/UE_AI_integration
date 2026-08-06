@@ -20,6 +20,16 @@ Prefer the recovery Skill over replaying a write when work may already have
 partially completed. Prefer the performance Skill for regression verdicts and
 the Trace Skill for provider-level diagnosis.
 
+For a LevelScriptBlueprint, use Workflow v2 with a `levelBlueprint` scope.
+The logical asset is the LevelScriptBlueprint while persistence and rollback
+use its owning `.umap`; do not route a map through an ordinary `blueprint`
+scope. Direct graph writes are atomic only for one request.
+
+For bounded PIE subsystem validation, plan and start the packaged
+`ue-pie-subsystem-validation` Recipe. Session Recipes may call only
+`sessionSafe` capabilities and are bound to one Editor instance and one
+Runner-owned PIE generation.
+
 ## MCP tool routing
 
 | Need | Tool |
@@ -45,7 +55,8 @@ different domain.
 
 Use this sequence when MCP is unavailable or a terminal workflow is requested:
 
-1. `ue-cli doctor --full --json`
+1. `ue-cli doctor --full --json` and resolve any revision, module, catalog, or
+   Workflow digest mismatch before writing
 2. `ue-cli skills --query <intent> --json`
 3. `ue-cli help <capability-id> --json`
 4. `ue-cli <capability-id> ... --json`, `ue-cli recipe ...`, or `ue-workflow-cli ...`

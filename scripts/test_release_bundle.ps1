@@ -55,6 +55,7 @@ try {
         'skills/setup-ue5/SKILL.md',
         'skills/ue-recovery-operator/SKILL.md',
         'Recipes/ue-recovery-operator.recipe.json',
+        'Recipes/ue-pie-subsystem-validation.recipe.json',
         'scripts/install_entry_skill.ps1',
         'scripts/install_entry_skill.sh',
         'Release/release-files.sha256.json'

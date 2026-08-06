@@ -2,6 +2,8 @@
 #include "Tools/MCPToolBase.h"
 #include "Tools/MCPToolRegistry.h"
 #include "Infrastructure/MCPToolHelpers.h"
+#include "Infrastructure/BlueprintMutationGuard.h"
+#include "Infrastructure/BlueprintPersistence.h"
 #include "Workflow/UEWorkflowExecutionContext.h"
 #include "Engine/Blueprint.h"
 #include "EdGraph/EdGraph.h"
@@ -48,8 +50,390 @@
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "Misc/PackageName.h"
+#include "Misc/DefaultValueHelper.h"
 #include "Modules/ModuleManager.h"
 #include "UObject/UnrealType.h"
+#include "UObject/StructOnScope.h"
+
+namespace
+{
+bool ReadRequiredNumber(
+	const TSharedPtr<FJsonObject>& Object,
+	const TCHAR* Field,
+	double& OutValue,
+	FString& OutError)
+{
+	if (!Object.IsValid() || !Object->TryGetNumberField(Field, OutValue)
+		|| !FMath::IsFinite(OutValue))
+	{
+		OutError = FString::Printf(
+			TEXT("typedValue.%s must be a finite number."),
+			Field);
+		return false;
+	}
+	return true;
+}
+
+bool ReadVectorValue(
+	const TSharedPtr<FJsonObject>& Object,
+	FVector& OutValue,
+	FString& OutError)
+{
+	double X = 0.0;
+	double Y = 0.0;
+	double Z = 0.0;
+	if (!ReadRequiredNumber(Object, TEXT("x"), X, OutError)
+		|| !ReadRequiredNumber(Object, TEXT("y"), Y, OutError)
+		|| !ReadRequiredNumber(Object, TEXT("z"), Z, OutError))
+	{
+		return false;
+	}
+	OutValue = FVector(X, Y, Z);
+	return true;
+}
+
+bool ReadRotatorValue(
+	const TSharedPtr<FJsonObject>& Object,
+	FRotator& OutValue,
+	FString& OutError)
+{
+	double Pitch = 0.0;
+	double Yaw = 0.0;
+	double Roll = 0.0;
+	if (!ReadRequiredNumber(Object, TEXT("pitch"), Pitch, OutError)
+		|| !ReadRequiredNumber(Object, TEXT("yaw"), Yaw, OutError)
+		|| !ReadRequiredNumber(Object, TEXT("roll"), Roll, OutError))
+	{
+		return false;
+	}
+	OutValue = FRotator(Pitch, Yaw, Roll);
+	return true;
+}
+
+bool ExportStructValue(
+	UScriptStruct* Struct,
+	const void* Memory,
+	FString& OutSerialized)
+{
+	OutSerialized.Reset();
+	if (!Struct || !Memory)
+	{
+		return false;
+	}
+	Struct->ExportText(
+		OutSerialized,
+		Memory,
+		nullptr,
+		nullptr,
+		PPF_None,
+		nullptr);
+	return !OutSerialized.IsEmpty();
+}
+
+bool NormalizeStructText(
+	UScriptStruct* Struct,
+	const FString& Serialized,
+	FString& OutNormalized)
+{
+	if (!Struct || Serialized.IsEmpty())
+	{
+		return false;
+	}
+	FStructOnScope Imported(Struct);
+	const TCHAR* End = Struct->ImportText(
+		*Serialized,
+		Imported.GetStructMemory(),
+		nullptr,
+		PPF_None,
+		nullptr,
+		Struct->GetName());
+	return End != nullptr
+		&& ExportStructValue(
+			Struct,
+			Imported.GetStructMemory(),
+			OutNormalized);
+}
+
+bool SerializePinStructValue(
+	UScriptStruct* Struct,
+	const void* Memory,
+	FString& OutSerialized)
+{
+	if (Struct == TBaseStructure<FVector>::Get())
+	{
+		return ExportStructValue(Struct, Memory, OutSerialized);
+	}
+	if (Struct == TBaseStructure<FRotator>::Get())
+	{
+		const FRotator& Rotator = *reinterpret_cast<const FRotator*>(Memory);
+		// K2 uses FDefaultValueHelper's vector grammar for Rotator defaults.
+		// Export the equivalent vector through UScriptStruct so the bridge does
+		// not construct the accepted keyed/comma representation itself.
+		const FVector Components(
+			Rotator.Pitch,
+			Rotator.Yaw,
+			Rotator.Roll);
+		return ExportStructValue(
+			TBaseStructure<FVector>::Get(),
+			&Components,
+			OutSerialized);
+	}
+	if (Struct == TBaseStructure<FTransform>::Get())
+	{
+		OutSerialized =
+			reinterpret_cast<const FTransform*>(Memory)->ToString();
+		return true;
+	}
+	if (Struct == TBaseStructure<FLinearColor>::Get())
+	{
+		OutSerialized =
+			reinterpret_cast<const FLinearColor*>(Memory)->ToString();
+		return true;
+	}
+	return false;
+}
+
+bool NormalizePinStructText(
+	UScriptStruct* Struct,
+	const FString& Serialized,
+	FString& OutNormalized)
+{
+	if (Struct == TBaseStructure<FVector>::Get())
+	{
+		FVector Value;
+		return FDefaultValueHelper::ParseVector(Serialized, Value)
+			&& SerializePinStructValue(Struct, &Value, OutNormalized);
+	}
+	if (Struct == TBaseStructure<FRotator>::Get())
+	{
+		FRotator Value;
+		return FDefaultValueHelper::ParseRotator(Serialized, Value)
+			&& SerializePinStructValue(Struct, &Value, OutNormalized);
+	}
+	if (Struct == TBaseStructure<FTransform>::Get())
+	{
+		FTransform Value;
+		return Value.InitFromString(Serialized)
+			&& SerializePinStructValue(Struct, &Value, OutNormalized);
+	}
+	if (Struct == TBaseStructure<FLinearColor>::Get())
+	{
+		FLinearColor Value;
+		return Value.InitFromString(Serialized)
+			&& SerializePinStructValue(Struct, &Value, OutNormalized);
+	}
+	return false;
+}
+
+TSharedPtr<FJsonObject> MakePinTypeResult(const UEdGraphPin& Pin)
+{
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(
+		TEXT("category"),
+		Pin.PinType.PinCategory.ToString());
+	Result->SetStringField(
+		TEXT("subCategory"),
+		Pin.PinType.PinSubCategory.ToString());
+	if (const UObject* TypeObject = Pin.PinType.PinSubCategoryObject.Get())
+	{
+		Result->SetStringField(TEXT("typeObject"), TypeObject->GetPathName());
+	}
+	Result->SetBoolField(TEXT("byRef"), Pin.PinType.bIsReference);
+	return Result;
+}
+
+bool BuildTypedPinDefault(
+	const UEdGraphPin& Pin,
+	const TSharedPtr<FJsonObject>& TypedValue,
+	FString& OutSerialized,
+	TSharedPtr<FJsonObject>& OutNormalizedValue,
+	FString& OutError)
+{
+	FString Type;
+	const TSharedPtr<FJsonObject>* Value = nullptr;
+	if (!TypedValue.IsValid()
+		|| !TypedValue->TryGetStringField(TEXT("type"), Type)
+		|| !TypedValue->TryGetObjectField(TEXT("value"), Value)
+		|| !Value || !Value->IsValid())
+	{
+		OutError = TEXT("typedValue requires {type, value}.");
+		return false;
+	}
+	UScriptStruct* Struct = Cast<UScriptStruct>(
+		Pin.PinType.PinSubCategoryObject.Get());
+	if (Pin.PinType.PinCategory != UEdGraphSchema_K2::PC_Struct || !Struct)
+	{
+		OutError = TEXT("typedValue requires a concrete struct input pin.");
+		return false;
+	}
+
+	FStructOnScope NativeValue(Struct);
+	OutNormalizedValue = MakeShared<FJsonObject>();
+	OutNormalizedValue->SetStringField(TEXT("type"), Type);
+	TSharedPtr<FJsonObject> Normalized = MakeShared<FJsonObject>();
+	if (Type == TEXT("Vector") && Struct == TBaseStructure<FVector>::Get())
+	{
+		FVector ValueData;
+		if (!ReadVectorValue(*Value, ValueData, OutError))
+		{
+			return false;
+		}
+		*reinterpret_cast<FVector*>(NativeValue.GetStructMemory()) = ValueData;
+		Normalized->SetNumberField(TEXT("x"), ValueData.X);
+		Normalized->SetNumberField(TEXT("y"), ValueData.Y);
+		Normalized->SetNumberField(TEXT("z"), ValueData.Z);
+	}
+	else if (Type == TEXT("Rotator")
+		&& Struct == TBaseStructure<FRotator>::Get())
+	{
+		FRotator ValueData;
+		if (!ReadRotatorValue(*Value, ValueData, OutError))
+		{
+			return false;
+		}
+		*reinterpret_cast<FRotator*>(NativeValue.GetStructMemory()) = ValueData;
+		Normalized->SetNumberField(TEXT("pitch"), ValueData.Pitch);
+		Normalized->SetNumberField(TEXT("yaw"), ValueData.Yaw);
+		Normalized->SetNumberField(TEXT("roll"), ValueData.Roll);
+	}
+	else if (Type == TEXT("Transform")
+		&& Struct == TBaseStructure<FTransform>::Get())
+	{
+		const TSharedPtr<FJsonObject>* Translation = nullptr;
+		const TSharedPtr<FJsonObject>* Rotation = nullptr;
+		const TSharedPtr<FJsonObject>* Scale = nullptr;
+		if (!(*Value)->TryGetObjectField(TEXT("translation"), Translation)
+			|| !Translation || !Translation->IsValid()
+			|| !(*Value)->TryGetObjectField(TEXT("rotation"), Rotation)
+			|| !Rotation || !Rotation->IsValid()
+			|| !(*Value)->TryGetObjectField(TEXT("scale3D"), Scale)
+			|| !Scale || !Scale->IsValid())
+		{
+			OutError = TEXT("Transform requires translation, rotation, and scale3D objects.");
+			return false;
+		}
+		FVector TranslationValue;
+		FRotator RotationValue;
+		FVector ScaleValue;
+		if (!ReadVectorValue(*Translation, TranslationValue, OutError)
+			|| !ReadRotatorValue(*Rotation, RotationValue, OutError)
+			|| !ReadVectorValue(*Scale, ScaleValue, OutError))
+		{
+			return false;
+		}
+		*reinterpret_cast<FTransform*>(NativeValue.GetStructMemory()) =
+			FTransform(RotationValue, TranslationValue, ScaleValue);
+		Normalized = *Value;
+	}
+	else if (Type == TEXT("LinearColor")
+		&& Struct == TBaseStructure<FLinearColor>::Get())
+	{
+		double R = 0.0;
+		double G = 0.0;
+		double B = 0.0;
+		double A = 0.0;
+		if (!ReadRequiredNumber(*Value, TEXT("r"), R, OutError)
+			|| !ReadRequiredNumber(*Value, TEXT("g"), G, OutError)
+			|| !ReadRequiredNumber(*Value, TEXT("b"), B, OutError)
+			|| !ReadRequiredNumber(*Value, TEXT("a"), A, OutError))
+		{
+			return false;
+		}
+		const FLinearColor ValueData(R, G, B, A);
+		*reinterpret_cast<FLinearColor*>(NativeValue.GetStructMemory()) = ValueData;
+		Normalized->SetNumberField(TEXT("r"), ValueData.R);
+		Normalized->SetNumberField(TEXT("g"), ValueData.G);
+		Normalized->SetNumberField(TEXT("b"), ValueData.B);
+		Normalized->SetNumberField(TEXT("a"), ValueData.A);
+	}
+	else
+	{
+		OutError = FString::Printf(
+			TEXT("typedValue type '%s' does not match pin struct '%s'."),
+			*Type,
+			*Struct->GetPathName());
+		return false;
+	}
+
+	OutNormalizedValue->SetObjectField(TEXT("value"), Normalized);
+	FString Exported;
+	FString RoundTripExported;
+	if (!ExportStructValue(Struct, NativeValue.GetStructMemory(), Exported)
+		|| !NormalizeStructText(Struct, Exported, RoundTripExported)
+		|| !SerializePinStructValue(
+			Struct,
+			NativeValue.GetStructMemory(),
+			OutSerialized))
+	{
+		OutError = TEXT("UE struct import/export could not serialize typedValue.");
+		return false;
+	}
+	return true;
+}
+
+FMCPToolResult RollbackDirectMutation(
+	UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard& Guard,
+	const FString& Message,
+	const FString& Code)
+{
+	FString RollbackError;
+	const bool bRollbackVerified = Guard.Rollback(RollbackError);
+	return FMCPToolResult::Error(
+		bRollbackVerified
+			? Message + TEXT(" The mutation was rolled back and verified.")
+			: Message + TEXT(" ") + RollbackError,
+		bRollbackVerified ? Code : TEXT("rollback_failed"),
+		500);
+}
+
+bool FinalizeDirectMutation(
+	UBlueprint* Blueprint,
+	const TSharedPtr<FJsonObject>& Params,
+	UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard& Guard,
+	bool& OutSaved,
+	bool& OutCompiled,
+	FMCPToolResult& OutFailure)
+{
+	OutSaved = false;
+	OutCompiled = false;
+	if (UEAIIntegration::Workflow::ShouldDeferCompile(Params))
+	{
+		Guard.Commit();
+		return true;
+	}
+	FKismetEditorUtilities::CompileBlueprint(
+		Blueprint,
+		EBlueprintCompileOptions::SkipSave);
+	OutCompiled = Blueprint->Status != BS_Error;
+	if (!OutCompiled)
+	{
+		OutFailure = RollbackDirectMutation(
+			Guard,
+			TEXT("The Blueprint mutation introduced compile errors."),
+			TEXT("asset_compile_failed"));
+		return false;
+	}
+	UEAIIntegration::Infrastructure::FBlueprintPersistenceError SaveError;
+	OutSaved = UEAIIntegration::Infrastructure::SaveBlueprintPackage(
+		Blueprint,
+		nullptr,
+		SaveError);
+	if (!OutSaved)
+	{
+		OutFailure = RollbackDirectMutation(
+			Guard,
+			SaveError.Message.IsEmpty()
+				? TEXT("The Blueprint mutation could not be saved.")
+				: SaveError.Message,
+			SaveError.Code.IsEmpty()
+				? TEXT("asset_save_failed")
+				: SaveError.Code);
+		return false;
+	}
+	Guard.Commit();
+	return true;
+}
+}
 
 // ============================================================
 // replace_function_calls
@@ -106,7 +490,7 @@ public:
 		}
 
 		if (!bDryRun && ReplacedCount > 0)
-			MCPHelpers::SaveBlueprintPackage(BP);
+			MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
@@ -201,22 +585,40 @@ public:
 
 		const UEdGraphSchema* Schema = SourceGraph ? SourceGraph->GetSchema() : nullptr;
 		if (!Schema) return FMCPToolResult::Error(TEXT("Graph schema not found"));
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(
+				Guard.GetErrorMessage(),
+				Guard.GetErrorCode(),
+				422);
+		}
+		Guard.MarkMutationStarted();
 
 		SourceNode->Modify();
 		TargetNode->Modify();
 		bool bConnected = Schema->TryCreateConnection(SourcePin, TargetPin);
 		if (!bConnected)
-			return FMCPToolResult::Error(TEXT("Cannot connect — types are incompatible"));
+			return RollbackDirectMutation(
+				Guard,
+				TEXT("Cannot connect pins because the graph schema rejected the connection."),
+				TEXT("pin_connection_rejected"));
 
 		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, false);
-		const bool bSaved =
-			UEAIIntegration::Workflow::ShouldSaveImmediately(Params)
-			&& MCPHelpers::SaveBlueprintPackage(BP);
+		bool bSaved = false;
+		bool bCompiled = false;
+		FMCPToolResult Failure;
+		if (!FinalizeDirectMutation(
+			BP, Params, Guard, bSaved, bCompiled, Failure))
+		{
+			return Failure;
+		}
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
 		Result->SetStringField(TEXT("blueprint"), BlueprintName);
 		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -252,8 +654,17 @@ public:
 
 		UEdGraphPin* Pin = Node->FindPin(FName(*PinName));
 		if (!Pin) return FMCPToolResult::Error(FString::Printf(TEXT("Pin '%s' not found"), *PinName));
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(
+				Guard.GetErrorMessage(),
+				Guard.GetErrorCode(),
+				422);
+		}
 
 		int32 DisconnectedCount = 0;
+		Guard.MarkMutationStarted();
 		if (!TargetNodeId.IsEmpty() && !TargetPinName.IsEmpty())
 		{
 			UEdGraphNode* TargetNode = MCPHelpers::FindNodeByGuid(BP, TargetNodeId);
@@ -268,12 +679,28 @@ public:
 			if (DisconnectedCount > 0) Pin->BreakAllPinLinks(true);
 		}
 
-		bool bSaved = DisconnectedCount > 0 ? MCPHelpers::SaveBlueprintPackage(BP) : false;
+		bool bSaved = false;
+		bool bCompiled = false;
+		if (DisconnectedCount > 0)
+		{
+			UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, false);
+			FMCPToolResult Failure;
+			if (!FinalizeDirectMutation(
+				BP, Params, Guard, bSaved, bCompiled, Failure))
+			{
+				return Failure;
+			}
+		}
+		else
+		{
+			Guard.Commit();
+		}
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
 		Result->SetNumberField(TEXT("disconnectedCount"), DisconnectedCount);
 		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -537,6 +964,12 @@ public:
 			{ TargetGraph = Graph; break; }
 		}
 		if (!TargetGraph) return FMCPToolResult::Error(FString::Printf(TEXT("Graph '%s' not found"), *DecodedGraphName));
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(
+				Guard.GetErrorMessage(), Guard.GetErrorCode(), 422);
+		}
 
 		UEdGraphNode* NewNode = nullptr;
 		TSet<UEdGraphNode*> NodesBefore;
@@ -550,6 +983,7 @@ public:
 		UPackage* BlueprintPackage = BP->GetOutermost();
 		const bool bPackageWasDirty =
 			BlueprintPackage && BlueprintPackage->IsDirty();
+		Guard.MarkMutationStarted();
 		TargetGraph->Modify();
 
 		if (NodeType == TEXT("CallFunction"))
@@ -1208,47 +1642,16 @@ public:
 			Params);
 		bool bCompiled = false;
 		bool bSaved = false;
-		if (!bDeferred)
+		FMCPToolResult Failure;
+		if (!FinalizeDirectMutation(
+			BP,
+			Params,
+			Guard,
+			bSaved,
+			bCompiled,
+			Failure))
 		{
-			FKismetEditorUtilities::CompileBlueprint(BP);
-			bCompiled = BP->Status != BS_Error;
-			if (!bCompiled)
-			{
-				RollbackAddedGraphNodes(
-					TargetGraph,
-					NodesBefore,
-					BlueprintPackage,
-					bPackageWasDirty);
-				FKismetEditorUtilities::CompileBlueprint(BP);
-				if (BlueprintPackage)
-				{
-					BlueprintPackage->SetDirtyFlag(
-						bPackageWasDirty);
-				}
-				return FMCPToolResult::Error(
-					TEXT("Node creation introduced Blueprint compile errors and was rolled back."),
-					TEXT("asset_compile_failed"),
-					500);
-			}
-			bSaved = MCPHelpers::SaveBlueprintPackage(BP);
-			if (!bSaved)
-			{
-				RollbackAddedGraphNodes(
-					TargetGraph,
-					NodesBefore,
-					BlueprintPackage,
-					bPackageWasDirty);
-				FKismetEditorUtilities::CompileBlueprint(BP);
-				if (BlueprintPackage)
-				{
-					BlueprintPackage->SetDirtyFlag(
-						bPackageWasDirty);
-				}
-				return FMCPToolResult::Error(
-					TEXT("Node compiled but the Blueprint could not be saved; the mutation was rolled back."),
-					TEXT("asset_save_failed"),
-					500);
-			}
+			return Failure;
 		}
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
@@ -1298,14 +1701,30 @@ public:
 			return FMCPToolResult::Error(TEXT("Cannot delete event entry node"));
 		if (Cast<UK2Node_CustomEvent>(Node))
 			return FMCPToolResult::Error(TEXT("Cannot delete CustomEvent entry node"));
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(
+				Guard.GetErrorMessage(),
+				Guard.GetErrorCode(),
+				422);
+		}
+		Guard.MarkMutationStarted();
 
 		FString NodeTitle = Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
+		Node->Modify();
+		Graph->Modify();
 		Node->BreakAllNodeLinks();
 		Graph->RemoveNode(Node);
-
-		const bool bSaved =
-			UEAIIntegration::Workflow::ShouldSaveImmediately(Params)
-			&& MCPHelpers::SaveBlueprintPackage(BP);
+		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, false);
+		bool bSaved = false;
+		bool bCompiled = false;
+		FMCPToolResult Failure;
+		if (!FinalizeDirectMutation(
+			BP, Params, Guard, bSaved, bCompiled, Failure))
+		{
+			return Failure;
+		}
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
@@ -1313,6 +1732,7 @@ public:
 		Result->SetStringField(TEXT("nodeId"), NodeId);
 		Result->SetStringField(TEXT("nodeTitle"), NodeTitle);
 		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -1340,21 +1760,36 @@ public:
 
 		UEdGraphNode* Node = MCPHelpers::FindNodeByGuid(BP, NodeId);
 		if (!Node) return FMCPToolResult::Error(TEXT("Node not found"));
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(
+				Guard.GetErrorMessage(),
+				Guard.GetErrorCode(),
+				422);
+		}
+		Guard.MarkMutationStarted();
 
 		Node->Modify();
 		Node->NodePosX = (int32)Params->GetNumberField(TEXT("posX"));
 		Node->NodePosY = (int32)Params->GetNumberField(TEXT("posY"));
 		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, false);
 
-		const bool bSaved =
-			UEAIIntegration::Workflow::ShouldSaveImmediately(Params)
-			&& MCPHelpers::SaveBlueprintPackage(BP);
+		bool bSaved = false;
+		bool bCompiled = false;
+		FMCPToolResult Failure;
+		if (!FinalizeDirectMutation(
+			BP, Params, Guard, bSaved, bCompiled, Failure))
+		{
+			return Failure;
+		}
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
 		Result->SetNumberField(TEXT("posX"), Node->NodePosX);
 		Result->SetNumberField(TEXT("posY"), Node->NodePosY);
 		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -1375,9 +1810,23 @@ public:
 		FString BlueprintName = Params->GetStringField(TEXT("blueprint"));
 		FString NodeId = Params->GetStringField(TEXT("nodeId"));
 		FString PinName = Params->GetStringField(TEXT("pinName"));
-		FString Value = Params->GetStringField(TEXT("value"));
 		if (BlueprintName.IsEmpty() || NodeId.IsEmpty() || PinName.IsEmpty())
 			return FMCPToolResult::Error(TEXT("Missing required fields"));
+		FString Value;
+		const bool bHasValue =
+			Params->TryGetStringField(TEXT("value"), Value);
+		const TSharedPtr<FJsonObject>* TypedValueField = nullptr;
+		const bool bHasTypedValue = Params->TryGetObjectField(
+			TEXT("typedValue"),
+			TypedValueField)
+			&& TypedValueField && TypedValueField->IsValid();
+		if (bHasValue == bHasTypedValue)
+		{
+			return FMCPToolResult::Error(
+				TEXT("Exactly one of value or typedValue is required."),
+				TEXT("invalid_params"),
+				422);
+		}
 
 		FString LoadError;
 		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(BlueprintName, LoadError);
@@ -1389,29 +1838,204 @@ public:
 
 		UEdGraphPin* Pin = Node->FindPin(FName(*PinName));
 		if (!Pin) return FMCPToolResult::Error(TEXT("Pin not found"));
-		if (Pin->Direction != EGPD_Input) return FMCPToolResult::Error(TEXT("Can only set defaults on input pins"));
+		if (Pin->Direction != EGPD_Input)
+			return FMCPToolResult::Error(
+				TEXT("Can only set defaults on input pins."),
+				TEXT("pin_default_unsupported"),
+				422);
+		if (!Pin->LinkedTo.IsEmpty())
+			return FMCPToolResult::Error(
+				TEXT("Linked pins cannot accept a default value."),
+				TEXT("pin_linked"),
+				409);
+		if (Pin->PinType.bIsReference)
+			return FMCPToolResult::Error(
+				TEXT("By-reference pins cannot accept a persisted default value."),
+				TEXT("pin_by_ref"),
+				422);
+		if (Pin->bDefaultValueIsReadOnly)
+			return FMCPToolResult::Error(
+				TEXT("The pin default is read-only."),
+				TEXT("pin_default_read_only"),
+				409);
+		if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Wildcard)
+			return FMCPToolResult::Error(
+				TEXT("Wildcard pins must be resolved before setting a default."),
+				TEXT("pin_type_unresolved"),
+				422);
+
+		const UEdGraphSchema* Schema = Graph ? Graph->GetSchema() : nullptr;
+		if (!Schema)
+			return FMCPToolResult::Error(
+				TEXT("The graph has no schema for default-value validation."),
+				TEXT("pin_default_unsupported"),
+				422);
+
+		TSharedPtr<FJsonObject> NormalizedTypedValue;
+		FString SerializedValue = Value;
+		FString TypedError;
+		if (bHasTypedValue
+			&& !BuildTypedPinDefault(
+				*Pin,
+				*TypedValueField,
+				SerializedValue,
+				NormalizedTypedValue,
+				TypedError))
+		{
+			return FMCPToolResult::Error(
+				TypedError,
+				TEXT("pin_type_mismatch"),
+				422);
+		}
+		const FString ValidationError = Schema->IsPinDefaultValid(
+			Pin,
+			SerializedValue,
+			nullptr,
+			FText::GetEmpty());
+		if (!ValidationError.IsEmpty())
+		{
+			return FMCPToolResult::Error(
+				ValidationError,
+				TEXT("pin_default_invalid"),
+				422);
+		}
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard
+			SingleRequestGuard(BP);
+		if (!SingleRequestGuard.IsValid())
+		{
+			return FMCPToolResult::Error(
+				SingleRequestGuard.GetErrorMessage(),
+				SingleRequestGuard.GetErrorCode(),
+				422);
+		}
 
 		FString OldValue = Pin->DefaultValue;
+		UObject* OldDefaultObject = Pin->DefaultObject;
+		const FText OldDefaultText = Pin->DefaultTextValue;
+		UPackage* Package = BP->GetOutermost();
+		const bool bPackageWasDirty = Package && Package->IsDirty();
+		auto Rollback = [&]()
+		{
+			UEdGraphNode* CurrentNode = MCPHelpers::FindNodeByGuid(
+				BP,
+				NodeId,
+				nullptr);
+			UEdGraphPin* CurrentPin = CurrentNode
+				? CurrentNode->FindPin(FName(*PinName))
+				: nullptr;
+			if (CurrentNode && CurrentPin)
+			{
+				CurrentNode->Modify();
+				CurrentPin->DefaultValue = OldValue;
+				CurrentPin->DefaultObject = OldDefaultObject;
+				CurrentPin->DefaultTextValue = OldDefaultText;
+				CurrentNode->PinDefaultValueChanged(CurrentPin);
+			}
+			FKismetEditorUtilities::CompileBlueprint(
+				BP,
+				EBlueprintCompileOptions::SkipSave);
+			if (Package)
+			{
+				Package->SetDirtyFlag(bPackageWasDirty);
+			}
+		};
+		SingleRequestGuard.MarkMutationStarted();
 		Node->Modify();
-		const UEdGraphSchema* Schema = Graph ? Graph->GetSchema() : nullptr;
-		if (Schema) Schema->TrySetDefaultValue(*Pin, Value);
-		else Pin->DefaultValue = Value;
+		Schema->TrySetDefaultValue(*Pin, SerializedValue);
+		FString ImmediateNormalized;
+		UScriptStruct* PinStruct = Cast<UScriptStruct>(
+			Pin->PinType.PinSubCategoryObject.Get());
+		const bool bImmediateMatches = bHasTypedValue
+			? NormalizePinStructText(
+				PinStruct,
+				Pin->DefaultValue,
+				ImmediateNormalized)
+				&& ImmediateNormalized == SerializedValue
+			: Schema->DoesDefaultValueMatch(*Pin, SerializedValue);
+		if (!bImmediateMatches
+			|| !Schema->IsCurrentPinDefaultValid(Pin).IsEmpty())
+		{
+			Rollback();
+			return FMCPToolResult::Error(
+				TEXT("The graph schema rejected or changed the requested pin default."),
+				TEXT("pin_default_persistence_failed"),
+				500);
+		}
 
 		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, false);
 		const bool bDeferredWorkflow =
 			UEAIIntegration::Workflow::ShouldDeferCompile(Params);
 		if (!bDeferredWorkflow)
 		{
-			FKismetEditorUtilities::CompileBlueprint(BP);
+			FKismetEditorUtilities::CompileBlueprint(
+				BP,
+				EBlueprintCompileOptions::SkipSave);
+			if (BP->Status == BS_Error)
+			{
+				Rollback();
+				return FMCPToolResult::Error(
+					TEXT("Pin default caused Blueprint compile errors and was rolled back."),
+					TEXT("asset_compile_failed"),
+					500);
+			}
+		}
+		UEdGraphNode* ReadBackNode = MCPHelpers::FindNodeByGuid(
+			BP,
+			NodeId,
+			nullptr);
+		UEdGraphPin* ReadBackPin = ReadBackNode
+			? ReadBackNode->FindPin(FName(*PinName))
+			: nullptr;
+		FString ReadBackNormalized;
+		const bool bReadBackMatches = ReadBackPin && (bHasTypedValue
+			? NormalizePinStructText(
+				PinStruct,
+				ReadBackPin->DefaultValue,
+				ReadBackNormalized)
+				&& ReadBackNormalized == SerializedValue
+			: Schema->DoesDefaultValueMatch(*ReadBackPin, SerializedValue));
+		if (!bReadBackMatches)
+		{
+			Rollback();
+			return FMCPToolResult::Error(
+				TEXT("Pin default did not survive reconstruction or compilation."),
+				TEXT("pin_default_persistence_failed"),
+				500);
 		}
 		const bool bSaved = !bDeferredWorkflow
 			&& MCPHelpers::SaveBlueprintPackage(BP);
+		if (!bDeferredWorkflow && !bSaved)
+		{
+			Rollback();
+			return FMCPToolResult::Error(
+				TEXT("Pin default could not be saved and was rolled back."),
+				TEXT("asset_save_failed"),
+				500);
+		}
+		SingleRequestGuard.Commit();
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
 		Result->SetStringField(TEXT("oldValue"), OldValue);
-		Result->SetStringField(TEXT("newValue"), Pin->DefaultValue);
+		Result->SetObjectField(TEXT("pinType"), MakePinTypeResult(*ReadBackPin));
+		if (NormalizedTypedValue.IsValid())
+		{
+			Result->SetObjectField(
+				TEXT("normalizedValue"),
+				NormalizedTypedValue);
+		}
+		else
+		{
+			Result->SetStringField(TEXT("normalizedValue"), ReadBackPin->DefaultValue);
+		}
+		Result->SetStringField(TEXT("serializedValue"), ReadBackPin->DefaultValue);
+		TSharedPtr<FJsonObject> ReadBack = MakeShared<FJsonObject>();
+		ReadBack->SetStringField(TEXT("nodeId"), NodeId);
+		ReadBack->SetStringField(TEXT("pinName"), PinName);
+		ReadBack->SetStringField(TEXT("serializedValue"), ReadBackPin->DefaultValue);
+		Result->SetObjectField(TEXT("readBack"), ReadBack);
 		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("deferredCompile"), bDeferredWorkflow);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -1458,15 +2082,27 @@ public:
 		UEdGraphNode_Comment* Node = Cast<UEdGraphNode_Comment>(
 			MCPHelpers::FindNodeByGuid(BP, NodeId));
 		if (!Node) return FMCPToolResult::Error(TEXT("Comment node not found"));
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(
+				Guard.GetErrorMessage(), Guard.GetErrorCode(), 422);
+		}
+		Guard.MarkMutationStarted();
 
 		FString OldComment = Node->NodeComment;
 		Node->Modify();
 		Node->NodeComment = Title;
 		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, false);
 
-		const bool bSaved =
-			UEAIIntegration::Workflow::ShouldSaveImmediately(Params)
-			&& MCPHelpers::SaveBlueprintPackage(BP);
+		bool bSaved = false;
+		bool bCompiled = false;
+		FMCPToolResult Failure;
+		if (!FinalizeDirectMutation(
+			BP, Params, Guard, bSaved, bCompiled, Failure))
+		{
+			return Failure;
+		}
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
@@ -1474,6 +2110,7 @@ public:
 		Result->SetStringField(TEXT("newTitle"), Title);
 		Result->SetBoolField(TEXT("bubbleVisible"), Node->bCommentBubbleVisible);
 		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -1501,18 +2138,32 @@ public:
 		UEdGraphNode_Comment* Node = Cast<UEdGraphNode_Comment>(
 			MCPHelpers::FindNodeByGuid(BP, NodeId));
 		if (!Node) return FMCPToolResult::Error(TEXT("Comment node not found"));
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(
+				Guard.GetErrorMessage(), Guard.GetErrorCode(), 422);
+		}
+		Guard.MarkMutationStarted();
 		const bool bOldVisible = Node->bCommentBubbleVisible;
 		Node->Modify();
 		Node->bCommentBubbleVisible = bVisible;
 		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, false);
-		const bool bSaved = UEAIIntegration::Workflow::ShouldSaveImmediately(Params)
-			&& MCPHelpers::SaveBlueprintPackage(BP);
+		bool bSaved = false;
+		bool bCompiled = false;
+		FMCPToolResult Failure;
+		if (!FinalizeDirectMutation(
+			BP, Params, Guard, bSaved, bCompiled, Failure))
+		{
+			return Failure;
+		}
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
 		Result->SetBoolField(TEXT("oldVisible"), bOldVisible);
 		Result->SetBoolField(TEXT("visible"), bVisible);
 		Result->SetStringField(TEXT("title"), Node->NodeComment);
 		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -1561,7 +2212,7 @@ public:
 			}
 		}
 
-		bool bSaved = MCPHelpers::SaveBlueprintPackage(BP);
+		bool bSaved = MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
@@ -1637,7 +2288,7 @@ public:
 		void* PropAddr = Prop->ContainerPtrToValuePtr<void>(CDO);
 		Prop->ImportText_Direct(*Value, PropAddr, CDO, PPF_None);
 
-		bool bSaved = MCPHelpers::SaveBlueprintPackage(BP);
+		bool bSaved = MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);

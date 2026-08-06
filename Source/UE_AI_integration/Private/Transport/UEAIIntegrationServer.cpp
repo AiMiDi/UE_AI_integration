@@ -5,8 +5,10 @@
 #include "HttpServerModule.h"
 #include "Interfaces/IPluginManager.h"
 #include "Infrastructure/ClientActivityService.h"
+#include "Infrastructure/EngineeringContractUtils.h"
 #include "Infrastructure/OptionalFeatureAvailability.h"
 #include "Infrastructure/Runtime/BlueprintDebugService.h"
+#include "Infrastructure/Sha256.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformProperties.h"
 #include "HAL/PlatformProcess.h"
@@ -31,6 +33,9 @@
 
 #ifndef UE_AI_INTEGRATION_VERSION
 #define UE_AI_INTEGRATION_VERSION "unknown"
+#endif
+#ifndef UE_AI_SOURCE_REVISION
+#define UE_AI_SOURCE_REVISION "unknown"
 #endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogUEAIIntegrationServer, Log, All);
@@ -66,6 +71,55 @@ FString CurrentProcessStartTimeUtc()
 	}
 #endif
 	return FDateTime::UtcNow().ToIso8601();
+}
+
+FString CapabilityCatalogDigest(const FMCPToolRegistry& Registry)
+{
+	TArray<TSharedPtr<FJsonObject>> Descriptors =
+		Registry.GetCapabilityDescriptors();
+	Descriptors.Sort([](
+		const TSharedPtr<FJsonObject>& Left,
+		const TSharedPtr<FJsonObject>& Right)
+	{
+		FString LeftId;
+		FString RightId;
+		if (Left.IsValid())
+		{
+			Left->TryGetStringField(TEXT("id"), LeftId);
+		}
+		if (Right.IsValid())
+		{
+			Right->TryGetStringField(TEXT("id"), RightId);
+		}
+		return LeftId < RightId;
+	});
+	TArray<TSharedPtr<FJsonValue>> Values;
+	Values.Reserve(Descriptors.Num());
+	for (const TSharedPtr<FJsonObject>& Descriptor : Descriptors)
+	{
+		if (Descriptor.IsValid())
+		{
+			Values.Add(MakeShared<FJsonValueObject>(Descriptor));
+		}
+	}
+	TSharedPtr<FJsonObject> Identity = MakeShared<FJsonObject>();
+	Identity->SetArrayField(TEXT("capabilities"), Values);
+	const FString Digest =
+		UEAIIntegration::Infrastructure::DigestJson(Identity);
+	return Digest.IsEmpty() ? FString() : TEXT("sha256:") + Digest;
+}
+
+FString LoadedPluginModuleDigest()
+{
+	const FString ModulePath = FModuleManager::Get().GetModuleFilename(
+		TEXT("UE_AI_integration"));
+	TArray<uint8> Bytes;
+	FString Digest;
+	return !ModulePath.IsEmpty()
+		&& FFileHelper::LoadFileToArray(Bytes, *ModulePath)
+		&& UEAIIntegration::Infrastructure::TrySha256Hex(Bytes, Digest)
+		? TEXT("sha256:") + Digest
+		: FString();
 }
 
 bool TryParseQueryBool(const TMap<FString, FString>& QueryParams, const FString& Name,
@@ -754,10 +808,73 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 		return;
 	}
 
+	if (Pending->Kind == EUEAIIntegrationRequestKind::CancelExecute)
+	{
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Field :
+			RequestObject->Values)
+		{
+			if (Field.Key != TEXT("requestId")
+				&& Field.Key != TEXT("reason"))
+			{
+				SendError(
+					Pending->OnComplete,
+					422,
+					TEXT("invalid_params"),
+					FString::Printf(
+						TEXT("Unknown cancellation field '%s'."),
+						*Field.Key));
+				return;
+			}
+		}
+		FString CancelRequestId;
+		if (!RequestObject->TryGetStringField(TEXT("requestId"), CancelRequestId)
+			|| CancelRequestId.IsEmpty()
+			|| CancelRequestId.Len() > 200)
+		{
+			SendError(
+				Pending->OnComplete,
+				422,
+				TEXT("invalid_params"),
+				TEXT("requestId must be a non-empty string of at most 200 characters."));
+			return;
+		}
+		FString Reason;
+		RequestObject->TryGetStringField(TEXT("reason"), Reason);
+		const FMCPResult CancelResult = Executor.CancelAsyncOperation(
+			CancelRequestId,
+			Reason);
+		if (!CancelResult.bOk)
+		{
+			SendError(
+				Pending->OnComplete,
+				CancelResult.Error.HttpStatus,
+				CancelResult.Error.Code,
+				CancelResult.Error.Message,
+				CancelResult.Error.Details);
+			return;
+		}
+		SendSuccess(Pending->OnComplete, CancelResult.Data);
+		return;
+	}
+
 	if (Pending->Kind == EUEAIIntegrationRequestKind::WorkflowAction)
 	{
 		FString Action;
 		RequestObject->TryGetStringField(TEXT("action"), Action);
+		FString RequestId;
+		RequestObject->TryGetStringField(TEXT("requestId"), RequestId);
+		if (RequestId.IsEmpty())
+		{
+			RequestId = TEXT("workflow-") + FGuid::NewGuid().ToString(
+				EGuidFormats::DigitsWithHyphensLower);
+		}
+		const FString MarkerCapability = TEXT("workflow.")
+			+ (Action.IsEmpty() ? TEXT("unknown") : Action);
+		WriteRequestMarker(
+			RequestId,
+			MarkerCapability,
+			TEXT("dispatch"),
+			TEXT("running"));
 		ClientActivityService.UpdateWorkflowActivity(
 			Pending->ActivityId,
 			Action,
@@ -772,6 +889,12 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 		const FMCPResult Result = WorkflowRuntime->HandleRequest(RequestObject);
 		if (!Result.bOk)
 		{
+			WriteRequestMarker(
+				RequestId,
+				MarkerCapability,
+				TEXT("terminal"),
+				TEXT("failed"),
+				Result.Error.Code);
 			SendError(
 				Pending->OnComplete,
 				Result.Error.HttpStatus,
@@ -780,6 +903,11 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 				Result.Error.Details);
 			return;
 		}
+		WriteRequestMarker(
+			RequestId,
+			MarkerCapability,
+			TEXT("terminal"),
+			TEXT("completed"));
 		SendSuccess(Pending->OnComplete, Result.Data);
 		return;
 	}
@@ -851,6 +979,15 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 		CapabilityId,
 		RequestId,
 		FindCapabilityRisk(Registry, CapabilityId));
+	const FString MarkerRequestId = RequestId.IsEmpty()
+		? TEXT("execute-") + FGuid::NewGuid().ToString(
+			EGuidFormats::DigitsWithHyphensLower)
+		: RequestId;
+	WriteRequestMarker(
+		MarkerRequestId,
+		CapabilityId,
+		TEXT("dispatch"),
+		TEXT("running"));
 
 	FMCPExecutionContext Context;
 	Context.Capability = CapabilityId;
@@ -863,11 +1000,18 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 	const FHttpResultCallback Completion = Pending->OnComplete;
 	const bool bDeferred = Executor.BeginExecuteAsync(
 		Context,
-		[this, Completion](FMCPResult&& AsyncResult) mutable
+		[this, Completion, MarkerRequestId, CapabilityId](
+			FMCPResult&& AsyncResult) mutable
 		{
 			check(IsInGameThread());
 			if (!AsyncResult.bOk)
 			{
+				WriteRequestMarker(
+					MarkerRequestId,
+					CapabilityId,
+					TEXT("terminal"),
+					TEXT("failed"),
+					AsyncResult.Error.Code);
 				SendError(
 					Completion,
 					AsyncResult.Error.HttpStatus,
@@ -876,6 +1020,11 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 					AsyncResult.Error.Details);
 				return;
 			}
+			WriteRequestMarker(
+				MarkerRequestId,
+				CapabilityId,
+				TEXT("terminal"),
+				TEXT("completed"));
 			SendSuccess(Completion, AsyncResult.Data);
 		},
 		Result);
@@ -884,56 +1033,14 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 		return;
 	}
 
-	if (Pending->Kind == EUEAIIntegrationRequestKind::CancelExecute)
-	{
-		for (const TPair<FString, TSharedPtr<FJsonValue>>& Field :
-			RequestObject->Values)
-		{
-			if (Field.Key != TEXT("requestId")
-				&& Field.Key != TEXT("reason"))
-			{
-				SendError(
-					Pending->OnComplete,
-					422,
-					TEXT("invalid_params"),
-					FString::Printf(
-						TEXT("Unknown cancellation field '%s'."),
-						*Field.Key));
-				return;
-			}
-		}
-		FString CancelRequestId;
-		if (!RequestObject->TryGetStringField(TEXT("requestId"), CancelRequestId)
-			|| CancelRequestId.IsEmpty()
-			|| CancelRequestId.Len() > 200)
-		{
-			SendError(
-				Pending->OnComplete,
-				422,
-				TEXT("invalid_params"),
-				TEXT("requestId must be a non-empty string of at most 200 characters."));
-			return;
-		}
-		FString Reason;
-		RequestObject->TryGetStringField(TEXT("reason"), Reason);
-		const FMCPResult CancelResult = Executor.CancelAsyncOperation(
-			CancelRequestId,
-			Reason);
-		if (!CancelResult.bOk)
-		{
-			SendError(
-				Pending->OnComplete,
-				CancelResult.Error.HttpStatus,
-				CancelResult.Error.Code,
-				CancelResult.Error.Message,
-				CancelResult.Error.Details);
-			return;
-		}
-		SendSuccess(Pending->OnComplete, CancelResult.Data);
-		return;
-	}
 	if (!Result.bOk)
 	{
+		WriteRequestMarker(
+			MarkerRequestId,
+			CapabilityId,
+			TEXT("terminal"),
+			TEXT("failed"),
+			Result.Error.Code);
 		SendError(
 			Pending->OnComplete,
 			Result.Error.HttpStatus,
@@ -943,6 +1050,11 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 		return;
 	}
 
+	WriteRequestMarker(
+		MarkerRequestId,
+		CapabilityId,
+		TEXT("terminal"),
+		TEXT("completed"));
 	SendSuccess(Pending->OnComplete, Result.Data);
 }
 
@@ -956,7 +1068,9 @@ bool FUEAIIntegrationServer::HandleHealth(
 	Data->SetStringField(TEXT("status"), State);
 	Data->SetStringField(TEXT("plugin"), TEXT("UE_AI_integration"));
 
-	FString PluginVersion = UTF8_TO_TCHAR(UE_AI_INTEGRATION_VERSION);
+	const FString CompiledPluginVersion =
+		UTF8_TO_TCHAR(UE_AI_INTEGRATION_VERSION);
+	FString PluginVersion = CompiledPluginVersion;
 	const TSharedPtr<IPlugin> Plugin =
 		IPluginManager::Get().FindPlugin(TEXT("UE_AI_integration"));
 	if (Plugin.IsValid() && !Plugin->GetDescriptor().VersionName.IsEmpty())
@@ -965,6 +1079,42 @@ bool FUEAIIntegrationServer::HandleHealth(
 	}
 	Data->SetStringField(TEXT("version"), PluginVersion);
 	Data->SetStringField(TEXT("pluginVersion"), PluginVersion);
+	Data->SetStringField(TEXT("pluginDescriptorVersion"), PluginVersion);
+	Data->SetStringField(TEXT("pluginCompiledVersion"), CompiledPluginVersion);
+	Data->SetStringField(
+		TEXT("sourceRevision"),
+		UTF8_TO_TCHAR(UE_AI_SOURCE_REVISION));
+	const FString ModuleDigest = LoadedPluginModuleDigest();
+	if (!ModuleDigest.IsEmpty())
+	{
+		Data->SetStringField(TEXT("loadedModuleSha256"), ModuleDigest);
+	}
+	const FString CatalogDigest = CapabilityCatalogDigest(Registry);
+	if (!CatalogDigest.IsEmpty())
+	{
+		Data->SetStringField(TEXT("capabilityCatalogDigest"), CatalogDigest);
+	}
+	const FMCPResult WorkflowHandshake = WorkflowRuntime->MakeHandshake();
+	if (WorkflowHandshake.bOk && WorkflowHandshake.Data.IsValid())
+	{
+		for (const TCHAR* Field : {
+			TEXT("contractSetDigest"),
+			TEXT("contractSetDigestV2")})
+		{
+			FString Value;
+			if (WorkflowHandshake.Data->TryGetStringField(Field, Value))
+			{
+				Data->SetStringField(Field, Value);
+			}
+		}
+		const TSharedPtr<FJsonObject>* Digests = nullptr;
+		if (WorkflowHandshake.Data->TryGetObjectField(
+			TEXT("contractSetDigests"), Digests)
+			&& Digests && Digests->IsValid())
+		{
+			Data->SetObjectField(TEXT("contractSetDigests"), *Digests);
+		}
+	}
 	Data->SetStringField(TEXT("engineVersion"), FEngineVersion::Current().ToString());
 	Data->SetStringField(TEXT("projectName"), FApp::GetProjectName());
 	Data->SetStringField(TEXT("mode"), TEXT("editor"));
@@ -1928,6 +2078,85 @@ FString FUEAIIntegrationServer::InstanceRecordPath() const
 		ServerInstanceId + TEXT(".json"));
 }
 
+FString FUEAIIntegrationServer::RequestMarkerPath() const
+{
+	return FPaths::Combine(
+		FPaths::ProjectSavedDir(),
+		TEXT("UEAIIntegration"),
+		TEXT("last-request.json"));
+}
+
+void FUEAIIntegrationServer::WriteRequestMarker(
+	const FString& RequestId,
+	const FString& Capability,
+	const FString& Phase,
+	const FString& Status,
+	const FString& ErrorCode) const
+{
+	if (RequestId.IsEmpty() || Capability.IsEmpty())
+	{
+		return;
+	}
+	const FString Path = RequestMarkerPath();
+	if (!IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), true))
+	{
+		return;
+	}
+	FString StartedAt = FDateTime::UtcNow().ToIso8601();
+	FString ExistingJson;
+	TSharedPtr<FJsonObject> Existing;
+	if (FFileHelper::LoadFileToString(ExistingJson, *Path)
+		&& ExistingJson.Len() <= 16384)
+	{
+		const TSharedRef<TJsonReader<>> ExistingReader =
+			TJsonReaderFactory<>::Create(ExistingJson);
+		FString ExistingRequestId;
+		if (FJsonSerializer::Deserialize(ExistingReader, Existing)
+			&& Existing.IsValid()
+			&& Existing->TryGetStringField(
+				TEXT("requestId"), ExistingRequestId)
+			&& ExistingRequestId == RequestId)
+		{
+			Existing->TryGetStringField(TEXT("startedAt"), StartedAt);
+		}
+	}
+	TSharedRef<FJsonObject> Marker = MakeShared<FJsonObject>();
+	Marker->SetStringField(TEXT("schema"), TEXT("ue.request-marker.v1"));
+	Marker->SetStringField(TEXT("requestId"), RequestId.Left(200));
+	Marker->SetStringField(TEXT("capability"), Capability.Left(200));
+	Marker->SetStringField(TEXT("serverInstanceId"), ServerInstanceId);
+	Marker->SetNumberField(
+		TEXT("processId"),
+		static_cast<double>(FPlatformProcess::GetCurrentProcessId()));
+	Marker->SetStringField(TEXT("startedAt"), StartedAt);
+	Marker->SetStringField(TEXT("updatedAt"), FDateTime::UtcNow().ToIso8601());
+	Marker->SetStringField(TEXT("phase"), Phase.Left(80));
+	Marker->SetStringField(TEXT("status"), Status.Left(32));
+	if (!ErrorCode.IsEmpty())
+	{
+		Marker->SetStringField(TEXT("errorCode"), ErrorCode.Left(120));
+	}
+	FString Json;
+	const TSharedRef<TJsonWriter<>> Writer =
+		TJsonWriterFactory<>::Create(&Json);
+	if (!FJsonSerializer::Serialize(Marker, Writer))
+	{
+		return;
+	}
+	const FString Temporary = Path + TEXT(".tmp-") + FGuid::NewGuid().ToString();
+	if (!FFileHelper::SaveStringToFile(
+		Json,
+		*Temporary,
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	{
+		return;
+	}
+	if (!IFileManager::Get().Move(*Path, *Temporary, true, true, false, true))
+	{
+		IFileManager::Get().Delete(*Temporary, false, true);
+	}
+}
+
 void FUEAIIntegrationServer::WriteInstanceRecord()
 {
 	const FString Path = InstanceRecordPath();
@@ -1952,6 +2181,19 @@ void FUEAIIntegrationServer::WriteInstanceRecord()
 		FString::Printf(TEXT("http://127.0.0.1:%d"), ListenPort));
 	Record->SetStringField(TEXT("project"), FApp::GetProjectName());
 	Record->SetStringField(TEXT("engineVersion"), FEngineVersion::Current().ToString());
+	Record->SetStringField(
+		TEXT("sourceRevision"),
+		UTF8_TO_TCHAR(UE_AI_SOURCE_REVISION));
+	Record->SetStringField(
+		TEXT("projectSavedPath"),
+		FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir()));
+	Record->SetStringField(
+		TEXT("requestMarkerPath"),
+		FPaths::ConvertRelativePathToFull(RequestMarkerPath()));
+	Record->SetStringField(
+		TEXT("crashRootPath"),
+		FPaths::ConvertRelativePathToFull(
+			FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Crashes"))));
 	Record->SetStringField(TEXT("updatedAt"), FDateTime::UtcNow().ToIso8601());
 	FString Json;
 	const TSharedRef<TJsonWriter<>> Writer =

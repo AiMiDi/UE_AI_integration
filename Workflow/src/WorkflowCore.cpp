@@ -23,6 +23,50 @@ namespace ue::workflow
 
 namespace
 {
+bool level_blueprint_operation_allowed(std::string_view capability_id)
+{
+    static constexpr std::string_view allowed[] = {
+        "blueprint.asset.compile",
+        "blueprint.asset.dirty.get",
+        "blueprint.asset.get",
+        "blueprint.asset.save",
+        "blueprint.comment.bounds.set",
+        "blueprint.comment.bubble.set",
+        "blueprint.comment.title.set",
+        "blueprint.function.parameter.add",
+        "blueprint.graph.create",
+        "blueprint.graph.get",
+        "blueprint.layout.organize",
+        "blueprint.layout.validate",
+        "blueprint.node.add",
+        "blueprint.node.delete",
+        "blueprint.node.move",
+        "blueprint.pin.connect",
+        "blueprint.pin.default.set",
+    };
+    return std::find(std::begin(allowed), std::end(allowed), capability_id)
+        != std::end(allowed);
+}
+
+bool capability_supports_scope(
+    std::string_view capability_id,
+    const std::vector<std::string>& declared_scopes,
+    std::string_view requested_scope)
+{
+    if (std::find(
+            declared_scopes.begin(),
+            declared_scopes.end(),
+            requested_scope) != declared_scopes.end())
+    {
+        return true;
+    }
+    return requested_scope == "levelBlueprint"
+        && level_blueprint_operation_allowed(capability_id)
+        && std::find(
+            declared_scopes.begin(),
+            declared_scopes.end(),
+            "blueprint") != declared_scopes.end();
+}
 
 using json = nlohmann::json;
 
@@ -2616,7 +2660,7 @@ public:
             const auto scopes = string_array(
                 capability.dsl.contains("scopeKinds") ? &capability.dsl["scopeKinds"] : nullptr);
             if (!scope_kind.empty() &&
-                std::find(scopes.begin(), scopes.end(), scope_kind) == scopes.end())
+                !capability_supports_scope(id, scopes, scope_kind))
             {
                 continue;
             }
@@ -2632,6 +2676,7 @@ public:
         }
         if (!scope_kind.empty() &&
             scope_kind != "blueprint" &&
+            scope_kind != "levelBlueprint" &&
             scope_kind != "widgetBlueprint" &&
             scope_kind != "widget" &&
             scope_kind != "material")
@@ -2641,7 +2686,7 @@ public:
                 "help",
                 "scope_unknown",
                 "/scope",
-                "Unknown composable scope. Use blueprint, widget, or material.");
+                "Unknown composable scope. Use blueprint, levelBlueprint, widget, or material.");
         }
         return make_result({
             { "schema", "ue.workflow-help.v1" },
@@ -3519,10 +3564,10 @@ private:
                 ? &capability->dsl["scopeKinds"]
                 : nullptr);
             if (!scope_kind.empty() &&
-                std::find(
-                    supported_scopes.begin(),
-                    supported_scopes.end(),
-                    scope_kind) == supported_scopes.end())
+                !capability_supports_scope(
+                    type,
+                    supported_scopes,
+                    scope_kind))
             {
                 add_diagnostic(
                     result.diagnostics,

@@ -84,6 +84,7 @@ export interface CapabilityDescriptor {
   traits: {
     destructive: boolean;
     expensive: boolean;
+    sessionSafe?: boolean;
   };
   effects: {
     asset: CapabilityEffect;
@@ -581,6 +582,15 @@ function parseCapability(
         `${location}.traits`,
       ),
       expensive: requireBoolean(traits, "expensive", `${location}.traits`),
+      ...(traits.sessionSafe === undefined
+        ? {}
+        : {
+            sessionSafe: requireBoolean(
+              traits,
+              "sessionSafe",
+              `${location}.traits`,
+            ),
+          }),
     },
     effects: {
       asset: parseEffect("asset"),

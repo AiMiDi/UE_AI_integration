@@ -31,6 +31,9 @@
 #ifndef UE_WORKFLOW_VERSION
 #define UE_WORKFLOW_VERSION "1.0.0"
 #endif
+#ifndef UE_SOURCE_REVISION
+#define UE_SOURCE_REVISION "unknown"
+#endif
 
 #ifndef UE_WORKFLOW_SOURCE_ROOT
 #define UE_WORKFLOW_SOURCE_ROOT ""
@@ -1116,20 +1119,36 @@ std::optional<int> persist_editor_receipt(
     {
         result = &*data;
     }
+    else if (const auto error = envelope.find("error");
+             error != envelope.end() && error->is_object())
+    {
+        const auto details = error->find("details");
+        if (details != error->end() && details->is_object())
+        {
+            result = &*details;
+        }
+    }
+
+    const auto receipt_it = result->find("receipt");
+    if (receipt_it == result->end() || !receipt_it->is_object())
+    {
+        if (!response.ok)
+        {
+            // Validation, approval, and digest failures occur before the Editor
+            // admits a run and intentionally have no receipt.
+            return std::nullopt;
+        }
+        return print_error(
+            kExitExecution,
+            "editor_receipt_missing",
+            "A successful workflow result must contain a persisted run receipt.");
+    }
 
     const auto result_validation = engine.ValidateResultJson(result->dump());
     if (!result_validation.ok)
     {
         print_json_text(result_validation.json, compact);
         return kExitExecution;
-    }
-    const auto receipt_it = result->find("receipt");
-    if (receipt_it == result->end() || !receipt_it->is_object())
-    {
-        return print_error(
-            kExitExecution,
-            "editor_receipt_missing",
-            "A successful workflow result must contain a persisted run receipt.");
     }
     const auto receipt_validation = engine.ValidateReceiptJson(receipt_it->dump());
     if (!receipt_validation.ok)
@@ -1150,8 +1169,12 @@ std::optional<int> persist_editor_receipt(
                 std::string("/receipt/") + field);
         }
     }
+    const auto expected_contract_digest =
+        receipt_it->value("dslVersion", std::string{}) == "2.0"
+        ? engine.ContractSetDigestV2()
+        : engine.ContractSetDigest();
     if (receipt_it->value("contractSetDigest", std::string{}) !=
-        engine.ContractSetDigest())
+        expected_contract_digest)
     {
         return print_error(
             kExitExecution,
@@ -1164,7 +1187,7 @@ std::optional<int> persist_editor_receipt(
         return print_error(
             kExitExecution,
             "receipt_write_failed",
-            "Workflow action succeeded, but the validated receipt could not be written.",
+            "The validated Workflow receipt could not be written.",
             path.generic_string());
     }
     return std::nullopt;
@@ -1341,6 +1364,7 @@ int run_command(
             { "product", "UE Workflow DSL" },
             { "executable", "ue-workflow-cli" },
             { "version", UE_WORKFLOW_VERSION },
+            { "sourceRevision", UE_SOURCE_REVISION },
             { "dsl", "ue.workflow" },
             { "dslVersion", ue::workflow::DslVersion() },
             { "plannerVersion", ue::workflow::PlannerVersion() },
@@ -1376,6 +1400,7 @@ int run_command(
         json payload = {
             { "ok", true },
             { "schema", "ue.workflow-doctor.v1" },
+            { "sourceRevision", UE_SOURCE_REVISION },
             { "contractRoot", options.contract_root.generic_string() },
             { "capabilityCount", engine->CapabilityCount() },
             { "composableOperationCount", engine->ComposableOperationCount() },
@@ -1685,16 +1710,13 @@ int run_command(
             "POST",
             "/api/v1/workflow",
             request.dump());
-        if (response.ok)
+        if (const auto receipt_error = persist_editor_receipt(
+                response,
+                *engine,
+                options.receipt,
+                options.json_output))
         {
-            if (const auto receipt_error = persist_editor_receipt(
-                    response,
-                    *engine,
-                    options.receipt,
-                    options.json_output))
-            {
-                return *receipt_error;
-            }
+            return *receipt_error;
         }
         return print_http_result(response, options.json_output);
     }

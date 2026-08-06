@@ -292,6 +292,11 @@ function parseCapability(value, domain, index, manifestPath) {
         traits: {
             destructive: requireBoolean(traits, "destructive", `${location}.traits`),
             expensive: requireBoolean(traits, "expensive", `${location}.traits`),
+            ...(traits.sessionSafe === undefined
+                ? {}
+                : {
+                    sessionSafe: requireBoolean(traits, "sessionSafe", `${location}.traits`),
+                }),
         },
         effects: {
             asset: parseEffect("asset"),

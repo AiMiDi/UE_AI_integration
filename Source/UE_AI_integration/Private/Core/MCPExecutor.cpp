@@ -337,17 +337,9 @@ bool FMCPExecutor::PrepareExecution(
 	TSharedPtr<FJsonObject>& OutEffectiveParams,
 	FMCPResult& OutFailure) const
 {
-	if (!Registry.IsReady())
-	{
-		OutFailure = FMCPResult::Fail(
-			TEXT("service_degraded"),
-			TEXT("Capability bindings failed validation."),
-			503,
-			MakeValidationDetails(Registry.GetValidationErrors()));
-		return false;
-	}
-
-	if (!Registry.FindTool(Context.Capability))
+	const TSharedPtr<FJsonObject>* Descriptor =
+		Registry.FindCapabilityDescriptor(Context.Capability);
+	if (!Descriptor || !Descriptor->IsValid())
 	{
 		if (const TSharedPtr<FJsonObject>* Tombstone =
 			Registry.FindCapabilityTombstone(Context.Capability))
@@ -369,9 +361,29 @@ bool FMCPExecutor::PrepareExecution(
 			404);
 		return false;
 	}
+	if (!Registry.FindTool(Context.Capability))
+	{
+		TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+		Details->SetStringField(TEXT("capability"), Context.Capability);
+		OutFailure = FMCPResult::Fail(
+			TEXT("capability_not_loaded"),
+			FString::Printf(
+				TEXT("Capability '%s' exists in the catalog but has no loaded Editor handler."),
+				*Context.Capability),
+			503,
+			Details);
+		return false;
+	}
+	if (!Registry.IsReady())
+	{
+		OutFailure = FMCPResult::Fail(
+			TEXT("service_degraded"),
+			TEXT("Capability bindings failed validation."),
+			503,
+			MakeValidationDetails(Registry.GetValidationErrors()));
+		return false;
+	}
 
-	const TSharedPtr<FJsonObject>* Descriptor =
-		Registry.FindCapabilityDescriptor(Context.Capability);
 	const TArray<FString> AvailabilityReasons =
 		Descriptor && Descriptor->IsValid()
 			? UEAIIntegration::Infrastructure::GetCapabilityUnavailableReasons(

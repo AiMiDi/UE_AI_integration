@@ -49,6 +49,7 @@ export interface CapabilityDescriptor {
     traits: {
         destructive: boolean;
         expensive: boolean;
+        sessionSafe?: boolean;
     };
     effects: {
         asset: CapabilityEffect;

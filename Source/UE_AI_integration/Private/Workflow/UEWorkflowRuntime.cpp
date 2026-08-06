@@ -15,14 +15,19 @@
 #include "Editor.h"
 #include "Editor/Transactor.h"
 #include "EditorAssetLibrary.h"
+#include "FileHelpers.h"
 #include "Engine/Blueprint.h"
+#include "Engine/Level.h"
+#include "Engine/LevelScriptBlueprint.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
+#include "Engine/World.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
 #include "HAL/PlatformMisc.h"
 #include "HAL/PlatformTime.h"
 #include "Infrastructure/EngineeringContractUtils.h"
+#include "Infrastructure/BlueprintPersistence.h"
 #include "Infrastructure/Compatibility/UEVersionCompat.h"
 #include "Infrastructure/Sha256.h"
 #include "Interfaces/IPluginManager.h"
@@ -59,6 +64,9 @@
 
 #ifndef UE_AI_INTEGRATION_VERSION
 #define UE_AI_INTEGRATION_VERSION "unknown"
+#endif
+#ifndef UE_AI_SOURCE_REVISION
+#define UE_AI_SOURCE_REVISION "unknown"
 #endif
 
 namespace UEAIIntegration::Workflow
@@ -160,6 +168,166 @@ UObject* LoadAssetWithoutLogging(const FString& AssetPath)
 	}
 	UObject* Asset = AssetData.GetAsset();
 	return IsValid(Asset) && Asset->IsAsset() ? Asset : nullptr;
+}
+
+bool IsLevelBlueprintScope(const FString& ScopeKind)
+{
+	return ScopeKind == TEXT("levelBlueprint");
+}
+
+UObject* LoadWorkflowLogicalAsset(
+	const FString& AssetPath,
+	const FString& ScopeKind,
+	FString* OutErrorCode = nullptr,
+	FString* OutErrorMessage = nullptr)
+{
+	if (OutErrorCode)
+	{
+		OutErrorCode->Reset();
+	}
+	if (OutErrorMessage)
+	{
+		OutErrorMessage->Reset();
+	}
+	UObject* PersistenceAsset = LoadAssetWithoutLogging(AssetPath);
+	if (!IsLevelBlueprintScope(ScopeKind))
+	{
+		if ((ScopeKind == TEXT("blueprint")
+				|| ScopeKind == TEXT("widgetBlueprint"))
+			&& PersistenceAsset && PersistenceAsset->IsA<UWorld>())
+		{
+			if (OutErrorCode)
+			{
+				*OutErrorCode = TEXT("workflow_scope_kind_mismatch");
+			}
+			if (OutErrorMessage)
+			{
+				*OutErrorMessage = TEXT(
+					"A map must use workflow scope kind 'levelBlueprint'.");
+			}
+			return nullptr;
+		}
+		return PersistenceAsset;
+	}
+
+	UWorld* World = Cast<UWorld>(PersistenceAsset);
+	ULevelScriptBlueprint* LevelBlueprint =
+		World && World->PersistentLevel
+			? World->PersistentLevel->GetLevelScriptBlueprint(true)
+			: nullptr;
+	if (!LevelBlueprint)
+	{
+		if (OutErrorCode)
+		{
+			*OutErrorCode = TEXT("target_asset_type_unsupported");
+		}
+		if (OutErrorMessage)
+		{
+			*OutErrorMessage = TEXT(
+				"levelBlueprint scope requires a saved Editor map with a persistent LevelScriptBlueprint.");
+		}
+		return nullptr;
+	}
+	UEAIIntegration::Infrastructure::FBlueprintPersistenceTarget Target;
+	UEAIIntegration::Infrastructure::FBlueprintPersistenceError Error;
+	if (!UEAIIntegration::Infrastructure::ResolveBlueprintPersistenceTarget(
+			LevelBlueprint,
+			Target,
+			Error))
+	{
+		if (OutErrorCode)
+		{
+			*OutErrorCode = Error.Code;
+		}
+		if (OutErrorMessage)
+		{
+			*OutErrorMessage = Error.Message;
+		}
+		return nullptr;
+	}
+	return LevelBlueprint;
+}
+
+UObject* LoadWorkflowLogicalAsset(
+	const TSharedPtr<FJsonObject>& AssetRecord)
+{
+	if (!AssetRecord.IsValid())
+	{
+		return nullptr;
+	}
+	FString AssetPath;
+	FString ScopeKind;
+	AssetRecord->TryGetStringField(TEXT("asset"), AssetPath);
+	AssetRecord->TryGetStringField(TEXT("kind"), ScopeKind);
+	return LoadWorkflowLogicalAsset(AssetPath, ScopeKind);
+}
+
+bool ValidateWorkflowScopeKinds(
+	const TSharedPtr<FJsonObject>& Workflow,
+	FMCPResult& OutFailure)
+{
+	if (!Workflow.IsValid())
+	{
+		return true;
+	}
+
+	auto ValidateScope = [&](const FString& ScopeId,
+		const TSharedPtr<FJsonObject>& Scope) -> bool
+	{
+		if (!Scope.IsValid())
+		{
+			return true;
+		}
+		FString Kind;
+		Scope->TryGetStringField(TEXT("kind"), Kind);
+		if (Kind != TEXT("blueprint")
+			&& Kind != TEXT("widgetBlueprint"))
+		{
+			return true;
+		}
+		FString AssetPath;
+		Scope->TryGetStringField(TEXT("asset"), AssetPath);
+		UObject* PersistenceAsset = LoadAssetWithoutLogging(AssetPath);
+		if (!PersistenceAsset || !PersistenceAsset->IsA<UWorld>())
+		{
+			return true;
+		}
+		TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+		Details->SetStringField(TEXT("scopeId"), ScopeId);
+		Details->SetStringField(TEXT("asset"), AssetPath);
+		Details->SetStringField(TEXT("kind"), Kind);
+		Details->SetStringField(TEXT("requiredKind"), TEXT("levelBlueprint"));
+		OutFailure = FMCPResult::Fail(
+			TEXT("workflow_scope_kind_mismatch"),
+			TEXT("A map must use workflow scope kind 'levelBlueprint'."),
+			409,
+			Details);
+		return false;
+	};
+
+	const TSharedPtr<FJsonObject>* Scopes = nullptr;
+	if (Workflow->TryGetObjectField(TEXT("scopes"), Scopes)
+		&& Scopes && Scopes->IsValid())
+	{
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Entry :
+			 (*Scopes)->Values)
+		{
+			if (Entry.Value.IsValid()
+				&& Entry.Value->Type == EJson::Object
+				&& !ValidateScope(Entry.Key, Entry.Value->AsObject()))
+			{
+				return false;
+			}
+		}
+	}
+	const TSharedPtr<FJsonObject>* Scope = nullptr;
+	if (Workflow->TryGetObjectField(TEXT("scope"), Scope)
+		&& Scope && Scope->IsValid()
+		&& !ValidateScope(TEXT("primary"), *Scope))
+	{
+		return false;
+	}
+	return true;
 }
 
 bool AssetExistsWithoutLogging(const FString& AssetPath)
@@ -1157,7 +1325,9 @@ bool RestoreMemorySnapshots(
 	return bRestored;
 }
 
-FString PackageFilenameForAsset(const FString& AssetPath)
+FString PackageFilenameForAsset(
+	const FString& AssetPath,
+	const FString& ScopeKind = FString())
 {
 	const FString PackageName =
 		FPackageName::ObjectPathToPackageName(AssetPath);
@@ -1165,7 +1335,9 @@ FString PackageFilenameForAsset(const FString& AssetPath)
 		? FString()
 		: FPackageName::LongPackageNameToFilename(
 			PackageName,
-			FPackageName::GetAssetPackageExtension());
+			IsLevelBlueprintScope(ScopeKind)
+				? FPackageName::GetMapPackageExtension()
+				: FPackageName::GetAssetPackageExtension());
 }
 
 FString WorkflowAssetSnapshotKey(
@@ -1272,11 +1444,31 @@ TSharedPtr<FJsonObject> CaptureAssetPrecondition(
 	Result->SetStringField(TEXT("scopeId"), ScopeId);
 	Result->SetStringField(TEXT("asset"), AssetPath);
 	Result->SetStringField(TEXT("kind"), Kind);
+	const bool bMapPackage = IsLevelBlueprintScope(Kind);
+	Result->SetStringField(
+		TEXT("packageType"),
+		bMapPackage ? TEXT("map") : TEXT("asset"));
+	Result->SetStringField(
+		TEXT("packageExtension"),
+		bMapPackage
+			? FPackageName::GetMapPackageExtension()
+			: FPackageName::GetAssetPackageExtension());
 	const bool bExists = AssetExistsWithoutLogging(AssetPath);
 	Result->SetBoolField(TEXT("exists"), bExists);
+	FString ResolutionCode;
+	FString ResolutionMessage;
 	UObject* Asset = bExists
-		? LoadAssetWithoutLogging(AssetPath)
+		? LoadWorkflowLogicalAsset(
+			AssetPath,
+			Kind,
+			&ResolutionCode,
+			&ResolutionMessage)
 		: nullptr;
+	if (!ResolutionCode.IsEmpty())
+	{
+		Result->SetStringField(TEXT("resolutionCode"), ResolutionCode);
+		Result->SetStringField(TEXT("resolutionMessage"), ResolutionMessage);
+	}
 	Result->SetBoolField(
 		TEXT("dirty"),
 		Asset && Asset->GetOutermost()->IsDirty());
@@ -1330,7 +1522,7 @@ TSharedPtr<FJsonObject> CaptureAssetPrecondition(
 	}
 
 	const FString PackageFilename =
-		PackageFilenameForAsset(AssetPath);
+		PackageFilenameForAsset(AssetPath, Kind);
 	FString PackageDigest;
 	if (!PackageFilename.IsEmpty() &&
 		IFileManager::Get().FileExists(*PackageFilename) &&
@@ -1416,8 +1608,14 @@ TSharedPtr<FJsonObject> FindAssetRecord(
 	return nullptr;
 }
 
-bool DeleteWorkflowAsset(const FString& AssetPath)
+bool DeleteWorkflowAsset(
+	const FString& AssetPath,
+	const FString& ScopeKind)
 {
+	if (IsLevelBlueprintScope(ScopeKind))
+	{
+		return false;
+	}
 	UObject* Asset = LoadAssetWithoutLogging(AssetPath);
 	UPackage* Package = Asset ? Asset->GetOutermost() : nullptr;
 	if (Asset)
@@ -1425,7 +1623,7 @@ bool DeleteWorkflowAsset(const FString& AssetPath)
 		const TArray<UObject*> Objects = {Asset};
 		ObjectTools::DeleteObjectsUnchecked(Objects);
 	}
-	const FString Filename = PackageFilenameForAsset(AssetPath);
+	const FString Filename = PackageFilenameForAsset(AssetPath, ScopeKind);
 	const bool bFileRemoved =
 		Filename.IsEmpty()
 		|| !IFileManager::Get().FileExists(*Filename)
@@ -1445,6 +1643,10 @@ bool RestoreWorkflowAssetFile(
 		AssetRecord.IsValid()
 		? AssetRecord->GetStringField(TEXT("asset"))
 		: FString();
+	const FString ScopeKind =
+		AssetRecord.IsValid()
+		? AssetRecord->GetStringField(TEXT("kind"))
+		: FString();
 	bool bExistedBefore = false;
 	if (AssetRecord.IsValid())
 	{
@@ -1454,7 +1656,7 @@ bool RestoreWorkflowAssetFile(
 	}
 	if (!bExistedBefore)
 	{
-		if (DeleteWorkflowAsset(AssetPath))
+		if (DeleteWorkflowAsset(AssetPath, ScopeKind))
 		{
 			return true;
 		}
@@ -1494,7 +1696,31 @@ bool RestoreWorkflowAssetFile(
 		IFileManager::Get().FileExists(*PackageFilename)
 		&& TryHashFile(PackageFilename, CurrentPackageDigest)
 		&& CurrentPackageDigest == ExpectedSnapshotDigest;
-	UObject* LoadedAsset = LoadAssetWithoutLogging(AssetPath);
+	UObject* LoadedAsset = LoadWorkflowLogicalAsset(
+		AssetPath,
+		ScopeKind);
+	const bool bLevelBlueprint = IsLevelBlueprintScope(ScopeKind);
+	UWorld* CurrentEditorWorld = GEditor
+		? GEditor->GetEditorWorldContext().World()
+		: nullptr;
+	const bool bReloadOpenEditorMap = bLevelBlueprint
+		&& CurrentEditorWorld
+		&& CurrentEditorWorld->GetOutermost()
+		&& CurrentEditorWorld->GetOutermost()->GetName() == AssetPath;
+	if (!bPackageAlreadyMatchesSnapshot && bReloadOpenEditorMap)
+	{
+		// UE 5.3 cannot reload the package backing the active Editor world with
+		// UPackageTools::ReloadPackages. Move the session to a blank map first,
+		// then atomically restore and load the verified .umap baseline.
+		if (!UEditorLoadingAndSavingUtils::NewBlankMap(false))
+		{
+			OutError = FString::Printf(
+				TEXT("Could not release the open Editor map '%s' before rollback."),
+				*AssetPath);
+			return false;
+		}
+		LoadedAsset = nullptr;
+	}
 	if (!bPackageAlreadyMatchesSnapshot && LoadedAsset)
 	{
 		// Windows keeps the source package file open through its linker. Release
@@ -1508,6 +1734,10 @@ bool RestoreWorkflowAssetFile(
 			PackageFilename,
 			OutError))
 	{
+		if (bReloadOpenEditorMap)
+		{
+			UEditorLoadingAndSavingUtils::LoadMap(PackageFilename);
+		}
 		OutError = FString::Printf(
 			TEXT("Could not restore staged package snapshot for '%s': %s"),
 			*AssetPath,
@@ -1515,7 +1745,20 @@ bool RestoreWorkflowAssetFile(
 		return false;
 	}
 
-	if (LoadedAsset)
+	if (bReloadOpenEditorMap)
+	{
+		UWorld* ReloadedWorld =
+			UEditorLoadingAndSavingUtils::LoadMap(PackageFilename);
+		if (!ReloadedWorld || !ReloadedWorld->GetOutermost()
+			|| ReloadedWorld->GetOutermost()->GetName() != AssetPath)
+		{
+			OutError = FString::Printf(
+				TEXT("Restored map '%s' could not be reloaded into the Editor session."),
+				*AssetPath);
+			return false;
+		}
+	}
+	else if (LoadedAsset)
 	{
 		TArray<UPackage*> Packages = {LoadedAsset->GetOutermost()};
 		FText ReloadError;
@@ -1652,8 +1895,7 @@ bool FWorkflowRuntime::SimulateEditorRestartForTest(
 		AssetRecord->TryGetBoolField(
 			TEXT("packageDirtyBefore"),
 			bDirtyBefore);
-		if (UObject* Asset = LoadAssetWithoutLogging(
-				GetStringField(AssetRecord, TEXT("asset"))))
+		if (UObject* Asset = LoadWorkflowLogicalAsset(AssetRecord))
 		{
 			Asset->GetOutermost()->SetDirtyFlag(bDirtyBefore);
 		}
@@ -1688,6 +1930,9 @@ FMCPResult FWorkflowRuntime::MakeHandshake() const
 	Data->SetStringField(TEXT("plannerVersion"), FromUtf8(
 		std::string(ue::workflow::PlannerVersion())));
 	Data->SetStringField(TEXT("serverInstanceId"), ServerInstanceId);
+	Data->SetStringField(
+		TEXT("sourceRevision"),
+		UTF8_TO_TCHAR(UE_AI_SOURCE_REVISION));
 	Data->SetStringField(TEXT("engineVersion"), FEngineVersion::Current().ToString());
 	Data->SetStringField(TEXT("projectName"), FApp::GetProjectName());
 	Data->SetStringField(TEXT("contractSetDigest"), ContractSetDigest);
@@ -2195,6 +2440,10 @@ bool FWorkflowRuntime::TryPlan(
 	TSharedPtr<FJsonObject>& OutPlan,
 	FMCPResult& OutFailure) const
 {
+	if (!ValidateWorkflowScopeKinds(Workflow, OutFailure))
+	{
+		return false;
+	}
 	const ue::workflow::Result CoreResult =
 		CoreEngine.PlanJson(ToUtf8(JsonStringify(Workflow)));
 	if (!CoreResult.ok)
@@ -2325,6 +2574,44 @@ bool FWorkflowRuntime::PreparePlanWithAssetPreconditions(
 			AssetValue.IsValid() && AssetValue->Type == EJson::Object
 			? AssetValue->AsObject()
 			: nullptr;
+		FString ResolutionCode;
+		if (Asset.IsValid()
+			&& Asset->TryGetStringField(
+				TEXT("resolutionCode"),
+				ResolutionCode)
+			&& !ResolutionCode.IsEmpty())
+		{
+			TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+			Details->SetStringField(
+				TEXT("scopeId"),
+				GetStringField(Asset, TEXT("scopeId")));
+			Details->SetStringField(
+				TEXT("asset"),
+				GetStringField(Asset, TEXT("asset")));
+			Details->SetStringField(
+				TEXT("kind"),
+				GetStringField(Asset, TEXT("kind")));
+			OutFailure = FMCPResult::Fail(
+				ResolutionCode,
+				GetStringField(Asset, TEXT("resolutionMessage")),
+				409,
+				Details);
+			return false;
+		}
+		bool bExists = false;
+		if (Asset.IsValid()
+			&& IsLevelBlueprintScope(
+				GetStringField(Asset, TEXT("kind")))
+			&& (!Asset->TryGetBoolField(TEXT("exists"), bExists)
+				|| !bExists))
+		{
+			OutFailure = FMCPResult::Fail(
+				TEXT("target_not_found"),
+				TEXT("levelBlueprint scope requires an existing saved map."),
+				404,
+				Asset);
+			return false;
+		}
 		bool bDirty = false;
 		if (Asset.IsValid()
 			&& Asset->TryGetBoolField(TEXT("dirty"), bDirty)
@@ -3639,6 +3926,49 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 	Record.StructureAfterRollback = MakeShared<FJsonObject>();
 	Record.ReadBack = MakeShared<FJsonObject>();
 	Record.AssetDiff = MakeShared<FJsonObject>();
+	Record.bJournalPersisted = true;
+	FString AdmissionJournalError;
+	if (!SaveRun(Record, AdmissionJournalError))
+	{
+		Record.bJournalPersisted = false;
+		return FMCPResult::Fail(
+			TEXT("journal_write_failed"),
+			TEXT("Could not create the admitted Workflow v2 staging journal."),
+			500,
+			MakeDiagnostics({AdmissionJournalError}));
+	}
+	Runs.Add(Record.RunId, Record);
+	auto FailAdmittedRun = [&Record, this, &Options](
+		const FString& Code,
+		const FString& Message,
+		const int32 HttpStatus,
+		const TSharedPtr<FJsonObject>& CauseDetails = nullptr)
+	{
+		Record.Status = TEXT("failed");
+		Record.FailurePhase = Record.CurrentPhase;
+		Record.CauseCode = Code;
+		Record.RecoveryState = TEXT("failed");
+		if (!Record.bMutationStarted)
+		{
+			Record.RollbackStatus = TEXT("notNeeded");
+			Record.bRollbackAttempted = false;
+			Record.bRollbackVerified = true;
+		}
+		if (CauseDetails.IsValid())
+		{
+			Record.Diagnostics.Add(
+				MakeShared<FJsonValueObject>(CauseDetails));
+		}
+		FString JournalError;
+		const bool bSaved = SaveRun(Record, JournalError);
+		Runs.Add(Record.RunId, Record);
+		TSharedPtr<FJsonObject> Details = Record.ToResultJson(Options);
+		if (!bSaved)
+		{
+			Details->SetStringField(TEXT("journalError"), JournalError);
+		}
+		return FMCPResult::Fail(Code, Message, HttpStatus, Details);
+	};
 
 	const FString WorkflowRecoveryRoot = FPaths::Combine(
 		FPaths::ProjectSavedDir(),
@@ -3654,8 +3984,11 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 	{
 		if (AssetValue.IsValid() && AssetValue->Type == EJson::Object)
 		{
+			const TSharedPtr<FJsonObject> PlannedAsset =
+				AssetValue->AsObject();
 			const FString Filename = PackageFilenameForAsset(
-				GetStringField(AssetValue->AsObject(), TEXT("asset")));
+				GetStringField(PlannedAsset, TEXT("asset")),
+				GetStringField(PlannedAsset, TEXT("kind")));
 			EstimatedSnapshotBytes += FMath::Max<int64>(
 				0,
 				IFileManager::Get().FileSize(*Filename));
@@ -3688,7 +4021,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 		Details->SetNumberField(
 			TEXT("storageLimitBytes"),
 			static_cast<double>(MaxRecoveryStorageBytes));
-		return FMCPResult::Fail(
+		return FailAdmittedRun(
 			TEXT("recovery_storage_unavailable"),
 			TEXT("Durable recovery storage is unavailable or would exceed its configured limit."),
 			507,
@@ -3699,7 +4032,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 		FPaths::Combine(GetRunDirectory(Record.RunId), TEXT("Snapshots"));
 	if (!IFileManager::Get().MakeDirectory(*SnapshotDirectory, true))
 	{
-		return FMCPResult::Fail(
+		return FailAdmittedRun(
 			TEXT("journal_write_failed"),
 			TEXT("Could not create the Workflow v2 snapshot directory."),
 			500);
@@ -3710,7 +4043,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 		if (!AssetValue.IsValid() ||
 			AssetValue->Type != EJson::Object)
 		{
-			return FMCPResult::Fail(
+			return FailAdmittedRun(
 				TEXT("workflow_core_invalid_response"),
 				TEXT("Workflow v2 assetSet contains a non-object entry."),
 				500);
@@ -3721,12 +4054,14 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 			GetStringField(PlannedAsset, TEXT("scopeId"));
 		const FString AssetPath =
 			GetStringField(PlannedAsset, TEXT("asset"));
+		const FString ScopeKind =
+			GetStringField(PlannedAsset, TEXT("kind"));
 		const TSharedPtr<FJsonObject>* Scope = nullptr;
 		if (ScopeId.IsEmpty() || AssetPath.IsEmpty()
 			|| !(*Scopes)->TryGetObjectField(ScopeId, Scope)
 			|| !Scope || !Scope->IsValid())
 		{
-			return FMCPResult::Fail(
+			return FailAdmittedRun(
 				TEXT("workflow_core_invalid_response"),
 				TEXT("Workflow v2 assetSet does not match normalized scopes."),
 				500);
@@ -3734,9 +4069,38 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 
 		const bool bExistedBefore =
 			AssetExistsWithoutLogging(AssetPath);
+		FString LoadErrorCode;
+		FString LoadErrorMessage;
 		UObject* Asset = bExistedBefore
-			? LoadAssetWithoutLogging(AssetPath)
+			? LoadWorkflowLogicalAsset(
+				AssetPath,
+				ScopeKind,
+				&LoadErrorCode,
+				&LoadErrorMessage)
 			: nullptr;
+		if (bExistedBefore && !Asset)
+		{
+			TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+			Details->SetStringField(TEXT("scopeId"), ScopeId);
+			Details->SetStringField(TEXT("asset"), AssetPath);
+			Details->SetStringField(TEXT("kind"), ScopeKind);
+			return FailAdmittedRun(
+				LoadErrorCode.IsEmpty()
+					? TEXT("target_asset_type_unsupported")
+					: LoadErrorCode,
+				LoadErrorMessage.IsEmpty()
+					? TEXT("Workflow scope asset could not be resolved to its logical asset type.")
+					: LoadErrorMessage,
+				409,
+				Details);
+		}
+		if (IsLevelBlueprintScope(ScopeKind) && !bExistedBefore)
+		{
+			return FailAdmittedRun(
+				TEXT("target_not_found"),
+				TEXT("levelBlueprint scope requires an existing saved map and cannot create one."),
+				404);
+		}
 		const bool bDirtyBefore =
 			Asset && Asset->GetOutermost()->IsDirty();
 		if (bDirtyBefore)
@@ -3745,7 +4109,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 				MakeShared<FJsonObject>();
 			Details->SetStringField(TEXT("scopeId"), ScopeId);
 			Details->SetStringField(TEXT("asset"), AssetPath);
-			return FMCPResult::Fail(
+			return FailAdmittedRun(
 				TEXT("asset_dirty"),
 				TEXT(
 					"Durable Workflow v2 execution refuses a scope that "
@@ -3782,7 +4146,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 				MemoryHashBefore);
 		}
 		const FString PackageFilename =
-			PackageFilenameForAsset(AssetPath);
+			PackageFilenameForAsset(AssetPath, ScopeKind);
 		AssetRecord->SetStringField(
 			TEXT("packageFilename"),
 			PackageFilename);
@@ -3796,7 +4160,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 					MakeShared<FJsonObject>();
 				Details->SetStringField(TEXT("scopeId"), ScopeId);
 				Details->SetStringField(TEXT("asset"), AssetPath);
-				return FMCPResult::Fail(
+				return FailAdmittedRun(
 					TEXT("snapshot_unavailable"),
 					TEXT(
 						"Existing Workflow v2 scopes require a package "
@@ -3806,14 +4170,16 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 			}
 			const FString SnapshotFilename = FPaths::Combine(
 				SnapshotDirectory,
-				ScopeId + FPackageName::GetAssetPackageExtension());
+				ScopeId + (IsLevelBlueprintScope(ScopeKind)
+					? FPackageName::GetMapPackageExtension()
+					: FPackageName::GetAssetPackageExtension()));
 			if (IFileManager::Get().Copy(
 					*SnapshotFilename,
 					*PackageFilename,
 					true,
 					true) != COPY_OK)
 			{
-				return FMCPResult::Fail(
+				return FailAdmittedRun(
 					TEXT("snapshot_write_failed"),
 					FString::Printf(
 						TEXT("Could not stage package snapshot for '%s'."),
@@ -3823,7 +4189,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 			FString SnapshotDigest;
 			if (!TryHashFile(SnapshotFilename, SnapshotDigest))
 			{
-				return FMCPResult::Fail(
+				return FailAdmittedRun(
 					TEXT("snapshot_write_failed"),
 					FString::Printf(
 						TEXT("Could not hash package snapshot for '%s'."),
@@ -3839,7 +4205,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 			FString PackageDigest;
 			if (!TryHashFile(PackageFilename, PackageDigest))
 			{
-				return FMCPResult::Fail(
+				return FailAdmittedRun(
 					TEXT("snapshot_unavailable"),
 					FString::Printf(
 						TEXT("Could not hash package for '%s'."),
@@ -3895,12 +4261,11 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 							TEXT("scopeId"))));
 			}
 		}
-		const FString RunDirectory = GetRunDirectory(Record.RunId);
-		IFileManager::Get().DeleteDirectory(
-			*RunDirectory,
-			false,
-			true);
-		return PreconditionFailure;
+		return FailAdmittedRun(
+			PreconditionFailure.Error.Code,
+			PreconditionFailure.Error.Message,
+			PreconditionFailure.Error.HttpStatus,
+			PreconditionFailure.Error.Details);
 	}
 
 	// Durable snapshots now exist for every pre-existing scope, and new scopes
@@ -3912,6 +4277,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 		UEAIIntegration::Infrastructure::DigestJson(Record.StructureBefore);
 	Record.RecoveryState = TEXT("checkpointed");
 	Record.CheckpointId = TEXT("checkpoint-0");
+	Record.SnapshotId = Record.RunId + TEXT(":baseline");
 	// checkpoint-0 is the verified canonical baseline captured above. Existing
 	// scopes reuse their immutable recovery snapshot as the checkpoint image;
 	// createIfMissing scopes persist absence explicitly. This makes the journal
@@ -3952,7 +4318,7 @@ FMCPResult FWorkflowRuntime::ExecuteWorkflowV2(
 	FString JournalError;
 	if (!SaveRun(Record, JournalError))
 	{
-		return FMCPResult::Fail(
+		return FailAdmittedRun(
 			TEXT("journal_write_failed"),
 			TEXT("Could not create Workflow v2 run journal."),
 			500,
@@ -4040,6 +4406,26 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 			PriorOutputs.Add(Pair.Key, Pair.Value->AsObject());
 		}
 	}
+	TSet<FString> DirtyPackagesBefore;
+	for (TObjectIterator<UPackage> It; It; ++It)
+	{
+		if (It->IsDirty())
+		{
+			DirtyPackagesBefore.Add(It->GetName());
+		}
+	}
+	TSet<FString> ScopePackages;
+	for (const TSharedPtr<FJsonValue>& AssetValue : Record.Assets)
+	{
+		const TSharedPtr<FJsonObject> AssetRecord =
+			AssetValue.IsValid() && AssetValue->Type == EJson::Object
+				? AssetValue->AsObject()
+				: nullptr;
+		if (UObject* Asset = LoadWorkflowLogicalAsset(AssetRecord))
+		{
+			ScopePackages.Add(Asset->GetOutermost()->GetName());
+		}
+	}
 
 	const FText TransactionTitle = FText::FromString(
 		FString::Printf(TEXT("UE Workflow v2 %s"), *Record.RunId));
@@ -4055,7 +4441,7 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 		}
 		const FString AssetPath =
 			GetStringField(AssetRecord, TEXT("asset"));
-		UObject* Asset = LoadAssetWithoutLogging(AssetPath);
+		UObject* Asset = LoadWorkflowLogicalAsset(AssetRecord);
 		AssetRecord->SetStringField(
 			TEXT("currentHash"),
 			ComputeAssetStructureHash(Asset));
@@ -4111,7 +4497,7 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 				: nullptr;
 			const FString ScopeId = GetStringField(AssetRecord, TEXT("scopeId"));
 			const FString AssetPath = GetStringField(AssetRecord, TEXT("asset"));
-			UObject* Asset = LoadAssetWithoutLogging(AssetPath);
+			UObject* Asset = LoadWorkflowLogicalAsset(AssetRecord);
 			UPackage* Package = Asset ? Asset->GetOutermost() : nullptr;
 			bool bExistedBefore = false;
 			AssetRecord->TryGetBoolField(TEXT("existedBefore"), bExistedBefore);
@@ -4137,9 +4523,13 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 				return false;
 			}
 
+			const FString ScopeKind =
+				GetStringField(AssetRecord, TEXT("kind"));
 			const FString CheckpointFilename = FPaths::Combine(
 				CheckpointDirectory,
-				ScopeId + FPackageName::GetAssetPackageExtension());
+				ScopeId + (IsLevelBlueprintScope(ScopeKind)
+					? FPackageName::GetMapPackageExtension()
+					: FPackageName::GetAssetPackageExtension()));
 			const FString PackageFilename =
 				GetStringField(AssetRecord, TEXT("packageFilename"));
 			if (PackageFilename.IsEmpty())
@@ -4208,12 +4598,34 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 			// and makes later loads target the recovery directory. The canonical
 			// save is copied to the checkpoint and the original disk baseline is
 			// restored immediately; the loaded package remains the dirty authority.
+			UObject* TopLevelObject = Asset;
+			if (UBlueprint* Blueprint = Cast<UBlueprint>(Asset))
+			{
+				UEAIIntegration::Infrastructure::FBlueprintPersistenceTarget
+					PersistenceTarget;
+				UEAIIntegration::Infrastructure::FBlueprintPersistenceError
+					PersistenceError;
+				if (!UEAIIntegration::Infrastructure::ResolveBlueprintPersistenceTarget(
+						Blueprint,
+						PersistenceTarget,
+						PersistenceError)
+					|| PersistenceTarget.Filename != PackageFilename)
+				{
+					OutError = PersistenceError.Message.IsEmpty()
+						? FString::Printf(
+							TEXT("Scope '%s' resolved to an inconsistent persistence target."),
+							*ScopeId)
+						: PersistenceError.Message;
+					return false;
+				}
+				TopLevelObject = PersistenceTarget.TopLevelObject;
+			}
 			FSavePackageArgs SaveArgs;
 			SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
 			SaveArgs.SaveFlags = SAVE_NoError;
 			if (!UPackage::SavePackage(
 					Package,
-					Asset,
+					TopLevelObject,
 					*PackageFilename,
 					SaveArgs))
 			{
@@ -4321,10 +4733,8 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 			{
 				continue;
 			}
-			UObject* Asset = LoadAssetWithoutLogging(
-				GetStringField(
-					AssetValue->AsObject(),
-					TEXT("asset")));
+			UObject* Asset = LoadWorkflowLogicalAsset(
+				AssetValue->AsObject());
 			for (UObject* Object : GatherDomainOwnedObjects(Asset))
 			{
 				if (Object)
@@ -4394,6 +4804,7 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 						? CloneObject(*Params)
 						: MakeShared<FJsonObject>());
 				TSharedPtr<FJsonObject> Output;
+				Record.bMutationStarted = true;
 				if (!ExecuteOperation(
 						Synthetic,
 						*Scope,
@@ -4468,6 +4879,7 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 				break;
 			}
 			TSharedPtr<FJsonObject> Output;
+			Record.bMutationStarted = true;
 			if (!ExecuteOperation(
 					Operation,
 					*Scope,
@@ -4572,7 +4984,10 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 #endif
 		}
 
-		Record.CurrentPhase = TEXT("finalizers");
+		if (bExecutionOk)
+		{
+			Record.CurrentPhase = TEXT("finalizers");
+		}
 		for (int32 Index = Record.NextFinalizerIndex;
 			 bExecutionOk && Index < Finalizers->Num();
 			 ++Index)
@@ -4741,6 +5156,39 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 		Record.TransactionId = UndoContext.TransactionId.ToString(
 			EGuidFormats::DigitsWithHyphensLower);
 	}
+	if (bExecutionOk)
+	{
+		TArray<FString> EscapedPackages;
+		for (TObjectIterator<UPackage> It; It; ++It)
+		{
+			const FString PackageName = It->GetName();
+			if (It->IsDirty()
+				&& !DirtyPackagesBefore.Contains(PackageName)
+				&& !ScopePackages.Contains(PackageName)
+				&& FPackageName::IsValidLongPackageName(PackageName)
+				&& !PackageName.StartsWith(TEXT("/Temp/")))
+			{
+				EscapedPackages.Add(PackageName);
+			}
+		}
+		if (!EscapedPackages.IsEmpty())
+		{
+			EscapedPackages.Sort();
+			TArray<TSharedPtr<FJsonValue>> Packages;
+			for (const FString& PackageName : EscapedPackages)
+			{
+				Packages.Add(MakeShared<FJsonValueString>(PackageName));
+			}
+			TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+			Details->SetArrayField(TEXT("escapedPackages"), Packages);
+			ExecutionFailure = FMCPResult::Fail(
+				TEXT("workflow_scope_escape"),
+				TEXT("Workflow changed a package outside its declared asset scopes."),
+				409,
+				Details);
+			bExecutionOk = false;
+		}
+	}
 
 	for (const TSharedPtr<FJsonValue>& AssetValue : Record.Assets)
 	{
@@ -4753,8 +5201,7 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 			AssetValue->AsObject();
 		const FString ScopeId =
 			GetStringField(AssetRecord, TEXT("scopeId"));
-		UObject* Asset = LoadAssetWithoutLogging(
-			GetStringField(AssetRecord, TEXT("asset")));
+		UObject* Asset = LoadWorkflowLogicalAsset(AssetRecord);
 		const TSharedPtr<FJsonObject> StructureAfter =
 			CaptureAssetStructure(Asset);
 		const FString HashAfter =
@@ -4804,6 +5251,8 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 	if (!bExecutionOk)
 	{
 		Record.Status = TEXT("failed");
+		Record.FailurePhase = Record.CurrentPhase;
+		Record.CauseCode = ExecutionFailure.Error.Code;
 		Record.Diagnostics.Add(
 			MakeShared<FJsonValueObject>(
 				ExecutionFailure.Error.Details.IsValid()
@@ -4861,8 +5310,7 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 				: nullptr;
 			const FString ScopeId =
 				GetStringField(AssetRecord, TEXT("scopeId"));
-			UObject* Asset = LoadAssetWithoutLogging(
-				GetStringField(AssetRecord, TEXT("asset")));
+			UObject* Asset = LoadWorkflowLogicalAsset(AssetRecord);
 			bool bInjectSaveFailure = false;
 #if WITH_DEV_AUTOMATION_TESTS
 			bInjectSaveFailure =
@@ -4873,8 +5321,24 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 				TestSaveFailureScopeId.Reset();
 			}
 #endif
-			if (bInjectSaveFailure || !Asset ||
-				!UEditorAssetLibrary::SaveLoadedAsset(Asset, true))
+			bool bSaved = false;
+			if (!bInjectSaveFailure && Asset)
+			{
+				if (UBlueprint* Blueprint = Cast<UBlueprint>(Asset))
+				{
+					UEAIIntegration::Infrastructure::FBlueprintPersistenceError
+						PersistenceError;
+					bSaved = UEAIIntegration::Infrastructure::SaveBlueprintPackage(
+						Blueprint,
+						nullptr,
+						PersistenceError);
+				}
+				else
+				{
+					bSaved = UEditorAssetLibrary::SaveLoadedAsset(Asset, true);
+				}
+			}
+			if (!bSaved)
 			{
 				ExecutionFailure = FMCPResult::Fail(
 					TEXT("workflow_save_failed"),
@@ -4883,6 +5347,8 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 						*ScopeId),
 					500);
 				Record.Status = TEXT("failed");
+				Record.FailurePhase = TEXT("save");
+				Record.CauseCode = TEXT("workflow_save_failed");
 				RollbackV2(Record, Options, true);
 				return FMCPResult::Fail(
 					TEXT("workflow_save_failed"),
@@ -4904,8 +5370,7 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 				AssetValue->Type == EJson::Object
 			? AssetValue->AsObject()
 			: nullptr;
-		UObject* Asset = LoadAssetWithoutLogging(
-			GetStringField(AssetRecord, TEXT("asset")));
+		UObject* Asset = LoadWorkflowLogicalAsset(AssetRecord);
 		if (Asset && Asset->GetOutermost()->IsDirty())
 		{
 			Record.DirtyPackages.Add(
@@ -5734,9 +6199,7 @@ FMCPResult FWorkflowRuntime::ResumeRunV2(
 			bRestoreDurableCheckpoint
 				? TEXT("structureHashBefore")
 				: TEXT("currentHash"));
-		UObject* CurrentAsset = bRestoreDurableCheckpoint
-			? FindObject<UObject>(nullptr, *ToAssetObjectPath(AssetPath))
-			: LoadAssetWithoutLogging(AssetPath);
+		UObject* CurrentAsset = LoadWorkflowLogicalAsset(AssetRecord);
 		if (!bTerminal
 			&& bDifferentInstance
 			&& CurrentAsset
@@ -6141,6 +6604,7 @@ FMCPResult FWorkflowRuntime::RollbackV2(
 	const FResponseOptions& Options,
 	const bool bAutomatic)
 {
+	Record.bRollbackAttempted = true;
 	if (Record.Status == TEXT("rolledBack"))
 	{
 		return FMCPResult::Ok(Record.ToResultJson(Options));
@@ -6190,7 +6654,7 @@ FMCPResult FWorkflowRuntime::RollbackV2(
 				: nullptr;
 			const FString AssetPath = GetStringField(AssetRecord, TEXT("asset"));
 			UObject* CurrentAsset =
-				LoadAssetWithoutLogging(AssetPath);
+				LoadWorkflowLogicalAsset(AssetRecord);
 			if (!bSameInstance
 				&& CurrentAsset
 				&& CurrentAsset->GetOutermost()->IsDirty())
@@ -6318,7 +6782,7 @@ FMCPResult FWorkflowRuntime::RollbackV2(
 		const FString BeforeHash = GetStringField(
 			AssetRecord,
 			TEXT("structureHashBefore"));
-		UObject* Asset = LoadAssetWithoutLogging(AssetPath);
+		UObject* Asset = LoadWorkflowLogicalAsset(AssetRecord);
 		FString CurrentHash = ComputeAssetStructureHash(Asset);
 		bool bRestored = CurrentHash == BeforeHash;
 
@@ -6326,7 +6790,7 @@ FMCPResult FWorkflowRuntime::RollbackV2(
 		{
 			RebuildDomainAfterRollback(Asset);
 			CurrentHash = ComputeAssetStructureHash(
-				LoadAssetWithoutLogging(AssetPath));
+				LoadWorkflowLogicalAsset(AssetRecord));
 			bRestored = CurrentHash == BeforeHash;
 		}
 
@@ -6356,6 +6820,11 @@ FMCPResult FWorkflowRuntime::RollbackV2(
 		{
 			FString RestoreError;
 			bRestored = RestoreWorkflowAssetFile(AssetRecord, RestoreError);
+			if (bRestored && IsLevelBlueprintScope(
+					GetStringField(AssetRecord, TEXT("kind"))))
+			{
+				Record.bEditorSessionReloaded = true;
+			}
 			if (!bRestored)
 			{
 				TSharedPtr<FJsonObject> Diagnostic = MakeShared<FJsonObject>();
@@ -6367,7 +6836,7 @@ FMCPResult FWorkflowRuntime::RollbackV2(
 			}
 		}
 
-		Asset = LoadAssetWithoutLogging(AssetPath);
+		Asset = LoadWorkflowLogicalAsset(AssetRecord);
 		CurrentHash = ComputeAssetStructureHash(Asset);
 		bRestored = bRestored && CurrentHash == BeforeHash;
 		bool bDirtyBefore = false;
@@ -6492,6 +6961,9 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToJournalJson() const
 		TEXT("lastCompletedOperationId"),
 		LastCompletedOperationId);
 	Json->SetStringField(TEXT("snapshotDigest"), SnapshotDigest);
+	Json->SetStringField(TEXT("snapshotId"), SnapshotId);
+	Json->SetStringField(TEXT("failurePhase"), FailurePhase);
+	Json->SetStringField(TEXT("causeCode"), CauseCode);
 	Json->SetNumberField(
 		TEXT("nextInitializerIndex"),
 		NextInitializerIndex);
@@ -6516,6 +6988,10 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToJournalJson() const
 		bMemorySnapshotRestored);
 	Json->SetBoolField(TEXT("rollbackAvailable"), bRollbackAvailable);
 	Json->SetBoolField(TEXT("rollbackVerified"), bRollbackVerified);
+	Json->SetBoolField(TEXT("mutationStarted"), bMutationStarted);
+	Json->SetBoolField(TEXT("journalPersisted"), bJournalPersisted);
+	Json->SetBoolField(TEXT("rollbackAttempted"), bRollbackAttempted);
+	Json->SetBoolField(TEXT("editorSessionReloaded"), bEditorSessionReloaded);
 	Json->SetArrayField(TEXT("operations"), Operations);
 	Json->SetArrayField(TEXT("finalizers"), Finalizers);
 	Json->SetArrayField(TEXT("dirtyPackages"), DirtyPackages);
@@ -6542,6 +7018,7 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToJournalJson() const
 			: MakeShared<FJsonObject>());
 	TSharedPtr<FJsonObject> Rollback = MakeShared<FJsonObject>();
 	Rollback->SetStringField(TEXT("status"), RollbackStatus);
+	Rollback->SetBoolField(TEXT("attempted"), bRollbackAttempted);
 	Rollback->SetBoolField(TEXT("available"), bRollbackAvailable);
 	Rollback->SetBoolField(TEXT("verified"), bRollbackVerified);
 	Rollback->SetBoolField(
@@ -6607,7 +7084,20 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToReceiptJson() const
 		TEXT("lastCompletedOperationId"),
 		LastCompletedOperationId);
 	Json->SetStringField(TEXT("snapshotDigest"), SnapshotDigest);
+	Json->SetStringField(TEXT("snapshotId"), SnapshotId);
+	Json->SetStringField(TEXT("failurePhase"), FailurePhase);
+	Json->SetStringField(TEXT("causeCode"), CauseCode);
+	Json->SetBoolField(TEXT("mutationStarted"), bMutationStarted);
+	Json->SetBoolField(TEXT("journalPersisted"), bJournalPersisted);
+	Json->SetBoolField(TEXT("rollbackAttempted"), bRollbackAttempted);
+	Json->SetBoolField(TEXT("editorSessionReloaded"), bEditorSessionReloaded);
 	Json->SetNumberField(TEXT("assetCount"), Assets.Num());
+	TSharedPtr<FJsonObject> Rollback = MakeShared<FJsonObject>();
+	Rollback->SetBoolField(TEXT("attempted"), bRollbackAttempted);
+	Rollback->SetStringField(TEXT("status"), RollbackStatus);
+	Rollback->SetBoolField(TEXT("available"), bRollbackAvailable);
+	Rollback->SetBoolField(TEXT("verified"), bRollbackVerified);
+	Json->SetObjectField(TEXT("rollback"), Rollback);
 	Json->SetNumberField(
 		TEXT("nextInitializerIndex"),
 		NextInitializerIndex);
@@ -6679,6 +7169,13 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson(
 		TEXT("lastCompletedOperationId"),
 		LastCompletedOperationId);
 	Json->SetStringField(TEXT("snapshotDigest"), SnapshotDigest);
+	Json->SetStringField(TEXT("snapshotId"), SnapshotId);
+	Json->SetStringField(TEXT("failurePhase"), FailurePhase);
+	Json->SetStringField(TEXT("causeCode"), CauseCode);
+	Json->SetBoolField(TEXT("mutationStarted"), bMutationStarted);
+	Json->SetBoolField(TEXT("journalPersisted"), bJournalPersisted);
+	Json->SetBoolField(TEXT("rollbackAttempted"), bRollbackAttempted);
+	Json->SetBoolField(TEXT("editorSessionReloaded"), bEditorSessionReloaded);
 	Json->SetArrayField(TEXT("recoveryWarnings"), RecoveryWarnings);
 	Json->SetNumberField(TEXT("assetCount"), Assets.Num());
 	Json->SetStringField(TEXT("detailLevel"),
@@ -6899,6 +7396,7 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson(
 	Summary->SetObjectField(TEXT("diff"), DiffSummary);
 	TSharedPtr<FJsonObject> RollbackSummary = MakeShared<FJsonObject>();
 	RollbackSummary->SetStringField(TEXT("status"), RollbackStatus);
+	RollbackSummary->SetBoolField(TEXT("attempted"), bRollbackAttempted);
 	RollbackSummary->SetBoolField(TEXT("available"), bRollbackAvailable);
 	RollbackSummary->SetBoolField(TEXT("verified"), bRollbackVerified);
 	Summary->SetObjectField(TEXT("rollback"), RollbackSummary);
@@ -7015,6 +7513,7 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::FRunRecord::ToResultJson(
 	{
 		TSharedPtr<FJsonObject> Rollback = MakeShared<FJsonObject>();
 		Rollback->SetStringField(TEXT("status"), RollbackStatus);
+		Rollback->SetBoolField(TEXT("attempted"), bRollbackAttempted);
 		Rollback->SetBoolField(TEXT("available"), bRollbackAvailable);
 		Rollback->SetBoolField(TEXT("verified"), bRollbackVerified);
 		Rollback->SetBoolField(TEXT("executionMemorySnapshotCaptured"), bMemorySnapshotCaptured);
@@ -7095,6 +7594,9 @@ bool FWorkflowRuntime::FRunRecord::FromJson(
 		TEXT("lastCompletedOperationId"),
 		OutRecord.LastCompletedOperationId);
 	Json->TryGetStringField(TEXT("snapshotDigest"), OutRecord.SnapshotDigest);
+	Json->TryGetStringField(TEXT("snapshotId"), OutRecord.SnapshotId);
+	Json->TryGetStringField(TEXT("failurePhase"), OutRecord.FailurePhase);
+	Json->TryGetStringField(TEXT("causeCode"), OutRecord.CauseCode);
 	double NumericIndex = 0.0;
 	if (Json->TryGetNumberField(
 			TEXT("nextInitializerIndex"),
@@ -7138,6 +7640,10 @@ bool FWorkflowRuntime::FRunRecord::FromJson(
 	Json->TryGetBoolField(
 		TEXT("rollbackVerified"),
 		OutRecord.bRollbackVerified);
+	Json->TryGetBoolField(TEXT("mutationStarted"), OutRecord.bMutationStarted);
+	Json->TryGetBoolField(TEXT("journalPersisted"), OutRecord.bJournalPersisted);
+	Json->TryGetBoolField(TEXT("rollbackAttempted"), OutRecord.bRollbackAttempted);
+	Json->TryGetBoolField(TEXT("editorSessionReloaded"), OutRecord.bEditorSessionReloaded);
 
 	const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
 	if (Json->TryGetArrayField(TEXT("operations"), Values) && Values)

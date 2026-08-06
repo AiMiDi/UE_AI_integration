@@ -134,6 +134,13 @@ private:
 	void WriteInstanceRecord();
 	void RemoveInstanceRecord();
 	FString InstanceRecordPath() const;
+	FString RequestMarkerPath() const;
+	void WriteRequestMarker(
+		const FString& RequestId,
+		const FString& Capability,
+		const FString& Phase,
+		const FString& Status,
+		const FString& ErrorCode = FString()) const;
 
 	static void SendJsonResponse(
 		const FHttpResultCallback& OnComplete,

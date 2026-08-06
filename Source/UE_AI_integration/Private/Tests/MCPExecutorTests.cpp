@@ -71,12 +71,12 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 	FMCPExecutor DegradedExecutor(DegradedRegistry);
 	const FMCPResult DegradedResult = DegradedExecutor.Execute(
 		{TEXT("blueprint.asset.list"), MakeShared<FJsonObject>()});
-	TestFalse(TEXT("Degraded registry prohibits execution"), DegradedResult.bOk);
-	TestEqual(TEXT("Degraded status"), DegradedResult.Error.HttpStatus, 503);
+	TestFalse(TEXT("Unloaded handler prohibits execution"), DegradedResult.bOk);
+	TestEqual(TEXT("Unloaded handler status"), DegradedResult.Error.HttpStatus, 503);
 	TestEqual(
-		TEXT("Degraded code"),
+		TEXT("Unloaded handler code"),
 		DegradedResult.Error.Code,
-		FString(TEXT("service_degraded")));
+		FString(TEXT("capability_not_loaded")));
 
 	FMCPToolRegistry Registry;
 	Registry.LoadCapabilityManifests();

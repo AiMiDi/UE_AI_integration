@@ -41,6 +41,9 @@
 #ifndef UE_CLI_VERSION
 #define UE_CLI_VERSION "1.0.0"
 #endif
+#ifndef UE_SOURCE_REVISION
+#define UE_SOURCE_REVISION "unknown"
+#endif
 
 namespace ue::command
 {
@@ -3924,6 +3927,7 @@ int PrintVersion(
             { "product", "UE short-operation CLI" },
             { "executable", "ue-cli" },
             { "version", UE_CLI_VERSION },
+            { "sourceRevision", UE_SOURCE_REVISION },
             { "apiVersion", "v1" },
             { "transport", "loopback-http" },
             { "defaultSchemaSource", "local" },
@@ -4283,6 +4287,147 @@ bool LooksLikeInstanceId(const std::string& value)
     return true;
 }
 
+bool PathIsWithin(
+    const std::filesystem::path& root,
+    const std::filesystem::path& candidate)
+{
+    if (!root.is_absolute() || !candidate.is_absolute())
+    {
+        return false;
+    }
+    std::error_code root_error;
+    std::error_code candidate_error;
+    auto normalized_root = std::filesystem::weakly_canonical(
+        root, root_error).lexically_normal();
+    auto normalized_candidate = std::filesystem::weakly_canonical(
+        candidate, candidate_error).lexically_normal();
+    if (root_error || candidate_error)
+    {
+        return false;
+    }
+    auto root_it = normalized_root.begin();
+    auto candidate_it = normalized_candidate.begin();
+    for (; root_it != normalized_root.end(); ++root_it, ++candidate_it)
+    {
+        if (candidate_it == normalized_candidate.end())
+        {
+            return false;
+        }
+#if defined(_WIN32)
+        std::string left = PathToUtf8(*root_it);
+        std::string right = PathToUtf8(*candidate_it);
+        std::transform(left.begin(), left.end(), left.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        std::transform(right.begin(), right.end(), right.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (left != right)
+#else
+        if (*root_it != *candidate_it)
+#endif
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+json InspectRequestFailureEvidence(
+    const json& instance,
+    const std::string& expected_instance_id)
+{
+    json evidence = json::object();
+    if (!instance.is_object())
+    {
+        return evidence;
+    }
+    const auto saved_text = instance.value(
+        "projectSavedPath", std::string{});
+    const auto marker_text = instance.value(
+        "requestMarkerPath", std::string{});
+    const auto crash_text = instance.value(
+        "crashRootPath", std::string{});
+    if (saved_text.empty() || marker_text.empty() || crash_text.empty())
+    {
+        return evidence;
+    }
+    const auto saved = ue::cli::Utf8Path(saved_text);
+    const auto marker_path = ue::cli::Utf8Path(marker_text);
+    const auto crash_root = ue::cli::Utf8Path(crash_text);
+    if (!PathIsWithin(saved, marker_path)
+        || !PathIsWithin(saved, crash_root))
+    {
+        evidence["diagnosticCode"] = "instance_artifact_path_rejected";
+        return evidence;
+    }
+    const json marker = ReadJsonFileBounded(marker_path, 16 * 1024);
+    if (!marker.is_object()
+        || marker.value("schema", std::string{}) != "ue.request-marker.v1"
+        || marker.value("serverInstanceId", std::string{})
+            != expected_instance_id
+        || marker.value("status", std::string{}) != "running")
+    {
+        return evidence;
+    }
+    evidence["lastRequest"] = {
+        { "requestId", marker.value("requestId", std::string{}).substr(0, 200) },
+        { "capability", marker.value("capability", std::string{}).substr(0, 200) },
+        { "phase", marker.value("phase", std::string{}).substr(0, 80) },
+        { "status", "running" },
+        { "startedAt", marker.value("startedAt", std::string{}) },
+    };
+
+    std::error_code marker_time_error;
+    const auto marker_time = std::filesystem::last_write_time(
+        marker_path, marker_time_error);
+    if (marker_time_error || !std::filesystem::is_directory(crash_root))
+    {
+        return evidence;
+    }
+    std::filesystem::path newest_crash;
+    std::filesystem::file_time_type newest_time{};
+    std::size_t scanned = 0;
+    std::error_code error;
+    for (const auto& directory :
+        std::filesystem::directory_iterator(crash_root, error))
+    {
+        if (error || scanned++ >= 32)
+        {
+            break;
+        }
+        if (!directory.is_directory(error) || error)
+        {
+            error.clear();
+            continue;
+        }
+        const auto candidate = directory.path() / "CrashContext.runtime-xml";
+        if (!PathIsWithin(crash_root, candidate)
+            || !std::filesystem::is_regular_file(candidate, error)
+            || error)
+        {
+            error.clear();
+            continue;
+        }
+        const auto modified = std::filesystem::last_write_time(candidate, error);
+        if (error || modified < marker_time)
+        {
+            error.clear();
+            continue;
+        }
+        if (newest_crash.empty() || modified > newest_time)
+        {
+            newest_crash = candidate;
+            newest_time = modified;
+        }
+    }
+    if (!newest_crash.empty())
+    {
+        evidence["crashContext"] = std::string("Saved/Crashes/")
+            + PathToUtf8(newest_crash.parent_path().filename())
+            + "/CrashContext.runtime-xml";
+    }
+    return evidence;
+}
+
 enum class ProcessIdentity
 {
     Match,
@@ -4618,7 +4763,7 @@ json InspectInstanceRecords(
         {
             continue;
         }
-        records.push_back({
+        json record = {
             { "record", entry.path().filename().generic_string() },
             { "serverInstanceId", instance_id },
             { "pid", pid },
@@ -4629,7 +4774,26 @@ json InspectInstanceRecords(
             { "reason", reason },
             { "ageSeconds", static_cast<std::uint64_t>(age_seconds) },
             { "deleted", was_deleted },
-        });
+        };
+        if (status == "stale" || status == "unverified")
+        {
+            const json failure_evidence = InspectRequestFailureEvidence(
+                value, instance_id);
+            if (failure_evidence.contains("lastRequest"))
+            {
+                record["lastRequest"] = failure_evidence["lastRequest"];
+            }
+            if (failure_evidence.contains("crashContext"))
+            {
+                record["crashContext"] = failure_evidence["crashContext"];
+            }
+            if (failure_evidence.contains("diagnosticCode"))
+            {
+                record["diagnosticCode"] =
+                    failure_evidence["diagnosticCode"];
+            }
+        }
+        records.push_back(std::move(record));
     }
     return {
         { "root", RedactedPathLabel(root) },
@@ -4763,6 +4927,59 @@ struct DoctorReport
     bool required_ok = false;
 };
 
+std::string LocalCapabilityCatalogDigest(const CapabilityCatalog* catalog)
+{
+    if (!catalog)
+    {
+        return {};
+    }
+    json descriptors = json::array();
+    for (const auto& [id, descriptor] : catalog->Descriptors())
+    {
+        (void)id;
+        descriptors.push_back(descriptor);
+    }
+    const auto digest = ue::workflow::CanonicalJsonSha256(
+        json({ { "capabilities", descriptors } }).dump());
+    return digest ? *digest : std::string{};
+}
+
+json LoadLocalWorkflowIdentity(
+    const std::filesystem::path& bundle_root,
+    const CapabilityCatalog* catalog)
+{
+    json identity = {
+        { "loaded", false },
+        { "contractSetDigest", nullptr },
+        { "contractSetDigestV2", nullptr },
+    };
+    if (bundle_root.empty() || !catalog)
+    {
+        identity["code"] = "workflow_contracts_unavailable";
+        return identity;
+    }
+    const auto contract_root = bundle_root / "Workflow" / "Contracts";
+    if (!std::filesystem::is_directory(contract_root))
+    {
+        identity["code"] = "workflow_contracts_unavailable";
+        return identity;
+    }
+    ue::workflow::Engine engine;
+    ue::workflow::LoadOptions load;
+    load.contract_root = contract_root;
+    load.capability_roots.push_back(catalog->Root());
+    const auto result = engine.Load(load);
+    if (!result.ok)
+    {
+        identity["code"] = "workflow_contract_load_failed";
+        return identity;
+    }
+    identity["loaded"] = true;
+    identity["contractSetDigest"] = engine.ContractSetDigest();
+    identity["contractSetDigestV2"] = engine.ContractSetDigestV2();
+    return identity;
+}
+
 DoctorReport CollectDoctorReport(
     const Options& options,
     const CapabilityCatalog* catalog,
@@ -4784,6 +5001,8 @@ DoctorReport CollectDoctorReport(
     add(DiagnosticCheck(
             "cli.version", "passed", "ok", UE_CLI_VERSION), true);
     add(DiagnosticCheck(
+            "cli.revision", "passed", "ok", UE_SOURCE_REVISION), true);
+    add(DiagnosticCheck(
             "capability.catalog",
             catalog ? "passed" : "failed",
             catalog ? "ok" : "capability_catalog_unavailable",
@@ -4799,6 +5018,10 @@ DoctorReport CollectDoctorReport(
         true);
 
     const auto bundle_root = InferBundleRoot(options, catalog);
+    const std::string local_catalog_digest =
+        LocalCapabilityCatalogDigest(catalog);
+    const json local_workflow = LoadLocalWorkflowIdentity(
+        bundle_root, catalog);
     static const std::array<std::filesystem::path, 9> required_files = {
         "UE_AI_integration.uplugin",
         "CLI/bin/ue-cli.exe",
@@ -4867,6 +5090,58 @@ DoctorReport CollectDoctorReport(
     if (health.ok)
     {
         editor_data = health.value.value("data", json::object());
+        const std::string remote_revision = editor_data.value(
+            "sourceRevision", std::string{});
+        const bool revision_match = remote_revision == UE_SOURCE_REVISION;
+        add(DiagnosticCheck(
+                "identity.source-revision",
+                revision_match ? "passed" : "failed",
+                revision_match ? "ok" : "source_revision_mismatch",
+                revision_match
+                    ? remote_revision
+                    : "CLI and loaded Editor plugin revisions differ."),
+            true);
+        const std::string descriptor_version = editor_data.value(
+            "pluginDescriptorVersion", std::string{});
+        const std::string compiled_version = editor_data.value(
+            "pluginCompiledVersion", std::string{});
+        const bool plugin_version_match = !descriptor_version.empty()
+            && descriptor_version == compiled_version;
+        add(DiagnosticCheck(
+                "identity.plugin-version",
+                plugin_version_match ? "passed" : "failed",
+                plugin_version_match ? "ok" : "plugin_version_mismatch",
+                plugin_version_match
+                    ? descriptor_version
+                    : "Plugin descriptor and compiled module versions differ."),
+            true);
+        const std::string remote_catalog_digest = editor_data.value(
+            "capabilityCatalogDigest", std::string{});
+        const bool catalog_match = !local_catalog_digest.empty()
+            && remote_catalog_digest == local_catalog_digest;
+        add(DiagnosticCheck(
+                "identity.capability-catalog",
+                catalog_match ? "passed" : "failed",
+                catalog_match ? "ok" : "capability_catalog_mismatch",
+                catalog_match
+                    ? local_catalog_digest
+                    : "Local and loaded Editor capability catalogs differ."),
+            true);
+        const bool workflow_loaded = local_workflow.value("loaded", false);
+        const bool workflow_match = workflow_loaded
+            && editor_data.value("contractSetDigest", std::string{})
+                == local_workflow.value("contractSetDigest", std::string{})
+            && editor_data.value("contractSetDigestV2", std::string{})
+                == local_workflow.value("contractSetDigestV2", std::string{});
+        add(DiagnosticCheck(
+                "identity.workflow-contracts",
+                workflow_match ? "passed" : "failed",
+                workflow_match ? "ok" : "workflow_contract_mismatch",
+                workflow_match
+                    ? local_workflow.value(
+                        "contractSetDigestV2", std::string{})
+                    : "Local and loaded Editor Workflow contracts differ."),
+            true);
         const ParsedEnvelope readonly = ParseEnvelope(client.Post(
             "/api/execute",
             json({
@@ -4894,6 +5169,7 @@ DoctorReport CollectDoctorReport(
     json data = {
         { "schema", "ue.doctor.v3" },
         { "version", UE_CLI_VERSION },
+        { "sourceRevision", UE_SOURCE_REVISION },
         { "full", options.doctor_full },
         { "endpoint", "<loopback>" },
         { "bundle", {
@@ -4905,6 +5181,34 @@ DoctorReport CollectDoctorReport(
             options.doctor_full && options.clean_stale_instances) },
         { "checks", checks },
         { "worker", worker_data },
+        { "identity", {
+            { "local", {
+                { "cliVersion", UE_CLI_VERSION },
+                { "sourceRevision", UE_SOURCE_REVISION },
+                { "capabilityCatalogDigest",
+                    local_catalog_digest.empty()
+                        ? json(nullptr) : json(local_catalog_digest) },
+                { "workflow", local_workflow },
+            } },
+            { "editor", editor_data.is_object()
+                ? json({
+                    { "sourceRevision", editor_data.value(
+                        "sourceRevision", std::string{}) },
+                    { "pluginDescriptorVersion", editor_data.value(
+                        "pluginDescriptorVersion", std::string{}) },
+                    { "pluginCompiledVersion", editor_data.value(
+                        "pluginCompiledVersion", std::string{}) },
+                    { "loadedModuleSha256", editor_data.value(
+                        "loadedModuleSha256", std::string{}) },
+                    { "capabilityCatalogDigest", editor_data.value(
+                        "capabilityCatalogDigest", std::string{}) },
+                    { "contractSetDigest", editor_data.value(
+                        "contractSetDigest", std::string{}) },
+                    { "contractSetDigestV2", editor_data.value(
+                        "contractSetDigestV2", std::string{}) },
+                })
+                : json::object() },
+        } },
         { "editor", editor_data },
         { "redaction", {
             { "absolutePaths", true },

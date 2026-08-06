@@ -1,5 +1,6 @@
 using UnrealBuildTool;
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 
@@ -17,6 +18,8 @@ public class UE_AI_integration : ModuleRules
 			Path.Combine(ModuleDirectory, "..", "..", "Workflow", "ThirdParty"));
 
 		PublicDefinitions.Add("UE_AI_INTEGRATION_VERSION=\"1.0.0\"");
+		PublicDefinitions.Add(
+			"UE_AI_SOURCE_REVISION=\"" + ResolveSourceRevision() + "\"");
 
 		bool bWithNiagara = IsOptionalFeatureEnabled(Target, "Niagara");
 		bool bWithWater = IsOptionalFeatureEnabled(Target, "Water");
@@ -151,6 +154,50 @@ public class UE_AI_integration : ModuleRules
 		{
 			PublicDefinitions.Add("WITH_LIVE_CODING=0");
 		}
+	}
+
+	private string ResolveSourceRevision()
+	{
+		string Revision = Environment.GetEnvironmentVariable("UEAI_SOURCE_REVISION");
+		if (String.IsNullOrWhiteSpace(Revision))
+		{
+			try
+			{
+				string RepositoryRoot = Path.GetFullPath(
+					Path.Combine(ModuleDirectory, "..", ".."));
+				ProcessStartInfo StartInfo = new ProcessStartInfo
+				{
+					FileName = "git",
+					Arguments = "-C \"" + RepositoryRoot + "\" rev-parse --short=12 HEAD",
+					UseShellExecute = false,
+					RedirectStandardOutput = true,
+					RedirectStandardError = true,
+					CreateNoWindow = true
+				};
+				using (Process Git = Process.Start(StartInfo))
+				{
+					Revision = Git.StandardOutput.ReadToEnd().Trim();
+					Git.WaitForExit(3000);
+					if (Git.ExitCode != 0)
+					{
+						Revision = null;
+					}
+				}
+			}
+			catch
+			{
+				Revision = null;
+			}
+		}
+		if (String.IsNullOrWhiteSpace(Revision))
+		{
+			return "unknown";
+		}
+		return new string(Revision
+			.Where(Character => Char.IsLetterOrDigit(Character)
+				|| Character == '.' || Character == '_' || Character == '-')
+			.Take(64)
+			.ToArray());
 	}
 
 	private static bool IsOptionalFeatureEnabled(

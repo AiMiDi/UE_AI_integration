@@ -5,6 +5,10 @@
 #include "EditorAssetLibrary.h"
 #include "EdGraph/EdGraph.h"
 #include "Engine/Blueprint.h"
+#include "Engine/Level.h"
+#include "Engine/LevelScriptBlueprint.h"
+#include "Engine/World.h"
+#include "FileHelpers.h"
 #include "Infrastructure/EngineeringContractUtils.h"
 #include "Infrastructure/Sha256.h"
 #include "Interfaces/IPluginManager.h"
@@ -21,6 +25,7 @@
 #include "Tools/MCPToolRegistry.h"
 #include "UEAIIntegrationSubsystem.h"
 #include "UObject/Package.h"
+#include "UObject/GarbageCollection.h"
 #include "UObject/UObjectGlobals.h"
 #include "Workflow/UEWorkflowExecutionContext.h"
 #include "Workflow/UEWorkflowRuntime.h"
@@ -625,6 +630,22 @@ bool HashAssetPackage(
 		FPackageName::LongPackageNameToFilename(
 			PackageName,
 			FPackageName::GetAssetPackageExtension());
+	TArray<uint8> Bytes;
+	return !Filename.IsEmpty()
+		&& FFileHelper::LoadFileToArray(Bytes, *Filename)
+		&& UEAIIntegration::Infrastructure::TrySha256Hex(
+			Bytes,
+			OutHash);
+}
+
+bool HashMapPackage(
+	const FString& MapPackageName,
+	FString& OutHash)
+{
+	const FString Filename =
+		FPackageName::LongPackageNameToFilename(
+			MapPackageName,
+			FPackageName::GetMapPackageExtension());
 	TArray<uint8> Bytes;
 	return !Filename.IsEmpty()
 		&& FFileHelper::LoadFileToArray(Bytes, *Filename)
@@ -2554,6 +2575,261 @@ bool FUEWorkflowV2DurableRollbackAndConflictTest::RunTest(
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUEWorkflowLevelBlueprintTransactionTest,
+	"UE_AI_integration.Workflow.V2.LevelBlueprintTransactionAndReceipt",
+	EAutomationTestFlags::EditorContext |
+		EAutomationTestFlags::EngineFilter)
+
+bool FUEWorkflowLevelBlueprintTransactionTest::RunTest(
+	const FString& Parameters)
+{
+	UUEAIIntegrationSubsystem* Subsystem =
+		GEditor
+			? GEditor->GetEditorSubsystem<UUEAIIntegrationSubsystem>()
+			: nullptr;
+	TestNotNull(TEXT("UE integration subsystem is initialized"), Subsystem);
+	if (!Subsystem || !Subsystem->GetRegistry() || !GEditor)
+	{
+		return false;
+	}
+
+	const FString Suffix =
+		FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	const FString MapPackageName =
+		TEXT("/Game/Automation/UEAI_LevelWorkflow_") + Suffix;
+	const FString MapFilename =
+		FPackageName::LongPackageNameToFilename(
+			MapPackageName,
+			FPackageName::GetMapPackageExtension());
+	GEditor->CreateNewMapForEditing(false, false);
+	UWorld* World = GEditor->GetEditorWorldContext().World();
+	if (!World
+		|| !UEditorLoadingAndSavingUtils::SaveMap(
+			World,
+			MapPackageName))
+	{
+		AddError(TEXT("Could not create the Level Blueprint Workflow fixture map."));
+		return false;
+	}
+	World = GEditor->GetEditorWorldContext().World();
+	ULevelScriptBlueprint* LevelBlueprint =
+		World && World->PersistentLevel
+			? World->PersistentLevel->GetLevelScriptBlueprint(false)
+			: nullptr;
+	TestNotNull(TEXT("Level Blueprint fixture exists"), LevelBlueprint);
+	if (!LevelBlueprint
+		|| !UEditorLoadingAndSavingUtils::SaveMap(
+			World,
+			MapPackageName))
+	{
+		AddError(TEXT("Could not save the Level Blueprint Workflow baseline."));
+		return false;
+	}
+	LevelBlueprint->GetOutermost()->SetDirtyFlag(false);
+
+	auto FindEventGraph = [](UBlueprint* Blueprint) -> UEdGraph*
+	{
+		if (!Blueprint)
+		{
+			return nullptr;
+		}
+		TArray<UEdGraph*> Graphs;
+		Blueprint->GetAllGraphs(Graphs);
+		for (UEdGraph* Graph : Graphs)
+		{
+			if (Graph
+				&& Graph->GetName().Equals(
+					TEXT("EventGraph"),
+					ESearchCase::IgnoreCase))
+			{
+				return Graph;
+			}
+		}
+		return nullptr;
+	};
+	UEdGraph* BaselineGraph = FindEventGraph(LevelBlueprint);
+	TestNotNull(TEXT("Level Blueprint EventGraph exists"), BaselineGraph);
+	if (!BaselineGraph)
+	{
+		return false;
+	}
+	const int32 BaselineNodeCount = BaselineGraph->Nodes.Num();
+	const FString BaselineStructureHash =
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(LevelBlueprint);
+	FString BaselineMapHash;
+	TestTrue(
+		TEXT("Level Blueprint map baseline is hashable"),
+		HashMapPackage(MapPackageName, BaselineMapHash));
+
+	TSharedPtr<FJsonObject> AddCommentParams = MakeShared<FJsonObject>();
+	AddCommentParams->SetStringField(TEXT("graph"), TEXT("EventGraph"));
+	AddCommentParams->SetStringField(TEXT("nodeType"), TEXT("Comment"));
+	AddCommentParams->SetStringField(
+		TEXT("comment"),
+		TEXT("UE AI Level Blueprint transaction fixture"));
+	AddCommentParams->SetNumberField(TEXT("posX"), 384.0);
+	AddCommentParams->SetNumberField(TEXT("posY"), 128.0);
+	TMap<FString, TSharedPtr<FJsonObject>> Scopes;
+	Scopes.Add(
+		TEXT("level"),
+		MakeScope(
+			TEXT("levelBlueprint"),
+			MapPackageName,
+			false));
+	const TSharedPtr<FJsonObject> Workflow = MakeWorkflowV2(
+		TEXT("level-blueprint-transaction"),
+		Scopes,
+		{MakeShared<FJsonValueObject>(
+			MakeScopedOperation(
+				TEXT("addComment"),
+				TEXT("blueprint.node.add"),
+				TEXT("level"),
+				AddCommentParams))});
+
+	UEAIIntegration::Workflow::FWorkflowRuntime Runtime(
+		*Subsystem->GetRegistry());
+	const FMCPResult Plan = PlanWorkflow(Runtime, Workflow);
+	FString Digest;
+	TestTrue(TEXT("Level Blueprint Workflow plans"), GetPlanDigest(Plan, Digest));
+	const TSharedPtr<FJsonObject>* Preconditions = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* PlannedAssets = nullptr;
+	TestTrue(
+		TEXT("Level Blueprint plan binds a map package"),
+		Plan.bOk
+			&& Plan.Data->TryGetObjectField(TEXT("preconditions"), Preconditions)
+			&& Preconditions && Preconditions->IsValid()
+			&& (*Preconditions)->TryGetArrayField(TEXT("assets"), PlannedAssets)
+			&& PlannedAssets && PlannedAssets->Num() == 1
+			&& (*PlannedAssets)[0]->AsObject()->GetStringField(
+				TEXT("packageType")) == TEXT("map")
+			&& (*PlannedAssets)[0]->AsObject()->GetStringField(
+				TEXT("packageExtension")) == FPackageName::GetMapPackageExtension());
+
+	TMap<FString, TSharedPtr<FJsonObject>> WrongScopes;
+	WrongScopes.Add(
+		TEXT("level"),
+		MakeScope(TEXT("blueprint"), MapPackageName, false));
+	const FMCPResult WrongKindPlan = PlanWorkflow(
+		Runtime,
+		MakeWorkflowV2(
+			TEXT("level-blueprint-wrong-kind"),
+			WrongScopes,
+			{}));
+	TestFalse(TEXT("Map rejects ordinary Blueprint scope"), WrongKindPlan.bOk);
+	TestEqual(
+		TEXT("Map kind mismatch returns stable guidance"),
+		WrongKindPlan.Error.Code,
+		FString(TEXT("workflow_scope_kind_mismatch")));
+
+	const FMCPResult Execute =
+		ExecuteWorkflow(Runtime, Workflow, Digest, true);
+	TestTrue(TEXT("Level Blueprint Workflow executes and saves"), Execute.bOk);
+	FString RunId;
+	if (Execute.bOk)
+	{
+		Execute.Data->TryGetStringField(TEXT("runId"), RunId);
+	}
+	World = GEditor->GetEditorWorldContext().World();
+	LevelBlueprint = World && World->PersistentLevel
+		? World->PersistentLevel->GetLevelScriptBlueprint(true)
+		: nullptr;
+	UEdGraph* MutatedGraph = FindEventGraph(LevelBlueprint);
+	TestTrue(
+		TEXT("Level Blueprint read-back sees the added node"),
+		MutatedGraph && MutatedGraph->Nodes.Num() == BaselineNodeCount + 1);
+	TestFalse(
+		TEXT("Saved Level Blueprint map is clean"),
+		LevelBlueprint && LevelBlueprint->GetOutermost()->IsDirty());
+
+	TSharedPtr<FJsonObject> RollbackRequest = MakeShared<FJsonObject>();
+	RollbackRequest->SetStringField(TEXT("action"), TEXT("rollback"));
+	RollbackRequest->SetStringField(TEXT("runId"), RunId);
+	RollbackRequest->SetStringField(TEXT("approvePlanDigest"), Digest);
+	const FMCPResult Rollback = Runtime.HandleRequest(RollbackRequest);
+	TestTrue(TEXT("Level Blueprint explicit rollback succeeds"), Rollback.bOk);
+	TestTrue(
+		TEXT("Level Blueprint rollback is verified"),
+		Rollback.bOk && Rollback.Data->GetBoolField(TEXT("rollbackVerified")));
+	World = GEditor->GetEditorWorldContext().World();
+	LevelBlueprint = World && World->PersistentLevel
+		? World->PersistentLevel->GetLevelScriptBlueprint(true)
+		: nullptr;
+	UEdGraph* RestoredGraph = FindEventGraph(LevelBlueprint);
+	FString RolledBackMapHash;
+	TestTrue(
+		TEXT("Rolled-back map remains hashable"),
+		HashMapPackage(MapPackageName, RolledBackMapHash));
+	TestEqual(
+		TEXT("Rollback restores map bytes"),
+		RolledBackMapHash,
+		BaselineMapHash);
+	TestEqual(
+		TEXT("Rollback restores Level Blueprint structure"),
+		UEAIIntegration::Workflow::FWorkflowRuntime::
+			ComputeAssetStructureHash(LevelBlueprint),
+		BaselineStructureHash);
+	TestTrue(
+		TEXT("Rollback restores Level Blueprint node count"),
+		RestoredGraph && RestoredGraph->Nodes.Num() == BaselineNodeCount);
+	TestFalse(
+		TEXT("Rollback restores clean map state"),
+		LevelBlueprint && LevelBlueprint->GetOutermost()->IsDirty());
+
+	UEAIIntegration::Workflow::FWorkflowRuntime FailureRuntime(
+		*Subsystem->GetRegistry());
+	const FMCPResult FailurePlan = PlanWorkflow(FailureRuntime, Workflow);
+	FString FailureDigest;
+	TestTrue(
+		TEXT("Level Blueprint failure Workflow plans"),
+		GetPlanDigest(FailurePlan, FailureDigest));
+	FailureRuntime.SetTestFailAfterOperation(1, false);
+	const FMCPResult Failure = ExecuteWorkflow(
+		FailureRuntime,
+		Workflow,
+		FailureDigest,
+		false,
+		TEXT("full"));
+	TestFalse(TEXT("Injected Level Blueprint operation failure is reported"), Failure.bOk);
+	const TSharedPtr<FJsonObject>* FailureReceipt = nullptr;
+	TestTrue(
+		TEXT("Injected Level Blueprint failure includes a receipt"),
+		Failure.Error.Details.IsValid()
+			&& Failure.Error.Details->TryGetObjectField(
+				TEXT("receipt"),
+				FailureReceipt)
+			&& FailureReceipt && FailureReceipt->IsValid()
+			&& (*FailureReceipt)->GetStringField(TEXT("failurePhase")) == TEXT("operations")
+			&& (*FailureReceipt)->GetBoolField(TEXT("mutationStarted"))
+			&& (*FailureReceipt)->GetBoolField(TEXT("journalPersisted"))
+			&& (*FailureReceipt)->GetBoolField(TEXT("rollbackVerified")));
+	FString FailureMapHash;
+	TestTrue(
+		TEXT("Failed Level Blueprint map remains hashable"),
+		HashMapPackage(MapPackageName, FailureMapHash));
+	TestEqual(
+		TEXT("Automatic rollback restores Level Blueprint map bytes"),
+		FailureMapHash,
+		BaselineMapHash);
+	if (Failure.Error.Details.IsValid())
+	{
+		FString FailureRunId;
+		if (Failure.Error.Details->TryGetStringField(
+				TEXT("runId"),
+				FailureRunId))
+		{
+			CleanupWorkflowRunArtifacts(FailureRunId);
+		}
+	}
+	CleanupWorkflowRunArtifacts(RunId);
+
+	GEditor->CreateNewMapForEditing(false, false);
+	CollectGarbage(RF_NoFlags);
+	IFileManager::Get().Delete(*MapFilename, false, true, true);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FUEWorkflowV2FaultBoundaryResumeTest,
 	"UE_AI_integration.Workflow.V2.FaultBoundaryResumeAndRollback",
 	EAutomationTestFlags::EditorContext |
@@ -2813,6 +3089,42 @@ bool FUEWorkflowV2FaultBoundaryResumeTest::RunTest(
 					TEXT("causeCode"))
 				: FString(),
 			FString(TEXT("workflow_test_injected_failure")));
+		if (InjectedFailure.Error.Details.IsValid())
+		{
+			const TSharedPtr<FJsonObject>* Receipt = nullptr;
+			TestTrue(
+				TEXT("Admitted execution failure always contains a receipt"),
+				InjectedFailure.Error.Details->TryGetObjectField(
+					TEXT("receipt"),
+					Receipt)
+				&& Receipt && Receipt->IsValid());
+			if (Receipt && Receipt->IsValid())
+			{
+				TestEqual(
+					TEXT("Failure receipt records the failing phase"),
+					(*Receipt)->GetStringField(TEXT("failurePhase")),
+					FString(TEXT("operations")));
+				TestEqual(
+					TEXT("Failure receipt records the stable cause"),
+					(*Receipt)->GetStringField(TEXT("causeCode")),
+					FString(TEXT("workflow_test_injected_failure")));
+				TestTrue(
+					TEXT("Failure receipt records that mutation started"),
+					(*Receipt)->GetBoolField(TEXT("mutationStarted")));
+				TestTrue(
+					TEXT("Failure receipt confirms its journal was persisted"),
+					(*Receipt)->GetBoolField(TEXT("journalPersisted")));
+				const TSharedPtr<FJsonObject>* RollbackReceipt = nullptr;
+				TestTrue(
+					TEXT("Failure receipt embeds rollback evidence"),
+					(*Receipt)->TryGetObjectField(
+						TEXT("rollback"),
+						RollbackReceipt)
+					&& RollbackReceipt && RollbackReceipt->IsValid()
+					&& (*RollbackReceipt)->GetBoolField(TEXT("attempted"))
+					&& (*RollbackReceipt)->GetBoolField(TEXT("verified")));
+			}
+		}
 		TestEqual(
 			TEXT("Fail-after-operation restores the first asset"),
 			UEAIIntegration::Workflow::FWorkflowRuntime::
@@ -3072,6 +3384,30 @@ bool FUEWorkflowV2FaultConflictAndSaveTest::RunTest(
 		TEXT("Injected save failure has the public save error code"),
 		SaveFailure.Error.Code,
 		FString(TEXT("workflow_save_failed")));
+	if (SaveFailure.Error.Details.IsValid())
+	{
+		const TSharedPtr<FJsonObject>* Receipt = nullptr;
+		TestTrue(
+			TEXT("Save failure returns a durable receipt"),
+			SaveFailure.Error.Details->TryGetObjectField(
+				TEXT("receipt"),
+				Receipt)
+			&& Receipt && Receipt->IsValid());
+		if (Receipt && Receipt->IsValid())
+		{
+			TestEqual(
+				TEXT("Save failure receipt identifies final save"),
+				(*Receipt)->GetStringField(TEXT("failurePhase")),
+				FString(TEXT("save")));
+			TestEqual(
+				TEXT("Save failure receipt preserves public cause"),
+				(*Receipt)->GetStringField(TEXT("causeCode")),
+				FString(TEXT("workflow_save_failed")));
+			TestFalse(
+				TEXT("Save failure receipt has a non-empty snapshot ID"),
+				(*Receipt)->GetStringField(TEXT("snapshotId")).IsEmpty());
+		}
+	}
 	TestEqual(
 		TEXT("Save failure restores the first asset hash"),
 		UEAIIntegration::Workflow::FWorkflowRuntime::

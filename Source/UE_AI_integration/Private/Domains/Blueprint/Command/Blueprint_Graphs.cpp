@@ -276,7 +276,7 @@ public:
 		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params);
 		const bool bSaved =
 			UEAIIntegration::Workflow::ShouldSaveImmediately(Params)
-			&& MCPHelpers::SaveBlueprintPackage(BP);
+			&& MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
@@ -351,7 +351,7 @@ public:
 		int32 NodeCount = TargetGraph->Nodes.Num();
 		FBlueprintEditorUtils::RemoveGraph(BP, TargetGraph, EGraphRemoveFlags::Default);
 		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
-		bool bSaved = MCPHelpers::SaveBlueprintPackage(BP);
+		bool bSaved = MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
@@ -433,7 +433,7 @@ public:
 
 		FBlueprintEditorUtils::RenameGraph(TargetGraph, NewName);
 		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
-		bool bSaved = MCPHelpers::SaveBlueprintPackage(BP);
+		bool bSaved = MCPHelpers::CompileAndSaveBlueprintPackage(BP);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
