@@ -1,9 +1,14 @@
 ---
 name: ue-render-debug-capture
-description: Capture, compare, and analyze Unreal Editor or PIE viewport debug visualization modes with explicit availability, restoration evidence, and render-fingerprint compatibility. Use for Lit/Unlit/Wireframe evidence, Buffer Visualization, Ray Tracing Debug, Nanite, Lumen, Virtual Shadow Map, GPU Skin Cache, Strata/Substrate, Groom, collision, or before/after rendering diagnosis.
+description: Capture Unreal viewport debug views, collect Niagara AsyncGpuTrace runtime evidence, or analyze DRED and rendering failure logs offline. Use for GPU crashes, Niagara runtime diagnosis, Buffer Visualization, Ray Tracing Debug, Nanite, Lumen, and before/after rendering evidence.
 ---
 
 # UE Render Debug Capture
+
+For retained crash logs, load recipe `offline-render-failure`. For Niagara GPU
+queries, load `niagara-runtime-evidence`. Both use
+`references/runtime-and-failure-evidence.md`. Offline log analysis does not
+require a running Editor. Read operation schemas before executing them.
 
 Treat a debug view as bounded visual evidence, not as a raw render-resource
 readback. Never infer unavailable GBuffer or RDG values from PNG colors.

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import type { CapabilityExecutionContext, CapabilityExecutor } from "./domain-router.js";
 import { UEApiError, type UEExecuteData } from "./ue-bridge.js";
+import { analyzeRenderFailure } from "./render-failure.js";
 
 type JsonObject = Record<string, unknown>;
 const MAX_TEXT = 4 * 1024 * 1024;
@@ -315,6 +316,7 @@ function validatePlugins(root: string, project: { path: string; data: JsonObject
 export class LocalProjectExecutor implements CapabilityExecutor {
   async execute(id: string, params: JsonObject = {}): Promise<UEExecuteData> {
     const root = projectRoot(params);
+    if (id === "scene.render.failure.analyze") return analyzeRenderFailure(root, params);
     const project = uproject(root, params.uproject);
     if (id === "production.project.summary.get") {
       return {

@@ -2,10 +2,10 @@
   "schema": "ue.agent-skill.v1",
   "schemaVersion": 1,
   "id": "ue-render-debug-capture",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "UE Render Debug Capture",
-  "description": "Capture and verify Editor or PIE rendering debug views with availability, state restoration, bounded analysis, and compatible pixel diffs.",
-  "domains": ["scene"],
+  "description": "Capture rendering debug views, collect Niagara AsyncGpuTrace runtime evidence, and analyze retained DRED/render failure logs offline with explicit evidence boundaries.",
+  "domains": ["scene", "content"],
   "risk": "readOnly",
   "triggers": [
     "render debug view",
@@ -15,7 +15,12 @@
     "lumen visualization",
     "viewport screenshot compare",
     "渲染调试视图",
-    "缓冲区可视化"
+    "缓冲区可视化",
+    "Niagara runtime evidence",
+    "Niagara 运行时证据",
+    "DRED",
+    "GPU crash",
+    "渲染故障诊断"
   ],
   "entrypoint": "SKILL.md",
   "requirements": {
@@ -28,9 +33,53 @@
       "scene.viewport.visualization.compare",
       "scene.viewport.visualization.analyze"
     ],
-    "optionalCapabilities": []
+    "optionalCapabilities": [
+      "content.niagara.runtime.inspect",
+      "content.niagara.runtime.capture",
+      "scene.render.failure.analyze"
+    ]
   },
   "recipes": [
+    {
+      "id": "offline-render-failure",
+      "title": "Analyze retained rendering failure evidence",
+      "description": "Read explicit finalized log and CrashContext paths locally, retaining bounded source evidence without requiring an Editor connection.",
+      "risk": "readOnly",
+      "inputs": [
+        {"name": "projectRoot", "type": "string", "required": true, "description": "Absolute directory containing the retained diagnostic files."},
+        {"name": "files", "type": "array", "required": true, "description": "One to eight explicit paths relative to projectRoot."}
+      ],
+      "steps": [
+        {"id": "discover-input-contract", "phase": "discover", "purpose": "Load the local operation schema and select finalized artifacts with explicit bounds.", "operations": ["scene.render.failure.analyze"]},
+        {"id": "analyze-files", "phase": "execute", "purpose": "Execute once through localProject; no Editor connection is needed.", "operations": ["scene.render.failure.analyze"]},
+        {"id": "verify-source-evidence", "phase": "verify", "purpose": "Inspect the returned ranges, hashes and truncation flags. Keep each source independent and the root cause unproven; do not re-execute just to verify the response.", "operations": ["scene.render.failure.analyze"]}
+      ],
+      "result": {
+        "summary": "Bounded DRED, device-removal, resource and queue evidence with exact source ranges.",
+        "evidence": ["source ranges and hashes", "queue and operation context", "allocation lifetime context", "CrashContext whitelist", "truncation and unsupported formats"],
+        "success": ["analyzed sources are identified", "metadata-only dumps are not described as decoded", "active breadcrumbs and nearby resources are not treated as root causes"]
+      }
+    },
+    {
+      "id": "niagara-runtime-evidence",
+      "title": "Observe a Niagara AsyncGpuTrace dispatch",
+      "description": "Select a loaded world and Data Interface, then capture one bounded GPU readback with provider and frame context.",
+      "risk": "readOnly",
+      "inputs": [
+        {"name": "world", "type": "string", "required": true, "description": "Exact loaded Editor or PIE world path."},
+        {"name": "dataInterface", "type": "string", "required": true, "description": "Exact loaded AsyncGpuTrace Data Interface path."}
+      ],
+      "steps": [
+        {"id": "inspect-targets", "phase": "discover", "purpose": "Discover loaded objects and bridge version; obtain current sessionId and generation from scene.pie.status when targeting PIE.", "operations": ["content.niagara.runtime.inspect"]},
+        {"id": "capture-dispatch", "phase": "execute", "purpose": "Capture one matching dispatch using an explicit world, DI, timeout and result limit.", "operations": ["content.niagara.runtime.capture"]},
+        {"id": "verify-capture", "phase": "verify", "purpose": "Inspect the returned state and sample semantics. Only complete proves readback; do not re-execute just to verify the response.", "operations": ["content.niagara.runtime.capture"]}
+      ],
+      "result": {
+        "summary": "One observed DI dispatch aggregated across instances, with bounded result slots and provider setup context.",
+        "evidence": ["world and DI identity", "session generation", "provider selection and availability", "render/setup/previous-allocation frames", "bounded GPU result slots"],
+        "success": ["state is complete before counts are used", "missing evidence remains unavailable or null", "query high-water mark is not called an issued-ray count", "TLAS reference presence is not claimed as lifetime proof"]
+      }
+    },
     {
       "id": "capture-and-compare",
       "title": "Capture and compare one rendering debug view",
@@ -112,6 +161,10 @@
     }
   ],
   "resources": [
+    {
+      "path": "references/runtime-and-failure-evidence.md",
+      "description": "Niagara runtime capture and offline render failure contracts, optional engine bridge installation and verification limits."
+    },
     {
       "path": "references/render-debug-evidence.md",
       "description": "Visualization availability, viewport targeting, state restoration, image-format, and analysis boundaries."

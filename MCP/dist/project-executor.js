@@ -4,6 +4,7 @@ import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { UEApiError } from "./ue-bridge.js";
+import { analyzeRenderFailure } from "./render-failure.js";
 const MAX_TEXT = 4 * 1024 * 1024;
 const MAX_ASSET_WORKER_OUTPUT = 1024 * 1024;
 function inside(root, candidate) {
@@ -305,6 +306,8 @@ function validatePlugins(root, project, params) {
 export class LocalProjectExecutor {
     async execute(id, params = {}) {
         const root = projectRoot(params);
+        if (id === "scene.render.failure.analyze")
+            return analyzeRenderFailure(root, params);
         const project = uproject(root, params.uproject);
         if (id === "production.project.summary.get") {
             return {

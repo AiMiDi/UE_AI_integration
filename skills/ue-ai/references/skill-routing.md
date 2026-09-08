@@ -12,6 +12,7 @@
 | Audit World Partition, cells, streaming, Data Layers, HLOD, or PCG | `ue-world-partition-validate` | applicability, bounded cells/sources, subsystem findings |
 | Inspect or change Landscape/Water deterministically | `ue-landscape-authoring` | snapshot/export hash, plan digest, semantic diff, rollback evidence |
 | Capture Nanite, Lumen, ray tracing, or buffer visualization | `ue-render-debug-capture` | exact viewport identity, restored view state, compatible image evidence |
+| Collect Niagara AsyncGpuTrace runtime evidence or analyze DRED/render failures offline | `ue-render-debug-capture` | exact world/DI, bounded GPU slots, provider/frame context, retained log ranges and hashes |
 | Compare frame-time or memory performance | `ue-performance-regression` | environment fingerprint, percentiles, thresholds, optional Trace |
 | Record, import, query, or export `.utrace` evidence | `ue-trace-insights` | Worker handshake, provider availability, bounded semantic query |
 | Recover an interrupted job, dropped MCP connection, or source-control preflight | `ue-recovery-operator` | checkpoint, bounded attempts, approval state, terminal read-back |

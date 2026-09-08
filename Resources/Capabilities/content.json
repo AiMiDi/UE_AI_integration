@@ -6960,6 +6960,154 @@
         "since": "0.9.0",
         "canonicalId": "content.widget.event.ensure_handler"
       }
+    },
+    {
+      "id": "content.niagara.runtime.inspect",
+      "domain": "content",
+      "kind": "query",
+      "description": "List bounded loaded Niagara components, worlds and AsyncGpuTrace Data Interfaces. Loaded-object inventory does not establish runtime binding or execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "world": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 128,
+            "default": 32
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.runtime.inspect"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      }
+    },
+    {
+      "id": "content.niagara.runtime.capture",
+      "domain": "content",
+      "kind": "query",
+      "description": "Capture one exact world/Data Interface AsyncGpuTrace dispatch and a bounded GPU result prefix without waiting for GPU idle. Requires the optional Editor engine evidence bridge; PIE requires current sessionId and generation. Query high-watermark includes reservations and is not issued-ray count.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "world": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "dataInterface": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "resultLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1024,
+            "default": 64
+          },
+          "timeoutSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 30,
+            "default": 5
+          }
+        },
+        "required": [
+          "world",
+          "dataInterface"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "read",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.runtime.capture"
+      },
+      "dsl": {
+        "admission": "interactiveOnly",
+        "scopeKinds": [],
+        "transactionDomain": "editorSession",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      }
     }
   ],
   "tombstones": []

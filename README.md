@@ -7,16 +7,22 @@ Editor 控制模块、Development Trace Runtime、离线 Trace Worker 和 TypeSc
 stdio bridge，让 Codex CLI、Claude Code 等 MCP 客户端查询或修改 Blueprint、
 场景、内容资产、动画、AI 与生产流程，并在 Editor 关闭后分析 `.utrace`。
 
-当前插件版本为 `1.0.0`，以 Unreal Engine 5.3 为实际构建基线；UE
-5.4–5.7 的差异集中在兼容层，但尚未全部完成本地编译验证。
+当前插件版本为 `1.0.0`，以 Unreal Engine 5.3 为发布构建基线；本地
+SilverPalace 5.4.1 已通过 Niagara、NiagaraShader 与插件相关模块构建。
+其他分支尚未完成完整编译与运行验证。
 
 ## 核心特性
 
-- 当前发布快照包含 428 项 manifest 驱动的 Editor、PIE、Development 与本地
+- 当前发布快照包含 431 项 manifest 驱动的 Editor、PIE、Development 与本地
   Trace 能力；
   服务启动时从 manifest 动态计算数量。
 - Content 领域包含 Niagara graph inspect/collision audit，以及节点启用状态和
   输入 Pin 默认值的 plan/apply/rollback 能力。
+- `content.niagara.runtime.inspect/capture` 提供世界与 DI 定位、按请求启用的
+  GPU 结果读回及 Provider/帧证据；采集需要可选的 Editor 引擎桥接。
+- `scene.render.failure.analyze` 可在 Editor 退出后离线分析 DRED、渲染调用栈、
+  Ensure 和 CrashContext，保留范围、哈希及验证边界。详见
+  [运行时与故障证据](skills/ue-render-debug-capture/references/runtime-and-failure-evidence.md)。
 - 十二个稳定的 MCP 工具，不把全部能力直接展开成工具列表。
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
 - 专用 PIE 生命周期、Runtime 对象/Widget/Delegate/真实输入与 Scenario 能力。
@@ -98,8 +104,8 @@ Development Game Target ──► UEAITraceRuntime（非 Shipping，仅受约束
 | Domain | 数量 | 能力范围 |
 |---|---:|---|
 | Blueprint | 87 | 资产生命周期、Graph 几何/排版/截图、声明式 BuildGraph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
-| Scene | 97 | Actor、PIE Runtime、可信输入/等待/截图、Viewport 调试视图证据、World Partition、Data Layer、HLOD、PCG、渲染诊断、Landscape/Water |
-| Content | 98 | 资产查询/依赖/审计、安全导入/重导入、Static Mesh/Texture 配置、Material、Niagara graph 审计与受审批写入、UMG 与事件 Handler 验证 |
+| Scene | 98 | Actor、PIE Runtime、可信输入/等待/截图、Viewport 调试视图证据、World Partition、Data Layer、HLOD、PCG、渲染诊断、Landscape/Water |
+| Content | 100 | 资产查询/依赖/审计、安全导入/重导入、Static Mesh/Texture 配置、Material、Niagara graph 审计与受审批写入、UMG 与事件 Handler 验证 |
 | Animation | 19 | AnimBlueprint、状态机与 BlendSpace 的创建、读取、校验和 Diff |
 | AI | 17 | Behavior Tree 与 Blackboard 的创建、读取、引用、校验和 Diff |
 | Production | 110 | Durable Job、Recipe/SAL、租约协调、性能标准 suite、恢复管理、Editor/Development Trace、离线工程与资产查询、受限 Runtime Bridge、测试、Cook/Package、Source Control、DDC、Epic BuildGraph |

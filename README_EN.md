@@ -9,17 +9,23 @@ Claude Code can inspect or modify Blueprints, scenes, content assets, animation,
 AI, and production workflows, then analyze `.utrace` files with the Editor
 closed.
 
-The current plugin version is `1.0.0`. Unreal Engine 5.3 is the verified build
-baseline. Differences for UE 5.4–5.7 are isolated in the compatibility layer,
-but those versions have not all been compiled locally.
+The current plugin version is `1.0.0`. Unreal Engine 5.3 is the release build
+baseline. The local SilverPalace 5.4.1 branch has passed builds of Niagara,
+NiagaraShader and the plugin modules; other branches still lack full validation.
 
 ## Highlights
 
-- The current release snapshot contains 428 manifest-driven Editor, PIE,
+- The current release snapshot contains 431 manifest-driven Editor, PIE,
   Development, and local Trace capabilities; the service derives the count from
   the manifests at startup.
 - The Content domain includes Niagara graph inspection/collision audit and
   plan/apply/rollback operations for node enabled states and input-pin defaults.
+- `content.niagara.runtime.inspect/capture` locates worlds and DIs and reads a
+  bounded GPU result prefix with provider/frame context through an optional
+  Editor engine bridge.
+- `scene.render.failure.analyze` analyzes retained DRED, rendering call stacks,
+  Ensures and CrashContext offline, preserving source ranges and evidence limits.
+  See [runtime and failure evidence](skills/ue-render-debug-capture/references/runtime-and-failure-evidence.md).
 - Twelve stable MCP tools instead of exposing every capability as a tool.
 - Six domain routers: Blueprint, Scene, Content, Animation, AI, and Production.
 - Dedicated PIE lifecycle, runtime object/widget/delegate, real input, and
@@ -115,8 +121,8 @@ manifests and does not infer categories from operation names.
 | Domain | Count | Scope |
 |---|---:|---|
 | Blueprint | 87 | Asset lifecycle, Graph geometry/layout/capture, declarative BuildGraph, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
-| Scene | 97 | Actors, PIE runtime, trusted input/waits/capture, viewport debug-view evidence, World Partition, Data Layers, HLOD, PCG, rendering diagnostics, Landscape/Water |
-| Content | 98 | Asset query/dependency/audit, safe import/reimport, Static Mesh and Texture settings, materials, Niagara graph audit and approved writes, UMG, and event-handler verification |
+| Scene | 98 | Actors, PIE runtime, trusted input/waits/capture, viewport debug-view evidence, World Partition, Data Layers, HLOD, PCG, rendering diagnostics, Landscape/Water |
+| Content | 100 | Asset query/dependency/audit, safe import/reimport, Static Mesh and Texture settings, materials, Niagara graph audit and approved writes, UMG, and event-handler verification |
 | Animation | 19 | Animation Blueprint, state machine, and BlendSpace authoring, inspection, validation, and diff |
 | AI | 17 | Behavior Tree and Blackboard authoring, inspection, references, validation, and diff |
 | Production | 110 | Durable jobs, Recipe/SAL, lease coordination, performance suites, recovery, Editor/Development Trace, offline project and asset queries, the restricted Runtime Bridge, tests, cook/package, source control, DDC, and Epic BuildGraph |

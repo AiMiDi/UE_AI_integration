@@ -77,6 +77,8 @@ namespace UEAIIntegrationTools
 	void RegisterNiagaraCollisionProjectAuditTools(FMCPToolRegistry& Registry);
 	void RegisterNiagaraGraphAdvancedTools(FMCPToolRegistry& Registry);
 	void RegisterNiagaraGraphModuleTools(FMCPToolRegistry& Registry);
+	void RegisterNiagaraRuntimeTools(FMCPToolRegistry& Registry,
+		UEAIIntegration::Infrastructure::FPIESessionController& Controller);
 	void RegisterUITools(FMCPToolRegistry& Registry);
 	void RegisterBuildTools(FMCPToolRegistry& Registry);
 	void RegisterProductionRuntimeTools(
@@ -166,6 +168,7 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	UEAIIntegrationTools::RegisterNiagaraCollisionProjectAuditTools(*Registry);
 	UEAIIntegrationTools::RegisterNiagaraGraphAdvancedTools(*Registry);
 	UEAIIntegrationTools::RegisterNiagaraGraphModuleTools(*Registry);
+	UEAIIntegrationTools::RegisterNiagaraRuntimeTools(*Registry, *PIEController);
 	UEAIIntegrationTools::RegisterUITools(*Registry);
 	Registry->EndDomainRegistration();
 
