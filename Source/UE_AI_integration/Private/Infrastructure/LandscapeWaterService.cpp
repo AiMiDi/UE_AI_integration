@@ -1618,13 +1618,21 @@ AActor* SpawnManagedWater(
 	// actor class as the non-null placement context and invoke the factory
 	// directly on the current level so its Water-specific PostSpawnActor setup
 	// still runs.
+	#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION <= 4
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.ObjectFlags |= RF_Transactional;
+	#endif
 	AActor* Actor =
 		Level && ActorClass
 			? Factory->CreateActor(
 				ActorClass,
 				Level,
 				Transform,
+				#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION <= 4
+				SpawnParameters)
+				#else
 				RF_Transactional)
+				#endif
 			: nullptr;
 	if (!Actor)
 	{

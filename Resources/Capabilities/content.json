@@ -1305,6 +1305,1937 @@
       }
     },
     {
+      "id": "content.niagara.graph.inspect",
+      "domain": "content",
+      "kind": "query",
+      "description": "Inspect loaded Niagara System, emitter, graph, and node paths including function-call enabled states, collision operation names, inventory-only helper/event/PBD/Neighbor operations, and RigidMeshCollisionQuery/PhysicsAsset provider kinds.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara System object or package path"
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional emitter handle name or object path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional graph name or canonical object path"
+          },
+          "includeDisabled": {
+            "type": "boolean",
+            "description": "Include disabled nodes (default true)"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4096,
+            "description": "Maximum flattened nodes returned (default 2048)"
+          }
+        },
+        "required": [
+          "system"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "search": {
+        "keywords": [
+          "niagara graph inspect",
+          "rigid mesh collision query",
+          "physics asset",
+          "async gpu trace",
+          "analytical collision",
+          "collision support",
+          "collision operation inventory",
+          "neighbor collision support"
+        ],
+        "aliases": [
+          "GetClosestPointMeshDistanceField",
+          "CalculateA_VolumeTexturesDistanceFieldGradient",
+          "QueryMeshDistanceFieldGPU",
+          "FindNearestDistanceFieldSurface_GPU",
+          "FindNearestDistanceFieldSurface",
+          "CalculateTheGlobalDistanceFieldSurfaceNormal",
+          "GetProjectionPoint",
+          "MoveToNearestDistanceFieldSurface_GPU",
+          "CreateAsyncRayTraceGpu",
+          "ReadAsyncRayTraceGpu",
+          "AsyncGpuTrace",
+          "AnalyticalCollisionQuery",
+          "PlaneSphereCollisionDetection",
+          "AddRotationalVelocity",
+          "CalculateLinePlaneInt",
+          "DebugCollisionEvents",
+          "FindTangentialVelocityOnSphere",
+          "InitialRotationalVelocity",
+          "InitializeNeighborGrid",
+          "PBD_IntraParticleCollision",
+          "PopulateNeighborGrid",
+          "GenerateCollisionEvent",
+          "ReceiveCollisionEvent",
+          "CalculateNeighbors",
+          "SampleNeighbors",
+          "NeighborBehaviours",
+          "NeighborBehaviors",
+          "RandomizeCollisionNormals",
+          "SetupRigidBodyDI",
+          "RayTrace"
+        ]
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "niagaraSystem"
+        ],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.inspect"
+      }
+    },
+    {
+      "id": "content.niagara.graph.collision.audit",
+      "domain": "content",
+      "kind": "query",
+      "description": "Audit Niagara graphs for ordinary CollisionQuery, Distance Field, Async GPU Trace, RigidMeshCollisionQuery, and PhysicsAsset nodes; return the complete bounded operation inventory, including inventory-only helper/event/PBD/Neighbor operations, with provider kinds and ray-tracing/distance-field state. An optional exact operation selector filters nodes and locations (for example MoveToNearestDistanceFieldSurface_GPU or CollisionQuery).",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara System object or package path"
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional emitter handle name or object path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional graph name or canonical object path"
+          },
+          "includeDisabled": {
+            "type": "boolean",
+            "description": "Include disabled nodes (default true)"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4096,
+            "description": "Maximum classified nodes returned (default 2048)"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Optional exact Niagara collision operation selector; matching is case-insensitive and trims surrounding whitespace. Examples: MoveToNearestDistanceFieldSurface_GPU, CollisionQuery, CalculateNeighbors."
+          }
+        },
+        "required": [
+          "system"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "search": {
+        "keywords": [
+          "niagara collision audit",
+          "rigid mesh collision query",
+          "physics asset",
+          "distance field operation",
+          "async gpu trace",
+          "analytical collision",
+          "collision support",
+          "collision operation inventory",
+          "neighbor collision support",
+          "collision operation selector"
+        ],
+        "aliases": [
+          "MoveToNearestDistanceFieldSurface_GPU",
+          "QueryMeshDistanceFieldGPU",
+          "FindNearestDistanceFieldSurface_GPU",
+          "FindNearestDistanceFieldSurface",
+          "CalculateTheGlobalDistanceFieldSurfaceNormal",
+          "CalculateA_VolumeTexturesDistanceFieldGradient",
+          "GetClosestPointMeshDistanceFieldAccurate",
+          "GetRestDistance",
+          "GetProjectionPoint",
+          "CreateAsyncRayTraceGpu",
+          "ReadAsyncRayTraceGpu",
+          "AsyncGpuTrace",
+          "AnalyticalCollisionQuery",
+          "PlaneSphereCollisionDetection",
+          "AddRotationalVelocity",
+          "CalculateLinePlaneInt",
+          "DebugCollisionEvents",
+          "FindTangentialVelocityOnSphere",
+          "InitialRotationalVelocity",
+          "InitializeNeighborGrid",
+          "PBD_IntraParticleCollision",
+          "PopulateNeighborGrid",
+          "GenerateCollisionEvent",
+          "ReceiveCollisionEvent",
+          "CollisionQuery",
+          "CollisionQueryAndResponse",
+          "CalculateNeighbors",
+          "SampleNeighbors",
+          "NeighborBehaviours",
+          "NeighborBehaviors",
+          "RandomizeCollisionNormals",
+          "SetupRigidBodyDI",
+          "RayTrace"
+        ]
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "niagaraSystem"
+        ],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+      "canonicalId": "content.niagara.graph.collision.audit"
+      }
+    },
+    {
+      "id": "content.niagara.collision.audit_project",
+      "domain": "content",
+      "kind": "query",
+      "description": "Scan project Niagara Systems with AssetRegistry and return a bounded collision operation inventory across system, emitter, and referenced graphs, including ordinary CollisionQuery and Distance Field operations such as MoveToNearestDistanceFieldSurface_GPU with node locations.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "packagePath": {
+            "type": "string",
+            "description": "Optional project content path under /Game (default /Game)"
+          },
+          "filter": {
+            "type": "string",
+            "description": "Optional case-insensitive asset name or object path substring"
+          },
+          "emitter": {
+            "type": "string",
+            "description": "Optional emitter handle name or object path applied to every System"
+          },
+          "graph": {
+            "type": "string",
+            "description": "Optional graph name or object path applied to every System"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Optional exact collision operation selector, for example CollisionQuery or MoveToNearestDistanceFieldSurface_GPU"
+          },
+          "includeDisabled": {
+            "type": "boolean",
+            "description": "Include disabled nodes and data-interface owners (default true)"
+          },
+          "waitForAssetRegistry": {
+            "type": "boolean",
+            "description": "Wait for AssetRegistry discovery to finish before scanning (default true)"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 512,
+            "description": "Maximum Niagara Systems to load and scan (default 128)"
+          },
+          "graphLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 512,
+            "description": "Maximum matching graph details returned per System (default 64)"
+          },
+          "detailLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4096,
+            "description": "Maximum node/location details retained per graph and operation inventory (default 256)"
+          },
+          "afterSystem": {
+            "type": "string",
+            "description": "Optional exclusive System object-path cursor from nextAfterSystem. Keep filters unchanged when paging. Counts and operation inventory describe the current page; hasMore indicates another page. Each page reads the current AssetRegistry, not a frozen snapshot."
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "search": {
+        "keywords": [
+          "project niagara collision audit",
+          "niagara system collision inventory",
+          "asset registry niagara scan",
+          "distance field operation locations",
+          "ordinary collision query locations"
+        ],
+        "aliases": [
+          "content.niagara.collision.audit_project",
+          "NiagaraProjectCollisionAudit",
+          "MoveToNearestDistanceFieldSurface_GPU",
+          "QueryMeshDistanceFieldGPU",
+          "FindNearestDistanceFieldSurface_GPU",
+          "CollisionQuery",
+          "CollisionQueryAndResponse",
+          "PerformCollisionQuerySyncCPU",
+          "PerformCollisionQueryAsyncCPU",
+          "CreateAsyncRayTraceGpu",
+          "ReadAsyncRayTraceGpu",
+          "AsyncGpuTrace"
+        ]
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "project"
+        ],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.collision.audit_project"
+      }
+    },
+    {
+      "id": "content.niagara.graph.collision.policy.plan",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Plan a Niagara collision provider policy for ordinary CollisionQuery, Distance Field, and Async GPU Trace function nodes; report RigidMeshCollisionQuery and PhysicsAsset operations without treating them as legacy ordinary CollisionQuery.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara System object or package path"
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional emitter handle name or object path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional graph name or canonical object path"
+          },
+          "policy": {
+            "type": "string",
+            "enum": [
+              "hardwareRayTracing",
+              "distanceField",
+              "hybrid"
+            ],
+            "description": "Collision provider policy"
+          },
+          "includeDisabled": {
+            "type": "boolean",
+            "description": "Include currently disabled provider nodes (default true)"
+          },
+          "allowMissingAsyncTrace": {
+            "type": "boolean",
+            "description": "Explicitly allow a hardwareRayTracing plan with no editable Async GPU Trace"
+          },
+          "allowDefaultProviderFallback": {
+            "type": "boolean",
+            "description": "Explicitly allow Project Default Async GPU Trace to fall back from HWRT to GSDF"
+          },
+          "allowUnmanagedOrdinaryCollisionQuery": {
+            "type": "boolean",
+            "description": "Explicitly allow enabled ordinary CollisionQuery nodes in read-only/shared graphs to remain enabled under hardwareRayTracing"
+          },
+          "allowUnmanagedDistanceField": {
+            "type": "boolean",
+            "description": "Explicitly allow enabled Distance Field nodes in read-only/shared graphs to remain enabled under hardwareRayTracing"
+          },
+          "persistence": {
+            "type": "string",
+            "enum": [
+              "dirtyOnly"
+            ],
+            "description": "Keep the package dirty for explicit editor/source-control save"
+          }
+        },
+        "required": [
+          "system",
+          "policy"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.collision.policy.plan"
+      }
+    },
+    {
+      "id": "content.niagara.graph.collision.policy.apply",
+      "domain": "content",
+      "kind": "command",
+      "description": "Apply an approved Niagara collision provider policy for ordinary CollisionQuery, Distance Field, and Async GPU Trace nodes with transaction, compilation, and read-back verification; RigidMeshCollisionQuery and PhysicsAsset inventory remains read-only.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara System object or package path"
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional emitter handle name or object path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional graph name or canonical object path"
+          },
+          "policy": {
+            "type": "string",
+            "enum": [
+              "hardwareRayTracing",
+              "distanceField",
+              "hybrid"
+            ],
+            "description": "Collision provider policy"
+          },
+          "includeDisabled": {
+            "type": "boolean",
+            "description": "Include currently disabled provider nodes (default true)"
+          },
+          "allowMissingAsyncTrace": {
+            "type": "boolean",
+            "description": "Explicitly allow a hardwareRayTracing plan with no editable Async GPU Trace"
+          },
+          "allowDefaultProviderFallback": {
+            "type": "boolean",
+            "description": "Explicitly allow Project Default Async GPU Trace to fall back from HWRT to GSDF"
+          },
+          "allowUnmanagedOrdinaryCollisionQuery": {
+            "type": "boolean",
+            "description": "Explicitly allow enabled ordinary CollisionQuery nodes in read-only/shared graphs to remain enabled under hardwareRayTracing"
+          },
+          "allowUnmanagedDistanceField": {
+            "type": "boolean",
+            "description": "Explicitly allow enabled Distance Field nodes in read-only/shared graphs to remain enabled under hardwareRayTracing"
+          },
+          "persistence": {
+            "type": "string",
+            "enum": [
+              "dirtyOnly"
+            ],
+            "description": "Keep the package dirty for explicit editor/source-control save"
+          },
+          "approvePlanDigest": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "Exact digest returned by the plan capability"
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit write confirmation"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Idempotent request identifier"
+          }
+        },
+        "required": [
+          "system",
+          "policy",
+          "approvePlanDigest",
+          "confirmWrite",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "niagaraSystem"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.collision.policy.apply"
+      }
+    },
+    {
+      "id": "content.niagara.graph.collision.policy.rollback",
+      "domain": "content",
+      "kind": "command",
+      "description": "Rollback a Niagara collision provider policy mutation in the same Editor instance.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "rollbackId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Receipt ID returned by the apply capability"
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit rollback confirmation"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Request identifier matching the original apply"
+          }
+        },
+        "required": [
+          "rollbackId",
+          "confirmWrite",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "niagaraSystem"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.collision.policy.rollback"
+      }
+    },
+    {
+      "id": "content.niagara.graph.async_trace.configure.plan",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Plan Async GPU Trace data-interface settings for a Niagara System.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara System object or package path"
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional emitter handle name or object path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional graph name or canonical object path"
+          },
+          "inputNodePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional AsyncGpuTrace input node path or name"
+          },
+          "inputNodeGuid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional AsyncGpuTrace input node GUID"
+          },
+          "dataInterfacePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional AsyncGpuTrace data-interface path or name"
+          },
+          "inputName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional Niagara input name"
+          },
+          "traceProvider": {
+            "type": "string",
+            "enum": [
+              "Default",
+              "HWRT",
+              "GSDF",
+              "None"
+            ],
+            "description": "Optional Async GPU Trace provider"
+          },
+          "maxTracesPerParticle": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 64,
+            "description": "Optional maximum traces per particle"
+          },
+          "maxRetraces": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32,
+            "description": "Optional collision retrace count"
+          },
+          "allowReadOnlyTargets": {
+            "type": "boolean",
+            "description": "Allow a mixed-scope request to skip read-only/shared targets"
+          },
+          "persistence": {
+            "type": "string",
+            "enum": [
+              "dirtyOnly"
+            ],
+            "description": "Keep the package dirty for explicit editor/source-control save"
+          }
+        },
+        "required": [
+          "system"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.async_trace.configure.plan"
+      }
+    },
+    {
+      "id": "content.niagara.graph.async_trace.configure.apply",
+      "domain": "content",
+      "kind": "command",
+      "description": "Apply approved Async GPU Trace data-interface settings with compile and read-back verification.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara System object or package path"
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional emitter handle name or object path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional graph name or canonical object path"
+          },
+          "inputNodePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional AsyncGpuTrace input node path or name"
+          },
+          "inputNodeGuid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional AsyncGpuTrace input node GUID"
+          },
+          "dataInterfacePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional AsyncGpuTrace data-interface path or name"
+          },
+          "inputName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional Niagara input name"
+          },
+          "traceProvider": {
+            "type": "string",
+            "enum": [
+              "Default",
+              "HWRT",
+              "GSDF",
+              "None"
+            ],
+            "description": "Optional Async GPU Trace provider"
+          },
+          "maxTracesPerParticle": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 64,
+            "description": "Optional maximum traces per particle"
+          },
+          "maxRetraces": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32,
+            "description": "Optional collision retrace count"
+          },
+          "allowReadOnlyTargets": {
+            "type": "boolean",
+            "description": "Allow a mixed-scope request to skip read-only/shared targets"
+          },
+          "persistence": {
+            "type": "string",
+            "enum": [
+              "dirtyOnly"
+            ],
+            "description": "Keep the package dirty for explicit editor/source-control save"
+          },
+          "approvePlanDigest": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "Exact digest returned by the plan capability"
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit write confirmation"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Idempotent request identifier"
+          }
+        },
+        "required": [
+          "system",
+          "approvePlanDigest",
+          "confirmWrite",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "niagaraSystem"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.async_trace.configure.apply"
+      }
+    },
+    {
+      "id": "content.niagara.graph.async_trace.configure.rollback",
+      "domain": "content",
+      "kind": "command",
+      "description": "Rollback an Async GPU Trace configuration receipt in the same Editor instance.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "rollbackId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Receipt ID returned by the apply capability"
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit rollback confirmation"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Request identifier matching the original apply"
+          }
+        },
+        "required": [
+          "rollbackId",
+          "confirmWrite",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "niagaraSystem"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.async_trace.configure.rollback"
+      }
+    },
+    {
+      "id": "content.niagara.graph.module.add.plan",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Plan adding a Niagara Module script to an emitter stack graph.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara System object or package path"
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Required emitter handle name or object path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional graph name or canonical object path"
+          },
+          "moduleScript": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara Module script object or package path"
+          },
+          "insertBeforeNodePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional existing stack module name or object path"
+          },
+          "targetIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 256,
+            "description": "Optional zero-based stack module insertion index"
+          },
+          "suggestedName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional display name suggested for the new node"
+          },
+          "outputNodePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional canonical output node path. Required to distinguish Spawn, Update, Event or Simulation Stage outputs sharing one graph; ambiguous selection reports candidate output paths."
+          }
+        },
+        "required": [
+          "system",
+          "emitter",
+          "moduleScript"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.module.add.plan"
+      }
+    },
+    {
+      "id": "content.niagara.graph.module.add.apply",
+      "domain": "content",
+      "kind": "command",
+      "description": "Add an approved Niagara Module script to an emitter stack graph with compile and read-back verification.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara System object or package path"
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Required emitter handle name or object path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional graph name or canonical object path"
+          },
+          "moduleScript": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara Module script object or package path"
+          },
+          "insertBeforeNodePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional existing stack module name or object path"
+          },
+          "targetIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 256,
+            "description": "Optional zero-based stack module insertion index"
+          },
+          "suggestedName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional display name suggested for the new node"
+          },
+          "approvePlanDigest": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "Exact digest returned by the plan capability"
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit write confirmation"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Idempotent request identifier"
+          },
+          "outputNodePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional canonical output node path. Required to distinguish Spawn, Update, Event or Simulation Stage outputs sharing one graph; ambiguous selection reports candidate output paths."
+          }
+        },
+        "required": [
+          "system",
+          "emitter",
+          "moduleScript",
+          "approvePlanDigest",
+          "confirmWrite",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "niagaraSystem"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.module.add.apply"
+      }
+    },
+    {
+      "id": "content.niagara.graph.module.add.rollback",
+      "domain": "content",
+      "kind": "command",
+      "description": "Rollback a Niagara Module insertion receipt in the same Editor instance.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "rollbackId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Receipt ID returned by the apply capability"
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit rollback confirmation"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Request identifier matching the original apply"
+          }
+        },
+        "required": [
+          "rollbackId",
+          "confirmWrite",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "niagaraSystem"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.module.add.rollback"
+      }
+    },
+    {
+      "id": "content.niagara.graph.node.set_enabled.plan",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Plan a Niagara function-call node enabled-state change against the current graph ChangeID.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara System object or package path"
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional emitter handle name or object path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional graph name or canonical object path"
+          },
+          "nodePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Canonical Niagara node object path; mutually exclusive with nodeGuid"
+          },
+          "nodeGuid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara node GUID; mutually exclusive with nodePath"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Desired function-call node enabled state"
+          },
+          "mutationScope": {
+            "type": "string",
+            "enum": [
+              "node",
+              "module"
+            ],
+            "description": "Change only the selected function-call node, or the complete top-level Niagara stack module group (default node)"
+          },
+          "persistence": {
+            "type": "string",
+            "enum": [
+              "dirtyOnly"
+            ],
+            "description": "Keep the package dirty for explicit editor/source-control save"
+          }
+        },
+        "required": [
+          "system",
+          "enabled"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "nodePath"
+            ],
+            "not": {
+              "required": [
+                "nodeGuid"
+              ]
+            }
+          },
+          {
+            "required": [
+              "nodeGuid"
+            ],
+            "not": {
+              "required": [
+                "nodePath"
+              ]
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.node.set_enabled.plan"
+      }
+    },
+    {
+      "id": "content.niagara.graph.node.set_enabled.apply",
+      "domain": "content",
+      "kind": "command",
+      "description": "Apply an approved Niagara function-call node enabled-state plan with transaction and read-back verification.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara System object or package path"
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional emitter handle name or object path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional graph name or canonical object path"
+          },
+          "nodePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Canonical Niagara node object path; mutually exclusive with nodeGuid"
+          },
+          "nodeGuid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara node GUID; mutually exclusive with nodePath"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Desired function-call node enabled state"
+          },
+          "mutationScope": {
+            "type": "string",
+            "enum": [
+              "node",
+              "module"
+            ],
+            "description": "Change only the selected function-call node, or the complete top-level Niagara stack module group (default node)"
+          },
+          "persistence": {
+            "type": "string",
+            "enum": [
+              "dirtyOnly"
+            ],
+            "description": "Keep the package dirty for explicit editor/source-control save"
+          },
+          "approvePlanDigest": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "Exact digest returned by the plan capability"
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit write confirmation"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Idempotent request identifier"
+          }
+        },
+        "required": [
+          "system",
+          "enabled",
+          "approvePlanDigest",
+          "confirmWrite",
+          "requestId"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "nodePath"
+            ],
+            "not": {
+              "required": [
+                "nodeGuid"
+              ]
+            }
+          },
+          {
+            "required": [
+              "nodeGuid"
+            ],
+            "not": {
+              "required": [
+                "nodePath"
+              ]
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "niagaraSystem"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.node.set_enabled.apply"
+      }
+    },
+    {
+      "id": "content.niagara.graph.node.set_enabled.rollback",
+      "domain": "content",
+      "kind": "command",
+      "description": "Rollback a Niagara function-call node enabled-state mutation in the same Editor instance.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "rollbackId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Receipt ID returned by the apply capability"
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit rollback confirmation"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Request identifier matching the original apply"
+          }
+        },
+        "required": [
+          "rollbackId",
+          "confirmWrite",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "niagaraSystem"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.node.set_enabled.rollback"
+      }
+    },
+    {
+      "id": "content.niagara.graph.pin.set_default.plan",
+      "domain": "content",
+      "kind": "validation",
+      "description": "Plan a Niagara input-pin default-value change against the current graph ChangeID.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara System object or package path"
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional emitter handle name or object path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional graph name or canonical object path"
+          },
+          "nodePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Canonical Niagara node object path; mutually exclusive with nodeGuid"
+          },
+          "nodeGuid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara node GUID; mutually exclusive with nodePath"
+          },
+          "pinName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unlinked input pin name returned by graph.inspect"
+          },
+          "value": {
+            "type": "string",
+            "description": "Serialized Niagara pin value, for example 5, true, or (X=1,Y=2,Z=3)"
+          },
+          "persistence": {
+            "type": "string",
+            "enum": [
+              "dirtyOnly"
+            ],
+            "description": "Keep the package dirty for explicit editor/source-control save"
+          }
+        },
+        "required": [
+          "system",
+          "pinName",
+          "value"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "nodePath"
+            ],
+            "not": {
+              "required": [
+                "nodeGuid"
+              ]
+            }
+          },
+          {
+            "required": [
+              "nodeGuid"
+            ],
+            "not": {
+              "required": [
+                "nodePath"
+              ]
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.pin.set_default.plan"
+      }
+    },
+    {
+      "id": "content.niagara.graph.pin.set_default.apply",
+      "domain": "content",
+      "kind": "command",
+      "description": "Apply an approved Niagara input-pin default-value plan with compilation and read-back verification.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara System object or package path"
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional emitter handle name or object path"
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional graph name or canonical object path"
+          },
+          "nodePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Canonical Niagara node object path; mutually exclusive with nodeGuid"
+          },
+          "nodeGuid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Niagara node GUID; mutually exclusive with nodePath"
+          },
+          "pinName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unlinked input pin name returned by graph.inspect"
+          },
+          "value": {
+            "type": "string",
+            "description": "Serialized Niagara pin value, for example 5, true, or (X=1,Y=2,Z=3)"
+          },
+          "persistence": {
+            "type": "string",
+            "enum": [
+              "dirtyOnly"
+            ],
+            "description": "Keep the package dirty for explicit editor/source-control save"
+          },
+          "approvePlanDigest": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "Exact digest returned by the plan capability"
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit write confirmation"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Idempotent request identifier"
+          }
+        },
+        "required": [
+          "system",
+          "pinName",
+          "value",
+          "approvePlanDigest",
+          "confirmWrite",
+          "requestId"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "nodePath"
+            ],
+            "not": {
+              "required": [
+                "nodeGuid"
+              ]
+            }
+          },
+          {
+            "required": [
+              "nodeGuid"
+            ],
+            "not": {
+              "required": [
+                "nodePath"
+              ]
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "niagaraSystem"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.pin.set_default.apply"
+      }
+    },
+    {
+      "id": "content.niagara.graph.pin.set_default.rollback",
+      "domain": "content",
+      "kind": "command",
+      "description": "Rollback a Niagara input-pin default-value mutation in the same Editor instance.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "rollbackId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Receipt ID returned by the apply capability"
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit rollback confirmation"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Request identifier matching the original apply"
+          }
+        },
+        "required": [
+          "rollbackId",
+          "confirmWrite",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "niagaraSystem"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.niagara.graph.pin.set_default.rollback"
+      }
+    },
+    {
       "id": "content.niagara.actor.spawn",
       "domain": "content",
       "kind": "command",

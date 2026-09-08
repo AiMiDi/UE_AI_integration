@@ -15,9 +15,11 @@ but those versions have not all been compiled locally.
 
 ## Highlights
 
-- The current release snapshot contains 410 manifest-driven Editor, PIE,
+- The current release snapshot contains 428 manifest-driven Editor, PIE,
   Development, and local Trace capabilities; the service derives the count from
   the manifests at startup.
+- The Content domain includes Niagara graph inspection/collision audit and
+  plan/apply/rollback operations for node enabled states and input-pin defaults.
 - Twelve stable MCP tools instead of exposing every capability as a tool.
 - Six domain routers: Blueprint, Scene, Content, Animation, AI, and Production.
 - Dedicated PIE lifecycle, runtime object/widget/delegate, real input, and
@@ -114,7 +116,7 @@ manifests and does not infer categories from operation names.
 |---|---:|---|
 | Blueprint | 87 | Asset lifecycle, Graph geometry/layout/capture, declarative BuildGraph, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
 | Scene | 97 | Actors, PIE runtime, trusted input/waits/capture, viewport debug-view evidence, World Partition, Data Layers, HLOD, PCG, rendering diagnostics, Landscape/Water |
-| Content | 80 | Asset query/dependency/audit, safe import/reimport, Static Mesh and Texture settings, materials, Niagara, UMG, and event-handler verification |
+| Content | 98 | Asset query/dependency/audit, safe import/reimport, Static Mesh and Texture settings, materials, Niagara graph audit and approved writes, UMG, and event-handler verification |
 | Animation | 19 | Animation Blueprint, state machine, and BlendSpace authoring, inspection, validation, and diff |
 | AI | 17 | Behavior Tree and Blackboard authoring, inspection, references, validation, and diff |
 | Production | 110 | Durable jobs, Recipe/SAL, lease coordination, performance suites, recovery, Editor/Development Trace, offline project and asset queries, the restricted Runtime Bridge, tests, cook/package, source control, DDC, and Epic BuildGraph |

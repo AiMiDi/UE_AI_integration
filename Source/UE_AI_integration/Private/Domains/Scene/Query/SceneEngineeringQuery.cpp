@@ -317,7 +317,11 @@ public:
 					: TEXT("loaded"));
 			Item->SetBoolField(TEXT("blockOnSlowLoading"), Source.bBlockOnSlowLoading);
 			Item->SetBoolField(TEXT("remote"), Source.bRemote);
+			#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION <= 4
+			Item->SetArrayField(TEXT("velocity"), VectorJson(Source.Velocity));
+			#else
 			Item->SetNumberField(TEXT("velocity"), Source.Velocity);
+			#endif
 			Sources.Add(MakeShared<FJsonValueObject>(Item));
 		}
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();

@@ -74,9 +74,21 @@ if (process.argv.includes("--stdio")) {
       socket.end(Buffer.concat([header, response]));
     });
   });
+  const startupIdleMs = 2000;
+  const requestIdleMs = 2000;
   let idle;
-  const reset = () => { clearTimeout(idle); idle = setTimeout(() => server.close(), 50); };
-  server.on("connection", reset);
+  let accepted = false;
+  const reset = () => {
+    clearTimeout(idle);
+    // Child-process startup can be noticeably slower on Windows under load.
+    // Keep the endpoint alive long enough for the client to validate the
+    // contract and issue the next request, then let the fixture self-clean.
+    idle = setTimeout(
+      () => server.close(),
+      accepted ? requestIdleMs : startupIdleMs,
+    );
+  };
+  server.on("connection", () => { accepted = true; reset(); });
   server.listen(endpoint, reset);
 } else {
   process.exitCode = 2;
@@ -169,7 +181,7 @@ function fakeWorkerBundle(directory) {
     };
 }
 async function allowFakeServiceToExit() {
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 2_100));
 }
 function rewriteJson(path, mutate) {
     const value = JSON.parse(readFileSync(path, "utf8"));

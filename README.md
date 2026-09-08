@@ -12,9 +12,11 @@ stdio bridge，让 Codex CLI、Claude Code 等 MCP 客户端查询或修改 Blue
 
 ## 核心特性
 
-- 当前发布快照包含 410 项 manifest 驱动的 Editor、PIE、Development 与本地
+- 当前发布快照包含 428 项 manifest 驱动的 Editor、PIE、Development 与本地
   Trace 能力；
   服务启动时从 manifest 动态计算数量。
+- Content 领域包含 Niagara graph inspect/collision audit，以及节点启用状态和
+  输入 Pin 默认值的 plan/apply/rollback 能力。
 - 十二个稳定的 MCP 工具，不把全部能力直接展开成工具列表。
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
 - 专用 PIE 生命周期、Runtime 对象/Widget/Delegate/真实输入与 Scenario 能力。
@@ -97,7 +99,7 @@ Development Game Target ──► UEAITraceRuntime（非 Shipping，仅受约束
 |---|---:|---|
 | Blueprint | 87 | 资产生命周期、Graph 几何/排版/截图、声明式 BuildGraph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
 | Scene | 97 | Actor、PIE Runtime、可信输入/等待/截图、Viewport 调试视图证据、World Partition、Data Layer、HLOD、PCG、渲染诊断、Landscape/Water |
-| Content | 80 | 资产查询/依赖/审计、安全导入/重导入、Static Mesh/Texture 配置、Material、Niagara、UMG 与事件 Handler 验证 |
+| Content | 98 | 资产查询/依赖/审计、安全导入/重导入、Static Mesh/Texture 配置、Material、Niagara graph 审计与受审批写入、UMG 与事件 Handler 验证 |
 | Animation | 19 | AnimBlueprint、状态机与 BlendSpace 的创建、读取、校验和 Diff |
 | AI | 17 | Behavior Tree 与 Blackboard 的创建、读取、引用、校验和 Diff |
 | Production | 110 | Durable Job、Recipe/SAL、租约协调、性能标准 suite、恢复管理、Editor/Development Trace、离线工程与资产查询、受限 Runtime Bridge、测试、Cook/Package、Source Control、DDC、Epic BuildGraph |

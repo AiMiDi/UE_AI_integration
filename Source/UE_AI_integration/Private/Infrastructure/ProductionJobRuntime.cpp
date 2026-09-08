@@ -755,7 +755,11 @@ namespace ProductionJobRuntimePrivate
 				TraceServices::GetTimingProfilerProviderName());
 		if (TimingProvider && IntervalEnd > IntervalStart)
 		{
+			#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION <= 4
+			TraceServices::FCreateAggregationParams AggregationParams;
+			#else
 			TraceServices::FCreateAggreationParams AggregationParams;
+			#endif
 			AggregationParams.IntervalStart = IntervalStart;
 			AggregationParams.IntervalEnd = IntervalEnd;
 			AggregationParams.CpuThreadFilter =
@@ -763,7 +767,13 @@ namespace ProductionJobRuntimePrivate
 				{
 					return true;
 				};
+			#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION <= 4
+			AggregationParams.bIncludeOldGpu1 = true;
+			AggregationParams.bIncludeOldGpu2 = true;
+			AggregationParams.GpuQueueFilter = [](const uint32) { return true; };
+			#else
 			AggregationParams.IncludeGpu = true;
+			#endif
 			TUniquePtr<
 				TraceServices::ITable<
 					TraceServices::FTimingProfilerAggregatedStats>>
@@ -977,7 +987,11 @@ namespace ProductionJobRuntimePrivate
 				continue;
 			}
 
+			#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION <= 4
+			TraceServices::FCreateAggregationParams GroupParams;
+			#else
 			TraceServices::FCreateAggreationParams GroupParams;
+			#endif
 			GroupParams.IntervalStart = IntervalStart;
 			GroupParams.IntervalEnd = IntervalEnd;
 			const TArray<uint32> IncludedThreadIds = Group.ThreadIds;
@@ -986,7 +1000,16 @@ namespace ProductionJobRuntimePrivate
 				{
 					return IncludedThreadIds.Contains(ThreadId);
 				};
+			#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION <= 4
+			GroupParams.bIncludeOldGpu1 = Group.bIncludeGpu;
+			GroupParams.bIncludeOldGpu2 = Group.bIncludeGpu;
+			GroupParams.GpuQueueFilter = [bIncludeGpu = Group.bIncludeGpu](const uint32)
+			{
+				return bIncludeGpu;
+			};
+			#else
 			GroupParams.IncludeGpu = Group.bIncludeGpu;
+			#endif
 			TUniquePtr<
 				TraceServices::ITable<
 					TraceServices::FTimingProfilerAggregatedStats>>

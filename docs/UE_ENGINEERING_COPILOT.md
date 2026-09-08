@@ -285,3 +285,24 @@ Niagara、Water 与 PCG 是可选 feature pack。通用 `BuildPlugin` 默认不�
 `UEAI_OPTIONAL_FEATURES=Niagara,Water,PCG` 明确选择。未编译的能力仍可在目录中
 发现，但 `available=false`，执行时统一返回 `capability_unavailable`，不会进入
 缺失模块的 Handler。
+
+### Niagara 图操作补充
+
+- `content.niagara.graph.module.add.plan/apply` 可传 `outputNodePath`，使用
+  `graph.inspect` 中 Output 节点的完整路径。同一 Graph 的 Spawn、Update、Event
+  或 Simulation Stage 有多个 Output 时必须明确选择；歧义错误会列出候选 Output
+  路径。原有唯一目标请求保持兼容，apply 仍需重新计算并核对 plan digest。
+- `content.niagara.collision.audit_project` 返回 `hasMore` 和 `nextAfterSystem`。
+  下一页保持筛选条件不变，将 `nextAfterSystem` 传入 `afterSystem`；`limit` 控制每批
+  加载的 System 数。`summaryScope=page` 表示统计和 operation inventory 仅属于本页，
+  `candidateSystemCount` 仍是所有匹配候选的数量。每页读取当前 AssetRegistry，
+  不冻结资产快照；扫描期间新插入到游标之前的资产需要下一轮全量扫描覆盖。
+- 审计的 `targetContexts` 返回同一共享 Graph 的所有已发现上下文；旧的 Scope 字段
+  保留首个上下文。节点计数仍按每个 System 内的唯一 Graph 统计，不能当作运行时
+  调用次数或具体 Output 的执行可达性证明。`graphLimit/detailLimit` 是输出上限。
+- 修改失败后，仅当恢复读回及所需编译通过才报告已恢复。否则返回
+  `restore_verification_failed`，保留 Editor 撤销记录；显式 rollback 校验失败也保留
+  该事务。不要将这类错误视为“没有发生修改”。
+
+针对性 UE Automation：`UE_AI_integration.Niagara`，使用 transient 对象验证
+Output 选择、审计游标、共享图上下文和恢复目标丢失，不保存测试资产。

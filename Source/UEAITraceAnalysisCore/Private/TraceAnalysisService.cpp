@@ -7,6 +7,7 @@
 #include "Misc/EngineVersion.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
+#include "Runtime/Launch/Resources/Version.h"
 #include "Common/ProviderLock.h"
 #include "TraceServices/AnalysisService.h"
 #include "TraceServices/Containers/Tables.h"
@@ -1234,11 +1235,22 @@ bool QueryTiming(
 		TEXT("averageInclusiveMs"), TEXT("maxInclusiveMs"),
 		TEXT("totalExclusiveMs")};
 
+	#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION <= 4
+	TraceServices::FCreateAggregationParams Params;
+	#else
 	TraceServices::FCreateAggreationParams Params;
+	#endif
 	Params.IntervalStart = Range.Start;
 	Params.IntervalEnd = Range.End;
 	Params.CpuThreadFilter = [](const uint32) { return true; };
-	Params.IncludeGpu = OptionBool(Request, TEXT("includeGpu"), true);
+	const bool bIncludeGpu = OptionBool(Request, TEXT("includeGpu"), true);
+	#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION <= 4
+	Params.bIncludeOldGpu1 = bIncludeGpu;
+	Params.bIncludeOldGpu2 = bIncludeGpu;
+	Params.GpuQueueFilter = [bIncludeGpu](const uint32) { return bIncludeGpu; };
+	#else
+	Params.IncludeGpu = bIncludeGpu;
+	#endif
 	TUniquePtr<TraceServices::ITable<TraceServices::FTimingProfilerAggregatedStats>>
 		Table(Provider->CreateAggregation(Params));
 	if (!Table.IsValid())
@@ -1993,8 +2005,13 @@ bool CollectAllocations(
 					Row.Address = Allocation->GetAddress();
 					Row.Size = Allocation->GetSize();
 					Row.Alignment = Allocation->GetAlignment();
+					#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION <= 4
+					Row.ThreadId = Allocation->GetAllocThreadId();
+					Row.CallstackId = Allocation->GetAllocCallstackId();
+					#else
 					Row.ThreadId = Allocation->GetThreadId();
 					Row.CallstackId = Allocation->GetCallstackId();
+					#endif
 					Row.FreeCallstackId = Allocation->GetFreeCallstackId();
 					Row.TagId = Allocation->GetTag();
 					Row.Tag = Tag;

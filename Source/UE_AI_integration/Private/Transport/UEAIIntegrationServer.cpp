@@ -39,6 +39,12 @@
 #define UE_AI_SOURCE_REVISION "unknown"
 #endif
 
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION <= 4
+#define UEAI_HTTP_ROUTE_HANDLER(Lambda) FHttpRequestHandler::CreateLambda(Lambda)
+#else
+#define UEAI_HTTP_ROUTE_HANDLER(Lambda) Lambda
+#endif
+
 DEFINE_LOG_CATEGORY_STATIC(LogUEAIIntegrationServer, Log, All);
 
 namespace
@@ -533,7 +539,7 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 	const FHttpRouteHandle HealthRoute = Router->BindRoute(
 		FHttpPath(TEXT("/api/health")),
 		EHttpServerRequestVerbs::VERB_GET,
-		[this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
+		UEAI_HTTP_ROUTE_HANDLER([this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 		{
 			return HandleCallerObserved(
 				Request,
@@ -542,7 +548,7 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 				{
 					return HandleHealth(Request, ObservedComplete);
 				});
-		});
+		}));
 	if (!HealthRoute.IsValid())
 	{
 		UE_LOG(LogUEAIIntegrationServer, Error, TEXT("Failed to bind /api/health."));
@@ -554,7 +560,7 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 	const FHttpRouteHandle CapabilitiesRoute = Router->BindRoute(
 		FHttpPath(TEXT("/api/capabilities")),
 		EHttpServerRequestVerbs::VERB_GET,
-		[this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
+		UEAI_HTTP_ROUTE_HANDLER([this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 		{
 			return HandleCallerObserved(
 				Request,
@@ -563,7 +569,7 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 				{
 					return HandleCapabilities(Request, ObservedComplete);
 				});
-		});
+		}));
 	if (!CapabilitiesRoute.IsValid())
 	{
 		UE_LOG(LogUEAIIntegrationServer, Error, TEXT("Failed to bind /api/capabilities."));
@@ -576,10 +582,10 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 	const FHttpRouteHandle ExecuteRoute = Router->BindRoute(
 		FHttpPath(TEXT("/api/execute")),
 		EHttpServerRequestVerbs::VERB_POST,
-		[this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
+		UEAI_HTTP_ROUTE_HANDLER([this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 		{
 			return HandleExecute(Request, OnComplete);
-		});
+		}));
 	if (!ExecuteRoute.IsValid())
 	{
 		UE_LOG(LogUEAIIntegrationServer, Error, TEXT("Failed to bind /api/execute."));
@@ -592,12 +598,12 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 	const FHttpRouteHandle CancelExecuteRoute = Router->BindRoute(
 		FHttpPath(TEXT("/api/execute/cancel")),
 		EHttpServerRequestVerbs::VERB_POST,
-		[this](
+		UEAI_HTTP_ROUTE_HANDLER([this](
 			const FHttpServerRequest& Request,
 			const FHttpResultCallback& OnComplete)
 		{
 			return HandleExecuteCancel(Request, OnComplete);
-		});
+		}));
 	if (!CancelExecuteRoute.IsValid())
 	{
 		UE_LOG(
@@ -613,10 +619,10 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 	const FHttpRouteHandle WorkflowHandshakeRoute = Router->BindRoute(
 		FHttpPath(TEXT("/api/v1/workflow/handshake")),
 		EHttpServerRequestVerbs::VERB_GET,
-		[this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
+		UEAI_HTTP_ROUTE_HANDLER([this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 		{
 			return HandleWorkflowHandshake(Request, OnComplete);
-		});
+		}));
 	if (!WorkflowHandshakeRoute.IsValid())
 	{
 		UE_LOG(
@@ -632,10 +638,10 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 	const FHttpRouteHandle WorkflowRoute = Router->BindRoute(
 		FHttpPath(TEXT("/api/v1/workflow")),
 		EHttpServerRequestVerbs::VERB_POST,
-		[this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
+		UEAI_HTTP_ROUTE_HANDLER([this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
 		{
 			return HandleWorkflow(Request, OnComplete);
-		});
+		}));
 	if (!WorkflowRoute.IsValid())
 	{
 		UE_LOG(
@@ -651,12 +657,12 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 	const FHttpRouteHandle RegisterClientRoute = Router->BindRoute(
 		FHttpPath(TEXT("/api/v1/clients/register")),
 		EHttpServerRequestVerbs::VERB_POST,
-		[this](
+		UEAI_HTTP_ROUTE_HANDLER([this](
 			const FHttpServerRequest& Request,
 			const FHttpResultCallback& OnComplete)
 		{
 			return HandleClientRegister(Request, OnComplete);
-		});
+		}));
 	if (!RegisterClientRoute.IsValid())
 	{
 		UE_LOG(
@@ -672,12 +678,12 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 	const FHttpRouteHandle HeartbeatClientRoute = Router->BindRoute(
 		FHttpPath(TEXT("/api/v1/clients/heartbeat")),
 		EHttpServerRequestVerbs::VERB_POST,
-		[this](
+		UEAI_HTTP_ROUTE_HANDLER([this](
 			const FHttpServerRequest& Request,
 			const FHttpResultCallback& OnComplete)
 		{
 			return HandleClientHeartbeat(Request, OnComplete);
-		});
+		}));
 	if (!HeartbeatClientRoute.IsValid())
 	{
 		UE_LOG(
@@ -693,12 +699,12 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 	const FHttpRouteHandle UnregisterClientRoute = Router->BindRoute(
 		FHttpPath(TEXT("/api/v1/clients/unregister")),
 		EHttpServerRequestVerbs::VERB_POST,
-		[this](
+		UEAI_HTTP_ROUTE_HANDLER([this](
 			const FHttpServerRequest& Request,
 			const FHttpResultCallback& OnComplete)
 		{
 			return HandleClientUnregister(Request, OnComplete);
-		});
+		}));
 	if (!UnregisterClientRoute.IsValid())
 	{
 		UE_LOG(
