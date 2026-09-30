@@ -213,6 +213,203 @@ function listFilesRecursive(directory, predicate) {
   return results.sort((a, b) => a.localeCompare(b));
 }
 
+function maskCppComments(source) {
+  const output = [...source];
+  let state = "normal";
+  let escaped = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const current = source[index];
+    const next = source[index + 1];
+    if (state === "lineComment") {
+      if (current === "\n" || current === "\r") {
+        state = "normal";
+      } else {
+        output[index] = " ";
+      }
+      continue;
+    }
+    if (state === "blockComment") {
+      if (current === "*" && next === "/") {
+        output[index] = " ";
+        output[index + 1] = " ";
+        index += 1;
+        state = "normal";
+      } else if (current !== "\n" && current !== "\r") {
+        output[index] = " ";
+      }
+      continue;
+    }
+    if (state === "string" || state === "char") {
+      if (escaped) {
+        escaped = false;
+      } else if (current === "\\") {
+        escaped = true;
+      } else if ((state === "string" && current === '"') ||
+                 (state === "char" && current === "'")) {
+        state = "normal";
+      }
+      continue;
+    }
+    if (current === "/" && next === "/") {
+      output[index] = " ";
+      output[index + 1] = " ";
+      index += 1;
+      state = "lineComment";
+    } else if (current === "/" && next === "*") {
+      output[index] = " ";
+      output[index + 1] = " ";
+      index += 1;
+      state = "blockComment";
+    } else if (current === '"') {
+      state = "string";
+    } else if (current === "'") {
+      state = "char";
+    }
+  }
+  return output.join("");
+}
+
+function getLineNumber(source, offset) {
+  return source.slice(0, offset).split("\n").length;
+}
+
+function shortTypeName(typeName) {
+  const parts = typeName.split("::");
+  return parts[parts.length - 1].trim();
+}
+
+function collectStaticRegistrations(source, relativePath) {
+  const scanSource = maskCppComments(source);
+  const classDeclarations = [
+    ...scanSource.matchAll(
+      /\bclass\s+([A-Za-z_]\w*)\s*(?:final\s*)?(?:\:[^{;]*)?\{/g
+    ),
+  ].map((match) => ({ name: match[1], offset: match.index }));
+  const classIds = new Map();
+  const capabilityMethods = [
+    ...scanSource.matchAll(
+      /FString\s+GetCapabilityId\s*\(\)\s*const\s+override\s*\{([\s\S]{0,240}?)\}/g
+    ),
+  ];
+  for (const method of capabilityMethods) {
+    const declaration = [...classDeclarations]
+      .reverse()
+      .find(({ offset }) => offset < method.index);
+    const id = method[1].match(/return\s+TEXT\("([^"]+)"\)/)?.[1];
+    if (!declaration || !id) continue;
+    const previous = classIds.get(declaration.name);
+    if (previous && previous.id !== id) {
+      fail(
+        `${relativePath}:${getLineNumber(source, method.index)} class ${declaration.name} declares multiple static capability IDs (${previous.id}, ${id}). ` +
+          "Next action: keep one canonical GetCapabilityId() per registered tool."
+      );
+      continue;
+    }
+    classIds.set(declaration.name, {
+      id,
+      line: getLineNumber(source, method.index),
+    });
+  }
+
+  const registrations = [];
+  const unresolved = [];
+  const preprocessorDirectives = [
+    ...scanSource.matchAll(
+      /^[ \t]*#[ \t]*(if|ifdef|ifndef|elif|else|endif)\b[^\r\n]*/gm
+    ),
+  ];
+  const preprocessorFrames = [];
+  let directiveIndex = 0;
+  let nextPreprocessorGroup = 0;
+  const contextAt = (offset) => {
+    while (
+      directiveIndex < preprocessorDirectives.length &&
+      preprocessorDirectives[directiveIndex].index < offset
+    ) {
+      const directive = preprocessorDirectives[directiveIndex];
+      const kind = directive[1];
+      if (kind === "if" || kind === "ifdef" || kind === "ifndef") {
+        preprocessorFrames.push({
+          group: nextPreprocessorGroup++,
+          branch: kind,
+        });
+      } else if (kind === "elif" || kind === "else") {
+        const frame = preprocessorFrames[preprocessorFrames.length - 1];
+        if (frame) frame.branch = kind;
+      } else if (kind === "endif") {
+        preprocessorFrames.pop();
+      }
+      directiveIndex += 1;
+    }
+    return preprocessorFrames.map((frame) => ({ ...frame }));
+  };
+  for (const registration of scanSource.matchAll(
+    /Registry\.Register\s*\(\s*MakeShared\s*<\s*([A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)\s*>\s*\(/g
+  )) {
+    const typeName = registration[1];
+    const className = shortTypeName(typeName);
+    const classInfo = classIds.get(className);
+    const entry = {
+      id: classInfo?.id,
+      className,
+      typeName,
+      path: relativePath,
+      line: getLineNumber(source, registration.index),
+      preprocessorContext: contextAt(registration.index),
+    };
+    if (entry.id) registrations.push(entry);
+    else unresolved.push(entry);
+  }
+  return {
+    registrations,
+    unresolved,
+    declared: [...classIds.entries()].map(([className, classInfo]) => ({
+      className,
+      id: classInfo.id,
+      path: relativePath,
+      line: classInfo.line,
+    })),
+  };
+}
+
+function areMutuallyExclusive(first, second) {
+  if (first.path !== second.path) return false;
+  for (const firstFrame of first.preprocessorContext ?? []) {
+    const secondFrame = (second.preprocessorContext ?? []).find(
+      (frame) => frame.group === firstFrame.group
+    );
+    if (secondFrame && secondFrame.branch !== firstFrame.branch) return true;
+  }
+  return false;
+}
+
+function findDuplicateRegistrationIds(registrations) {
+  const byId = new Map();
+  for (const registration of registrations) {
+    const entries = byId.get(registration.id) ?? [];
+    entries.push(registration);
+    byId.set(registration.id, entries);
+  }
+  return [...byId.entries()]
+    .filter(([, entries]) =>
+      entries.some((entry, index) =>
+        entries.slice(index + 1).some(
+          (other) => !areMutuallyExclusive(entry, other)
+        )
+      )
+    )
+    .map(([id]) => id);
+}
+
+function findUnregisteredStaticTools(declared, registrations) {
+  const registeredKeys = new Set(
+    registrations.map((registration) => `${registration.path}\0${registration.id}`)
+  );
+  return declared.filter(
+    (tool) => !registeredKeys.has(`${tool.path}\0${tool.id}`)
+  );
+}
+
 const manifestIds = new Set();
 const manifestById = new Map();
 let manifestTotal = 0;
@@ -536,6 +733,9 @@ if (legacyHandlerFiles.length !== 0) {
 const handlerIds = new Set();
 let handlerIdTotal = 0;
 let registrationCount = 0;
+const staticRegistrations = [];
+const unresolvedRegistrations = [];
+const staticallyDeclaredTools = [];
 
 for (const handlerPath of handlerFiles) {
   const relativePath = path
@@ -557,6 +757,13 @@ for (const handlerPath of handlerFiles) {
   }
 
   const source = fs.readFileSync(handlerPath, "utf8");
+  const registrationAudit = collectStaticRegistrations(
+    source,
+    path.relative(projectRoot, handlerPath)
+  );
+  staticRegistrations.push(...registrationAudit.registrations);
+  unresolvedRegistrations.push(...registrationAudit.unresolved);
+  staticallyDeclaredTools.push(...registrationAudit.declared);
   const ids = [
     ...source.matchAll(
       /FString\s+GetCapabilityId\(\)\s+const\s+override\s*\{\s*return\s+TEXT\("([^"]+)"\)\s*;\s*\}/g
@@ -589,6 +796,34 @@ for (const handlerPath of handlerFiles) {
       `${path.relative(projectRoot, handlerPath)} still calls FMCPToolRegistry::Get()`
     );
   }
+}
+
+const registrationsById = new Map();
+for (const registration of staticRegistrations) {
+  const entries = registrationsById.get(registration.id) ?? [];
+  entries.push(registration);
+  registrationsById.set(registration.id, entries);
+}
+const duplicateRegistrationIds = findDuplicateRegistrationIds(staticRegistrations);
+for (const id of duplicateRegistrationIds) {
+  const entries = registrationsById.get(id);
+  const locations = entries
+    .map((entry) => `${entry.path}:${entry.line} (${entry.className})`)
+    .join(", ");
+  fail(
+    `Capability ${id} is statically registered ${entries.length} times: ${locations}. ` +
+      "Next action: remove the duplicate Registry.Register(MakeShared<...>) call or assign a distinct capability ID."
+  );
+}
+const unregisteredStaticTools = findUnregisteredStaticTools(
+  staticallyDeclaredTools,
+  staticRegistrations
+);
+for (const tool of unregisteredStaticTools) {
+  fail(
+    `${tool.path}:${tool.line} class ${tool.className} declares capability ${tool.id} but has no static Registry.Register(MakeShared<...>) call. ` +
+      "Next action: register the tool in its domain registrar or remove the unused handler."
+  );
 }
 
 const editorRequiredIds = new Set(
@@ -831,7 +1066,16 @@ console.log(
       handlers: handlerFiles.length,
       capabilities: manifestIds.size,
       domainCounts: actualDomainCounts,
-      kindCounts
+      kindCounts,
+      registrationAudit: {
+        staticRegistrations: staticRegistrations.length,
+        unresolvedRegistrations: unresolvedRegistrations.length,
+        registrationCandidates:
+          staticRegistrations.length + unresolvedRegistrations.length,
+        staticallyDeclaredTools: staticallyDeclaredTools.length,
+        unregisteredStaticTools: unregisteredStaticTools.length,
+        duplicateRegistrationIds,
+      }
     },
     null,
     2

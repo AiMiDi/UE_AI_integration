@@ -66,18 +66,7 @@ function resolveLocalCapabilities(catalog, args) {
             ? validateDomainOperation(catalog, args.domain, args.operation)
             : catalog.get(args.operation);
         if (!capability) {
-            const removed = catalog.removed(args.operation);
-            if (removed) {
-                throw new UEApiError({
-                    code: "capability_removed",
-                    message: `Capability "${args.operation}" was removed; use "${removed.replacement}".`,
-                    details: removed,
-                });
-            }
-            throw new UEApiError({
-                code: "capability_not_found",
-                message: `Unknown capability "${args.operation}"`,
-            });
+            throw createLocalCapabilityLookupError(catalog, args.operation);
         }
         const match = capabilityMatch(capability, args);
         return match === false
@@ -100,6 +89,55 @@ function resolveLocalCapabilities(catalog, args) {
             return right.match.score - left.match.score;
         }
         return compareCapabilityIds(left.capability.id, right.capability.id);
+    });
+}
+function createLocalCapabilityLookupError(catalog, operation) {
+    const removed = catalog.removed(operation);
+    if (removed) {
+        return new UEApiError({
+            code: "capability_removed",
+            message: `Capability "${operation}" was removed; use "${removed.replacement}".`,
+            details: {
+                ...removed,
+                nextAction: `Run ue-cli help ${removed.replacement} --json and retry with the canonical ID.`,
+                helpCommand: `ue-cli help ${removed.replacement} --json`,
+                safeToRetry: true,
+            },
+        });
+    }
+    const suggestions = [...new Set(CAPABILITY_DOMAINS.flatMap((domain) => {
+            try {
+                validateDomainOperation(catalog, domain, operation);
+                return [];
+            }
+            catch (error) {
+                if (!(error instanceof UEApiError) || error.code !== "capability_not_found") {
+                    return [];
+                }
+                const details = error.details;
+                return Array.isArray(details?.suggestions)
+                    ? details.suggestions.filter((value) => typeof value === "string")
+                    : [];
+            }
+        }))].slice(0, 3);
+    const discoveryCommand = "ue-cli capabilities --json";
+    return new UEApiError({
+        code: "capability_not_found",
+        message: suggestions.length === 0
+            ? `Unknown capability "${operation}"`
+            : `Unknown capability "${operation}". Did you mean ${suggestions
+                .map((candidate) => `"${candidate}"`)
+                .join(", ")}?`,
+        details: {
+            suggestions,
+            nextAction: suggestions.length === 0
+                ? `Run ${discoveryCommand} to discover the current ID.`
+                : `Run ue-cli help ${suggestions[0]} --json, then retry with the exact canonical ID.`,
+            helpCommand: suggestions.length === 0
+                ? discoveryCommand
+                : `ue-cli help ${suggestions[0]} --json`,
+            safeToRetry: true,
+        },
     });
 }
 function capabilityMatch(capability, args) {

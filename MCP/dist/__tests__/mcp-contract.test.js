@@ -282,6 +282,64 @@ test("pages and filters capability summaries without emitting schemas by default
     assert.equal(exactPayload.capabilities.length, 1);
     assert.ok(exactPayload.capabilities[0].inputSchema);
 });
+test("returns actionable local lookup details without a domain", async () => {
+    const catalog = loadCapabilityCatalog();
+    const response = await handleCapabilities(catalog, {
+        getHealth: async () => {
+            throw new Error("not expected");
+        },
+        getCapabilities: async () => {
+            throw new Error("not expected");
+        },
+        execute: async () => {
+            throw new Error("not expected");
+        },
+        workflow: async () => {
+            throw new Error("not expected");
+        },
+    }, { operation: "scene.level.sav" });
+    assert.equal(response.isError, true);
+    assert.equal(response.content[0]?.type, "text");
+    if (response.content[0]?.type !== "text") {
+        assert.fail("Expected capability lookup error as MCP text content");
+    }
+    const payload = JSON.parse(response.content[0].text);
+    assert.equal(payload.error.code, "capability_not_found");
+    assert.ok(payload.error.details.suggestions.includes("scene.level.save"));
+    assert.equal(payload.error.details.helpCommand, "ue-cli help scene.level.save --json");
+    assert.equal(payload.error.details.safeToRetry, true);
+});
+test("returns actionable tombstone details without a domain", async () => {
+    const catalog = loadCapabilityCatalog();
+    const tombstone = catalog.removed("blueprint.node.comment.set");
+    assert.ok(tombstone);
+    const response = await handleCapabilities(catalog, {
+        getHealth: async () => {
+            throw new Error("not expected");
+        },
+        getCapabilities: async () => {
+            throw new Error("not expected");
+        },
+        execute: async () => {
+            throw new Error("not expected");
+        },
+        workflow: async () => {
+            throw new Error("not expected");
+        },
+    }, { operation: "blueprint.node.comment.set" });
+    assert.equal(response.isError, true);
+    assert.equal(response.content[0]?.type, "text");
+    if (response.content[0]?.type !== "text") {
+        assert.fail("Expected removed capability error as MCP text content");
+    }
+    const payload = JSON.parse(response.content[0].text);
+    assert.deepEqual(payload.error.details, {
+        ...tombstone,
+        nextAction: `Run ue-cli help ${tombstone.replacement} --json and retry with the canonical ID.`,
+        helpCommand: `ue-cli help ${tombstone.replacement} --json`,
+        safeToRetry: true,
+    });
+});
 test("keeps ue_context directory-only by default and pages full schemas by domain", () => {
     const catalog = loadCapabilityCatalog();
     const directoryResponse = handleContext(catalog, {});
@@ -544,6 +602,43 @@ test("rejects a cross-domain dotted operation before HTTP execution", async () =
     assert.equal(response.content[0]?.type, "text");
     const payload = JSON.parse(response.content[0].text);
     assert.equal(payload.error.code, "cross_domain_operation");
+    assert.equal(payload.error.details.nextAction, `Call ue_scene with operation "${sceneOperation}".`);
+    assert.equal(payload.error.details.helpCommand, `ue-cli help ${sceneOperation} --json`);
+    assert.equal(payload.error.details.safeToRetry, true);
+});
+test("suggests the canonical capability and help command for a mistyped operation", async () => {
+    const catalog = loadCapabilityCatalog();
+    const response = await runDomainOperation(catalog, {
+        execute: async () => {
+            throw new Error("must not execute an unknown operation");
+        },
+    }, "scene", "scene.level.sav", {});
+    assert.equal(response.isError, true);
+    assert.equal(response.content[0]?.type, "text");
+    if (response.content[0]?.type !== "text") {
+        assert.fail("Expected unknown operation error as MCP text content");
+    }
+    const payload = JSON.parse(response.content[0].text);
+    assert.equal(payload.error.code, "capability_not_found");
+    assert.ok(payload.error.details.suggestions.includes("scene.level.save"));
+    assert.equal(payload.error.details.helpCommand, "ue-cli help scene.level.save --json");
+    assert.equal(payload.error.details.safeToRetry, true);
+});
+test("does not return unrelated suggestions for an unknown operation family", async () => {
+    const catalog = loadCapabilityCatalog();
+    const response = await runDomainOperation(catalog, {
+        execute: async () => {
+            throw new Error("must not execute an unknown operation");
+        },
+    }, "scene", "scene.level.zzz", {});
+    assert.equal(response.isError, true);
+    assert.equal(response.content[0]?.type, "text");
+    if (response.content[0]?.type !== "text") {
+        assert.fail("Expected unknown operation error as MCP text content");
+    }
+    const payload = JSON.parse(response.content[0].text);
+    assert.deepEqual(payload.error.details.suggestions, []);
+    assert.equal(payload.error.details.helpCommand, "ue-cli capabilities --domain scene --json");
 });
 test("routes dedicated PIE commands through the scene domain", async () => {
     const catalog = loadCapabilityCatalog();

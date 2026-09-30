@@ -471,9 +471,26 @@ def main() -> int:
                 check=check,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=timeout,
                 env=environment,
                 input=shell_input,
+            )
+
+        source_root = Path(__file__).resolve().parents[2]
+
+        def run_bundle(
+            arguments: list[str],
+            *,
+            check: bool = False,
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [args.cli, *arguments],
+                check=check,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=20.0,
             )
 
         try:
@@ -485,6 +502,89 @@ def main() -> int:
                 environment=environment,
             )
             assert json.loads(status.stdout)["data"]["status"] == "healthy"
+
+            local_probe = run_bundle(
+                [
+                    "mcp",
+                    "surface-status",
+                    "--bundle",
+                    str(source_root),
+                    "--endpoint",
+                    "http://127.0.0.1:1",
+                    "--json",
+                ],
+                check=True,
+            )
+            local_identity = json.loads(local_probe.stdout)["data"]["identity"]["local"]
+            workflow_identity = local_identity["workflow"]
+            health_identity.update(
+                {
+                    "state": "ready",
+                    "sourceRevision": local_identity["sourceRevision"],
+                    "pluginDescriptorVersion": local_identity["pluginDescriptorVersion"],
+                    "pluginCompiledVersion": local_identity["pluginDescriptorVersion"],
+                    "loadedModuleSha256": local_identity["loadedModuleSha256"],
+                    "capabilityCatalogDigest": local_identity["capabilityCatalogDigest"],
+                    "contractSetDigest": workflow_identity["contractSetDigest"],
+                    "contractSetDigestV2": workflow_identity["contractSetDigestV2"],
+                    "validationErrors": [],
+                }
+            )
+            surface_ready = run_bundle(
+                [
+                    "mcp",
+                    "surface-status",
+                    "--bundle",
+                    str(source_root),
+                    "--endpoint",
+                    endpoint,
+                    "--json",
+                ],
+                check=True,
+            )
+            ready_data = json.loads(surface_ready.stdout)["data"]
+            assert ready_data["readiness"]["status"] == "ready"
+            assert ready_data["readiness"]["safeToProceed"] is True
+            assert ready_data["readiness"]["identityIssues"] == []
+            assert ready_data["readiness"]["identityUnavailable"] == []
+            health_identity.clear()
+
+            surface_unreachable = run(
+                [
+                    "mcp",
+                    "surface-status",
+                    "--endpoint",
+                    "http://127.0.0.1:1",
+                    "--json",
+                ],
+                check=True,
+            )
+            unreachable_data = json.loads(surface_unreachable.stdout)["data"]
+            assert unreachable_data["readiness"]["status"] == "unavailable"
+            assert unreachable_data["readiness"]["safeToProceed"] is False
+            assert "nextAction" in unreachable_data["readiness"]
+            assert unreachable_data["online"]["connected"] is False
+
+            health_identity["sourceRevision"] = "remote-mismatch"
+            surface_mismatch = run(
+                ["mcp", "surface-status", "--endpoint", endpoint, "--json"],
+                check=True,
+            )
+            mismatch_data = json.loads(surface_mismatch.stdout)["data"]
+            assert mismatch_data["readiness"]["status"] == "mismatch"
+            assert "source_revision_mismatch" in mismatch_data["readiness"]["identityIssues"]
+            assert "source_revision_unavailable" not in mismatch_data["readiness"]["identityUnavailable"]
+            assert mismatch_data["online"]["identity"]["sourceRevision"] == "remote-mismatch"
+            health_identity.clear()
+
+            surface_degraded = run(
+                ["mcp", "surface-status", "--endpoint", endpoint, "--json"],
+                check=True,
+            )
+            degraded_data = json.loads(surface_degraded.stdout)["data"]
+            assert degraded_data["readiness"]["status"] == "degraded"
+            assert degraded_data["readiness"]["safeToProceed"] is False
+            assert degraded_data["readiness"]["identityUnavailable"]
 
             if os.name == "nt":
                 instance_root = temporary_path / "instances"
@@ -558,8 +658,6 @@ def main() -> int:
                 )
                 doctor_environment = os.environ.copy()
                 doctor_environment["UEAI_INSTANCE_ROOT"] = str(instance_root)
-                source_root = Path(__file__).resolve().parents[2]
-
                 def run_doctor(arguments: list[str]) -> subprocess.CompletedProcess[str]:
                     return subprocess.run(
                         [
@@ -595,6 +693,10 @@ def main() -> int:
                     "invalid": 1,
                     "unverified": 1,
                 }
+                instance_report = inspected_json["data"]["instances"]
+                assert instance_report["scannedCount"] == 6
+                assert instance_report["returnedCount"] == 6
+                assert instance_report["truncated"] is False
                 assert all(
                     path.exists()
                     for path in [
@@ -673,6 +775,28 @@ def main() -> int:
                     and item["reason"] == "record_changed"
                     for item in race_cleanup["skipped"]
                 ), {"calls": race_health_calls, "cleanup": race_cleanup}
+
+                for record_count in (32, 256):
+                    boundary_root = temporary_path / f"instances-{record_count}"
+                    boundary_root.mkdir()
+                    for index in range(record_count):
+                        (boundary_root / f"boundary-{index:03d}.json").write_text(
+                            "{}", encoding="utf-8"
+                        )
+                    doctor_environment["UEAI_INSTANCE_ROOT"] = str(boundary_root)
+                    boundary = run_doctor(
+                        [
+                            "doctor",
+                            "--endpoint",
+                            endpoint,
+                            "--no-clean-stale-instances",
+                            "--json",
+                        ]
+                    )
+                    boundary_data = json.loads(boundary.stdout)["data"]["instances"]
+                    assert boundary_data["scannedCount"] == record_count
+                    assert boundary_data["returnedCount"] == min(record_count, 32)
+                    assert boundary_data["truncated"] is (record_count > 32)
 
             invalid_capability = run(["invalid", "--json"])
             assert invalid_capability.returncode == 2

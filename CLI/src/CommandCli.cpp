@@ -4559,6 +4559,8 @@ json InspectInstanceRecords(
     const std::string& selected,
     const bool clean_stale)
 {
+    constexpr std::size_t kMaxScannedRecords = 256;
+    constexpr std::size_t kMaxReturnedRecords = 32;
     const auto root = DefaultInstanceRoot();
     json records = json::array();
     json deleted = json::array();
@@ -4576,6 +4578,9 @@ json InspectInstanceRecords(
             { "root", RedactedPathLabel(root) },
             { "selected", selected.empty() ? json(nullptr) : json(selected) },
             { "records", records },
+            { "scannedCount", 0 },
+            { "returnedCount", 0 },
+            { "truncated", false },
             { "counts", counts },
             { "cleanup", {
                 { "enabled", clean_stale },
@@ -4586,10 +4591,13 @@ json InspectInstanceRecords(
         };
     }
     std::vector<std::filesystem::directory_entry> entries;
+    bool enumeration_truncated = false;
+    bool enumeration_failed = false;
     for (const auto& entry : std::filesystem::directory_iterator(root, error))
     {
-        if (error || entries.size() >= 256)
+        if (error)
         {
+            enumeration_failed = true;
             break;
         }
         if (!entry.is_regular_file(error)
@@ -4598,6 +4606,11 @@ json InspectInstanceRecords(
         {
             error.clear();
             continue;
+        }
+        if (entries.size() >= kMaxScannedRecords)
+        {
+            enumeration_truncated = true;
+            break;
         }
         entries.push_back(entry);
     }
@@ -4612,6 +4625,7 @@ json InspectInstanceRecords(
                 > right.last_write_time(right_error);
         });
     std::size_t health_checks = 0;
+    bool records_truncated = false;
     for (const auto& entry : entries)
     {
         const auto inspected_hash = HashFile(entry.path());
@@ -4759,8 +4773,9 @@ json InspectInstanceRecords(
                 });
             }
         }
-        if (records.size() >= 32)
+        if (records.size() >= kMaxReturnedRecords)
         {
+            records_truncated = true;
             continue;
         }
         json record = {
@@ -4799,6 +4814,13 @@ json InspectInstanceRecords(
         { "root", RedactedPathLabel(root) },
         { "selected", selected.empty() ? json(nullptr) : json(selected) },
         { "records", records },
+        { "scannedCount", entries.size() },
+        { "returnedCount", records.size() },
+        { "truncated", enumeration_truncated || enumeration_failed
+            || records_truncated },
+        { "scanError", enumeration_failed
+            ? json("directory_enumeration_failed")
+            : json(nullptr) },
         { "counts", counts },
         { "cleanup", {
             { "enabled", clean_stale },
@@ -4942,6 +4964,65 @@ std::string LocalCapabilityCatalogDigest(const CapabilityCatalog* catalog)
     const auto digest = ue::workflow::CanonicalJsonSha256(
         json({ { "capabilities", descriptors } }).dump());
     return digest ? *digest : std::string{};
+}
+
+std::string LocalPluginModuleDigest(
+    const std::filesystem::path& bundle_root)
+{
+    if (bundle_root.empty())
+    {
+        return {};
+    }
+    const auto module_root = bundle_root / "Binaries" / "Win64";
+    std::error_code error;
+    if (!std::filesystem::is_directory(module_root, error) || error)
+    {
+        return {};
+    }
+    std::vector<std::filesystem::path> candidates;
+    for (const auto& entry : std::filesystem::directory_iterator(module_root, error))
+    {
+        if (error)
+        {
+            return {};
+        }
+        if (!entry.is_regular_file(error) || error)
+        {
+            error.clear();
+            continue;
+        }
+        const auto filename = entry.path().filename().string();
+        if (entry.path().extension() == ".dll"
+            && filename.rfind("UnrealEditor-UE_AI_integration", 0) == 0)
+        {
+            candidates.push_back(entry.path());
+        }
+    }
+    std::sort(candidates.begin(), candidates.end());
+    const auto digest = candidates.empty()
+        ? std::optional<std::string>{}
+        : HashFile(candidates.front());
+    return digest ? *digest : std::string{};
+}
+
+bool IsUsableIdentity(const std::string& value)
+{
+    return !value.empty() && value != "unknown";
+}
+
+std::string LocalPluginDescriptorVersion(
+    const std::filesystem::path& bundle_root)
+{
+    if (bundle_root.empty())
+    {
+        return {};
+    }
+    const json descriptor = ReadJsonFileBounded(
+        bundle_root / "UE_AI_integration.uplugin",
+        256 * 1024);
+    return descriptor.is_object()
+        ? descriptor.value("VersionName", std::string{})
+        : std::string{};
 }
 
 json LoadLocalWorkflowIdentity(
@@ -5369,11 +5450,22 @@ int RunTestTools(
 }
 
 int RunMcpSurfaceStatus(
+    const Options& options,
     const CapabilityCatalog& catalog,
     ue::api::Client& client,
     bool json_output,
     std::ostream& output)
 {
+    const auto bundle_root = InferBundleRoot(options, &catalog);
+    const std::string local_catalog_digest =
+        LocalCapabilityCatalogDigest(&catalog);
+    const json local_workflow = LoadLocalWorkflowIdentity(
+        bundle_root,
+        &catalog);
+    const std::string local_plugin_version =
+        LocalPluginDescriptorVersion(bundle_root);
+    const std::string local_module_digest =
+        LocalPluginModuleDigest(bundle_root);
     json backend_counts = json::object();
     std::size_t deprecated = 0;
     std::size_t canonical = 0;
@@ -5392,18 +5484,208 @@ int RunMcpSurfaceStatus(
         }
     }
     const ParsedEnvelope health = ParseEnvelope(client.Get("/api/health"));
-    json online = { { "connected", health.ok } };
+    json remote_identity = {
+        { "sourceRevision", "" },
+        { "pluginDescriptorVersion", "" },
+        { "pluginCompiledVersion", "" },
+        { "loadedModuleSha256", "" },
+        { "capabilityCatalogDigest", "" },
+        { "contractSetDigest", "" },
+        { "contractSetDigestV2", "" },
+    };
+    json validation_errors = json::array();
+    std::string remote_state;
+    bool remote_state_known = false;
+    bool remote_validation_known = false;
+    json online = {
+        { "connected", health.ok },
+        { "identity", remote_identity },
+        { "validationErrors", validation_errors },
+    };
     if (health.ok)
     {
-        const json data = health.value.value("data", json::object());
+        json data = health.value.value("data", json::object());
+        if (!data.is_object())
+        {
+            data = json::object();
+        }
+        const auto read_string_field = [&](const char* field)
+        {
+            const auto it = data.find(field);
+            return it != data.end() && it->is_string()
+                ? it->get<std::string>()
+                : std::string{};
+        };
+        remote_state = read_string_field("state");
+        if (remote_state.empty())
+        {
+            remote_state = read_string_field("status");
+        }
+        remote_state_known = remote_state == "ready"
+            || remote_state == "healthy"
+            || remote_state == "degraded";
         online["capabilityCount"] = data.value("capabilityCount", 0);
         online["availableCapabilityCount"] = data.value("availableCapabilityCount", 0);
-        online["handlerMismatches"] = data.value("validationErrors", json::array());
+        if (data.contains("validationErrors")
+            && data["validationErrors"].is_array())
+        {
+            validation_errors = data["validationErrors"];
+            remote_validation_known = true;
+        }
+        online["validationErrors"] = validation_errors;
+        online["handlerMismatches"] = validation_errors;
+        for (const char* field : {
+                 "sourceRevision",
+                 "pluginDescriptorVersion",
+                 "pluginCompiledVersion",
+                 "loadedModuleSha256",
+                 "capabilityCatalogDigest",
+                 "contractSetDigest",
+                 "contractSetDigestV2" })
+        {
+            remote_identity[field] = read_string_field(field);
+        }
+        if (data.contains("contractSetDigests"))
+        {
+            remote_identity["contractSetDigests"] =
+                data["contractSetDigests"];
+        }
+        online["identity"] = remote_identity;
     }
     else
     {
         online["code"] = health.code;
+        online["message"] = health.message;
     }
+    const json local_identity = {
+        { "cliVersion", UE_CLI_VERSION },
+        { "sourceRevision", IsUsableIdentity(UE_SOURCE_REVISION)
+            ? json(UE_SOURCE_REVISION) : json(nullptr) },
+        { "pluginDescriptorVersion",
+            !IsUsableIdentity(local_plugin_version)
+                ? json(nullptr) : json(local_plugin_version) },
+        { "loadedModuleSha256",
+            !IsUsableIdentity(local_module_digest)
+                ? json(nullptr) : json(local_module_digest) },
+        { "capabilityCatalogDigest",
+            !IsUsableIdentity(local_catalog_digest)
+                ? json(nullptr) : json(local_catalog_digest) },
+        { "workflow", local_workflow },
+    };
+    json identity_issues = json::array();
+    json identity_unavailable = json::array();
+    if (health.ok)
+    {
+        if (!remote_state_known)
+        {
+            identity_unavailable.push_back("remote_health_state_unavailable");
+        }
+        if (!remote_validation_known)
+        {
+            identity_unavailable.push_back(
+                "remote_validation_errors_unavailable");
+        }
+        const auto require_match = [&](
+            const std::string& expected,
+            const std::string& actual,
+            const char* mismatch_reason,
+            const char* unavailable_reason)
+        {
+            if (!IsUsableIdentity(expected) || !IsUsableIdentity(actual))
+            {
+                identity_unavailable.push_back(unavailable_reason);
+            }
+            else if (expected != actual)
+            {
+                identity_issues.push_back(mismatch_reason);
+            }
+        };
+        require_match(
+            UE_SOURCE_REVISION,
+            remote_identity.value("sourceRevision", std::string{}),
+            "source_revision_mismatch",
+            "source_revision_unavailable");
+        require_match(
+            local_plugin_version,
+            remote_identity.value("pluginDescriptorVersion", std::string{}),
+            "plugin_descriptor_version_mismatch",
+            "plugin_descriptor_version_unavailable");
+        require_match(
+            remote_identity.value(
+                "pluginDescriptorVersion", std::string{}),
+            remote_identity.value(
+                "pluginCompiledVersion", std::string{}),
+            "plugin_compiled_version_mismatch",
+            "plugin_compiled_version_unavailable");
+        require_match(
+            local_module_digest,
+            remote_identity.value("loadedModuleSha256", std::string{}),
+            "loaded_module_mismatch",
+            "loaded_module_identity_unavailable");
+        require_match(
+            local_catalog_digest,
+            remote_identity.value(
+                "capabilityCatalogDigest", std::string{}),
+            "capability_catalog_mismatch",
+            "capability_catalog_unavailable");
+        const bool local_workflow_loaded =
+            local_workflow.value("loaded", false);
+        if (!local_workflow_loaded)
+        {
+            identity_unavailable.push_back("local_workflow_contracts_unavailable");
+        }
+        else
+        {
+            require_match(
+                local_workflow.value("contractSetDigest", std::string{}),
+                remote_identity.value("contractSetDigest", std::string{}),
+                "workflow_contract_mismatch",
+                "workflow_contract_unavailable");
+            require_match(
+                local_workflow.value("contractSetDigestV2", std::string{}),
+                remote_identity.value("contractSetDigestV2", std::string{}),
+                "workflow_contract_v2_mismatch",
+                "workflow_contract_v2_unavailable");
+        }
+    }
+    const bool remote_degraded = remote_state == "degraded"
+        || !validation_errors.empty();
+    std::string readiness_status = "unavailable";
+    std::string next_action =
+        "Start or reconnect to a matching Unreal Editor, then rerun "
+        "ue-cli mcp surface-status --json.";
+    if (health.ok)
+    {
+        if (!identity_issues.empty())
+        {
+            readiness_status = "mismatch";
+            next_action =
+                "Rebuild or reload UE_AI_integration in the Editor, "
+                "then rerun ue-cli mcp surface-status --json and compare "
+                "the reported identity fields.";
+        }
+        else if (!identity_unavailable.empty() || remote_degraded)
+        {
+            readiness_status = "degraded";
+            next_action =
+                "Inspect identityUnavailable and validationErrors; rebuild or "
+                "reload the matching Editor before retrying live capability calls.";
+        }
+        else
+        {
+            readiness_status = "ready";
+            next_action =
+                "Run ue-cli help <capability-id> --live-schema --json "
+                "before executing an Editor-backed capability.";
+        }
+    }
+    json readiness = {
+        { "status", readiness_status },
+        { "safeToProceed", readiness_status == "ready" },
+        { "identityIssues", identity_issues },
+        { "identityUnavailable", identity_unavailable },
+        { "nextAction", next_action },
+    };
     ParsedEnvelope response{
         true,
         {
@@ -5417,6 +5699,11 @@ int RunMcpSurfaceStatus(
                     { "backendCounts", backend_counts },
                 } },
                 { "online", online },
+                { "identity", {
+                    { "local", local_identity },
+                    { "remote", remote_identity },
+                } },
+                { "readiness", readiness },
             } },
         },
         {},
@@ -5577,7 +5864,12 @@ int ExecuteOptions(
                 output,
                 error);
         }
-        return RunMcpSurfaceStatus(*catalog, client, options.json_output, output);
+        return RunMcpSurfaceStatus(
+            options,
+            *catalog,
+            client,
+            options.json_output,
+            output);
     }
     if (options.command == "doctor"
         || options.command == "test-tools")

@@ -210,14 +210,32 @@ export function validateDomainOperation(catalog, domain, operation) {
             throw new UEApiError({
                 code: "capability_removed",
                 message: `Capability "${operation}" was removed; use "${removed.replacement}".`,
-                details: removed,
+                details: {
+                    ...removed,
+                    nextAction: `Run ue-cli help ${removed.replacement} --json and retry with the canonical ID.`,
+                    helpCommand: `ue-cli help ${removed.replacement} --json`,
+                    safeToRetry: true,
+                },
             });
         }
+        const suggestions = suggestCapabilityIds(catalog, domain, operation);
         throw new UEApiError({
             code: "capability_not_found",
-            message: `Unknown capability "${operation}"`,
+            message: suggestions.length === 0
+                ? `Unknown capability "${operation}"`
+                : `Unknown capability "${operation}". Did you mean ${suggestions
+                    .map((candidate) => `"${candidate}"`)
+                    .join(", ")}?`,
             details: {
                 requestedDomain: domain,
+                suggestions,
+                nextAction: suggestions.length === 0
+                    ? `Run ue-cli capabilities --domain ${domain} --json to discover the current ID.`
+                    : `Run ue-cli help ${suggestions[0]} --json, then retry with the exact canonical ID.`,
+                helpCommand: suggestions.length === 0
+                    ? `ue-cli capabilities --domain ${domain} --json`
+                    : `ue-cli help ${suggestions[0]} --json`,
+                safeToRetry: true,
             },
         });
     }
@@ -228,10 +246,65 @@ export function validateDomainOperation(catalog, domain, operation) {
             details: {
                 requestedDomain: domain,
                 actualDomain: capability.domain,
+                nextAction: `Call ${DOMAIN_TOOL_NAMES[capability.domain]} with operation "${capability.id}".`,
+                helpCommand: `ue-cli help ${capability.id} --json`,
+                safeToRetry: true,
             },
         });
     }
     return capability;
+}
+function editDistance(left, right) {
+    const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+    for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+        let diagonal = previous[0];
+        previous[0] = leftIndex;
+        for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+            const above = previous[rightIndex];
+            previous[rightIndex] = Math.min(previous[rightIndex] + 1, previous[rightIndex - 1] + 1, diagonal + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1));
+            diagonal = above;
+        }
+    }
+    return previous[right.length];
+}
+function commonPrefixLength(left, right) {
+    let length = 0;
+    while (length < left.length &&
+        length < right.length &&
+        left[length] === right[length]) {
+        length += 1;
+    }
+    return length;
+}
+function sharedCapabilitySegments(requested, candidate) {
+    const requestedSegments = requested.split(".");
+    const candidateSegments = candidate.split(".");
+    return requestedSegments.slice(1).filter((segment, index) => segment.length > 0 && segment === candidateSegments[index + 1]).length;
+}
+function suggestCapabilityIds(catalog, domain, operation) {
+    const normalized = operation.trim().toLowerCase();
+    if (normalized.length === 0 || normalized.length > 128)
+        return [];
+    const scored = catalog
+        .forDomain(domain)
+        .map((candidate) => {
+        const id = candidate.id.toLowerCase();
+        const sharedSegments = sharedCapabilitySegments(normalized, id);
+        const prefixLength = commonPrefixLength(normalized, id);
+        const distance = editDistance(normalized, id);
+        return {
+            id: candidate.id,
+            score: sharedSegments * 100 +
+                prefixLength * 2 -
+                distance,
+            qualifies: id.startsWith(normalized) ||
+                distance <= 3 ||
+                prefixLength >= Math.max(4, normalized.length - 2),
+        };
+    })
+        .filter(({ qualifies }) => qualifies)
+        .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
+    return scored.slice(0, 3).map(({ id }) => id);
 }
 export async function runDomainOperation(catalog, executor, domain, operation, params = {}, requestId, context) {
     try {
