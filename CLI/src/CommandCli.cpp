@@ -25,6 +25,7 @@
 #include <map>
 #include <optional>
 #include <random>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -888,6 +889,11 @@ std::optional<std::string> ReadParameterText(
     return decoded.text;
 }
 
+bool ValidateConvertedParameters(
+    const json& schema,
+    const json& params,
+    std::string& message);
+
 ConversionResult ConvertParameterObject(
     const json& capability_descriptor,
     const json& params,
@@ -900,34 +906,76 @@ ConversionResult ConvertParameterObject(
         result.message = "Params JSON must contain one object.";
         return result;
     }
-
-    std::vector<RawOption> raw_options;
-    raw_options.reserve(params.size());
+    const json schema = capability_descriptor.value(
+        "inputSchema",
+        json::object());
+    const json properties = schema.value("properties", json::object());
+    if (!schema.is_object() || !properties.is_object())
+    {
+        result.code = "invalid_capability_schema";
+        result.message =
+            "Capability inputSchema must contain object properties.";
+        return result;
+    }
+    result.schema_accepts_request_id = properties.contains("requestId");
     for (auto iterator = params.begin(); iterator != params.end(); ++iterator)
     {
-        std::string value;
-        if (iterator->is_string())
+        if (iterator.key() == "requestId")
         {
-            value = iterator->get<std::string>();
-            if (value.starts_with('@'))
-            {
-                value.insert(value.begin(), '@');
-            }
+            result.code = "unknown_parameter";
+            result.message =
+                "Parameter 'requestId' must be passed with --request-id.";
+            return result;
         }
-        else
+        if (!properties.contains(iterator.key()))
         {
-            value = iterator->dump();
+            result.code = "unknown_parameter";
+            result.message =
+                "Unknown parameter '" + iterator.key() + "'.";
+            return result;
         }
-        raw_options.push_back({
-            iterator.key(),
-            std::move(value),
-            false,
-        });
+        result.params[iterator.key()] = *iterator;
     }
-    return ConvertParameters(
-        capability_descriptor,
-        raw_options,
-        confirm_write);
+    if (confirm_write)
+    {
+        if (!properties.contains("confirmWrite"))
+        {
+            result.code = "confirm_write_unsupported";
+            result.message =
+                "--confirm-write is not declared by this capability.";
+            return result;
+        }
+        result.params["confirmWrite"] = true;
+    }
+    for (const auto& required : schema.value("required", json::array()))
+    {
+        if (!required.is_string())
+        {
+            continue;
+        }
+        const std::string property = required.get<std::string>();
+        if (property == "requestId")
+        {
+            continue;
+        }
+        if (!result.params.contains(property))
+        {
+            result.code = "required_parameter_missing";
+            result.message =
+                "Missing required parameter '" + property + "'.";
+            return result;
+        }
+    }
+    if (!ValidateConvertedParameters(
+            schema,
+            result.params,
+            result.message))
+    {
+        result.code = "invalid_parameter";
+        return result;
+    }
+    result.ok = true;
+    return result;
 }
 
 ParsedEnvelope ParseEnvelope(const ue::api::HttpResult& response)
@@ -1201,6 +1249,383 @@ std::optional<json> ConvertArrayValue(
     const json items =
         schema.value("items", json::object());
     return ConvertScalar(items, raw, message);
+}
+
+struct SchemaValidationIssue
+{
+    std::string path;
+    std::string code;
+    std::string message;
+};
+
+std::string SchemaPath(
+    const std::string& path,
+    const std::string& field)
+{
+    return path.empty() ? field : path + "." + field;
+}
+
+std::string SchemaPath(
+    const std::string& path,
+    const std::size_t index)
+{
+    return path + "[" + std::to_string(index) + "]";
+}
+
+bool MatchesJsonType(
+    const std::string& type,
+    const json& value)
+{
+    if (type == "object") return value.is_object();
+    if (type == "array") return value.is_array();
+    if (type == "string") return value.is_string();
+    if (type == "boolean") return value.is_boolean();
+    if (type == "integer") return value.is_number_integer();
+    if (type == "number") return value.is_number();
+    if (type == "null") return value.is_null();
+    return true;
+}
+
+bool MatchesDeclaredType(
+    const json& schema,
+    const json& value)
+{
+    const auto type = schema.find("type");
+    if (type == schema.end())
+    {
+        return true;
+    }
+    if (type->is_string())
+    {
+        return MatchesJsonType(type->get<std::string>(), value);
+    }
+    if (type->is_array())
+    {
+        return std::any_of(
+            type->begin(),
+            type->end(),
+            [&value](const json& candidate)
+            {
+                return candidate.is_string()
+                    && MatchesJsonType(candidate.get<std::string>(), value);
+            });
+    }
+    return true;
+}
+
+std::optional<std::size_t> NonNegativeSchemaSize(
+    const json& schema,
+    const char* field)
+{
+    const auto value = schema.find(field);
+    if (value == schema.end())
+    {
+        return std::nullopt;
+    }
+    if (value->is_number_unsigned())
+    {
+        return value->get<std::size_t>();
+    }
+    if (value->is_number_integer())
+    {
+        const auto integer = value->get<std::int64_t>();
+        if (integer >= 0)
+        {
+            return static_cast<std::size_t>(integer);
+        }
+    }
+    return std::nullopt;
+}
+
+void CollectSchemaValidationIssues(
+    const json& schema,
+    const json& value,
+    const std::string& path,
+    std::vector<SchemaValidationIssue>& issues,
+    const bool ignore_request_id_requirement = false)
+{
+    if (!schema.is_object())
+    {
+        return;
+    }
+
+    const auto add_issue =
+        [&issues, &path](
+            const std::string& code,
+            const std::string& message)
+        {
+            issues.push_back({ path, code, message });
+        };
+
+    if (!MatchesDeclaredType(schema, value))
+    {
+        const json type_value = schema.contains("type")
+            ? schema["type"]
+            : json("value");
+        add_issue(
+            "type",
+            "Value does not match the declared schema type "
+                + (type_value.is_string() ? type_value.get<std::string>() : type_value.dump())
+                + ".");
+        return;
+    }
+
+    if (schema.contains("const") && value != schema["const"])
+    {
+        add_issue(
+            "const",
+            "Value must equal schema const " + schema["const"].dump() + ".");
+    }
+    const auto enum_values = schema.find("enum");
+    if (enum_values != schema.end() && enum_values->is_array())
+    {
+        const bool match = std::any_of(
+            enum_values->begin(),
+            enum_values->end(),
+            [&value](const json& candidate)
+            {
+                return candidate == value;
+            });
+        if (!match)
+        {
+            add_issue("enum", "Value is not one of the declared enum values.");
+        }
+    }
+
+    if (value.is_object())
+    {
+        const auto required = schema.find("required");
+        if (required != schema.end() && required->is_array())
+        {
+            for (const auto& field : *required)
+            {
+                if (!field.is_string())
+                {
+                    continue;
+                }
+                const std::string name = field.get<std::string>();
+                if (ignore_request_id_requirement
+                    && path.empty()
+                    && name == "requestId")
+                {
+                    continue;
+                }
+                if (!value.contains(name))
+                {
+                    issues.push_back({
+                        SchemaPath(path, name),
+                        "required",
+                        "Required parameter is missing."});
+                }
+            }
+        }
+        const auto properties = schema.find("properties");
+        const bool has_properties = properties != schema.end()
+            && properties->is_object();
+        if (schema.value("additionalProperties", true) == false
+            && has_properties)
+        {
+            for (auto iterator = value.begin(); iterator != value.end(); ++iterator)
+            {
+                if (!properties->contains(iterator.key()))
+                {
+                    issues.push_back({
+                        SchemaPath(path, iterator.key()),
+                        "additionalProperties",
+                        "Unknown parameter is not allowed by the schema."});
+                }
+            }
+        }
+        const auto min_properties = NonNegativeSchemaSize(schema, "minProperties");
+        if (min_properties && value.size() < *min_properties)
+        {
+            add_issue("minProperties", "Object has fewer properties than allowed.");
+        }
+        const auto max_properties = NonNegativeSchemaSize(schema, "maxProperties");
+        if (max_properties && value.size() > *max_properties)
+        {
+            add_issue("maxProperties", "Object has more properties than allowed.");
+        }
+        if (has_properties)
+        {
+            for (auto iterator = properties->begin();
+                 iterator != properties->end();
+                 ++iterator)
+            {
+                if (value.contains(iterator.key()) && iterator->is_object())
+                {
+                    CollectSchemaValidationIssues(
+                        *iterator,
+                        value.at(iterator.key()),
+                        SchemaPath(path, iterator.key()),
+                        issues);
+                }
+            }
+        }
+    }
+    else if (value.is_array())
+    {
+        const auto min_items = NonNegativeSchemaSize(schema, "minItems");
+        if (min_items && value.size() < *min_items)
+        {
+            add_issue("minItems", "Array contains fewer items than allowed.");
+        }
+        const auto max_items = NonNegativeSchemaSize(schema, "maxItems");
+        if (max_items && value.size() > *max_items)
+        {
+            add_issue("maxItems", "Array contains more items than allowed.");
+        }
+        if (schema.value("uniqueItems", false) == true)
+        {
+            for (std::size_t left = 0; left < value.size(); ++left)
+            {
+                for (std::size_t right = left + 1; right < value.size(); ++right)
+                {
+                    if (value[left] == value[right])
+                    {
+                        add_issue("uniqueItems", "Array items must be unique.");
+                        left = value.size();
+                        break;
+                    }
+                }
+            }
+        }
+        const auto items = schema.find("items");
+        if (items != schema.end() && items->is_object())
+        {
+            for (std::size_t index = 0; index < value.size(); ++index)
+            {
+                CollectSchemaValidationIssues(
+                    *items,
+                    value[index],
+                    SchemaPath(path, index),
+                    issues);
+            }
+        }
+    }
+    else if (value.is_string())
+    {
+        const std::size_t length = value.get<std::string>().size();
+        const auto min_length = NonNegativeSchemaSize(schema, "minLength");
+        if (min_length && length < *min_length)
+        {
+            add_issue("minLength", "String is shorter than allowed.");
+        }
+        const auto max_length = NonNegativeSchemaSize(schema, "maxLength");
+        if (max_length && length > *max_length)
+        {
+            add_issue("maxLength", "String is longer than allowed.");
+        }
+        const auto pattern = schema.find("pattern");
+        if (pattern != schema.end() && pattern->is_string())
+        {
+            try
+            {
+                if (!std::regex_search(
+                        value.get<std::string>(),
+                        std::regex(pattern->get<std::string>())))
+                {
+                    add_issue("pattern", "String does not match the declared pattern.");
+                }
+            }
+            catch (const std::regex_error&)
+            {
+                add_issue("pattern", "Schema declares an invalid regular expression.");
+            }
+        }
+    }
+    else if (value.is_number())
+    {
+        const double numeric = value.get<double>();
+        const auto minimum = schema.find("minimum");
+        if (minimum != schema.end() && minimum->is_number() && numeric < minimum->get<double>())
+        {
+            add_issue("minimum", "Number is below the declared minimum.");
+        }
+        const auto maximum = schema.find("maximum");
+        if (maximum != schema.end() && maximum->is_number() && numeric > maximum->get<double>())
+        {
+            add_issue("maximum", "Number exceeds the declared maximum.");
+        }
+        const auto exclusive_minimum = schema.find("exclusiveMinimum");
+        if (exclusive_minimum != schema.end() && exclusive_minimum->is_number()
+            && numeric <= exclusive_minimum->get<double>())
+        {
+            add_issue("exclusiveMinimum", "Number must be greater than the exclusive minimum.");
+        }
+        const auto exclusive_maximum = schema.find("exclusiveMaximum");
+        if (exclusive_maximum != schema.end() && exclusive_maximum->is_number()
+            && numeric >= exclusive_maximum->get<double>())
+        {
+            add_issue("exclusiveMaximum", "Number must be less than the exclusive maximum.");
+        }
+    }
+
+    for (const char* keyword : { "anyOf", "oneOf" })
+    {
+        const auto branches = schema.find(keyword);
+        if (branches == schema.end() || !branches->is_array())
+        {
+            continue;
+        }
+        std::size_t matches = 0;
+        for (const auto& branch : *branches)
+        {
+            if (!branch.is_object())
+            {
+                continue;
+            }
+            std::vector<SchemaValidationIssue> branch_issues;
+            CollectSchemaValidationIssues(branch, value, path, branch_issues);
+            matches += branch_issues.empty() ? 1 : 0;
+        }
+        const bool valid = std::string(keyword) == "anyOf"
+            ? matches > 0
+            : matches == 1;
+        if (!valid)
+        {
+            add_issue(keyword, "Value does not satisfy the declared alternatives.");
+        }
+    }
+    const auto all_of = schema.find("allOf");
+    if (all_of != schema.end() && all_of->is_array())
+    {
+        for (const auto& branch : *all_of)
+        {
+            if (branch.is_object())
+            {
+                CollectSchemaValidationIssues(branch, value, path, issues);
+            }
+        }
+    }
+    const auto not_schema = schema.find("not");
+    if (not_schema != schema.end() && not_schema->is_object())
+    {
+        std::vector<SchemaValidationIssue> branch_issues;
+        CollectSchemaValidationIssues(*not_schema, value, path, branch_issues);
+        if (branch_issues.empty())
+        {
+            add_issue("not", "Value matches a prohibited schema.");
+        }
+    }
+}
+
+bool ValidateConvertedParameters(
+    const json& schema,
+    const json& params,
+    std::string& message)
+{
+    std::vector<SchemaValidationIssue> issues;
+    CollectSchemaValidationIssues(schema, params, {}, issues, true);
+    if (issues.empty())
+    {
+        return true;
+    }
+    const auto& issue = issues.front();
+    message = "Parameter schema validation failed"
+        + (issue.path.empty() ? std::string{} : " at '" + issue.path + "'")
+        + " (" + issue.code + "): " + issue.message;
+    return false;
 }
 
 std::string GenerateRequestId()
@@ -4065,6 +4490,14 @@ ConversionResult ConvertParameters(
                 + CamelToKebab(property) + "'.";
             return result;
         }
+    }
+    if (!ValidateConvertedParameters(
+            schema,
+            result.params,
+            result.message))
+    {
+        result.code = "invalid_parameter";
+        return result;
     }
     result.ok = true;
     return result;

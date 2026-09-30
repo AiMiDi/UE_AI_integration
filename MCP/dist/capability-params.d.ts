@@ -45,6 +45,9 @@ export interface CapabilityParameterPreflight {
     request: CapabilityParameterTemplate["request"];
     persistence: CapabilityParameterTemplate["persistence"];
     retry: CapabilityParameterTemplate["retry"];
+    nextAction: string;
+    helpCommand: string;
+    safeToRetry: boolean;
 }
 export declare function createParameterTemplate(capability: CapabilityDescriptor): CapabilityParameterTemplate;
 export declare function preflightParameters(capability: CapabilityDescriptor, params: unknown): CapabilityParameterPreflight;

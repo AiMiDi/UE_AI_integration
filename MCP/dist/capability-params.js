@@ -82,7 +82,9 @@ function metadata(capability) {
     ].filter((field) => field in properties);
     const request = {
         acceptsRequestId: "requestId" in properties,
-        generatedByCli: "requestId" in properties,
+        // This contract is consumed by MCP. MCP does not synthesize request IDs;
+        // callers that use the CLI must inspect the CLI-specific contract.
+        generatedByCli: false,
     };
     const approval = {
         required: approvalRequired,
@@ -213,6 +215,10 @@ function validateSchema(schema, value, path, errors, collect = true) {
                 issue("maximum", "Value exceeds the declared maximum.", schema.maximum);
         }
     }
+    else if (type === "boolean") {
+        if (typeof value !== "boolean")
+            issue("type", "Value must be a boolean.", "boolean");
+    }
     for (const [keyword, expectedCount] of [["anyOf", 1], ["oneOf", 1]]) {
         const branches = schema[keyword];
         if (!Array.isArray(branches))
@@ -262,6 +268,15 @@ export function preflightParameters(capability, params) {
             warnings.push({ path: missingApproval.join(","), code: "approval_required", message: "Explicit approval is required before execution.", expected: true, actual: params });
         }
     }
+    const helpCommand = `ue-cli help ${capability.id} --json`;
+    const safeToRetry = info.retry.safeToRetry;
+    const nextAction = errors.length > 0
+        ? safeToRetry
+            ? "Correct the listed parameters, then rerun local preflight before execution."
+            : "Correct the listed parameters; do not retry an unknown write outcome. Recover or read back the request and asset before retrying the write."
+        : warnings.length > 0
+            ? "Provide the explicit approval fields, then rerun local preflight before execution."
+            : "Execute with the validated parameters, then verify the capability receipt and readback.";
     return {
         capability: capability.id,
         schemaSource: "local-manifest",
@@ -274,6 +289,9 @@ export function preflightParameters(capability, params) {
         request: info.request,
         persistence: info.persistence,
         retry: info.retry,
+        nextAction,
+        helpCommand,
+        safeToRetry,
     };
 }
 //# sourceMappingURL=capability-params.js.map

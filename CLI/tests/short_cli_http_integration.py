@@ -83,11 +83,21 @@ def main() -> int:
         "additionalProperties": False,
         "required": ["assetPath", "enabled"],
         "properties": {
-            "assetPath": {"type": "string"},
+            "assetPath": {
+                "type": "string",
+                "minLength": 3,
+                "pattern": r"^/Game/",
+            },
             "enabled": {"type": "boolean"},
-            "count": {"type": "integer"},
-            "ratio": {"type": "number"},
-            "tags": {"type": "array", "items": {"type": "string"}},
+            "count": {"type": "integer", "minimum": 1, "maximum": 9},
+            "ratio": {"type": "number", "minimum": 0, "maximum": 2},
+            "tags": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "uniqueItems": True,
+                "items": {"type": "string"},
+            },
             "settings": {"type": "object"},
             "confirmWrite": {"type": "boolean"},
             "requestId": {"type": "string"},
@@ -970,6 +980,49 @@ def main() -> int:
             }
             assert file_preflight["request"]["generatedRequestId"] is False
             assert len(requests) == before_file_preflight_requests
+
+            invalid_type_file = temporary_path / "invalid-type-params.json"
+            invalid_type_file.write_text(
+                json.dumps(
+                    {
+                        "assetPath": "/Game/PreflightFile",
+                        "enabled": "false",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            before_invalid_type_requests = len(requests)
+            invalid_type_result = run(
+                [
+                    "params-preflight",
+                    "test.typed",
+                    "--params-file",
+                    str(invalid_type_file),
+                    "--json",
+                ]
+            )
+            assert invalid_type_result.returncode == 2
+            invalid_type = json.loads(invalid_type_result.stdout)
+            assert invalid_type["error"]["code"] == "invalid_parameter"
+            assert len(requests) == before_invalid_type_requests
+
+            before_invalid_range_requests = len(requests)
+            invalid_range_result = run(
+                [
+                    "params-preflight",
+                    "test.typed",
+                    "--asset-path",
+                    "/Game/Preflight",
+                    "--enabled",
+                    "--count",
+                    "0",
+                    "--json",
+                ]
+            )
+            assert invalid_range_result.returncode == 2
+            invalid_range = json.loads(invalid_range_result.stdout)
+            assert invalid_range["error"]["code"] == "invalid_parameter"
+            assert len(requests) == before_invalid_range_requests
 
             live_help = run(
                 [

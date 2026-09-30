@@ -4,9 +4,11 @@
 
 .DESCRIPTION
     Verification-lane harness. It builds the plugin through UAT BuildPlugin into
-    an isolated package under -WorkRoot and then runs UnrealEditor-Cmd with
-    -NullRHI against that isolated copy, so the user's project DLL and Editor
-    state stay untouched. This script never edits plugin sources.
+    an isolated package under -WorkRoot and then runs UnrealEditor-Cmd against
+    that isolated copy, so the user's project DLL and Editor state stay
+    untouched. The default lane is -NullRHI; -VerificationLane
+    nonnullrhi-editor uses -RenderOffscreen. This script never edits plugin
+    sources.
 
     Evidence written under -WorkRoot:
         logs\buildplugin-<stamp>.log
@@ -32,6 +34,9 @@ param(
     [string] $PackageDir,
 
     [string[]] $TestFilter = @(),
+
+    [ValidateSet('isolated-nullrhi', 'nonnullrhi-editor')]
+    [string] $VerificationLane = 'isolated-nullrhi',
 
     [switch] $SkipBuild,
 
@@ -149,6 +154,47 @@ function Get-DirectoryContentSnapshot {
     }
 }
 
+function Get-FileIdentity {
+    param([Parameter(Mandatory)][string] $Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return [ordered]@{
+            present = $false
+            path = $Path
+            sha256 = $null
+            bytes = $null
+            lastWriteTimeUtc = $null
+        }
+    }
+    $file = Get-Item -LiteralPath $Path
+    return [ordered]@{
+        present = $true
+        path = $file.FullName
+        sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        bytes = [int64]$file.Length
+        lastWriteTimeUtc = $file.LastWriteTimeUtc.ToString('o')
+    }
+}
+
+$EditorIdentity = Get-FileIdentity -Path $EditorCmd
+
+function Get-ModuleArtifactSnapshot {
+    param([Parameter(Mandatory)][string] $PluginDirectory)
+    if (-not (Test-Path -LiteralPath $PluginDirectory -PathType Container)) {
+        return [ordered]@{
+            dll = Get-FileIdentity -Path (Join-Path $PluginDirectory 'Binaries\Win64\UnrealEditor-UE_AI_integration.dll')
+            pdb = Get-FileIdentity -Path (Join-Path $PluginDirectory 'Binaries\Win64\UnrealEditor-UE_AI_integration.pdb')
+        }
+    }
+    $dll = Get-ChildItem -LiteralPath $PluginDirectory -Recurse -File -Filter '*UE_AI_integration*.dll' |
+        Sort-Object FullName | Select-Object -First 1
+    $pdb = Get-ChildItem -LiteralPath $PluginDirectory -Recurse -File -Filter '*UE_AI_integration*.pdb' |
+        Sort-Object FullName | Select-Object -First 1
+    return [ordered]@{
+        dll = if ($dll) { Get-FileIdentity -Path $dll.FullName } else { Get-FileIdentity -Path (Join-Path $PluginDirectory 'Binaries\Win64\UnrealEditor-UE_AI_integration.dll') }
+        pdb = if ($pdb) { Get-FileIdentity -Path $pdb.FullName } else { Get-FileIdentity -Path (Join-Path $PluginDirectory 'Binaries\Win64\UnrealEditor-UE_AI_integration.pdb') }
+    }
+}
+
 function Get-PackageContentSnapshot {
     param([Parameter(Mandatory)][string] $PackageDirectory)
     $hostPlugin = Join-Path $PackageDirectory 'HostProject\Plugins\UE_AI_integration'
@@ -160,6 +206,7 @@ function Get-PackageContentSnapshot {
     }
     $snapshot = Get-DirectoryContentSnapshot -Root $pluginDirectory
     $snapshot.pluginDirectory = $pluginDirectory
+    $snapshot.moduleArtifacts = Get-ModuleArtifactSnapshot -PluginDirectory $pluginDirectory
     return $snapshot
 }
 
@@ -191,6 +238,8 @@ Write-Host "[harness] plugin snapshot head=$($Snapshot.head) sha256=$($Snapshot.
 $BuildExit = 0
 $BuildLog = $null
 $BuildErrors = @()
+$PostBuildSnapshot = $null
+$AutomationEndSnapshot = $null
 if (-not $SkipBuild) {
     if ($Fresh -and (Test-Path -LiteralPath $PackageDir)) {
         $resolvedPackage = [IO.Path]::GetFullPath($PackageDir)
@@ -221,12 +270,25 @@ if (-not $SkipBuild) {
     foreach ($errorLine in $BuildErrors) {
         Write-Host "  BUILD ERROR: $errorLine"
     }
+    $PostBuildSnapshot = Get-PluginSnapshot
+    Write-Host "[harness] post-build plugin snapshot head=$($PostBuildSnapshot.head) sha256=$($PostBuildSnapshot.snapshotSha256)"
+}
+
+$SourceStableForBuild = if ($SkipBuild) {
+    $null
+}
+else {
+    $BuildExit -eq 0 -and $null -ne $PostBuildSnapshot -and
+        $Snapshot.snapshotSha256 -eq $PostBuildSnapshot.snapshotSha256
 }
 
 $PackageBindingPath = Join-Path $WorkRoot 'package-binding.json'
 $PackageBinding = [ordered]@{
     verified = $false
     sourceSnapshotSha256 = $Snapshot.snapshotSha256
+    sourceSnapshotBeforeBuild = $Snapshot
+    sourceSnapshotAfterBuild = $PostBuildSnapshot
+    sourceStableForBuild = $SourceStableForBuild
     packageDir = $PackageDir
     packageContent = $null
     reason = 'not evaluated'
@@ -237,6 +299,10 @@ if (-not $SkipBuild -and $BuildExit -ne 0) {
     $CanRunAutomation = $false
     $PackageBinding.reason = 'build_failed'
 }
+elseif (-not $SkipBuild -and -not $SourceStableForBuild) {
+    $CanRunAutomation = $false
+    $PackageBinding.reason = 'source_changed_during_build'
+}
 elseif ($SkipBuild) {
     # A reused package is valid only when a previous run recorded the same
     # content-bound source snapshot. Otherwise the result would be evidence
@@ -245,10 +311,18 @@ elseif ($SkipBuild) {
         $previousBinding = Get-Content -LiteralPath $PackageBindingPath -Raw | ConvertFrom-Json
         $PackageBinding.packageContent = Get-PackageContentSnapshot -PackageDirectory $PackageDir
         $PackageBinding.previousSourceSnapshotSha256 = [string]$previousBinding.sourceSnapshotSha256
-        $sourceSnapshotMatches = [string]$previousBinding.sourceSnapshotSha256 -eq $Snapshot.snapshotSha256
+        $previousSourceSnapshot = if ($previousBinding.sourceSnapshotAfterBuild) {
+            [string]$previousBinding.sourceSnapshotAfterBuild.snapshotSha256
+        }
+        else {
+            [string]$previousBinding.sourceSnapshotSha256
+        }
+        $sourceSnapshotMatches = $previousSourceSnapshot -eq $Snapshot.snapshotSha256
+        $previousSourceStable = $null -ne $previousBinding.sourceStableForBuild -and
+            [bool]$previousBinding.sourceStableForBuild
         $packageSnapshotMatches = $PackageBinding.packageContent.present -and
             $PackageBinding.packageContent.contentSha256 -eq [string]$previousBinding.packageContent.contentSha256
-        if ($sourceSnapshotMatches -and $packageSnapshotMatches) {
+        if ($sourceSnapshotMatches -and $previousSourceStable -and $packageSnapshotMatches) {
             $PackageBinding.verified = $true
             $PackageBinding.reason = 'reused_package_matches_source_and_package_snapshots'
         }
@@ -306,6 +380,22 @@ if (-not $SkipBuild -and $CanRunAutomation) {
 
 $Automation = [ordered]@{
     skipped = $true
+    lane = $VerificationLane
+    rhi = if ($VerificationLane -eq 'isolated-nullrhi') { 'NullRHI' } else { 'NonNullRHI' }
+    editor = $EditorIdentity
+    verification = [ordered]@{
+        staticVerified = $null
+        compiled = if ($SkipBuild) { $null } else { $BuildExit -eq 0 }
+        moduleLoaded = $null
+        moduleLoadProof = [ordered]@{
+            status = 'unavailable'
+            reason = 'Host automation does not query production.module.loaded.get.'
+        }
+        assetReadback = $null
+        runtimeVerified = $null
+        visualVerified = $null
+        unknownReasons = @('Host automation does not query production.module.loaded.get or prove project-asset/visual acceptance.')
+    }
     reason = if ($TestFilter.Count -eq 0) { 'no_test_filter' } elseif (-not $CanRunAutomation) { $PackageBinding.reason } else { 'not_started' }
 }
 $AutomationExit = $null
@@ -341,7 +431,7 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
         '-nop4',
         '-nosplash',
         '-NoSound',
-        '-NullRHI',
+        $(if ($VerificationLane -eq 'isolated-nullrhi') { '-NullRHI' } else { '-RenderOffscreen' }),
         '-NoLiveCoding',
         '-UEAIDisableServer',
         '-stdout',
@@ -367,6 +457,8 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
     if (-not $process.Start()) {
         throw 'UnrealEditor-Cmd did not start.'
     }
+    $automationStartedAtUtc = [DateTime]::UtcNow.ToString('o')
+    $automationProcessId = $process.Id
     try {
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
@@ -381,6 +473,8 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
     finally {
         $process.Dispose()
     }
+    $automationFinishedAtUtc = [DateTime]::UtcNow.ToString('o')
+    $AutomationEndSnapshot = Get-PluginSnapshot
     [IO.File]::WriteAllText(
         (Join-Path $LogsRoot "automation-$Stamp.stdout.log"), $stdout, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText(
@@ -442,6 +536,10 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
     if ($failedTests.Count -ne 0) { $gateReasons += "non_success_test_states_$($failedTests.Count)" }
     if ($reportTests.Count -eq 0) { $gateReasons += 'empty_test_report' }
     if ($unmatchedFilters.Count -ne 0) { $gateReasons += 'requested_filter_unmatched' }
+    if ($null -ne $AutomationEndSnapshot -and
+        $AutomationEndSnapshot.snapshotSha256 -ne $Snapshot.snapshotSha256) {
+        $gateReasons += 'source_changed_during_automation'
+    }
     $AutomationOk = $gateReasons.Count -eq 0
     Write-Host ("[harness] automation exit={0} succeeded={1} succeededWithWarnings={2} successfulTestStates={3} failed={4} notRun={5} tests={6} report={7}" -f $AutomationExit, $reportSucceeded, $reportSucceededWithWarnings, $successfulTestCount, $reportFailed, $reportNotRun, $reportTests.Count, $reportPath)
     if ($gateReasons.Count -gt 0) {
@@ -453,6 +551,35 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
 
     $Automation = [ordered]@{
         skipped = $false
+        lane = $VerificationLane
+        rhi = if ($VerificationLane -eq 'isolated-nullrhi') { 'NullRHI' } else { 'NonNullRHI' }
+        editor = [ordered]@{
+            executable = $EditorIdentity
+            processId = $automationProcessId
+            startedAtUtc = $automationStartedAtUtc
+            finishedAtUtc = $automationFinishedAtUtc
+        }
+        verification = [ordered]@{
+            staticVerified = $null
+            compiled = if ($SkipBuild) { $null } else { $BuildExit -eq 0 }
+            moduleLoaded = $null
+            moduleLoadProof = [ordered]@{
+                status = 'unavailable'
+                reason = 'The automation report does not expose production.module.loaded.get or the exact loaded DLL hash.'
+            }
+            assetReadback = $null
+            runtimeVerified = $null
+            visualVerified = $null
+            unknownReasons = @(
+                'The automation report does not expose production.module.loaded.get or the exact loaded DLL hash.'
+                if ($VerificationLane -eq 'isolated-nullrhi') {
+                    'NullRHI contract results are not NonNullRHI runtime or visual acceptance.'
+                }
+                else {
+                    'NonNullRHI execution alone does not prove a project asset, disk save, or visual acceptance.'
+                }
+            )
+        }
         filters = $TestFilter
         exitCode = $AutomationExit
         log = $autoLog
@@ -471,10 +598,21 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
 
 $summaryPath = Join-Path $WorkRoot "summary-$Stamp.json"
 $summary = [ordered]@{
-    schema = 'ue.host-automation-run.v1'
+    schema = 'ue.host-automation-run.v2'
     utcStarted = [DateTime]::UtcNow.ToString('o')
+    verificationLane = $VerificationLane
     pluginSnapshot = $Snapshot
+    postBuildPluginSnapshot = $PostBuildSnapshot
+    automationEndPluginSnapshot = $AutomationEndSnapshot
+    sourceStableForBuild = $SourceStableForBuild
+    sourceStableThroughAutomation = if ($null -eq $AutomationEndSnapshot) {
+        $null
+    }
+    else {
+        $AutomationEndSnapshot.snapshotSha256 -eq $Snapshot.snapshotSha256
+    }
     engineRoot = $EngineRoot
+    editor = $EditorIdentity
     packageDir = $PackageDir
     packageBinding = $PackageBinding
     build = [ordered]@{

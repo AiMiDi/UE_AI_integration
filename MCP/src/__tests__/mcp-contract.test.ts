@@ -14,6 +14,7 @@ import {
   createMcpServer,
   handleCapabilities,
   handleContext,
+  handleParameterContract,
   MCP_TOOL_NAMES,
   type UEConnectionClient,
 } from "../mcp-server.js";
@@ -158,6 +159,27 @@ test("registers the stable MCP tools without contacting Unreal Editor", () => {
     ],
   );
   assert.equal(networkCalls, 0);
+});
+
+test("returns actionable parameter preflight errors without contacting Unreal Editor", () => {
+  const response = handleParameterContract(loadCapabilityCatalog(), {
+    action: "preflight",
+    operation: "scene.level.save",
+    params: { onlyIfDirty: "false" },
+  });
+
+  assert.equal(response.isError, false);
+  assert.equal(response.content[0]?.type, "text");
+  if (response.content[0]?.type !== "text") {
+    assert.fail("Expected parameter preflight JSON content");
+  }
+  const payload = JSON.parse(response.content[0].text);
+  assert.equal(payload.schema, "ue.capability-params-preflight.v1");
+  assert.equal(payload.valid, false);
+  assert.equal(payload.helpCommand, "ue-cli help scene.level.save --json");
+  assert.equal(payload.safeToRetry, false);
+  assert.match(payload.nextAction, /Recover or read back/);
+  assert.ok(payload.errors.some((error: { code?: string }) => error.code === "type"));
 });
 
 test("locates ue-workflow-cli offline with deterministic precedence", () => {

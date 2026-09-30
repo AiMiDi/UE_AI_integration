@@ -6,7 +6,7 @@ import { loadCapabilityCatalog } from "../capability-catalog.js";
 import { locateShortCli, locateWorkflowCli, } from "../cli-locator.js";
 import { runDomainOperation } from "../domain-router.js";
 import { createLocalShutdownHandler } from "../index.js";
-import { createMcpServer, handleCapabilities, handleContext, MCP_TOOL_NAMES, } from "../mcp-server.js";
+import { createMcpServer, handleCapabilities, handleContext, handleParameterContract, MCP_TOOL_NAMES, } from "../mcp-server.js";
 import { UEApiError, UEClient, } from "../ue-bridge.js";
 import { safeStringify } from "../helpers.js";
 import { handleWorkflowInput, parseWorkflowInput, runWorkflowAction, UE_WORKFLOW_INPUT_SCHEMA, UE_WORKFLOW_TOOL_SCHEMA, } from "../workflow-router.js";
@@ -104,6 +104,25 @@ test("registers the stable MCP tools without contacting Unreal Editor", () => {
         "sections",
     ]);
     assert.equal(networkCalls, 0);
+});
+test("returns actionable parameter preflight errors without contacting Unreal Editor", () => {
+    const response = handleParameterContract(loadCapabilityCatalog(), {
+        action: "preflight",
+        operation: "scene.level.save",
+        params: { onlyIfDirty: "false" },
+    });
+    assert.equal(response.isError, false);
+    assert.equal(response.content[0]?.type, "text");
+    if (response.content[0]?.type !== "text") {
+        assert.fail("Expected parameter preflight JSON content");
+    }
+    const payload = JSON.parse(response.content[0].text);
+    assert.equal(payload.schema, "ue.capability-params-preflight.v1");
+    assert.equal(payload.valid, false);
+    assert.equal(payload.helpCommand, "ue-cli help scene.level.save --json");
+    assert.equal(payload.safeToRetry, false);
+    assert.match(payload.nextAction, /Recover or read back/);
+    assert.ok(payload.errors.some((error) => error.code === "type"));
 });
 test("locates ue-workflow-cli offline with deterministic precedence", () => {
     const fixturePluginRoot = resolve("fixture-plugin");

@@ -19,6 +19,22 @@ test("parameter templates contain defaults and required metadata without inventi
     assert.equal("confirmWrite" in writeTemplate.params, false);
     assert.ok(writeTemplate.required.includes("assetPath"));
     assert.ok(writeTemplate.unresolved.includes("assetPath"));
+    const requestCapability = catalog.get("blueprint.build.from_spec");
+    assert.ok(requestCapability);
+    const requestTemplate = createParameterTemplate(requestCapability);
+    assert.equal(requestTemplate.request.acceptsRequestId, true);
+    assert.equal(requestTemplate.request.generatedByCli, false);
+});
+test("preflight rejects boolean strings and exposes write recovery guidance", () => {
+    const capability = catalog.get("scene.level.save");
+    assert.ok(capability);
+    const result = preflightParameters(capability, { onlyIfDirty: "false" });
+    assert.equal(result.valid, false);
+    assert.equal(result.safeToProceed, false);
+    assert.ok(result.errors.some((error) => error.code === "type"));
+    assert.equal(result.safeToRetry, false);
+    assert.equal(result.helpCommand, "ue-cli help scene.level.save --json");
+    assert.match(result.nextAction, /Recover or read back/);
 });
 test("preflight rejects unknown, missing, type, range, and pattern errors locally", () => {
     const capability = catalog.get("blueprint.asset.list");

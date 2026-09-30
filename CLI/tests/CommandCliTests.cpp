@@ -794,6 +794,60 @@ int main()
         !invalid_const.ok && invalid_const.code == "invalid_parameter",
         "const true must reject false");
 
+    json constrained = Descriptor();
+    auto& constrained_properties =
+        constrained["inputSchema"]["properties"];
+    constrained_properties["assetPath"]["minLength"] = 6;
+    constrained_properties["assetPath"]["pattern"] = "^/Game/";
+    constrained_properties["count"]["minimum"] = 1;
+    constrained_properties["count"]["maximum"] = 9;
+    constrained_properties["tags"]["minItems"] = 1;
+    constrained_properties["tags"]["maxItems"] = 3;
+    constrained_properties["tags"]["uniqueItems"] = true;
+
+    const auto below_minimum = ue::command::ConvertParameters(
+        constrained,
+        {
+            { "asset-path", "/Game/A", false },
+            { "enabled", std::nullopt, false },
+            { "count", "0", false },
+        },
+        false);
+    Require(
+        !below_minimum.ok
+            && below_minimum.code == "invalid_parameter"
+            && below_minimum.message.find("minimum") != std::string::npos,
+        "numeric minimum must be enforced");
+
+    const auto duplicate_items = ue::command::ConvertParameters(
+        constrained,
+        {
+            { "asset-path", "/Game/Valid", false },
+            { "enabled", std::nullopt, false },
+            { "tags", "same", false },
+            { "tags", "same", false },
+        },
+        false);
+    Require(
+        !duplicate_items.ok
+            && duplicate_items.code == "invalid_parameter"
+            && duplicate_items.message.find("uniqueItems")
+                != std::string::npos,
+        "uniqueItems must be enforced");
+
+    const auto invalid_pattern = ue::command::ConvertParameters(
+        constrained,
+        {
+            { "asset-path", "/Engine/Invalid", false },
+            { "enabled", std::nullopt, false },
+        },
+        false);
+    Require(
+        !invalid_pattern.ok
+            && invalid_pattern.code == "invalid_parameter"
+            && invalid_pattern.message.find("pattern") != std::string::npos,
+        "string pattern must be enforced");
+
     const auto parameter_file =
         std::filesystem::temp_directory_path()
         / "ue-command-cli-settings.json";

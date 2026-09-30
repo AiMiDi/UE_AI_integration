@@ -52,6 +52,9 @@ export interface CapabilityParameterPreflight {
   request: CapabilityParameterTemplate["request"];
   persistence: CapabilityParameterTemplate["persistence"];
   retry: CapabilityParameterTemplate["retry"];
+  nextAction: string;
+  helpCommand: string;
+  safeToRetry: boolean;
 }
 
 function isRecord(value: unknown): value is JsonObject {
@@ -146,7 +149,9 @@ function metadata(capability: CapabilityDescriptor) {
   ].filter((field) => field in properties);
   const request = {
     acceptsRequestId: "requestId" in properties,
-    generatedByCli: "requestId" in properties,
+    // This contract is consumed by MCP. MCP does not synthesize request IDs;
+    // callers that use the CLI must inspect the CLI-specific contract.
+    generatedByCli: false,
   };
   const approval = {
     required: approvalRequired,
@@ -263,6 +268,8 @@ function validateSchema(
       if (typeof schema.minimum === "number" && value < schema.minimum) issue("minimum", "Value is below the declared minimum.", schema.minimum);
       if (typeof schema.maximum === "number" && value > schema.maximum) issue("maximum", "Value exceeds the declared maximum.", schema.maximum);
     }
+  } else if (type === "boolean") {
+    if (typeof value !== "boolean") issue("type", "Value must be a boolean.", "boolean");
   }
 
   for (const [keyword, expectedCount] of [["anyOf", 1], ["oneOf", 1]] as const) {
@@ -315,6 +322,15 @@ export function preflightParameters(
       warnings.push({ path: missingApproval.join(","), code: "approval_required", message: "Explicit approval is required before execution.", expected: true, actual: params });
     }
   }
+  const helpCommand = `ue-cli help ${capability.id} --json`;
+  const safeToRetry = info.retry.safeToRetry;
+  const nextAction = errors.length > 0
+    ? safeToRetry
+      ? "Correct the listed parameters, then rerun local preflight before execution."
+      : "Correct the listed parameters; do not retry an unknown write outcome. Recover or read back the request and asset before retrying the write."
+    : warnings.length > 0
+      ? "Provide the explicit approval fields, then rerun local preflight before execution."
+      : "Execute with the validated parameters, then verify the capability receipt and readback.";
   return {
     capability: capability.id,
     schemaSource: "local-manifest",
@@ -327,5 +343,8 @@ export function preflightParameters(
     request: info.request,
     persistence: info.persistence,
     retry: info.retry,
+    nextAction,
+    helpCommand,
+    safeToRetry,
   };
 }
