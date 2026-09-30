@@ -70,6 +70,8 @@ namespace UEAIIntegration::MaterialQuery
 		constexpr int32 DefinitionResponseReserveBytes = 16 * 1024;
 		constexpr int32 MaxDefinitionClassesScanned = 50000;
 		constexpr int32 MaxDefinitionContractsBuilt = 1024;
+		constexpr TCHAR AssetKindMaterial[] = TEXT("material|");
+		constexpr TCHAR AssetKindMaterialFunction[] = TEXT("materialFunction|");
 		// All public entry points execute on the Editor game thread, like domain tools.
 		TArray<TSharedPtr<const FSnapshot>> Snapshots;
 		TArray<TSharedPtr<const FBoundaryProof>> BoundaryProofs;
@@ -355,13 +357,48 @@ namespace UEAIIntegration::MaterialQuery
 			return true;
 		}
 
+		bool HasTypedIdentity(const FSnapshot& Snapshot)
+		{
+			return !Snapshot.Id.IsEmpty() && !Snapshot.ProjectionHash.IsEmpty();
+		}
+
+		FString SnapshotAssetKind(const FSnapshot& Snapshot)
+		{
+			if (Snapshot.AssetClass.StartsWith(AssetKindMaterialFunction)) return TEXT("materialFunction");
+			if (Snapshot.AssetClass.StartsWith(AssetKindMaterial)) return TEXT("material");
+			return FString();
+		}
+
+		FString SnapshotAssetClassName(const FSnapshot& Snapshot)
+		{
+			if (Snapshot.AssetClass.StartsWith(AssetKindMaterialFunction))
+				return Snapshot.AssetClass.Mid(UE_ARRAY_COUNT(AssetKindMaterialFunction) - 1);
+			if (Snapshot.AssetClass.StartsWith(AssetKindMaterial))
+				return Snapshot.AssetClass.Mid(UE_ARRAY_COUNT(AssetKindMaterial) - 1);
+			return Snapshot.AssetClass;
+		}
+
 		TSharedPtr<FJsonObject> Metadata(const FSnapshot& Snapshot)
 		{
 			auto Result = MakeShared<FJsonObject>();
+			if (HasTypedIdentity(Snapshot))
+			{
+				const FString Kind = SnapshotAssetKind(Snapshot);
+				if (!Kind.IsEmpty())
+				{
+					auto AssetRef = MakeShared<FJsonObject>();
+					AssetRef->SetStringField(TEXT("kind"), Kind);
+					AssetRef->SetStringField(TEXT("path"), Snapshot.AssetPath);
+					AssetRef->SetStringField(TEXT("snapshotId"), Snapshot.Id);
+					AssetRef->SetStringField(TEXT("projectionHash"), Snapshot.ProjectionHash);
+					if (!Snapshot.PreviewId.IsEmpty()) AssetRef->SetStringField(TEXT("previewId"), Snapshot.PreviewId);
+					Result->SetObjectField(TEXT("assetRef"), AssetRef);
+				}
+			}
 			Result->SetStringField(TEXT("schema"), TEXT("ue.material.graph-query/1"));
 			Result->SetStringField(TEXT("snapshotId"), Snapshot.Id);
 			Result->SetStringField(TEXT("assetPath"), Snapshot.AssetPath);
-			Result->SetStringField(TEXT("assetClass"), Snapshot.AssetClass);
+			Result->SetStringField(TEXT("assetClass"), SnapshotAssetClassName(Snapshot));
 			Result->SetStringField(TEXT("capturedAt"), Snapshot.CapturedAt);
 			Result->SetStringField(TEXT("projectionHash"), Snapshot.ProjectionHash);
 			Result->SetStringField(TEXT("source"), Snapshot.PreviewId.IsEmpty()
@@ -400,11 +437,29 @@ namespace UEAIIntegration::MaterialQuery
 			return Result;
 		}
 
-		TSharedPtr<FJsonObject> EdgeJson(const FSnapshot& Snapshot, const FEdge& Edge)
+		TSharedPtr<FJsonObject> NodeRef(const FSnapshot& Snapshot, const FString& Id)
+		{
+			auto Result = MakeShared<FJsonObject>();
+			Result->SetStringField(TEXT("kind"), TEXT("materialNode"));
+			Result->SetStringField(TEXT("id"), Id);
+			Result->SetStringField(TEXT("snapshotId"), Snapshot.Id);
+			Result->SetStringField(TEXT("projectionHash"), Snapshot.ProjectionHash);
+			return Result;
+		}
+
+		TSharedPtr<FJsonObject> EdgeJson(
+			const FSnapshot& Snapshot,
+			const FEdge& Edge,
+			bool bIncludeTypedRefs)
 		{
 			auto Result = MakeShared<FJsonObject>();
 			Result->SetStringField(TEXT("sourceNodeId"), Snapshot.Nodes[Edge.Source].Id);
 			Result->SetStringField(TEXT("targetNodeId"), Snapshot.Nodes[Edge.Target].Id);
+			if (bIncludeTypedRefs && HasTypedIdentity(Snapshot))
+			{
+				Result->SetObjectField(TEXT("sourceRef"), NodeRef(Snapshot, Snapshot.Nodes[Edge.Source].Id));
+				Result->SetObjectField(TEXT("targetRef"), NodeRef(Snapshot, Snapshot.Nodes[Edge.Target].Id));
+			}
 			Result->SetNumberField(TEXT("outputIndex"), Edge.OutputIndex);
 			Result->SetNumberField(TEXT("inputIndex"), Edge.InputIndex);
 			Result->SetStringField(TEXT("inputName"), Edge.InputName);
@@ -421,10 +476,11 @@ namespace UEAIIntegration::MaterialQuery
 		}
 
 		// Deep clone prevents tool consumers (including tests) from mutating cache data.
-		TSharedPtr<FJsonObject> NodeJson(const FNode& Node)
+		TSharedPtr<FJsonObject> NodeJson(const FSnapshot& Snapshot, const FNode& Node)
 		{
 			TSharedPtr<FJsonObject> Result;
 			FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(JsonText(Node.Data)), Result);
+			if (HasTypedIdentity(Snapshot)) Result->SetObjectField(TEXT("nodeRef"), NodeRef(Snapshot, Node.Id));
 			Result->SetNumberField(TEXT("incomingCount"), Node.Incoming.Num());
 			Result->SetNumberField(TEXT("outgoingCount"), Node.Outgoing.Num());
 			return Result;
@@ -437,6 +493,21 @@ namespace UEAIIntegration::MaterialQuery
 			Cursor->SetStringField(TEXT("filter"), FilterHash);
 			Cursor->SetNumberField(TEXT("offset"), Offset);
 			return FBase64::Encode(JsonText(Cursor));
+		}
+
+		TSharedPtr<FJsonObject> Continuation(
+			const FSnapshot& Snapshot,
+			const FString& FilterHash,
+			int32 Offset,
+			const FString& NextCursor)
+		{
+			auto Result = MakeShared<FJsonObject>();
+			Result->SetStringField(TEXT("snapshotId"), Snapshot.Id);
+			Result->SetStringField(TEXT("projectionHash"), Snapshot.ProjectionHash);
+			Result->SetStringField(TEXT("filterHash"), FilterHash);
+			Result->SetNumberField(TEXT("offset"), Offset);
+			if (!NextCursor.IsEmpty()) Result->SetStringField(TEXT("nextCursor"), NextCursor);
+			return Result;
 		}
 	}
 
@@ -478,7 +549,13 @@ namespace UEAIIntegration::MaterialQuery
 		else for (UMaterialExpression* E : Function->GetExpressions()) Expressions.Add(E);
 		Snapshot->AssetPath = OriginalPath.IsEmpty() ? Asset->GetPathName() : OriginalPath;
 		Snapshot->PreviewId = PreviewId;
-		Snapshot->AssetClass = Asset->GetClass()->GetName();
+		// Preserve the exact capture-time asset kind in the immutable snapshot so
+		// later pages can publish typed handles without reloading the UObject.
+		Snapshot->AssetClass = Function
+			                         ? FString(AssetKindMaterialFunction) + Asset->GetClass()->GetName()
+			                         : Material
+			                         ? FString(AssetKindMaterial) + Asset->GetClass()->GetName()
+			                         : Asset->GetClass()->GetName();
 		Snapshot->CapturedAt = FDateTime::UtcNow().ToIso8601();
 		Snapshot->CapturedSeconds = Start;
 		if (Function)
@@ -704,7 +781,7 @@ namespace UEAIIntegration::MaterialQuery
 		for (int32 I = 0; I < Snapshot->Edges.Num(); ++I)
 		{
 			auto& Edge = Snapshot->Edges[I];
-			Edge.Key = JsonText(EdgeJson(*Snapshot, Edge));
+			Edge.Key = JsonText(EdgeJson(*Snapshot, Edge, false));
 			Snapshot->EdgesByKey.Add(I);
 			Snapshot->ApproximateBytes += Edge.Key.Len() * sizeof(TCHAR) + sizeof(int32);
 		}
@@ -790,7 +867,7 @@ namespace UEAIIntegration::MaterialQuery
 				++Scanned;
 				continue;
 			}
-			auto Data = NodeJson(Node);
+			auto Data = NodeJson(*Snapshot, Node);
 			const int32 NodeBytes = FTCHARToUTF8(*JsonText(Data)).Length();
 			if (Bytes + NodeBytes > ResponseBudget) break;
 			Bytes += NodeBytes;
@@ -807,7 +884,13 @@ namespace UEAIIntegration::MaterialQuery
 		Result->SetNumberField(TEXT("scannedCount"), Scanned);
 		Result->SetNumberField(TEXT("candidateCount"), Count);
 		Result->SetBoolField(TEXT("hasMore"), Offset < Count);
-		if (Offset < Count) Result->SetStringField(TEXT("nextCursor"), EncodeCursor(*Snapshot, FilterHash, Offset));
+		if (Offset < Count)
+		{
+			const FString NextCursor = EncodeCursor(*Snapshot, FilterHash, Offset);
+			Result->SetStringField(TEXT("nextCursor"), NextCursor);
+			if (HasTypedIdentity(*Snapshot))
+				Result->SetObjectField(TEXT("continuation"), Continuation(*Snapshot, FilterHash, Offset, NextCursor));
+		}
 		return FMCPToolResult::Ok(Result);
 	}
 
@@ -896,7 +979,7 @@ namespace UEAIIntegration::MaterialQuery
 		TArray<TSharedPtr<FJsonValue>> Nodes, Edges, Boundary;
 		for (int32 Index : Queue)
 		{
-			auto Data = NodeJson(Snapshot->Nodes[Index]);
+			auto Data = NodeJson(*Snapshot, Snapshot->Nodes[Index]);
 			Data->SetNumberField(TEXT("distance"), Distances.FindChecked(Index));
 			const int32 Size = FTCHARToUTF8(*JsonText(Data)).Length();
 			if (Bytes + Size > ResponseBudget)
@@ -913,7 +996,7 @@ namespace UEAIIntegration::MaterialQuery
 		{
 			const FEdge& Edge = Snapshot->Edges[Index];
 			if (!Returned.Contains(Edge.Source) && !Returned.Contains(Edge.Target)) continue;
-			auto Data = EdgeJson(*Snapshot, Edge);
+			auto Data = EdgeJson(*Snapshot, Edge, true);
 			const int32 Size = FTCHARToUTF8(*JsonText(Data)).Length();
 			if (Edges.Num() + Boundary.Num() >= MaxEdges || Bytes + Size > ResponseBudget)
 			{
@@ -1025,7 +1108,7 @@ namespace UEAIIntegration::MaterialQuery
 			{
 				continue;
 			}
-			const TSharedPtr<FJsonObject> Edge = EdgeJson(*Snapshot, SnapshotEdge);
+			const TSharedPtr<FJsonObject> Edge = EdgeJson(*Snapshot, SnapshotEdge, true);
 			const FString EdgeKey = JsonText(Edge);
 			BoundaryBytes += FTCHARToUTF8(*EdgeKey).Length();
 			if (BoundaryEdges.Num() >= 1000 || BoundaryBytes > ResponseBudget - 8192)
@@ -1108,6 +1191,13 @@ namespace UEAIIntegration::MaterialQuery
 		Result->SetStringField(TEXT("sourceSnapshotId"), Snapshot->Id);
 		Result->SetStringField(TEXT("sourceProjectionHash"), Snapshot->ProjectionHash);
 		Result->SetArrayField(TEXT("writableNodeIds"), IdentityNodes);
+		TArray<TSharedPtr<FJsonValue>> WritableNodeRefs;
+		if (HasTypedIdentity(*Snapshot))
+		{
+			for (const FString& NodeId : WritableIds)
+				WritableNodeRefs.Add(MakeShared<FJsonValueObject>(NodeRef(*Snapshot, NodeId)));
+			Result->SetArrayField(TEXT("writableNodeRefs"), WritableNodeRefs);
+		}
 		Result->SetArrayField(TEXT("boundaryEdges"), BoundaryEdges);
 		Result->SetNumberField(TEXT("writableNodeCount"), WritableIds.Num());
 		Result->SetNumberField(TEXT("boundaryEdgeCount"), BoundaryEdges.Num());
@@ -2303,6 +2393,9 @@ namespace UEAIIntegration::MaterialQuery
 					const FNode* Old = Compare <= 0 ? &Before->Nodes[Left] : nullptr;
 					const FNode* New = Compare >= 0 ? &After->Nodes[Right] : nullptr;
 					Change->SetStringField(TEXT("nodeId"), Old ? Old->Id : New->Id);
+					const FSnapshot& NodeRefSnapshot = New ? *After : *Before;
+					if (HasTypedIdentity(NodeRefSnapshot))
+						Change->SetObjectField(TEXT("nodeRef"), NodeRef(NodeRefSnapshot, Old ? Old->Id : New->Id));
 					Change->SetStringField(TEXT("beforeHash"), Old ? Old->DataHash : FString());
 					Change->SetStringField(TEXT("afterHash"), New ? New->DataHash : FString());
 					TArray<TSharedPtr<FJsonValue>> Fields;
@@ -2328,7 +2421,7 @@ namespace UEAIIntegration::MaterialQuery
 				{
 					const auto& S = Compare < 0 ? *Before : *After;
 					Change->SetObjectField(
-						TEXT("edge"), EdgeJson(S, S.Edges[S.EdgesByKey[Compare < 0 ? Left : Right]]));
+						TEXT("edge"), EdgeJson(S, S.Edges[S.EdgesByKey[Compare < 0 ? Left : Right]], true));
 				}
 				const int32 Size = FTCHARToUTF8(*JsonText(Change)).Length();
 				if (Bytes + Size > ResponseBudget)
@@ -2376,7 +2469,24 @@ namespace UEAIIntegration::MaterialQuery
 			C->SetStringField(TEXT("phase"), Phase);
 			C->SetNumberField(TEXT("left"), Left);
 			C->SetNumberField(TEXT("right"), Right);
-			Result->SetStringField(TEXT("nextCursor"), FBase64::Encode(JsonText(C)));
+			const FString NextCursor = FBase64::Encode(JsonText(C));
+			Result->SetStringField(TEXT("nextCursor"), NextCursor);
+			auto ContinuationData = MakeShared<FJsonObject>();
+			ContinuationData->SetStringField(TEXT("snapshotId"), BeforeId);
+			ContinuationData->SetStringField(TEXT("projectionHash"), Before->ProjectionHash);
+			ContinuationData->SetStringField(TEXT("filterHash"), Digest(BeforeId + TEXT("\n") + AfterId));
+			ContinuationData->SetNumberField(TEXT("offset"), Phase == TEXT("nodes") ? Left : Right);
+			ContinuationData->SetStringField(TEXT("offsetAxis"), Phase == TEXT("nodes") ? TEXT("left") : TEXT("right"));
+			ContinuationData->SetStringField(TEXT("phase"), Phase);
+			ContinuationData->SetNumberField(TEXT("left"), Left);
+			ContinuationData->SetNumberField(TEXT("right"), Right);
+			ContinuationData->SetStringField(TEXT("beforeSnapshotId"), BeforeId);
+			ContinuationData->SetStringField(TEXT("afterSnapshotId"), AfterId);
+			ContinuationData->SetStringField(TEXT("beforeProjectionHash"), Before->ProjectionHash);
+			ContinuationData->SetStringField(TEXT("afterProjectionHash"), After->ProjectionHash);
+			ContinuationData->SetStringField(TEXT("nextCursor"), NextCursor);
+			if (HasTypedIdentity(*Before) && HasTypedIdentity(*After))
+				Result->SetObjectField(TEXT("continuation"), ContinuationData);
 		}
 		return FMCPToolResult::Ok(Result);
 	}

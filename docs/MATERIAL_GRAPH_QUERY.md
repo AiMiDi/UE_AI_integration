@@ -49,6 +49,17 @@ See [preview editing](MATERIAL_EDITOR_PREVIEW.md) for the matching write contrac
   silently switch to a newer capture. Cursors bind the snapshot and filters.
 - `projectionHash` hashes the captured query representation, including exposed
   node details and edges. It is not a package hash or a Workflow write token.
+- Responses retain the legacy `assetPath`, `assetClass`, `snapshotId` and
+  `projectionHash` fields. When both `snapshotId` and `projectionHash` are
+  present, they also expose an additive typed `assetRef`:
+  `{kind:"material"|"materialFunction",path,snapshotId,projectionHash}`;
+  editor-preview captures add `previewId`. A typed reference is never emitted
+  with an empty projection hash.
+- Node records retain `nodeId` and add `nodeRef`:
+  `{kind:"materialNode",id,snapshotId,projectionHash}`. Edge records retain
+  `sourceNodeId`/`targetNodeId` and add matching `sourceRef`/`targetRef` node
+  references. Boundary responses retain `writableNodeIds` and add
+  `writableNodeRefs` when the snapshot has a complete typed identity.
 - Every response states `liveStateChecked: false`. Recapture before preparing
   edits. Workflow verifies its own current asset preconditions at execution.
 - Expired, evicted or released snapshots return an explicit error requiring a
@@ -187,6 +198,16 @@ hasMore:true; continue with nextCursor. Limits can change between pages, but
 the cursor cannot switch or reverse the snapshot pair. No complete total-change
 count is claimed before all pages have been read. Equal projection hashes allow
 an immediate empty result without scanning.
+
+In addition to the legacy `nextCursor`, a page with `hasMore:true` returns a
+structured `continuation`. Node pages bind it to
+`{snapshotId,projectionHash,filterHash,offset,nextCursor}`. Diff pages retain
+the same compatibility fields and additionally expose `phase`, `left` and
+`right` merge indexes, plus `beforeSnapshotId`/`afterSnapshotId` and both
+projection hashes. Diff `offset` is accompanied by `offsetAxis`; clients must
+resume with `nextCursor` and treat the phase and both indexes as the complete
+continuation state. A continuation is omitted when the projection hash is not
+available, while the legacy cursor field remains unchanged.
 
 This compares the captured query projection, not full UObject properties, shader
 semantics, pixel output or current live state. Re-capture after editing. Renaming

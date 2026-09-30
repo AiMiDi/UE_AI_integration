@@ -53,6 +53,15 @@ bool FMaterialGraphQueryPagingTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Capture did not dirty package"), Function->GetOutermost()->IsDirty());
 	TestEqual(TEXT("Count"), CaptureResult.Data->GetIntegerField(TEXT("totalNodes")), 5000);
 	const FString Id = CaptureResult.Data->GetStringField(TEXT("snapshotId"));
+	TestTrue(TEXT("Capture exposes typed asset reference"), CaptureResult.Data->HasField(TEXT("assetRef")));
+	if (CaptureResult.Data->HasField(TEXT("assetRef")))
+	{
+		const auto AssetRef = CaptureResult.Data->GetObjectField(TEXT("assetRef"));
+		TestEqual(TEXT("Asset reference kind"), AssetRef->GetStringField(TEXT("kind")), FString(TEXT("materialFunction")));
+		TestEqual(TEXT("Asset reference snapshot binding"), AssetRef->GetStringField(TEXT("snapshotId")), Id);
+		TestEqual(TEXT("Asset reference projection binding"), AssetRef->GetStringField(TEXT("projectionHash")), CaptureResult.Data->GetStringField(TEXT("projectionHash")));
+		TestFalse(TEXT("Typed asset reference never has an empty projection hash"), AssetRef->GetStringField(TEXT("projectionHash")).IsEmpty());
+	}
 	auto Params = QueryParams(Id);
 	Params->SetNumberField(TEXT("limit"), 137);
 	TSet<FString> Seen;
@@ -65,12 +74,32 @@ bool FMaterialGraphQueryPagingTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("Page succeeds"), Page.bSuccess)) return false;
 		for (const auto& Node : Page.Data->GetArrayField(TEXT("nodes")))
 		{
+			const auto NodeObject = Node->AsObject();
+			if (Pages == 1)
+			{
+				TestTrue(TEXT("Node page exposes typed node reference"), NodeObject->HasField(TEXT("nodeRef")));
+				if (NodeObject->HasField(TEXT("nodeRef")))
+				{
+					const auto Ref = NodeObject->GetObjectField(TEXT("nodeRef"));
+					TestEqual(TEXT("Node reference ID matches legacy field"), Ref->GetStringField(TEXT("id")), NodeObject->GetStringField(TEXT("nodeId")));
+					TestEqual(TEXT("Node reference snapshot binding"), Ref->GetStringField(TEXT("snapshotId")), Id);
+					TestFalse(TEXT("Typed node reference never has an empty projection hash"), Ref->GetStringField(TEXT("projectionHash")).IsEmpty());
+				}
+			}
 			const FString NodeId = Node->AsObject()->GetStringField(TEXT("nodeId"));
 			TestFalse(TEXT("No duplicate across pages"), Seen.Contains(NodeId));
 			Seen.Add(NodeId);
 		}
 		if (!Page.Data->GetBoolField(TEXT("hasMore"))) break;
 		const FString Cursor = Page.Data->GetStringField(TEXT("nextCursor"));
+		TestTrue(TEXT("Node page exposes bound continuation"), Page.Data->HasField(TEXT("continuation")));
+		if (Page.Data->HasField(TEXT("continuation")))
+		{
+			const auto Continuation = Page.Data->GetObjectField(TEXT("continuation"));
+			TestEqual(TEXT("Continuation snapshot binding"), Continuation->GetStringField(TEXT("snapshotId")), Id);
+			TestEqual(TEXT("Continuation projection binding"), Continuation->GetStringField(TEXT("projectionHash")), CaptureResult.Data->GetStringField(TEXT("projectionHash")));
+			TestEqual(TEXT("Continuation preserves legacy cursor"), Continuation->GetStringField(TEXT("nextCursor")), Cursor);
+		}
 		if (FirstCursor.IsEmpty()) FirstCursor = Cursor;
 		Params->SetStringField(TEXT("cursor"), Cursor);
 	}
@@ -128,6 +157,57 @@ bool FMaterialGraphQueryTraversalTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Cycle traversal terminates"), Cycle.bSuccess);
 	TestEqual(TEXT("Cycle visited once per node"), Cycle.Data->GetArrayField(TEXT("nodes")).Num(), 3);
 	TestFalse(TEXT("Cycle upstream traversal complete"), Cycle.Data->GetBoolField(TEXT("truncated")));
+	if (Cycle.Data->GetArrayField(TEXT("edges")).Num() > 0)
+	{
+		const auto Edge = Cycle.Data->GetArrayField(TEXT("edges"))[0]->AsObject();
+		TestTrue(TEXT("Subgraph edge exposes typed source reference"), Edge->HasField(TEXT("sourceRef")));
+		TestTrue(TEXT("Subgraph edge exposes typed target reference"), Edge->HasField(TEXT("targetRef")));
+		if (Edge->HasField(TEXT("sourceRef")))
+		{
+			const auto SourceRef = Edge->GetObjectField(TEXT("sourceRef"));
+			TestEqual(TEXT("Source reference ID matches legacy field"), SourceRef->GetStringField(TEXT("id")), Edge->GetStringField(TEXT("sourceNodeId")));
+			TestEqual(TEXT("Source reference snapshot binding"), SourceRef->GetStringField(TEXT("snapshotId")), Id);
+			TestFalse(TEXT("Typed source reference never has an empty projection hash"), SourceRef->GetStringField(TEXT("projectionHash")).IsEmpty());
+		}
+		if (Edge->HasField(TEXT("targetRef")))
+		{
+			const auto TargetRef = Edge->GetObjectField(TEXT("targetRef"));
+			TestEqual(TEXT("Target reference ID matches legacy field"), TargetRef->GetStringField(TEXT("id")), Edge->GetStringField(TEXT("targetNodeId")));
+			TestEqual(TEXT("Target reference snapshot binding"), TargetRef->GetStringField(TEXT("snapshotId")), Id);
+			TestFalse(TEXT("Typed target reference never has an empty projection hash"), TargetRef->GetStringField(TEXT("projectionHash")).IsEmpty());
+		}
+	}
+	TStrongObjectPtr<UMaterialFunction> BoundaryFunction(NewObject<UMaterialFunction>());
+	auto* BoundarySource = AddQueryExpression<UMaterialExpressionConstant>(BoundaryFunction.Get());
+	auto* BoundaryTarget = AddQueryExpression<UMaterialExpressionAdd>(BoundaryFunction.Get());
+	BoundaryTarget->A.Connect(0, BoundarySource);
+	const auto BoundaryCapture = Capture(BoundaryFunction.Get());
+	if (TestTrue(TEXT("Boundary fixture captures"), BoundaryCapture.bSuccess))
+	{
+		auto BoundaryParams = QueryParams(BoundaryCapture.Data->GetStringField(TEXT("snapshotId")));
+		BoundaryParams->SetArrayField(TEXT("nodeIds"), {MakeShared<FJsonValueString>(MCPMaterialInfrastructure::ExpressionNodeId(BoundaryTarget))});
+		BoundaryParams->SetNumberField(TEXT("depth"), 1);
+		BoundaryParams->SetNumberField(TEXT("maxNodes"), 10);
+		BoundaryParams->SetNumberField(TEXT("maxEdges"), 10);
+		const auto BoundaryResult = Boundary(BoundaryParams);
+		if (TestTrue(TEXT("Boundary exposes typed writable node references"), BoundaryResult.bSuccess))
+		{
+			TestTrue(TEXT("Boundary has writable node references"), BoundaryResult.Data->HasField(TEXT("writableNodeRefs")));
+			if (BoundaryResult.Data->HasField(TEXT("writableNodeRefs")))
+			{
+				const auto Refs = BoundaryResult.Data->GetArrayField(TEXT("writableNodeRefs"));
+				TestEqual(TEXT("Writable reference count matches legacy IDs"), Refs.Num(), BoundaryResult.Data->GetArrayField(TEXT("writableNodeIds")).Num());
+				if (Refs.Num() > 0)
+				{
+					const auto Ref = Refs[0]->AsObject();
+					TestTrue(TEXT("Writable reference has typed kind"), Ref->GetStringField(TEXT("kind")) == TEXT("materialNode"));
+					TestEqual(TEXT("Writable reference snapshot binding"), Ref->GetStringField(TEXT("snapshotId")), BoundaryCapture.Data->GetStringField(TEXT("snapshotId")));
+					TestFalse(TEXT("Writable reference never has an empty projection hash"), Ref->GetStringField(TEXT("projectionHash")).IsEmpty());
+				}
+			}
+		}
+		Release(BoundaryCapture.Data->GetStringField(TEXT("snapshotId")));
+	}
 	Params->SetStringField(TEXT("direction"), TEXT("downstream"));
 	Params->SetNumberField(TEXT("maxNodes"), 5);
 	Params->SetNumberField(TEXT("maxEdges"), 7);
@@ -159,6 +239,7 @@ bool FMaterialGraphQueryIdentityTest::RunTest(const FString& Parameters)
 	Material->GetOutermost()->SetDirtyFlag(false);
 	const auto Before = Capture(Material.Get());
 	if (!TestTrue(TEXT("Capture material root inputs"), Before.bSuccess)) return false;
+	TestEqual(TEXT("Material asset reference kind"), Before.Data->GetObjectField(TEXT("assetRef"))->GetStringField(TEXT("kind")), FString(TEXT("material")));
 	TestNull(TEXT("Read model needs no material graph"), Material->MaterialGraph.Get());
 	TestEqual(TEXT("Root edge included"), Before.Data->GetIntegerField(TEXT("totalEdges")), 1);
 	MCPMaterialInfrastructure::EnsureMaterialGraph(Material.Get());
@@ -301,6 +382,24 @@ bool FMaterialGraphDiffTest::RunTest(const FString&)
 	{
 		const auto Page = Diff(P); if (!TestTrue(TEXT("Diff page succeeds"), Page.bSuccess)) return false;
 		TestTrue(TEXT("Per-page result limit"), Page.Data->GetArrayField(TEXT("changes")).Num() <= 1);
+		if (Page.Data->GetBoolField(TEXT("hasMore")) && I == 0)
+		{
+			TestTrue(TEXT("Diff exposes bound continuation"), Page.Data->HasField(TEXT("continuation")));
+			if (Page.Data->HasField(TEXT("continuation")))
+			{
+				const auto Continuation = Page.Data->GetObjectField(TEXT("continuation"));
+				TestEqual(TEXT("Diff continuation before snapshot"), Continuation->GetStringField(TEXT("beforeSnapshotId")), Before.Data->GetStringField(TEXT("snapshotId")));
+				TestEqual(TEXT("Diff continuation after snapshot"), Continuation->GetStringField(TEXT("afterSnapshotId")), After.Data->GetStringField(TEXT("snapshotId")));
+				TestEqual(TEXT("Diff continuation preserves legacy cursor"), Continuation->GetStringField(TEXT("nextCursor")), Page.Data->GetStringField(TEXT("nextCursor")));
+				TestTrue(TEXT("Diff continuation preserves merge phase"), Continuation->HasField(TEXT("phase")));
+				TestTrue(TEXT("Diff continuation preserves left and right indexes"), Continuation->HasField(TEXT("left")) && Continuation->HasField(TEXT("right")));
+				if (Continuation->HasField(TEXT("left")) && Continuation->HasField(TEXT("right")))
+				{
+					TestTrue(TEXT("Diff continuation left index is non-negative"), Continuation->GetIntegerField(TEXT("left")) >= 0);
+					TestTrue(TEXT("Diff continuation right index is non-negative"), Continuation->GetIntegerField(TEXT("right")) >= 0);
+				}
+			}
+		}
 		for (const auto& V : Page.Data->GetArrayField(TEXT("changes")))
 		{
 			const auto Change = V->AsObject(); const FString Kind = Change->GetStringField(TEXT("change"));
@@ -311,6 +410,14 @@ bool FMaterialGraphDiffTest::RunTest(const FString&)
 			if (Kind == TEXT("modified"))
 			{
 				++Modified; TestEqual(TEXT("Modified node identity"), Id, ExpressionNodeId(B));
+				TestTrue(TEXT("Diff node change exposes typed node reference"), Change->HasField(TEXT("nodeRef")));
+				if (Change->HasField(TEXT("nodeRef")))
+				{
+					const auto Ref = Change->GetObjectField(TEXT("nodeRef"));
+					TestEqual(TEXT("Diff node reference ID matches legacy field"), Ref->GetStringField(TEXT("id")), Id);
+					TestEqual(TEXT("Diff node reference binds after snapshot"), Ref->GetStringField(TEXT("snapshotId")), After.Data->GetStringField(TEXT("snapshotId")));
+					TestFalse(TEXT("Diff node reference never has an empty projection hash"), Ref->GetStringField(TEXT("projectionHash")).IsEmpty());
+				}
 				TSet<FString> Fields; for (const auto& Field : Change->GetArrayField(TEXT("changedFields"))) Fields.Add(Field->AsString());
 				TestTrue(TEXT("Value and position changes identified"), Fields.Contains(TEXT("value")) && Fields.Contains(TEXT("x")));
 			}
