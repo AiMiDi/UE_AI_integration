@@ -10,10 +10,16 @@
 #include "UEAIIntegrationServer.h"
 #include "HAL/PlatformMisc.h"
 
-// Constructor and destructor are out-of-line because the subsystem owns
-// forward-declared unique pointers. Keeping construction here also prevents
-// UHT's generated constructor from instantiating their cleanup paths while the
-// pointee types are incomplete.
+void FMCPToolRegistryDeleter::operator()(FMCPToolRegistry* Registry) const
+{
+	delete Registry;
+}
+
+void FMCPExecutorDeleter::operator()(FMCPExecutor* Executor) const
+{
+	delete Executor;
+}
+
 UUEAIIntegrationSubsystem::UUEAIIntegrationSubsystem() = default;
 UUEAIIntegrationSubsystem::~UUEAIIntegrationSubsystem() = default;
 
@@ -120,7 +126,7 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	BlueprintDebugService =
 		MakeShared<UEAIIntegration::Infrastructure::FBlueprintDebugService>(
 			*PIEController);
-	Registry = MakeUnique<FMCPToolRegistry>();
+	Registry.Reset(new FMCPToolRegistry());
 	ClientActivityService =
 		MakeShared<UEAIIntegration::Infrastructure::FClientActivityService>();
 	ProductionController =
@@ -221,7 +227,7 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// A catalog mismatch degrades discovery/execution but must not hide the health endpoint.
 	Registry->LoadCapabilityManifests();
 
-	Executor = MakeUnique<FMCPExecutor>(*Registry);
+	Executor.Reset(new FMCPExecutor(*Registry));
 	const FString ConfiguredPort =
 		FPlatformMisc::GetEnvironmentVariable(TEXT("UE_PORT"));
 	if (!ConfiguredPort.IsEmpty())

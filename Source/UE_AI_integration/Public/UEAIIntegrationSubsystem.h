@@ -9,6 +9,17 @@
 
 class FMCPToolRegistry;
 class FMCPExecutor;
+
+struct FMCPToolRegistryDeleter
+{
+	void operator()(FMCPToolRegistry* Registry) const;
+};
+
+struct FMCPExecutorDeleter
+{
+	void operator()(FMCPExecutor* Executor) const;
+};
+
 namespace UEAIIntegration::Infrastructure
 {
 class FBlueprintDebugService;
@@ -66,8 +77,8 @@ private:
 		ProductionController;
 	TSharedPtr<UEAIIntegration::Infrastructure::FClientActivityService>
 		ClientActivityService;
-	TUniquePtr<FMCPToolRegistry> Registry;
-	TUniquePtr<FMCPExecutor> Executor;
+	TUniquePtr<FMCPToolRegistry, FMCPToolRegistryDeleter> Registry;
+	TUniquePtr<FMCPExecutor, FMCPExecutorDeleter> Executor;
 	TUniquePtr<FUEAIIntegrationServer> Server;
 	int32 ServerPort = 9847;
 	bool bServerEnableRequested = true;

@@ -30,6 +30,7 @@
 #include "LevelEditorViewport.h"
 #include "LumenVisualizationData.h"
 #include "Runtime/Launch/Resources/Version.h"
+#include "Slate/SceneViewport.h"
 #include "Misc/App.h"
 #include "Misc/Base64.h"
 #include "Misc/EngineVersion.h"
