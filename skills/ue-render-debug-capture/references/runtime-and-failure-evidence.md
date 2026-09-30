@@ -1,10 +1,10 @@
 # Runtime inspection and rendering failure evidence
 
-The current removal and validation record is
-[`2026-09-08-niagara-no-engine-bridge.json`](../../../docs/validation/2026-09-08-niagara-no-engine-bridge.json).
-The earlier GPU bridge validation record is historical and does not describe
-the current implementation. The plugin uses existing engine APIs; it does not
-install an engine patch.
+The plugin uses existing engine APIs; it does not install an engine patch.
+Historical validation is retained with the originating task evidence rather
+than treated as current runtime proof. See
+[`UE AI improvement plan`](../../../docs/UE_AI_IMPROVEMENT_PLAN.md) for the
+evidence boundary and the current follow-up matrix.
 
 ## Niagara runtime inventory
 
