@@ -76,7 +76,7 @@ def main() -> int:
     artifact = b"standalone ue artifact\n"
     artifact_hash = hashlib.sha256(artifact).hexdigest()
     health_identity: dict[str, object] = {}
-    health_control: dict[str, object] = {"hook": None}
+    health_control: dict[str, object] = {"hook": None, "invalidData": False}
 
     typed_schema = {
         "type": "object",
@@ -197,16 +197,21 @@ def main() -> int:
                 hook = health_control.get("hook")
                 if callable(hook):
                     hook()
+                health_data: object = (
+                    []
+                    if health_control.get("invalidData")
+                    else {
+                        "status": "healthy",
+                        "apiVersion": "v1",
+                        "pluginVersion": "0.8.0",
+                        **health_identity,
+                    }
+                )
                 self.send_json(
                     200,
                     {
                         "ok": True,
-                        "data": {
-                            "status": "healthy",
-                            "apiVersion": "v1",
-                            "pluginVersion": "0.8.0",
-                            **health_identity,
-                        },
+                        "data": health_data,
                     },
                 )
                 return
@@ -709,18 +714,56 @@ def main() -> int:
                     ]
                 )
 
+                health_control["invalidData"] = True
+                invalid_health = run_doctor(
+                    [
+                        "doctor",
+                        "--full",
+                        "--endpoint",
+                        endpoint,
+                        "--no-clean-stale-instances",
+                        "--json",
+                    ]
+                )
+                invalid_health_json = json.loads(invalid_health.stdout)
+                live_record = next(
+                    item
+                    for item in invalid_health_json["data"]["instances"]["records"]
+                    if item["serverInstanceId"] == live_id
+                )
+                assert live_record["status"] == "unverified"
+                assert live_record["reason"] == "health_invalid_data"
+                health_control["invalidData"] = False
+
+                test_tools = run_doctor(
+                    ["test-tools", "--endpoint", endpoint, "--json"]
+                )
+                assert test_tools.returncode in (0, 4), (
+                    test_tools.stdout,
+                    test_tools.stderr,
+                )
+                test_tools_json = json.loads(test_tools.stdout)
+                assert test_tools_json["data"]["schema"] == "ue.test-tools.v2"
+                assert test_tools_json["data"]["mcpExpectedToolCount"] == 13
+                assert not any(
+                    check["id"] == "mcp.stdio" and check["status"] != "passed"
+                    for check in test_tools_json["data"]["checks"]
+                )
+                assert stale_path.exists()
+                assert invalid_path.exists()
+
                 cleaned = run_doctor(
                     ["doctor", "--full", "--endpoint", endpoint, "--json"]
                 )
                 cleaned_json = json.loads(cleaned.stdout)
                 cleanup = cleaned_json["data"]["instances"]["cleanup"]
                 assert cleanup["enabled"] is True
-                assert len(cleanup["deleted"]) == 4, cleanup
+                assert len(cleanup["deleted"]) == 3, cleanup
                 assert live_path.exists()
                 assert unverified_path.exists()
                 assert not stale_path.exists()
                 assert not reused_path.exists()
-                assert not mismatch_path.exists()
+                assert mismatch_path.exists()
                 assert not invalid_path.exists()
 
                 race_id = str(uuid.uuid4())

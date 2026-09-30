@@ -55,8 +55,13 @@ try {
   await client.connect(transport);
   const listed = await client.listTools();
   const names = listed.tools.map((tool) => tool.name).sort();
-  if (names.length !== 12) {
-    throw new Error(`expected 12 tools, received ${names.length}: ${names.join(", ")}`);
+  const expectedNames = [
+    "ue_ai", "ue_animation", "ue_blueprint", "ue_capabilities", "ue_cli",
+    "ue_content", "ue_context", "ue_params", "ue_production", "ue_scene",
+    "ue_skills", "ue_status", "ue_workflow",
+  ];
+  if (JSON.stringify(names) !== JSON.stringify(expectedNames)) {
+    throw new Error(`expected ${expectedNames.join(", ")}; received ${names.join(", ")}`);
   }
   process.stdout.write(
     `${JSON.stringify({ ok: true, toolCount: names.length, tools: names })}\n`,

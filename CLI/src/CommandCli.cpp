@@ -4899,6 +4899,7 @@ json InspectInstanceRecords(
             && pid != 0
             && !process_start.empty()
             && IsLoopbackEndpoint(endpoint);
+        bool cleanup_eligible = !identity_valid;
         if (identity_valid)
         {
             switch (ProbeProcessIdentity(pid, process_start))
@@ -4906,16 +4907,20 @@ json InspectInstanceRecords(
             case ProcessIdentity::Missing:
                 status = "stale";
                 reason = "process_not_found";
+                cleanup_eligible = true;
                 break;
             case ProcessIdentity::StartTimeMismatch:
                 status = "stale";
                 reason = "process_start_mismatch";
+                cleanup_eligible = true;
                 break;
             case ProcessIdentity::Unverified:
                 status = "unverified";
                 reason = "process_identity_unverified";
+                cleanup_eligible = false;
                 break;
             case ProcessIdentity::Match:
+                cleanup_eligible = false;
                 if (health_checks++ >= 8)
                 {
                     status = "unverified";
@@ -4932,16 +4937,40 @@ json InspectInstanceRecords(
                         reason = "health_unreachable";
                         break;
                     }
-                    const json data = health.value.value(
-                        "data", json::object());
+                    const auto data_it = health.value.find("data");
+                    if (data_it == health.value.end()
+                        || !data_it->is_object())
+                    {
+                        status = "unverified";
+                        reason = "health_invalid_data";
+                        break;
+                    }
+                    const json& data = *data_it;
+                    const auto health_instance =
+                        data.find("serverInstanceId");
+                    const auto health_pid = data.find("processId");
+                    const auto health_start =
+                        data.find("processStartTime");
+                    if (health_instance == data.end()
+                        || !health_instance->is_string()
+                        || health_instance->get<std::string>().empty()
+                        || health_pid == data.end()
+                        || !health_pid->is_number_integer()
+                        || health_pid->get<std::int64_t>() <= 0
+                        || health_start == data.end()
+                        || !health_start->is_string()
+                        || health_start->get<std::string>().empty())
+                    {
+                        status = "unverified";
+                        reason = "health_identity_unavailable";
+                        break;
+                    }
                     const bool matches =
-                        data.value("serverInstanceId", std::string{})
-                            == instance_id
-                        && data.value("processId", std::uint64_t{0})
-                            == pid
-                        && data.value("processStartTime", std::string{})
-                            == process_start;
+                        health_instance->get<std::string>() == instance_id
+                        && health_pid->get<std::uint64_t>() == pid
+                        && health_start->get<std::string>() == process_start;
                     status = matches ? "live" : "stale";
+                    cleanup_eligible = !matches;
                     reason = matches
                         ? "identity_verified"
                         : "health_identity_mismatch";
@@ -4949,10 +4978,28 @@ json InspectInstanceRecords(
                 break;
             }
         }
+        else if (pid != 0 && !process_start.empty())
+        {
+            // Preserve legacy records when their PID/start pair still points
+            // at a live process, even if newer identity fields are missing.
+            const ProcessIdentity process_identity =
+                ProbeProcessIdentity(pid, process_start);
+            if (process_identity == ProcessIdentity::Match)
+            {
+                status = "unverified";
+                reason = "record_identity_incomplete_live_process";
+                cleanup_eligible = false;
+            }
+            else if (process_identity == ProcessIdentity::Unverified)
+            {
+                cleanup_eligible = false;
+            }
+        }
         counts[status] = counts.value(status, 0) + 1;
         bool was_deleted = false;
         const double age_seconds = FileAgeSeconds(entry.path());
         if (clean_stale
+            && cleanup_eligible
             && (status == "stale" || status == "invalid")
             && age_seconds >= 300.0
             && LooksLikeInstanceId(entry.path().stem().string()))
@@ -4985,6 +5032,10 @@ json InspectInstanceRecords(
                         != entry.path().stem().string()))
             {
                 cleanup_skip_reason = "server_instance_changed";
+            }
+            else if (reason == "health_identity_mismatch")
+            {
+                cleanup_skip_reason = "health_identity_mismatch";
             }
             else
             {
@@ -5170,13 +5221,13 @@ json RunMcpStdioDiagnostic(const std::filesystem::path& bundle_root)
     const bool passed = exit_code == 0
         && payload.is_object()
         && payload.value("ok", false)
-        && payload.value("toolCount", 0) == 12;
+        && payload.value("toolCount", 0) == 13;
     json check = DiagnosticCheck(
         "mcp.stdio",
         passed ? "passed" : "failed",
         passed ? "ok" : "mcp_smoke_failed",
         passed
-            ? "MCP initialize/list-tools returned exactly 12 tools."
+            ? "MCP initialize/list-tools returned exactly 13 tools."
             : (text.empty() ? "MCP stdio smoke produced no result." : text));
     check["durationMs"] = elapsed();
     return check;
@@ -5400,14 +5451,35 @@ DoctorReport CollectDoctorReport(
 
     const ParsedEnvelope health = ParseEnvelope(client.Get("/api/health"));
     const bool editor_required = options.endpoint_explicit;
+    const auto health_data = health.ok
+        ? health.value.find("data")
+        : health.value.end();
+    const bool health_data_valid = health.ok
+        && health_data != health.value.end()
+        && health_data->is_object();
+    const std::string health_data_code = !health.ok
+        ? health.code
+        : health_data == health.value.end()
+        ? "health_identity_unavailable"
+        : !health_data->is_object()
+        ? "health_invalid_data"
+        : "ok";
     add(DiagnosticCheck(
             "editor.health",
-            health.ok ? "passed" : (editor_required ? "failed" : "unavailable"),
-            health.ok ? "ok" : health.code,
-            health.ok ? "loopback health succeeded" : health.message),
+            health_data_valid
+                ? "passed"
+                : (editor_required ? "failed" : "unavailable"),
+            health_data_code,
+            health_data_valid
+                ? "loopback health succeeded"
+                : health.ok
+                ? "Editor health response data is not an object."
+                : health.message),
         editor_required);
-    json editor_data;
-    if (health.ok)
+    json editor_data = health_data_valid
+        ? *health_data
+        : json::object();
+    if (health_data_valid)
     {
         editor_data = health.value.value("data", json::object());
         const std::string remote_revision = editor_data.value(
@@ -5605,6 +5677,9 @@ int RunTestTools(
 {
     Options doctor = options;
     doctor.doctor_full = true;
+    // test-tools is a diagnostic probe, so it must never delete instance
+    // records unless a caller explicitly runs the cleanup-capable doctor.
+    doctor.clean_stale_instances = false;
     doctor.output_path.clear();
     doctor.endpoint_explicit = options.require_editor;
     DoctorReport report = CollectDoctorReport(
@@ -5661,7 +5736,7 @@ int RunTestTools(
             { "requireEditor", options.require_editor },
             { "capabilityCount", catalog ? catalog->Size() : 0 },
             { "skillCount", skill_catalog ? skill_catalog->Size() : 0 },
-            { "mcpExpectedToolCount", 12 },
+            { "mcpExpectedToolCount", 13 },
             { "checks", checks },
             { "summary", {
                 { "passed", passed },
