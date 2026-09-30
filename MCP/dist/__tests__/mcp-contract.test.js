@@ -24,7 +24,7 @@ test("keeps oversized MCP JSON text valid when truncating", () => {
     assert.equal(typeof payload.preview, "string");
     assert.ok(output.length <= 512);
 });
-test("registers exactly twelve MCP tools without contacting Unreal Editor", () => {
+test("registers the stable MCP tools without contacting Unreal Editor", () => {
     let networkCalls = 0;
     const offlineClient = {
         getHealth: async () => {
@@ -54,6 +54,7 @@ test("registers exactly twelve MCP tools without contacting Unreal Editor", () =
         "ue_status",
         "ue_capabilities",
         "ue_context",
+        "ue_params",
         "ue_skills",
         "ue_cli",
         "ue_blueprint",
@@ -66,7 +67,7 @@ test("registers exactly twelve MCP tools without contacting Unreal Editor", () =
     ]);
     assert.deepEqual(runtime.registeredToolNames, MCP_TOOL_NAMES);
     assert.deepEqual(registeredTools, MCP_TOOL_NAMES);
-    assert.equal(runtime.registeredToolNames.length, 12);
+    assert.equal(runtime.registeredToolNames.length, 13);
     assert.deepEqual(Object.keys(registeredToolMap.ue_skills?.inputSchema?.shape ?? {}), [
         "action",
         "query",

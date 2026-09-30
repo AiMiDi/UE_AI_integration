@@ -5,7 +5,7 @@ import { type MCPResponse } from "./helpers.js";
 import { type UECapabilitiesData, type UECapabilityQuery, type UEHealthData, type UEWorkflowData, type UEWorkflowRequest } from "./ue-bridge.js";
 import { type CliLocationResult } from "./cli-locator.js";
 import { type AgentSkillCatalog } from "./skill-catalog.js";
-export declare const MCP_TOOL_NAMES: readonly ["ue_status", "ue_capabilities", "ue_context", "ue_skills", "ue_cli", "ue_blueprint", "ue_scene", "ue_content", "ue_animation", "ue_ai", "ue_production", "ue_workflow"];
+export declare const MCP_TOOL_NAMES: readonly ["ue_status", "ue_capabilities", "ue_context", "ue_params", "ue_skills", "ue_cli", "ue_blueprint", "ue_scene", "ue_content", "ue_animation", "ue_ai", "ue_production", "ue_workflow"];
 export type MCPToolName = (typeof MCP_TOOL_NAMES)[number];
 export interface UEConnectionClient {
     getHealth(): Promise<UEHealthData>;
@@ -82,6 +82,11 @@ export declare function handleContext(catalog: CapabilityCatalog, args: {
     risk?: CapabilityDslRisk;
     offset?: number;
     limit?: number;
+}): MCPResponse;
+export declare function handleParameterContract(catalog: CapabilityCatalog, args: {
+    action: "template" | "preflight";
+    operation: string;
+    params?: unknown;
 }): MCPResponse;
 export declare function createMcpServer(options?: CreateMcpServerOptions): UEAIIntegrationMcpServer;
 export {};

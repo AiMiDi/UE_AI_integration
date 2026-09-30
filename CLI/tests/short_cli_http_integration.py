@@ -859,6 +859,75 @@ def main() -> int:
             assert "--asset-path <string> required" in help_result.stdout
             assert len(queries) == query_count
 
+            before_template_requests = len(requests)
+            template_result = run(
+                ["params-template", "test.typed", "--json"],
+                check=True,
+            )
+            template = json.loads(template_result.stdout)["data"]
+            assert template["schema"] == "ue.cli-params-template.v1"
+            assert template["capability"] == "test.typed"
+            assert template["schemaSource"] == "local-manifest"
+            assert template["request"]["acceptsRequestId"] is True
+            assert "requestId" not in template["params"]
+            assert template["required"] == ["assetPath", "enabled"]
+            assert len(queries) == query_count
+            assert len(requests) == before_template_requests
+
+            before_preflight_requests = len(requests)
+            preflight_result = run(
+                [
+                    "params-preflight",
+                    "test.typed",
+                    "--asset-path",
+                    "/Game/Preflight",
+                    "--enabled",
+                    "--json",
+                ],
+                check=True,
+            )
+            preflight = json.loads(preflight_result.stdout)["data"]
+            assert preflight["schema"] == "ue.cli-params-preflight.v1"
+            assert preflight["valid"] is True
+            assert preflight["backend"] == "editor"
+            assert preflight["request"]["generatedRequestId"] is False
+            assert "requestId" not in preflight["params"]
+            assert preflight["params"] == {
+                "assetPath": "/Game/Preflight",
+                "enabled": True,
+            }
+            assert len(requests) == before_preflight_requests
+
+            preflight_file = temporary_path / "preflight-params.json"
+            preflight_file.write_text(
+                json.dumps(
+                    {
+                        "assetPath": "/Game/PreflightFile",
+                        "enabled": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            before_file_preflight_requests = len(requests)
+            file_preflight_result = run(
+                [
+                    "params-preflight",
+                    "test.typed",
+                    "--params-file",
+                    str(preflight_file),
+                    "--json",
+                ],
+                check=True,
+            )
+            file_preflight = json.loads(file_preflight_result.stdout)["data"]
+            assert file_preflight["valid"] is True
+            assert file_preflight["params"] == {
+                "assetPath": "/Game/PreflightFile",
+                "enabled": False,
+            }
+            assert file_preflight["request"]["generatedRequestId"] is False
+            assert len(requests) == before_file_preflight_requests
+
             live_help = run(
                 [
                     "help",

@@ -14,10 +14,12 @@ import { RecipeRunnerExecutor } from "./recipe-executor.js";
 import { LocalAssetExecutor, LocalProjectExecutor } from "./project-executor.js";
 import { SalExecutor } from "./sal-executor.js";
 import { DevelopmentBridgeExecutor } from "./development-bridge.js";
+import { createParameterTemplate, preflightParameters, } from "./capability-params.js";
 export const MCP_TOOL_NAMES = [
     "ue_status",
     "ue_capabilities",
     "ue_context",
+    "ue_params",
     "ue_skills",
     "ue_cli",
     "ue_blueprint",
@@ -272,6 +274,27 @@ export function handleContext(catalog, args) {
         return formatErrorResponse(error);
     }
 }
+export function handleParameterContract(catalog, args) {
+    try {
+        const capability = catalog.get(args.operation);
+        if (!capability) {
+            throw createLocalCapabilityLookupError(catalog, args.operation);
+        }
+        if (args.action === "template") {
+            return formatJsonResponse({
+                schema: "ue.capability-params-template.v1",
+                ...createParameterTemplate(capability),
+            });
+        }
+        return formatJsonResponse({
+            schema: "ue.capability-params-preflight.v1",
+            ...preflightParameters(capability, args.params ?? {}),
+        });
+    }
+    catch (error) {
+        return formatErrorResponse(error);
+    }
+}
 export function createMcpServer(options = {}) {
     const catalog = options.catalog ?? loadCapabilityCatalog();
     const skillCatalog = options.skillCatalog ?? loadAgentSkillCatalog(catalog);
@@ -387,6 +410,22 @@ export function createMcpServer(options = {}) {
         risk: args.risk,
         offset: args.offset,
         limit: args.limit,
+    }));
+    server.tool("ue_params", "Generate a local schema-driven parameter template or preflight a parameter object without contacting Unreal Editor.", {
+        action: z.enum(["template", "preflight"]),
+        operation: z
+            .string()
+            .trim()
+            .min(1)
+            .describe("Canonical dotted capability ID"),
+        params: z
+            .record(z.unknown())
+            .optional()
+            .describe("JSON params to validate for preflight; ignored for template"),
+    }, async (args) => handleParameterContract(catalog, {
+        action: args.action,
+        operation: args.operation,
+        params: args.params,
     }));
     server.tool("ue_skills", "Load bounded local UE Agent Skill packages and capability recipes. This tool never contacts Editor or executes operations; discover exact schemas with ue_context, then execute through the domain tools or ue_workflow.", {
         action: z

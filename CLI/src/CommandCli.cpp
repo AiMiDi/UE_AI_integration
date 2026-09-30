@@ -72,6 +72,8 @@ struct Options
     bool timeout_explicit = false;
     bool json_output = false;
     bool confirm_write = false;
+    bool params_template = false;
+    bool params_preflight = false;
     bool help = false;
     bool live_schema = false;
     std::vector<RawOption> raw_options;
@@ -284,6 +286,13 @@ bool ParseArguments(
                 options.help_capability = argument;
                 continue;
             }
+            if ((options.command == "params-template"
+                    || options.command == "params-preflight")
+                && options.help_capability.empty())
+            {
+                options.help_capability = argument;
+                continue;
+            }
             if (options.command == "trace")
             {
                 options.trace_arguments.push_back(argument);
@@ -337,6 +346,26 @@ bool ParseArguments(
                 return false;
             }
             options.confirm_write = true;
+            continue;
+        }
+        if (name == "params-template")
+        {
+            if (inline_value)
+            {
+                error = "--params-template does not accept a value.";
+                return false;
+            }
+            options.params_template = true;
+            continue;
+        }
+        if (name == "preflight")
+        {
+            if (inline_value)
+            {
+                error = "--preflight does not accept a value.";
+                return false;
+            }
+            options.params_preflight = true;
             continue;
         }
         if (name == "live-schema")
@@ -504,6 +533,8 @@ void PrintGeneralHelp(std::ostream& output)
         << "  ue-cli recipe validate|plan|start|status|resume|cancel|result [options]\n"
         << "  ue-cli sal stub|lint|plan [options]\n"
         << "  ue-cli help <capability-id>\n"
+        << "  ue-cli params-template <capability-id> [--live-schema] [--json]\n"
+        << "  ue-cli params-preflight <capability-id> --params-file <path|-> [--json]\n"
         << "  ue-cli shell [--live-schema]\n"
         << "  ue-cli --version\n\n"
         << "Global options:\n"
@@ -513,6 +544,8 @@ void PrintGeneralHelp(std::ostream& output)
         << "  --params <json-object>     Supply the complete params object\n"
         << "  --params-file <path|->     Read params JSON from a file or stdin\n"
         << "  --confirm-write            Set confirmWrite=true when supported\n"
+        << "  --params-template          Print a local schema-driven parameter template\n"
+        << "  --preflight                Validate params locally without dispatching\n"
         << "  --output <path>            Export image or artifact payload\n"
         << "  --live-schema              Fetch exact schema from Editor\n"
         << "  --capability-root <path>   Override packaged local manifests\n"
@@ -717,6 +750,15 @@ void PrintCommandHelp(
         output
             << "Usage: ue-cli help <capability-id> [--live-schema] [--json]\n"
             << "Load the local or live descriptor and print exact parameters.\n";
+        return;
+    }
+    if (options.command == "params-template"
+        || options.command == "params-preflight")
+    {
+        output
+            << "Usage: ue-cli " << options.command
+            << " <capability-id> [--params <json> | --params-file <path|->] [--json]\n"
+            << "Run a local schema contract check without dispatching to Editor.\n";
         return;
     }
 
@@ -2547,6 +2589,203 @@ std::string DescriptorRisk(const json& descriptor)
         return descriptor["dsl"].value("risk", std::string{});
     }
     return {};
+}
+
+struct ParameterTemplateContext
+{
+    json missing_required = json::array();
+};
+
+std::optional<json> TemplateValue(
+    const json& schema,
+    const std::string& path,
+    ParameterTemplateContext& context)
+{
+    if (schema.contains("default"))
+    {
+        return schema["default"];
+    }
+    if (schema.contains("const"))
+    {
+        return schema["const"];
+    }
+    const std::string type = schema.value("type", std::string{});
+    if (type == "object" && schema.value("properties", json::object()).is_object())
+    {
+        json object = json::object();
+        const json properties = schema.value("properties", json::object());
+        std::set<std::string> required;
+        for (const auto& item : schema.value("required", json::array()))
+        {
+            if (item.is_string())
+            {
+                required.insert(item.get<std::string>());
+            }
+        }
+        for (auto iterator = properties.begin();
+             iterator != properties.end();
+             ++iterator)
+        {
+            if (!iterator->is_object())
+            {
+                continue;
+            }
+            const std::string child_path = path.empty()
+                ? iterator.key()
+                : path + "." + iterator.key();
+            const auto value = TemplateValue(
+                *iterator,
+                child_path,
+                context);
+            if (value)
+            {
+                object[iterator.key()] = *value;
+            }
+            else if (required.contains(iterator.key()))
+            {
+                context.missing_required.push_back({
+                    { "path", child_path },
+                    { "reason", "required field has no safe default" },
+                    { "required", true },
+                    { "type", iterator->value("type", std::string("json")) },
+                    { "enum", iterator->value("enum", json::array()) },
+                });
+            }
+        }
+        return object.empty()
+            ? std::optional<json>(json::object())
+            : std::optional<json>(std::move(object));
+    }
+    return std::nullopt;
+}
+
+json BuildParameterTemplate(
+    const json& descriptor,
+    const std::string& schema_source)
+{
+    const json schema = descriptor.value("inputSchema", json::object());
+    const json properties = schema.value("properties", json::object());
+    ParameterTemplateContext context;
+    json params = json::object();
+    json required = json::array();
+    json property_info = json::array();
+    std::set<std::string> required_names;
+    for (const auto& item : schema.value("required", json::array()))
+    {
+        if (item.is_string() && item.get<std::string>() != "requestId")
+        {
+            required_names.insert(item.get<std::string>());
+            required.push_back(item.get<std::string>());
+        }
+    }
+    if (properties.is_object())
+    {
+        for (auto iterator = properties.begin();
+             iterator != properties.end();
+             ++iterator)
+        {
+            if (!iterator->is_object() || iterator.key() == "requestId")
+            {
+                continue;
+            }
+            const auto value = TemplateValue(
+                *iterator,
+                iterator.key(),
+                context);
+            if (value)
+            {
+                params[iterator.key()] = *value;
+            }
+            json info = {
+                { "name", iterator.key() },
+                { "required", required_names.contains(iterator.key()) },
+                { "type", iterator->value("type", std::string("json")) },
+            };
+            for (const char* field : {
+                     "description", "default", "const", "enum",
+                     "minimum", "maximum", "minLength", "maxLength",
+                     "minItems", "maxItems" })
+            {
+                if (iterator->contains(field))
+                {
+                    info[field] = (*iterator)[field];
+                }
+            }
+            property_info.push_back(std::move(info));
+        }
+    }
+    json approval_fields = json::array();
+    for (const char* field : { "confirmWrite", "approvePlanDigest" })
+    {
+        if (properties.is_object() && properties.contains(field))
+        {
+            approval_fields.push_back(field);
+        }
+    }
+    const std::string risk = DescriptorRisk(descriptor);
+    const bool approval_required = risk == "confirmWrite"
+        || std::any_of(
+            approval_fields.begin(),
+            approval_fields.end(),
+            [&required_names](const json& field)
+            {
+                return field.is_string()
+                    && required_names.contains(field.get<std::string>());
+            });
+    json persistence_fields = json::array();
+    for (const char* field : {
+             "save", "saveOnSuccess", "onlyIfDirty", "saveAsset",
+             "savePackage" })
+    {
+        if (properties.is_object() && properties.contains(field))
+        {
+            persistence_fields.push_back(field);
+        }
+    }
+    const json effects = descriptor.value("effects", json::object());
+    bool writes = false;
+    if (effects.is_object())
+    {
+        for (auto iterator = effects.begin();
+             iterator != effects.end();
+             ++iterator)
+        {
+            writes = writes || iterator->is_string()
+                && iterator->get<std::string>() == "write";
+        }
+    }
+    return {
+        { "schema", "ue.cli-params-template.v1" },
+        { "capability", descriptor.value("id", std::string{}) },
+        { "schemaSource", schema_source },
+        { "params", std::move(params) },
+        { "required", std::move(required) },
+        { "missingRequired", std::move(context.missing_required) },
+        { "properties", std::move(property_info) },
+        { "approval", {
+            { "required", approval_required },
+            { "fields", std::move(approval_fields) },
+            { "guidance", approval_required
+                ? "Review the plan and set the declared approval fields explicitly; this template never grants approval."
+                : "No manifest-declared approval field is required." },
+        } },
+        { "request", {
+            { "acceptsRequestId", properties.is_object()
+                && properties.contains("requestId") },
+            { "generatedByCli", properties.is_object()
+                && properties.contains("requestId") },
+        } },
+        { "persistence", {
+            { "fields", std::move(persistence_fields) },
+            { "guidance", "Choose the save policy explicitly and verify the resulting package/readback after execution." },
+        } },
+        { "retry", {
+            { "safeToRetry", !writes },
+            { "guidance", writes
+                ? "Do not retry an unknown write outcome; recover or read back the request and asset first."
+                : "The declared effects are read-only; retry is safe after correcting transport failures." },
+        } },
+    };
 }
 
 json LocalCapabilitySummary(const json& descriptor)
@@ -5807,7 +6046,8 @@ int ExecuteOptions(
             || options.command == "test-tools"
             || options.command == "mcp-surface-status"
             || options.command == "capabilities"
-            || options.command == "help"))
+            || (options.command == "help"
+                && !options.params_preflight)))
     {
         return PrintFailure(
             {
@@ -6018,7 +6258,9 @@ int ExecuteOptions(
     {
         return descriptor_exit;
     }
-    if (options.command == "help" || options.help)
+    if ((options.command == "help" || options.help)
+        && !options.params_template
+        && !options.params_preflight)
     {
         if (options.json_output)
         {
@@ -6044,6 +6286,42 @@ int ExecuteOptions(
                 << (options.live_schema ? "Editor" : "local manifest")
                 << "\n"
                 << CapabilityHelp(*descriptor);
+        }
+        return 0;
+    }
+
+    if (options.params_template)
+    {
+        if (options.params_json
+            || options.params_file
+            || !options.raw_options.empty()
+            || options.confirm_write)
+        {
+            return PrintFailure(
+                {
+                    false,
+                    json(),
+                    "parameter_template_options_conflict",
+                    "Parameter templates do not accept params or write confirmation options.",
+                },
+                options.json_output,
+                kExitUsage,
+                output,
+                error);
+        }
+        const json template_value = BuildParameterTemplate(
+            *descriptor,
+            options.live_schema ? "editor" : "local-manifest");
+        if (options.json_output)
+        {
+            output << json({
+                { "ok", true },
+                { "data", template_value },
+            }).dump() << "\n";
+        }
+        else
+        {
+            output << template_value.dump(2) << "\n";
         }
         return 0;
     }
@@ -6136,7 +6414,8 @@ int ExecuteOptions(
             error);
     }
     std::string request_id = options.request_id;
-    if (request_id.empty()
+    if (!options.params_preflight
+        && request_id.empty()
         && conversion.schema_accepts_request_id)
     {
         request_id = GenerateRequestId();
@@ -6188,6 +6467,56 @@ int ExecuteOptions(
             kExitUsage,
             output,
             error);
+    }
+    if (options.params_preflight)
+    {
+        const json effects = descriptor->value("effects", json::object());
+        const bool writes = effects.is_object()
+            && std::any_of(
+                effects.begin(),
+                effects.end(),
+                [](const auto& item)
+                {
+                    return item.is_string()
+                        && item.get<std::string>() == "write";
+                });
+        const std::string risk = DescriptorRisk(*descriptor);
+        const json preflight = {
+            { "schema", "ue.cli-params-preflight.v1" },
+            { "capability", capability },
+            { "schemaSource", options.live_schema ? "editor" : "local-manifest" },
+            { "valid", true },
+            { "safeToProceed", !writes || options.confirm_write },
+            { "params", conversion.params },
+            { "backend", BackendName(backend.backend) },
+            { "request", {
+                { "acceptsRequestId", conversion.schema_accepts_request_id },
+                { "providedRequestId", !options.request_id.empty() },
+                { "generatedRequestId", false },
+            } },
+            { "approval", {
+                { "required", risk == "confirmWrite" },
+                { "confirmWriteProvided", options.confirm_write },
+                { "guidance", risk == "confirmWrite"
+                    ? "Review the plan and explicitly pass --confirm-write before execution."
+                    : "No manifest-declared confirmWrite risk is present." },
+            } },
+            { "persistence", {
+                { "fields", json::array() },
+                { "guidance", "Verify the capability-specific receipt, save result, and disk readback after execution." },
+            } },
+            { "retry", {
+                { "safeToRetry", !writes },
+                { "guidance", writes
+                    ? "Do not retry an unknown write outcome; recover or read back first."
+                    : "The declared effects are read-only; retry is safe after transport failures." },
+            } },
+        };
+        return PrintSuccess(
+            "params-preflight",
+            { true, { { "ok", true }, { "data", preflight } }, {}, {} },
+            options.json_output,
+            output);
     }
     ExecutionBackend selected_backend = backend.backend;
     bool used_local_trace =
@@ -6615,6 +6944,16 @@ int Run(
         || options.command == "version")
     {
         return PrintVersion(options.json_output, output);
+    }
+    if (options.command == "params-template")
+    {
+        options.params_template = true;
+        options.command = "help";
+    }
+    else if (options.command == "params-preflight")
+    {
+        options.params_preflight = true;
+        options.command = "help";
     }
 
     if (!options.bundle_root.empty())
