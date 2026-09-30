@@ -20,8 +20,8 @@ UUEAIIntegrationSubsystem::~UUEAIIntegrationSubsystem() = default;
 bool UUEAIIntegrationSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 {
 	return !FParse::Param(
-		FCommandLine::Get(),
-		TEXT("UEAIPerformanceChild"))
+			FCommandLine::Get(),
+			TEXT("UEAIPerformanceChild"))
 		&& Super::ShouldCreateSubsystem(Outer);
 }
 
@@ -37,6 +37,9 @@ namespace UEAIIntegrationTools
 	void RegisterBlueprintAssetLifecycleTools(FMCPToolRegistry& Registry);
 	void RegisterBlueprintAssetStateTools(FMCPToolRegistry& Registry);
 	void RegisterBlueprintGraphTools(FMCPToolRegistry& Registry);
+	void RegisterBlueprintAuthoringOperationsTools(FMCPToolRegistry& Registry);
+	void RegisterBlueprintDataAssetTools(FMCPToolRegistry& Registry);
+	void RegisterBlueprintBatchSpawnTools(FMCPToolRegistry& Registry);
 	void RegisterVariableTools(FMCPToolRegistry& Registry);
 	void RegisterParamTools(FMCPToolRegistry& Registry);
 	void RegisterInterfaceTools(FMCPToolRegistry& Registry);
@@ -60,7 +63,11 @@ namespace UEAIIntegrationTools
 	void RegisterContentAssetChangeTools(FMCPToolRegistry& Registry);
 	void RegisterContentAssetSettingsTools(FMCPToolRegistry& Registry);
 	void RegisterMaterialReadTools(FMCPToolRegistry& Registry);
+	void RegisterMaterialGraphQueryTools(FMCPToolRegistry& Registry);
 	void RegisterMaterialMutationTools(FMCPToolRegistry& Registry);
+	void RegisterMaterialFunctionMutationTools(FMCPToolRegistry& Registry);
+	void RegisterMaterialCustomTools(FMCPToolRegistry& Registry);
+	void RegisterMaterialUtilityTools(FMCPToolRegistry& Registry);
 	void RegisterAnimationTools(FMCPToolRegistry& Registry);
 	void RegisterActorTools(FMCPToolRegistry& Registry);
 	void RegisterPIETools(
@@ -77,8 +84,14 @@ namespace UEAIIntegrationTools
 	void RegisterNiagaraCollisionProjectAuditTools(FMCPToolRegistry& Registry);
 	void RegisterNiagaraGraphAdvancedTools(FMCPToolRegistry& Registry);
 	void RegisterNiagaraGraphModuleTools(FMCPToolRegistry& Registry);
-	void RegisterNiagaraRuntimeTools(FMCPToolRegistry& Registry,
-		UEAIIntegration::Infrastructure::FPIESessionController& Controller);
+	void RegisterNiagaraDynamicInputTools(FMCPToolRegistry& Registry);
+	void RegisterNiagaraSystemParameterReceiptTools(FMCPToolRegistry& Registry);
+	void RegisterNiagaraGraphEditTools(FMCPToolRegistry& Registry);
+	void RegisterNiagaraRuntimeTools(FMCPToolRegistry& Registry);
+	void RegisterNiagaraSimCacheTools(FMCPToolRegistry& Registry);
+	void RegisterNiagaraCompileTools(FMCPToolRegistry& Registry);
+	void RegisterNiagaraEventHandlerTools(FMCPToolRegistry& Registry);
+	void RegisterNiagaraSimulationStageTools(FMCPToolRegistry& Registry);
 	void RegisterUITools(FMCPToolRegistry& Registry);
 	void RegisterBuildTools(FMCPToolRegistry& Registry);
 	void RegisterProductionRuntimeTools(
@@ -126,6 +139,9 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	UEAIIntegrationTools::RegisterBlueprintAssetLifecycleTools(*Registry);
 	UEAIIntegrationTools::RegisterBlueprintAssetStateTools(*Registry);
 	UEAIIntegrationTools::RegisterBlueprintGraphTools(*Registry);
+	UEAIIntegrationTools::RegisterBlueprintAuthoringOperationsTools(*Registry);
+	UEAIIntegrationTools::RegisterBlueprintDataAssetTools(*Registry);
+	UEAIIntegrationTools::RegisterBlueprintBatchSpawnTools(*Registry);
 	UEAIIntegrationTools::RegisterVariableTools(*Registry);
 	UEAIIntegrationTools::RegisterParamTools(*Registry);
 	UEAIIntegrationTools::RegisterInterfaceTools(*Registry);
@@ -161,14 +177,28 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	UEAIIntegrationTools::RegisterContentAssetSettingsTools(*Registry);
 	UEAIIntegrationTools::RegisterUserTypeTools(*Registry);
 	UEAIIntegrationTools::RegisterMaterialReadTools(*Registry);
+	UEAIIntegrationTools::RegisterMaterialGraphQueryTools(*Registry);
 	UEAIIntegrationTools::RegisterMaterialMutationTools(*Registry);
+	UEAIIntegrationTools::RegisterMaterialFunctionMutationTools(*Registry);
+	UEAIIntegrationTools::RegisterMaterialCustomTools(*Registry);
+	UEAIIntegrationTools::RegisterMaterialUtilityTools(*Registry);
 	UEAIIntegrationTools::RegisterDataTableTools(*Registry);
 	UEAIIntegrationTools::RegisterNiagaraTools(*Registry);
+	UEAIIntegrationTools::RegisterNiagaraSystemParameterReceiptTools(*Registry);
+	// Note: RegisterNiagaraTools already calls RegisterNiagaraCompileTools.
+	// Do not register the compile tools a second time here — that would
+	// duplicate content.niagara.system.compile.request / diagnostics.get /
+	// emitter.gpu_hlsl.get and degrade the catalog.
 	UEAIIntegrationTools::RegisterNiagaraGraphTools(*Registry);
 	UEAIIntegrationTools::RegisterNiagaraCollisionProjectAuditTools(*Registry);
 	UEAIIntegrationTools::RegisterNiagaraGraphAdvancedTools(*Registry);
 	UEAIIntegrationTools::RegisterNiagaraGraphModuleTools(*Registry);
-	UEAIIntegrationTools::RegisterNiagaraRuntimeTools(*Registry, *PIEController);
+	UEAIIntegrationTools::RegisterNiagaraDynamicInputTools(*Registry);
+	UEAIIntegrationTools::RegisterNiagaraGraphEditTools(*Registry);
+	UEAIIntegrationTools::RegisterNiagaraEventHandlerTools(*Registry);
+	UEAIIntegrationTools::RegisterNiagaraSimulationStageTools(*Registry);
+	UEAIIntegrationTools::RegisterNiagaraRuntimeTools(*Registry);
+	UEAIIntegrationTools::RegisterNiagaraSimCacheTools(*Registry);
 	UEAIIntegrationTools::RegisterUITools(*Registry);
 	Registry->EndDomainRegistration();
 
@@ -224,8 +254,8 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 			Log,
 			TEXT("[UE_AI_integration] Local HTTP service is disabled %s."),
 			bServerSuppressedForProcess
-				? TEXT("for this process by -UEAIDisableServer")
-				: TEXT("in Editor user settings"));
+			? TEXT("for this process by -UEAIDisableServer")
+			: TEXT("in Editor user settings"));
 	}
 	else if (Server->Start(ServerPort))
 	{

@@ -14,15 +14,17 @@
 class FMCPToolRegistry;
 class FMCPExecutor;
 class FJsonObject;
+
 namespace UEAIIntegration::Workflow
 {
-class FWorkflowRuntime;
+	class FWorkflowRuntime;
 }
+
 namespace UEAIIntegration::Infrastructure
 {
-class FBlueprintDebugService;
-class FClientActivityService;
-struct FCallerContext;
+	class FBlueprintDebugService;
+	class FClientActivityService;
+	struct FCallerContext;
 }
 
 enum class EUEAIIntegrationRequestKind : uint8
@@ -53,7 +55,7 @@ public:
 		FMCPToolRegistry& InRegistry,
 		FMCPExecutor& InExecutor,
 		UEAIIntegration::Infrastructure::FClientActivityService&
-			InClientActivityService,
+		InClientActivityService,
 		UEAIIntegration::Infrastructure::FBlueprintDebugService*
 			InBlueprintDebugService = nullptr);
 	~FUEAIIntegrationServer();
@@ -73,6 +75,19 @@ public:
 	/** Plan an internally generated Workflow through the same Editor planner. */
 	FMCPResult PlanWorkflowDefinition(
 		const TSharedPtr<FJsonObject>& Workflow) const;
+
+	/**
+	 * Execute an internally generated Workflow whose plan was prepared by
+	 * PlanWorkflowDefinition.  Keeping this bridge on the server makes domain
+	 * commands use the same Editor-bound precondition, transaction, journal,
+	 * read-back, and rollback path as the public Workflow endpoint.
+	 */
+	FMCPResult ExecuteWorkflowDefinition(
+		const TSharedPtr<FJsonObject>& Workflow,
+		const FString& ApprovedPlanDigest,
+		bool bSaveOnSuccess,
+		bool bConfirmWrite,
+		const FString& RequestId = FString()) const;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	/**
@@ -161,7 +176,7 @@ private:
 	FMCPToolRegistry& Registry;
 	FMCPExecutor& Executor;
 	UEAIIntegration::Infrastructure::FClientActivityService&
-		ClientActivityService;
+	ClientActivityService;
 	UEAIIntegration::Infrastructure::FBlueprintDebugService*
 		BlueprintDebugService = nullptr;
 	TUniquePtr<UEAIIntegration::Workflow::FWorkflowRuntime> WorkflowRuntime;

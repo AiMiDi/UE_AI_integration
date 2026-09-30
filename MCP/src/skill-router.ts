@@ -182,7 +182,7 @@ function recipeGuide(
     })),
     performInOrder: recipe.steps.map(guideStep),
     seeResults: recipe.steps
-      .filter((step) => step.phase === "verify")
+      .filter((step) => step.phase === "verify" && step.optional !== true)
       .map(resultGuide)
       .filter((step) => step.operations.length > 0),
     resultContract: recipe.result,

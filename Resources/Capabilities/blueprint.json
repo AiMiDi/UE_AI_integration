@@ -277,21 +277,50 @@
       "id": "blueprint.asset.list",
       "domain": "blueprint",
       "kind": "query",
-      "description": "List all Blueprint assets in the project, optionally filtered by name, parent class, or type.",
+      "description": "List a deterministic page of Blueprint assets, optionally filtered by name, parent class, or type, under a bounded asset-registry scan. The response reports scannedAssetCount/maxScannedAssets plus scanExhausted, totalComplete, and partial; exhaustion returns the scanned prefix without nextOffset rather than claiming a complete total or raising 413.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "filter": {
             "type": "string",
+            "maxLength": 512,
             "description": "Name/path substring filter"
           },
           "parentClass": {
             "type": "string",
+            "maxLength": 256,
             "description": "Filter by parent class name"
           },
           "type": {
             "type": "string",
+            "enum": [
+              "all",
+              "regular",
+              "level"
+            ],
+            "maxLength": 16,
             "description": "all, regular, or level"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50,
+            "description": "Maximum number of deterministically sorted matching assets to return."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647,
+            "default": 0,
+            "description": "Zero-based offset into the deterministically sorted matching assets."
+          },
+          "maxScannedAssets": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50000,
+            "default": 5000,
+            "description": "Hard cap on regular Blueprint and map asset-registry rows inspected before returning an explicit partial prefix."
           }
         },
         "additionalProperties": false
@@ -530,15 +559,35 @@
         "properties": {
           "query": {
             "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
             "description": "Search term"
           },
           "path": {
             "type": "string",
+            "maxLength": 1024,
             "description": "Path filter"
           },
           "maxResults": {
-            "type": "number",
-            "description": "Max results (default 50)"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50,
+            "description": "Maximum number of matching nodes to return."
+          },
+          "maxAssets": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 500,
+            "description": "Maximum number of matching Blueprint assets to load and inspect."
+          },
+          "maxScannedNodes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200000,
+            "default": 50000,
+            "description": "Global node-inspection budget across the selected assets."
           }
         },
         "required": [
@@ -575,15 +624,70 @@
         "properties": {
           "typeName": {
             "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
             "description": "Type name to search for"
           },
           "filter": {
             "type": "string",
+            "maxLength": 512,
             "description": "Blueprint name/path filter"
           },
           "maxResults": {
-            "type": "number",
-            "description": "Max results (default 200)"
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 200,
+            "description": "Maximum number of deterministic usage records to return."
+          },
+          "maxConnectionsPerPin": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64,
+            "default": 16,
+            "description": "Maximum linked-pin identities embedded in one pin-connection result."
+          },
+          "maxAssets": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 500,
+            "description": "Maximum number of filtered Blueprint assets in this page."
+          },
+          "assetOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647,
+            "default": 0,
+            "description": "Zero-based offset into the deterministic filtered asset list."
+          },
+          "maxScannedVariables": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000,
+            "default": 10000,
+            "description": "Global Blueprint-variable inspection budget."
+          },
+          "maxScannedNodes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50000,
+            "default": 5000,
+            "description": "Global graph-node inspection budget."
+          },
+          "maxScannedPins": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200000,
+            "default": 50000,
+            "description": "Global graph-pin inspection budget."
+          },
+          "maxScannedLinks": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500000,
+            "default": 100000,
+            "description": "Global linked-pin inspection budget."
           }
         },
         "required": [
@@ -657,7 +761,44 @@
         "properties": {
           "blueprint": {
             "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
             "description": "Blueprint name or path"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50,
+            "description": "Maximum number of deterministically sorted local SCS components to return."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647,
+            "default": 0,
+            "description": "Zero-based offset into the sorted local SCS components."
+          },
+          "maxScannedNodes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 200,
+            "description": "Whole-SCS hard cap; an asset above this limit is rejected before node copying or sorting."
+          },
+          "maxChildrenPerComponent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 256,
+            "default": 64,
+            "description": "Maximum child identities embedded for one returned component."
+          },
+          "maxChildEntries": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4096,
+            "default": 1024,
+            "description": "Global child-identity output budget for this page."
           }
         },
         "required": [
@@ -1160,7 +1301,7 @@
       },
       "lifecycle": {
         "status": "active",
-        "since": "0.9.0",
+        "since": "1.0.0",
         "canonicalId": "blueprint.component.add"
       }
     },
@@ -1168,13 +1309,50 @@
       "id": "blueprint.component.list",
       "domain": "blueprint",
       "kind": "query",
-      "description": "List all components in a Blueprint's Simple Construction Script.",
+      "description": "List one deterministic page of local SCS components and bounded child identities. Native and inherited component templates are not enumerated; an oversized SCS fails hard with 413 before returning any component rows.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "blueprint": {
             "type": "string",
-            "description": "Blueprint name or path"
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Actor Blueprint name or asset path."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50,
+            "description": "Maximum sorted local SCS component rows in this page."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647,
+            "default": 0,
+            "description": "Zero-based offset into sorted local SCS components."
+          },
+          "maxScannedNodes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 200,
+            "description": "Whole-SCS node-slot safety limit. If the SCS is larger, the operation fails with component_scan_limit_exceeded and returns no rows."
+          },
+          "maxChildrenPerComponent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 256,
+            "default": 64,
+            "description": "Maximum child identity records embedded in each returned component row."
+          },
+          "maxChildEntries": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4096,
+            "default": 1024,
+            "description": "Global child identity output budget across this component page."
           }
         },
         "required": [
@@ -1197,8 +1375,210 @@
       },
       "lifecycle": {
         "status": "active",
-        "since": "0.9.0",
+        "since": "1.0.0",
         "canonicalId": "blueprint.component.list"
+      }
+    },
+    {
+      "id": "blueprint.component.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Read one local SCS component template, its stable identity, hierarchy, bounded properties, and state-hash coverage. Inherited and native component templates are not returned.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Blueprint name or asset path."
+          },
+          "componentName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Exact local SCS component variable name."
+          },
+          "componentNodeId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 36,
+            "pattern": "^[0-9A-Fa-f-]{32,36}$",
+            "description": "Stable local SCS VariableGuid."
+          },
+          "property": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Optional exact readable property name."
+          },
+          "filter": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Optional property-name or category substring filter."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50,
+            "description": "Maximum number of sorted property records to return."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647,
+            "default": 0,
+            "description": "Zero-based offset into matching properties."
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "componentNodeId"
+            ]
+          },
+          {
+            "required": [
+              "componentName"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "blueprint.component.get"
+      }
+    },
+    {
+      "id": "blueprint.component.property.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Set one persistent editable property on a local SCS component template with scratch parsing, state-hash stale checks, bounded value length, compile/save read-back, and verified failure rollback.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Blueprint name or asset path."
+          },
+          "componentName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Exact local SCS component variable name."
+          },
+          "componentNodeId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 36,
+            "pattern": "^[0-9A-Fa-f-]{32,36}$",
+            "description": "Stable local SCS VariableGuid."
+          },
+          "property": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Editable persistent property name."
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 65536,
+            "description": "Unreal property text. Empty text is allowed when accepted by the property type."
+          },
+          "expectedStateHash": {
+            "type": "string",
+            "minLength": 71,
+            "maxLength": 71,
+            "pattern": "^sha256:[0-9A-Fa-f]{64}$",
+            "description": "Optional complete component-state hash returned by component.get."
+          },
+          "expectedOldValue": {
+            "type": "string",
+            "maxLength": 65536,
+            "description": "Optional exact normalized current property value."
+          },
+          "expectedTemplatePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Optional exact component-template object path."
+          }
+        },
+        "required": [
+          "blueprint",
+          "property",
+          "value"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "componentNodeId"
+            ]
+          },
+          {
+            "required": [
+              "componentName"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "blueprint.component.property.set"
       }
     },
     {
@@ -1239,8 +1619,226 @@
       },
       "lifecycle": {
         "status": "active",
-        "since": "0.9.0",
+        "since": "1.0.0",
         "canonicalId": "blueprint.component.remove"
+      }
+    },
+    {
+      "id": "blueprint.component.reparent",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Move a local SCS component to a new parent component or to the SCS root. Promoting a scene component to the root makes it the scene root (the previous scene root is nested beneath it); self-parenting and descendant cycles are rejected.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Blueprint name or asset path."
+          },
+          "componentName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Exact local SCS component variable name."
+          },
+          "componentNodeId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 36,
+            "pattern": "^[0-9A-Fa-f-]{32,36}$",
+            "description": "Stable local SCS VariableGuid."
+          },
+          "newParentName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "New local SCS parent variable name; omit to move to the root."
+          },
+          "newParentNodeId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 36,
+            "pattern": "^[0-9A-Fa-f-]{32,36}$",
+            "description": "New local SCS parent VariableGuid; omit to move to the root."
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "componentNodeId"
+            ]
+          },
+          {
+            "required": [
+              "componentName"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "blueprint.component.reparent"
+      }
+    },
+    {
+      "id": "blueprint.component.rename",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Rename a local SCS component, rejecting invalid or duplicate names.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Blueprint name or asset path."
+          },
+          "componentName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Exact local SCS component variable name."
+          },
+          "componentNodeId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 36,
+            "pattern": "^[0-9A-Fa-f-]{32,36}$",
+            "description": "Stable local SCS VariableGuid."
+          },
+          "newName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "New local SCS component variable name."
+          }
+        },
+        "required": [
+          "blueprint",
+          "newName"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "componentNodeId"
+            ]
+          },
+          {
+            "required": [
+              "componentName"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "blueprint.component.rename"
+      }
+    },
+    {
+      "id": "blueprint.component.duplicate",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Duplicate a local SCS component, copying its template properties under the same parent with a collision-free name.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Blueprint name or asset path."
+          },
+          "componentName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Exact local SCS component variable name."
+          },
+          "componentNodeId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 36,
+            "pattern": "^[0-9A-Fa-f-]{32,36}$",
+            "description": "Stable local SCS VariableGuid."
+          },
+          "newName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Optional name for the copy; defaults to <name>_Copy."
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "componentNodeId"
+            ]
+          },
+          {
+            "required": [
+              "componentName"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "blueprint.component.duplicate"
       }
     },
     {
@@ -1904,21 +2502,26 @@
       "id": "blueprint.default.set",
       "domain": "blueprint",
       "kind": "command",
-      "description": "Set the default value of a Blueprint variable on the CDO (Class Default Object).",
+      "description": "Set one persistent generated-class default on a Blueprint CDO. The complete value is parsed into scratch storage before the CDO is modified, then compiled, saved, and read back with verified rollback on failure.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "blueprint": {
             "type": "string",
-            "description": "Blueprint name"
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Blueprint name or asset path."
           },
           "variable": {
             "type": "string",
-            "description": "Variable name"
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Generated-class property name."
           },
           "value": {
             "type": "string",
-            "description": "New default value as string"
+            "maxLength": 65536,
+            "description": "Complete Unreal property text. Empty text is allowed when accepted by the property type."
           }
         },
         "required": [
@@ -1934,6 +2537,15 @@
       },
       "output": {
         "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "safeWrite"
       },
       "effects": {
         "asset": "write",
@@ -2387,6 +2999,110 @@
       }
     },
     {
+      "id": "blueprint.build.from_spec",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Build a Blueprint from a bounded Monolith-compatible spec containing variables, SCS components, graph nodes, connections, and pin defaults through one approved transaction.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Existing Blueprint asset path or name."
+          },
+          "graph": {
+            "type": "string",
+            "description": "Target graph name; defaults to EventGraph."
+          },
+          "buildId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,128}$"
+          },
+          "mode": {
+            "enum": [
+              "merge",
+              "replaceManaged"
+            ],
+            "default": "merge"
+          },
+          "variables": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "object"
+            }
+          },
+          "components": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "object"
+            }
+          },
+          "nodes": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "type": "object"
+            }
+          },
+          "connections": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "type": "object"
+            }
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "default": true
+          },
+          "saveOnSuccess": {
+            "type": "boolean",
+            "default": true
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "blueprint",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.3.0",
+        "canonicalId": "blueprint.build.from_spec"
+      }
+    },
+    {
       "id": "blueprint.graph.build.definition.get",
       "domain": "blueprint",
       "kind": "query",
@@ -2612,6 +3328,69 @@
       }
     },
     {
+      "id": "blueprint.graph.build.execute",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Execute a declarative Blueprint BuildGraph through the Editor-bound Workflow runtime with plan approval, transaction, compile, readback, and rollback evidence.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "definition": {
+            "type": "object",
+            "description": "Bounded ue.blueprint-buildgraph.v1 definition."
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "default": true,
+            "description": "Explicit approval for the prepared plan digest."
+          },
+          "saveOnSuccess": {
+            "type": "boolean",
+            "default": true,
+            "description": "Save the edited Blueprint package after verified execution."
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Optional stable request identifier for retry-safe Workflow execution."
+          }
+        },
+        "required": [
+          "definition",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.2.0",
+        "canonicalId": "blueprint.graph.build.execute"
+      }
+    },
+    {
       "id": "blueprint.graph.capture",
       "domain": "blueprint",
       "kind": "query",
@@ -2759,7 +3538,7 @@
       "effects": {
         "asset": "read",
         "world": "none",
-        "editorSession": "write",
+        "editorSession": "none",
         "external": "none"
       },
       "lifecycle": {
@@ -2846,7 +3625,7 @@
       "effects": {
         "asset": "read",
         "world": "none",
-        "editorSession": "write",
+        "editorSession": "none",
         "external": "none"
       },
       "lifecycle": {
@@ -2959,23 +3738,95 @@
       "id": "blueprint.graph.describe",
       "domain": "blueprint",
       "kind": "query",
-      "description": "Get a human-readable description of the execution flow in a Blueprint graph.",
+      "description": "Read a bounded, deterministic K2 execution-pin projection for all graph entries or one exact event/function entry subflow. Node GUIDs, pin GUIDs, and edgeId tuples are stable identities; pagination and scan truncation are reported independently.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "name": {
             "type": "string",
-            "description": "Blueprint name"
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Blueprint name or asset path."
           },
           "graph": {
             "type": "string",
-            "description": "Graph name"
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Exact graph name."
+          },
+          "entryPoint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Optional exact, case-insensitive event/custom-event name or function graph name. Ambiguous names are rejected; use entryNodeId to disambiguate."
+          },
+          "entryNodeId": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 36,
+            "pattern": "^[0-9A-Fa-f-]{32,36}$",
+            "description": "Optional stable execution-node GUID used as the subflow root. May select any node with K2 execution pins."
+          },
+          "maxNodes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 200,
+            "description": "Maximum execution nodes returned in this node page."
+          },
+          "maxEdges": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000,
+            "default": 1000,
+            "description": "Maximum stable execution-edge records returned in this edge page."
+          },
+          "nodeOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647,
+            "default": 0,
+            "description": "Zero-based offset into the deterministic selected-subflow node traversal."
+          },
+          "edgeOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647,
+            "default": 0,
+            "description": "Zero-based offset into the deterministic selected-subflow execution edges."
+          },
+          "maxScannedNodes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20000,
+            "default": 5000,
+            "description": "Hard graph node-slot scan budget used before entry resolution and traversal."
+          },
+          "maxScannedPins": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200000,
+            "default": 50000,
+            "description": "Hard graph pin scan budget."
+          },
+          "maxScannedLinks": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500000,
+            "default": 100000,
+            "description": "Hard execution linked-pin scan budget."
           }
         },
         "required": [
           "name",
           "graph"
         ],
+        "not": {
+          "required": [
+            "entryPoint",
+            "entryNodeId"
+          ]
+        },
         "additionalProperties": false
       },
       "traits": {
@@ -2984,6 +3835,17 @@
       },
       "output": {
         "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [
+          "blueprint",
+          "levelBlueprint",
+          "widgetBlueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "readOnly"
       },
       "effects": {
         "asset": "read",
@@ -4504,7 +5366,13 @@
           },
           "pinName": {
             "type": "string",
-            "description": "Pin name"
+            "minLength": 1,
+            "description": "Pin name. Ambiguous names must be disambiguated with pinId."
+          },
+          "pinId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Exact nonzero pin GUID from blueprint.graph.get. When pinName is also supplied, both identities must match."
           },
           "value": {
             "type": "string",
@@ -4535,8 +5403,19 @@
         },
         "required": [
           "blueprint",
-          "nodeId",
-          "pinName"
+          "nodeId"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "pinId"
+            ]
+          },
+          {
+            "required": [
+              "pinName"
+            ]
+          }
         ],
         "oneOf": [
           {
@@ -5258,6 +6137,478 @@
       }
     },
     {
+      "id": "blueprint.variable.rename",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Rename a Blueprint member variable and update every graph node that references it, rejecting invalid and duplicate names.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Blueprint name or path"
+          },
+          "variableName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Current variable name"
+          },
+          "newName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "New variable name"
+          }
+        },
+        "required": [
+          "blueprint",
+          "variableName",
+          "newName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "blueprint.variable.rename"
+      }
+    },
+    {
+      "id": "blueprint.timeline.add",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Create a Timeline template and linked UK2Node_Timeline in an event graph.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timelineName": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "graph": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "autoPlay": {
+            "type": "boolean"
+          },
+          "loop": {
+            "type": "boolean"
+          },
+          "position": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer"
+            }
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.timeline.add"
+      }
+    },
+    {
+      "id": "blueprint.timeline.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Read Timeline templates, settings, and float, vector, color, and event keyframes. Component tracks expose channels with time/value/interpMode keys.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timelineName": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "includeCurves": {
+            "type": "boolean",
+            "description": "Include key arrays (default true)."
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.timeline.get"
+      }
+    },
+    {
+      "id": "blueprint.timeline.track.add",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Add a float, vector, event, or color track to an existing Timeline.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timelineName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "trackName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "trackType": {
+            "type": "string",
+            "enum": [
+              "float",
+              "vector",
+              "event",
+              "color"
+            ]
+          }
+        },
+        "required": [
+          "blueprint",
+          "timelineName",
+          "trackName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.timeline.track.add"
+      }
+    },
+    {
+      "id": "blueprint.timeline.keys.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Replace keyframes on a Timeline float, vector, color, or event track with validated typed keyframes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timelineName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "trackName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "keys": {
+            "type": "array",
+            "maxItems": 4096,
+            "items": {
+              "type": "object",
+              "properties": {
+                "time": {
+                  "type": "number"
+                },
+                "value": {
+                  "type": "number"
+                },
+                "x": {
+                  "type": "number"
+                },
+                "y": {
+                  "type": "number"
+                },
+                "z": {
+                  "type": "number"
+                },
+                "r": {
+                  "type": "number"
+                },
+                "g": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                },
+                "a": {
+                  "type": "number"
+                },
+                "interpMode": {
+                  "type": "string",
+                  "enum": [
+                    "linear",
+                    "constant",
+                    "cubic"
+                  ]
+                }
+              },
+              "required": [
+                "time"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "blueprint",
+          "timelineName",
+          "trackName",
+          "keys"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.timeline.keys.set"
+      }
+    },
+    {
+      "id": "blueprint.cdo.properties.get",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Read reflected CDO properties from a Blueprint or UObject asset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "category": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "includeParentDefaults": {
+            "type": "boolean",
+            "description": "Include inherited properties (default true)."
+          },
+          "maxProperties": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4096,
+            "default": 1024
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.cdo.properties.get"
+      }
+    },
+    {
+      "id": "blueprint.cdo.property.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Set one writable property on a Blueprint CDO or loaded UObject asset from a scalar, object, or array JSON value, with optional old-value/state-hash protection and save readback.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Blueprint or UObject asset path."
+          },
+          "property": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Writable property name; exact match is preferred and case-insensitive fallback is supported."
+          },
+          "value": {
+            "description": "New scalar, object, or array value accepted by the Unreal property."
+          },
+          "expectedOldValue": {
+            "type": "string",
+            "maxLength": 65536,
+            "description": "Optional exported property value read before the write; mismatch rejects the mutation."
+          },
+          "expectedStateHash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-fA-F]{64}$",
+            "description": "Optional stateHash returned by a previous read/write response."
+          }
+        },
+        "required": [
+          "asset",
+          "property",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": true,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.3.0",
+        "canonicalId": "blueprint.cdo.property.set"
+      }
+    },
+    {
+      "id": "blueprint.dispatcher.remove",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Remove an event dispatcher and its signature graph from a Blueprint.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1
+          },
+          "dispatcherName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "blueprint",
+          "dispatcherName"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.dispatcher.remove"
+      }
+    },
+    {
       "id": "blueprint.variable.type.set",
       "domain": "blueprint",
       "kind": "command",
@@ -5310,6 +6661,843 @@
         "status": "active",
         "since": "0.9.0",
         "canonicalId": "blueprint.variable.type.set"
+      }
+    },
+    {
+      "id": "blueprint.pin.promote",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Promote an existing Blueprint node pin to a new member variable and rewire its links through a VariableGet (output pin) or VariableSet (input pin) accessor node.",
+      "requires": {
+        "features": [
+          "Blueprint"
+        ],
+        "plugins": [
+          "BlueprintGraph"
+        ],
+        "modules": [
+          "BlueprintGraph"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint name or object path."
+          },
+          "graph": {
+            "type": "string",
+            "description": "Optional graph name; the node is resolved by GUID across all graphs."
+          },
+          "nodeId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Node GUID."
+          },
+          "pinName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Pin name. Ambiguous names must be disambiguated with pinId."
+          },
+          "pinId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Exact nonzero pin GUID from blueprint.graph.get."
+          },
+          "variableName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional name for the new member variable (defaults to the pin name)."
+          }
+        },
+        "required": [
+          "blueprint",
+          "nodeId"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "pinId"
+            ]
+          },
+          {
+            "required": [
+              "pinName"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.pin.promote"
+      }
+    },
+    {
+      "id": "blueprint.node.bulk.add",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Add multiple Blueprint graph nodes in one atomic transaction. Each entry uses the same node descriptors as blueprint.node.add; on any failure no partial nodes remain.",
+      "requires": {
+        "features": [
+          "Blueprint"
+        ],
+        "plugins": [
+          "BlueprintGraph"
+        ],
+        "modules": [
+          "BlueprintGraph"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint name or object path."
+          },
+          "graph": {
+            "type": "string",
+            "description": "Optional graph name (defaults to the first event graph)."
+          },
+          "nodes": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "properties": {
+                "class": {
+                  "type": "string",
+                  "description": "Node type (same values as blueprint.node.add nodeType)."
+                },
+                "nodeType": {
+                  "type": "string",
+                  "description": "Alias for class."
+                },
+                "position": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "items": {
+                    "type": "number"
+                  },
+                  "description": "Node position as [x, y]."
+                },
+                "functionName": {
+                  "type": "string",
+                  "description": "For CallFunction/OverrideEvent."
+                },
+                "className": {
+                  "type": "string",
+                  "description": "For CallFunction: class to find the function on."
+                },
+                "variableName": {
+                  "type": "string",
+                  "description": "For VariableGet/VariableSet."
+                },
+                "typeName": {
+                  "type": "string",
+                  "description": "For BreakStruct/MakeStruct."
+                },
+                "castTarget": {
+                  "type": "string",
+                  "description": "For DynamicCast."
+                },
+                "eventName": {
+                  "type": "string",
+                  "description": "For CustomEvent."
+                },
+                "comment": {
+                  "type": "string",
+                  "description": "For Comment node."
+                },
+                "componentName": {
+                  "type": "string",
+                  "description": "For ComponentBoundEvent."
+                },
+                "delegateName": {
+                  "type": "string",
+                  "description": "For bound-event and delegate nodes."
+                },
+                "actorPath": {
+                  "type": "string",
+                  "description": "For ActorBoundEvent."
+                },
+                "inputActionName": {
+                  "type": "string",
+                  "description": "For InputAction."
+                },
+                "inputAction": {
+                  "type": "string",
+                  "description": "For EnhancedInputAction: InputAction asset object path."
+                },
+                "inputActionPath": {
+                  "type": "string",
+                  "description": "Alias for inputAction."
+                },
+                "consumeInput": {
+                  "type": "boolean",
+                  "description": "For InputAction."
+                },
+                "executeWhenPaused": {
+                  "type": "boolean",
+                  "description": "For InputAction."
+                },
+                "overrideParentBinding": {
+                  "type": "boolean",
+                  "description": "For InputAction."
+                },
+                "factoryFunctionName": {
+                  "type": "string",
+                  "description": "For AsyncAction."
+                },
+                "factoryClassName": {
+                  "type": "string",
+                  "description": "For AsyncAction."
+                },
+                "latent": {
+                  "type": "boolean",
+                  "description": "For CallFunction: require a latent function."
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "blueprint",
+          "nodes"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.node.bulk.add"
+      }
+    },
+    {
+      "id": "blueprint.pin.bulk.connect",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Wire multiple Blueprint pin connections in one atomic transaction. Self connections, already-connected pairs, and cycle-forming pairs are rejected; on any failure no partial connections remain.",
+      "requires": {
+        "features": [
+          "Blueprint"
+        ],
+        "plugins": [
+          "BlueprintGraph"
+        ],
+        "modules": [
+          "BlueprintGraph"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint name or object path."
+          },
+          "graph": {
+            "type": "string",
+            "description": "Optional graph name; nodes are resolved by GUID across all graphs."
+          },
+          "connections": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "type": "object",
+              "properties": {
+                "sourceNodeId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Source node GUID."
+                },
+                "sourcePinName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Source pin name."
+                },
+                "targetNodeId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Target node GUID."
+                },
+                "targetPinName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Target pin name."
+                }
+              },
+              "required": [
+                "sourceNodeId",
+                "sourcePinName",
+                "targetNodeId",
+                "targetPinName"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "blueprint",
+          "connections"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.pin.bulk.connect"
+      }
+    },
+    {
+      "id": "blueprint.pin.default.bulk.set",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Set multiple unlinked input-pin default values in one atomic transaction. Each entry mirrors blueprint.pin.default.set; on any failure no partial defaults remain.",
+      "requires": {
+        "features": [
+          "Blueprint"
+        ],
+        "plugins": [
+          "BlueprintGraph"
+        ],
+        "modules": [
+          "BlueprintGraph"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint name or object path."
+          },
+          "graph": {
+            "type": "string",
+            "description": "Optional graph name; nodes are resolved by GUID across all graphs."
+          },
+          "defaults": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "type": "object",
+              "properties": {
+                "nodeId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Node GUID."
+                },
+                "pinName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Input pin name."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Raw UE pin default value."
+                }
+              },
+              "required": [
+                "nodeId",
+                "pinName",
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "blueprint",
+          "defaults"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.pin.default.bulk.set"
+      }
+    },
+    {
+      "id": "blueprint.graph.export",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Export the full structural graph (nodes, pins, links) of a Blueprint graph with stable node GUID and pin GUID identities for round-trip inspection; never compiles or saves.",
+      "requires": {
+        "features": [
+          "Blueprint"
+        ],
+        "plugins": [
+          "BlueprintGraph"
+        ],
+        "modules": [
+          "BlueprintGraph"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Blueprint asset package or object path."
+          },
+          "graph": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Optional graph name or object path; defaults to the primary event graph."
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.graph.export"
+      }
+    },
+    {
+      "id": "blueprint.graph.duplicate",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Duplicate an existing Blueprint graph into a new same-schema graph with re-wired internal links, added to the appropriate Blueprint graph list, then compile and read back the node count. Writes require a non-transient /Game/ Blueprint.",
+      "requires": {
+        "features": [
+          "Blueprint"
+        ],
+        "plugins": [
+          "BlueprintGraph"
+        ],
+        "modules": [
+          "BlueprintGraph"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint asset package or object path"
+          },
+          "graph": {
+            "type": "string",
+            "description": "Optional source graph name or object path; defaults to the primary event graph"
+          },
+          "newName": {
+            "type": "string",
+            "description": "Optional display name for the duplicated graph; defaults to <source>_Copy"
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.graph.duplicate"
+      }
+    },
+    {
+      "id": "blueprint.graph.copy_nodes",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Copy all nodes (with internal links re-wired) from a source graph into an existing target graph of the same Blueprint, then compile and read back the node counts. Writes require a non-transient /Game/ Blueprint.",
+      "requires": {
+        "features": [
+          "Blueprint"
+        ],
+        "plugins": [
+          "BlueprintGraph"
+        ],
+        "modules": [
+          "BlueprintGraph"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint asset package or object path"
+          },
+          "sourceGraph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Source graph name or object path to copy nodes from"
+          },
+          "targetGraph": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Target graph name or object path to copy nodes into"
+          }
+        },
+        "required": [
+          "blueprint",
+          "sourceGraph",
+          "targetGraph"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "blueprint.graph.copy_nodes"
+      }
+    },
+    {
+      "id": "blueprint.data_asset.create",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Create a raw UObject/DataAsset instance at a /Game package path using a loaded native or plugin class, register it with the Asset Registry, and optionally save it.",
+      "requires": {
+        "features": [
+          "Blueprint"
+        ],
+        "plugins": [
+          "BlueprintGraph"
+        ],
+        "modules": [
+          "AssetRegistry",
+          "EditorScriptingUtilities"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "savePath": {
+            "type": "string",
+            "minLength": 7,
+            "description": "New package path under /Game, without an object suffix (for example /Game/Data/DA_Example)."
+          },
+          "className": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Loaded native or plugin UObject class name or full /Script class path. Blueprint and Actor classes are rejected."
+          },
+          "skipSave": {
+            "type": "boolean",
+            "default": false,
+            "description": "Keep the created package dirty in memory instead of saving it to disk."
+          }
+        },
+        "required": [
+          "savePath",
+          "className"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "blueprint"
+        ],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "safeWrite"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.2.0",
+        "canonicalId": "blueprint.data_asset.create"
+      }
+    },
+    {
+      "id": "blueprint.actor.batch_spawn",
+      "domain": "blueprint",
+      "kind": "command",
+      "description": "Spawn up to 1000 actors from a Blueprint class in a grid or linear pattern with bounded transform, metadata, and scalar property assignment.",
+      "requires": {
+        "features": [
+          "Blueprint"
+        ],
+        "modules": [
+          "UnrealEd",
+          "AssetRegistry"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Blueprint asset path or generated class path."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "description": "Number of actors to spawn."
+          },
+          "pattern": {
+            "type": "string",
+            "enum": [
+              "grid",
+              "linear"
+            ],
+            "default": "grid"
+          },
+          "origin": {
+            "description": "Origin as [x,y,z] or {x,y,z}."
+          },
+          "spacing": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": 200
+          },
+          "columns": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 10
+          },
+          "direction": {
+            "description": "Linear direction as [x,y,z] or {x,y,z}."
+          },
+          "rotation": {
+            "description": "Shared rotation as [pitch,yaw,roll] or {pitch,yaw,roll}."
+          },
+          "scale": {
+            "description": "Shared scale as [x,y,z] or {x,y,z}."
+          },
+          "labelPrefix": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "folder": {
+            "type": "string",
+            "maxLength": 256,
+            "default": "Blueprints"
+          },
+          "properties": {
+            "type": "object",
+            "description": "Scalar actor properties assigned through ImportText_Direct."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "sublevel": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "mobility": {
+            "type": "string",
+            "enum": [
+              "static",
+              "stationary",
+              "movable"
+            ]
+          },
+          "select": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "blueprint",
+          "count"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": true,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "editStep",
+        "scopeKinds": [
+          "world"
+        ],
+        "transactionDomain": "world",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.2.0",
+        "canonicalId": "blueprint.actor.batch_spawn"
       }
     }
   ],

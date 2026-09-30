@@ -37,6 +37,7 @@ const inputTypes = new Set([
   "boolean",
   "object",
   "array",
+  "json",
 ]);
 
 function fail(message) {

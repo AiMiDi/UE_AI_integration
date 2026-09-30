@@ -1,63 +1,123 @@
 {
-	"FileVersion": 3,
-	"Version": 11,
-	"VersionName": "1.0.0",
-	"FriendlyName": "UE_AI_integration",
-	"Description": "A manifest-driven AI integration for Unreal Engine 5.3-5.7 with Agent Skills, UE Workflow DSL, rendering debug evidence, bounded trace capture, and offline TraceServices analysis.",
-	"Category": "Editor",
-	"CreatedBy": "NodeNestor",
-	"CreatedByURL": "https://github.com/NodeNestor",
-	"DocsURL": "",
-	"MarketplaceURL": "",
-	"CanContainContent": true,
-	"IsBetaVersion": true,
-	"IsExperimentalVersion": false,
-	"Installed": false,
-	"SupportedTargetPlatforms": ["Win64", "Linux", "Mac"],
-	"SupportedPrograms": ["UEAITraceWorker"],
-	"Modules": [
-		{
-			"Name": "UE_AI_integration",
-			"Type": "DeveloperTool",
-			"LoadingPhase": "PostEngineInit",
-			"TargetAllowList": ["Editor"],
-			"PlatformAllowList": ["Win64", "Linux", "Mac"]
-		},
-		{
-			"Name": "UEAITraceAnalysisCore",
-			"Type": "EditorAndProgram",
-			"LoadingPhase": "Default",
-			"ProgramAllowList": ["UEAITraceWorker"],
-			"PlatformAllowList": ["Win64", "Linux", "Mac"]
-		},
-		{
-			"Name": "UEAITraceRuntime",
-			"Type": "Runtime",
-			"LoadingPhase": "Default",
-			"TargetAllowList": ["Game"],
-			"TargetConfigurationAllowList": ["Development", "DebugGame"],
-			"PlatformAllowList": ["Win64", "Linux", "Mac"]
-		},
-		{
-			"Name": "UEAIDevelopmentBridge",
-			"Type": "Runtime",
-			"LoadingPhase": "Default",
-			"TargetAllowList": ["Game"],
-			"TargetConfigurationAllowList": ["Development", "DebugGame"],
-			"PlatformAllowList": ["Win64", "Linux", "Mac"]
-		},
-		{
-			"Name": "UEAITraceWorker",
-			"Type": "Program",
-			"LoadingPhase": "Default",
-			"ProgramAllowList": ["UEAITraceWorker"],
-			"PlatformAllowList": ["Win64", "Linux", "Mac"]
-		}
-	],
-	"Plugins": [
-		{ "Name": "EditorScriptingUtilities", "Enabled": true },
-		{ "Name": "Niagara", "Enabled": false, "Optional": true },
-		{ "Name": "Water", "Enabled": false, "Optional": true },
-		{ "Name": "PCG", "Enabled": false, "Optional": true }
-	]
+  "FileVersion": 3,
+  "Version": 11,
+  "VersionName": "1.0.0",
+  "FriendlyName": "UE_AI_integration",
+  "Description": "A manifest-driven AI integration for Unreal Engine 5.3-5.7 with Agent Skills, UE Workflow DSL, rendering debug evidence, bounded trace capture, and offline TraceServices analysis.",
+  "Category": "Editor",
+  "CreatedBy": "NodeNestor",
+  "CreatedByURL": "https://github.com/NodeNestor",
+  "DocsURL": "",
+  "MarketplaceURL": "",
+  "CanContainContent": true,
+  "IsBetaVersion": true,
+  "IsExperimentalVersion": false,
+  "Installed": false,
+  "SupportedTargetPlatforms": [
+    "Win64",
+    "Linux",
+    "Mac"
+  ],
+  "SupportedPrograms": [
+    "UEAITraceWorker"
+  ],
+  "Modules": [
+    {
+      "Name": "UE_AI_integration",
+      "Type": "DeveloperTool",
+      "LoadingPhase": "PostEngineInit",
+      "TargetAllowList": [
+        "Editor"
+      ],
+      "PlatformAllowList": [
+        "Win64",
+        "Linux",
+        "Mac"
+      ]
+    },
+    {
+      "Name": "UEAITraceAnalysisCore",
+      "Type": "EditorAndProgram",
+      "LoadingPhase": "Default",
+      "TargetAllowList": [
+        "Editor"
+      ],
+      "ProgramAllowList": [
+        "UEAITraceWorker"
+      ],
+      "PlatformAllowList": [
+        "Win64",
+        "Linux",
+        "Mac"
+      ]
+    },
+    {
+      "Name": "UEAITraceRuntime",
+      "Type": "Runtime",
+      "LoadingPhase": "Default",
+      "TargetAllowList": [
+        "Game"
+      ],
+      "TargetConfigurationAllowList": [
+        "Development",
+        "DebugGame"
+      ],
+      "PlatformAllowList": [
+        "Win64",
+        "Linux",
+        "Mac"
+      ]
+    },
+    {
+      "Name": "UEAIDevelopmentBridge",
+      "Type": "Runtime",
+      "LoadingPhase": "Default",
+      "TargetAllowList": [
+        "Game"
+      ],
+      "TargetConfigurationAllowList": [
+        "Development",
+        "DebugGame"
+      ],
+      "PlatformAllowList": [
+        "Win64",
+        "Linux",
+        "Mac"
+      ]
+    },
+    {
+      "Name": "UEAITraceWorker",
+      "Type": "Program",
+      "LoadingPhase": "Default",
+      "ProgramAllowList": [
+        "UEAITraceWorker"
+      ],
+      "PlatformAllowList": [
+        "Win64",
+        "Linux",
+        "Mac"
+      ]
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "EditorScriptingUtilities",
+      "Enabled": true
+    },
+    {
+      "Name": "Niagara",
+      "Enabled": false,
+      "Optional": true
+    },
+    {
+      "Name": "Water",
+      "Enabled": false,
+      "Optional": true
+    },
+    {
+      "Name": "PCG",
+      "Enabled": false,
+      "Optional": true
+    }
+  ]
 }

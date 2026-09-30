@@ -1,0 +1,6 @@
+interface:
+  display_name: "UE Niagara Authoring"
+  short_description: "Inspect and safely edit Niagara Systems and graphs."
+  default_prompt: "Use $ue-niagara-authoring to inspect a Niagara System or graph and safely edit graph nodes, modules, pin defaults, renderer materials, or typed User parameters."
+policy:
+  allow_implicit_invocation: true

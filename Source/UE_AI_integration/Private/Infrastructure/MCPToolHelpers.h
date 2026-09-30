@@ -92,50 +92,109 @@ namespace MCPHelpers
 		return nullptr;
 	}
 
-	inline UBlueprint* LoadBlueprintByName(const FString& NameOrPath, FString& OutError)
+	inline UBlueprint* LoadBlueprintFromAsset(const FAssetData& Asset, FString& OutError)
 	{
-		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
-		TArray<FAssetData> AllBP;
-		Registry.GetAssetsByClass(UBlueprint::StaticClass()->GetClassPathName(), AllBP, true);
-
-		for (FAssetData& Asset : AllBP)
+		UObject* Loaded = Asset.GetAsset();
+		if (UBlueprint* Blueprint = Cast<UBlueprint>(Loaded))
 		{
-			if (Asset.AssetName.ToString().Equals(NameOrPath, ESearchCase::IgnoreCase) ||
-				Asset.PackageName.ToString().Equals(NameOrPath, ESearchCase::IgnoreCase))
+			if (IsValid(Blueprint) && Blueprint->IsAsset())
 			{
-				UBlueprint* BP = Cast<UBlueprint>(Asset.GetAsset());
-				if (IsValid(BP) && BP->IsAsset()) return BP;
+				return Blueprint;
 			}
 		}
-
-		// Try loading as level blueprint from maps
-		TArray<FAssetData> AllMaps;
-		Registry.GetAssetsByClass(UWorld::StaticClass()->GetClassPathName(), AllMaps, false);
-		for (FAssetData& MapAsset : AllMaps)
+		if (UWorld* World = Cast<UWorld>(Loaded))
 		{
-			if (MapAsset.AssetName.ToString().Equals(NameOrPath, ESearchCase::IgnoreCase) ||
-				MapAsset.PackageName.ToString().Equals(NameOrPath, ESearchCase::IgnoreCase))
+			if (World->PersistentLevel)
 			{
-				UWorld* World = Cast<UWorld>(MapAsset.GetAsset());
-				if (World && World->PersistentLevel)
+				ULevelScriptBlueprint* LevelBlueprint =
+					World->PersistentLevel->GetLevelScriptBlueprint(/*bDontCreate=*/ true);
+				if (IsValid(LevelBlueprint))
 				{
-					ULevelScriptBlueprint* LevelBP = World->PersistentLevel->GetLevelScriptBlueprint(true);
-					if (IsValid(LevelBP)) return LevelBP;
+					return LevelBlueprint;
+				}
+			}
+			OutError = FString::Printf(
+				TEXT("Map '%s' has no existing Level Script Blueprint. Open and create it in the Level Blueprint editor before querying it."),
+				*Asset.PackageName.ToString());
+			return nullptr;
+		}
+		OutError = FString::Printf(
+			TEXT("Asset '%s' could not be loaded as a Blueprint or map. Use blueprint.asset.list to select a valid asset path."),
+			*Asset.GetSoftObjectPath().ToString());
+		return nullptr;
+	}
+
+	inline UBlueprint* LoadBlueprintByName(const FString& NameOrPath, FString& OutError)
+	{
+		OutError.Reset();
+		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+		TArray<FAssetData> Matches;
+		const bool bIsPath = NameOrPath.StartsWith(TEXT("/"));
+		if (bIsPath)
+		{
+			// Resolve explicit package/object paths without a global short-name search.
+			TArray<FAssetData> PackageAssets;
+			Registry.GetAssetsByPackageName(
+				FName(*FPackageName::ObjectPathToPackageName(NameOrPath)),
+				PackageAssets);
+			for (const FAssetData& Asset : PackageAssets)
+			{
+				if (Asset.PackageName.ToString().Equals(NameOrPath, ESearchCase::IgnoreCase)
+					|| Asset.GetSoftObjectPath().ToString().Equals(NameOrPath, ESearchCase::IgnoreCase))
+				{
+					Matches.Add(Asset);
 				}
 			}
 		}
-
-		// Try direct load
-		UObject* Loaded = StaticLoadObject(UBlueprint::StaticClass(), nullptr, *NameOrPath);
-		if (UBlueprint* BP = Cast<UBlueprint>(Loaded))
+		else
 		{
-			if (IsValid(BP) && BP->IsAsset())
+			// A map and a regular Blueprint may share a short name. Check both
+			// catalogs before loading anything so selection cannot depend on registry order.
+			TArray<FAssetData> Candidates;
+			Registry.GetAssetsByClass(UBlueprint::StaticClass()->GetClassPathName(), Candidates, true);
+			Registry.GetAssetsByClass(UWorld::StaticClass()->GetClassPathName(), Candidates, false);
+			for (const FAssetData& Asset : Candidates)
 			{
-				return BP;
+				if (Asset.AssetName.ToString().Equals(NameOrPath, ESearchCase::IgnoreCase))
+				{
+					Matches.Add(Asset);
+				}
 			}
 		}
-
-		OutError = FString::Printf(TEXT("Blueprint '%s' not found. Use list_blueprints to see available assets."), *NameOrPath);
+		if (Matches.Num() == 1)
+		{
+			return LoadBlueprintFromAsset(Matches[0], OutError);
+		}
+		if (Matches.Num() > 1)
+		{
+			TArray<FString> Paths;
+			for (const FAssetData& Asset : Matches)
+			{
+				Paths.Add(Asset.GetSoftObjectPath().ToString());
+			}
+			Paths.Sort();
+			constexpr int32 MaxDisplayedPaths = 8;
+			const bool bTruncated = Paths.Num() > MaxDisplayedPaths;
+			Paths.SetNum(FMath::Min(Paths.Num(), MaxDisplayedPaths));
+			OutError = FString::Printf(
+				TEXT("Blueprint '%s' is ambiguous (%d matching assets). Use an exact object path: %s%s"),
+				*NameOrPath, Matches.Num(), *FString::Join(Paths, TEXT(", ")),
+				bTruncated ? TEXT(". Use blueprint.asset.list with filter and pagination for more matches.") : TEXT("."));
+			return nullptr;
+		}
+		if (bIsPath)
+		{
+			// Preserve explicit-path loading for assets not yet represented in the registry.
+			UBlueprint* Blueprint = Cast<UBlueprint>(
+				StaticLoadObject(UBlueprint::StaticClass(), nullptr, *NameOrPath));
+			if (IsValid(Blueprint) && Blueprint->IsAsset())
+			{
+				return Blueprint;
+			}
+		}
+		OutError = FString::Printf(
+			TEXT("Blueprint '%s' not found. Use blueprint.asset.list with filter and pagination to select an exact asset path."),
+			*NameOrPath);
 		return nullptr;
 	}
 
@@ -168,18 +227,70 @@ namespace MCPHelpers
 
 	// ---- Serialization ----
 
+	inline TSharedRef<FJsonObject> SerializePinTerminalType(const FEdGraphTerminalType& Type)
+	{
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetStringField(TEXT("type"), Type.TerminalCategory.ToString());
+		Result->SetStringField(TEXT("subcategory"), Type.TerminalSubCategory.ToString());
+		Result->SetStringField(TEXT("subCategory"), Type.TerminalSubCategory.ToString());
+		if (const UObject* Subtype = Type.TerminalSubCategoryObject.Get())
+		{
+			Result->SetStringField(TEXT("subtype"), Subtype->GetName());
+			Result->SetStringField(TEXT("subtypePath"), Subtype->GetPathName());
+		}
+		Result->SetBoolField(TEXT("isConst"), Type.bTerminalIsConst);
+		Result->SetBoolField(TEXT("const"), Type.bTerminalIsConst);
+		Result->SetBoolField(TEXT("reference"), false);
+		Result->SetBoolField(TEXT("isWeakPointer"), Type.bTerminalIsWeakPointer);
+		Result->SetBoolField(TEXT("isUObjectWrapper"), Type.bTerminalIsUObjectWrapper);
+		return Result;
+	}
+
+	inline TSharedRef<FJsonObject> SerializePinType(const FEdGraphPinType& Type)
+	{
+		TSharedRef<FJsonObject> Result = SerializePinTerminalType(FEdGraphTerminalType::FromPinType(Type));
+		Result->SetBoolField(TEXT("isReference"), Type.bIsReference);
+		Result->SetBoolField(TEXT("reference"), Type.bIsReference);
+		Result->SetBoolField(TEXT("const"), Type.bIsConst);
+		Result->SetBoolField(TEXT("isArray"), Type.IsArray());
+		const TCHAR* ContainerType = TEXT("none");
+		switch (Type.ContainerType)
+		{
+		case EPinContainerType::Array:
+			ContainerType = TEXT("array");
+			break;
+		case EPinContainerType::Set:
+			ContainerType = TEXT("set");
+			break;
+		case EPinContainerType::Map:
+			ContainerType = TEXT("map");
+			break;
+		default:
+			break;
+		}
+		Result->SetStringField(TEXT("containerType"), ContainerType);
+		if (Type.IsMap())
+		{
+			Result->SetObjectField(TEXT("mapValueType"), SerializePinTerminalType(Type.PinValueType));
+		}
+		return Result;
+	}
+
 	inline TSharedPtr<FJsonObject> SerializePin(UEdGraphPin* Pin)
 	{
 		if (!Pin) return nullptr;
-		TSharedRef<FJsonObject> PinJson = MakeShared<FJsonObject>();
+		TSharedRef<FJsonObject> PinJson = SerializePinType(Pin->PinType);
+		// Report the stored pin identity; APIs that accept only names still
+		// require their own unambiguous name resolution.
+		PinJson->SetStringField(TEXT("pinId"), Pin->PinId.ToString());
 		PinJson->SetStringField(TEXT("name"), Pin->PinName.ToString());
 		PinJson->SetStringField(TEXT("direction"), Pin->Direction == EGPD_Input ? TEXT("Input") : TEXT("Output"));
-		PinJson->SetStringField(TEXT("type"), Pin->PinType.PinCategory.ToString());
-		if (Pin->PinType.PinSubCategoryObject.IsValid())
-			PinJson->SetStringField(TEXT("subtype"), Pin->PinType.PinSubCategoryObject->GetName());
 		if (!Pin->DefaultValue.IsEmpty())
 			PinJson->SetStringField(TEXT("defaultValue"), Pin->DefaultValue);
-		PinJson->SetBoolField(TEXT("isArray"), Pin->PinType.IsArray());
+		if (Pin->DefaultObject)
+			PinJson->SetStringField(TEXT("defaultObject"), Pin->DefaultObject->GetPathName());
+		if (!Pin->DefaultTextValue.IsEmpty())
+			PinJson->SetStringField(TEXT("defaultText"), Pin->DefaultTextValue.ToString());
 		PinJson->SetBoolField(TEXT("hidden"), Pin->bHidden);
 
 		if (Pin->LinkedTo.Num() > 0)
@@ -190,6 +301,7 @@ namespace MCPHelpers
 				if (!Linked || !Linked->GetOwningNode()) continue;
 				TSharedRef<FJsonObject> LinkJson = MakeShared<FJsonObject>();
 				LinkJson->SetStringField(TEXT("nodeId"), Linked->GetOwningNode()->NodeGuid.ToString());
+				LinkJson->SetStringField(TEXT("pinId"), Linked->PinId.ToString());
 				LinkJson->SetStringField(TEXT("pinName"), Linked->PinName.ToString());
 				Links.Add(MakeShared<FJsonValueObject>(LinkJson));
 			}
@@ -255,12 +367,13 @@ namespace MCPHelpers
 		TArray<TSharedPtr<FJsonValue>> VarsArr;
 		for (const FBPVariableDescription& Var : BP->NewVariables)
 		{
-			TSharedRef<FJsonObject> VarJson = MakeShared<FJsonObject>();
+			TSharedRef<FJsonObject> VarJson = SerializePinType(Var.VarType);
 			VarJson->SetStringField(TEXT("name"), Var.VarName.ToString());
-			VarJson->SetStringField(TEXT("type"), Var.VarType.PinCategory.ToString());
-			if (Var.VarType.PinSubCategoryObject.IsValid())
-				VarJson->SetStringField(TEXT("subtype"), Var.VarType.PinSubCategoryObject->GetName());
-			VarJson->SetBoolField(TEXT("isArray"), Var.VarType.IsArray());
+			VarJson->SetStringField(TEXT("defaultValue"), Var.DefaultValue);
+			// JSON numbers cannot represent every uint64 flag combination exactly.
+			VarJson->SetStringField(
+				TEXT("propertyFlags"),
+				FString::Printf(TEXT("%llu"), static_cast<uint64>(Var.PropertyFlags)));
 			VarsArr.Add(MakeShared<FJsonValueObject>(VarJson));
 		}
 		Result->SetArrayField(TEXT("variables"), VarsArr);
@@ -309,12 +422,28 @@ namespace MCPHelpers
 		UPackage* Package = Asset->GetPackage();
 		if (!Package) return false;
 
+		// Property tools also accept instanced subobjects (for example Niagara
+		// renderers). Save their owning asset, not the subobject as a root export.
+		// SavePackage fatally rejects roots without the requested top-level flags.
+		UObject* RootAsset = Asset;
+		while (RootAsset->GetOuter() && RootAsset->GetOuter() != Package)
+		{
+			RootAsset = RootAsset->GetOuter();
+		}
+		if (RootAsset->GetOuter() != Package
+			|| !RootAsset->HasAnyFlags(RF_Standalone)
+			|| RootAsset->HasAnyFlags(RF_Transient)
+			|| Package == GetTransientPackage())
+		{
+			return false;
+		}
+
 		FString PackageFilename = FPackageName::LongPackageNameToFilename(
 			Package->GetName(), FPackageName::GetAssetPackageExtension());
 
 		FSavePackageArgs SaveArgs;
 		SaveArgs.TopLevelFlags = RF_Standalone;
-		return UPackage::SavePackage(Package, Asset, *PackageFilename, SaveArgs);
+		return UPackage::SavePackage(Package, RootAsset, *PackageFilename, SaveArgs);
 	}
 
 	// ---- JSON helpers ----

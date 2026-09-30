@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE Blueprint Authoring"
+  short_description: "Inspect and edit Blueprint variables, components, and dispatchers."
+  default_prompt: "Use $ue-blueprint-authoring to inspect or edit authored Blueprint member variables, local SCS components, and event dispatchers."

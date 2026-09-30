@@ -13,13 +13,14 @@ SilverPalace 5.4.1 已通过 Niagara、NiagaraShader 与插件相关模块构建
 
 ## 核心特性
 
-- 当前发布快照包含 431 项 manifest 驱动的 Editor、PIE、Development 与本地
+- 当前发布快照包含 564 项 manifest 驱动的 Editor、PIE、Development 与本地
   Trace 能力；
   服务启动时从 manifest 动态计算数量。
 - Content 领域包含 Niagara graph inspect/collision audit，以及节点启用状态和
   输入 Pin 默认值的 plan/apply/rollback 能力。
-- `content.niagara.runtime.inspect/capture` 提供世界与 DI 定位、按请求启用的
-  GPU 结果读回及 Provider/帧证据；采集需要可选的 Editor 引擎桥接。
+- `content.niagara.simcache.*` 提供公开 API 的粒子属性采集、缓存检查、逐帧分页读取、JSON 证据导出与释放；支持显式帧数/超时和部分结果，不需要引擎补丁。GPU 回读可能卡顿，不提供 AsyncGpuTrace 私有缓冲区证据。参见 [使用流程](skills/ue-render-debug-capture/references/runtime-and-failure-evidence.md)。
+- `content.niagara.runtime.inspect` 通过现有 Niagara API 检查已加载的世界、
+  组件、DI 与配置值，无需修改引擎；对象清单不证明 GPU 碰撞执行或结果。
 - `scene.render.failure.analyze` 可在 Editor 退出后离线分析 DRED、渲染调用栈、
   Ensure 和 CrashContext，保留范围、哈希及验证边界。详见
   [运行时与故障证据](skills/ue-render-debug-capture/references/runtime-and-failure-evidence.md)。
@@ -103,9 +104,9 @@ Development Game Target ──► UEAITraceRuntime（非 Shipping，仅受约束
 
 | Domain | 数量 | 能力范围 |
 |---|---:|---|
-| Blueprint | 87 | 资产生命周期、Graph 几何/排版/截图、声明式 BuildGraph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
-| Scene | 98 | Actor、PIE Runtime、可信输入/等待/截图、Viewport 调试视图证据、World Partition、Data Layer、HLOD、PCG、渲染诊断、Landscape/Water |
-| Content | 100 | 资产查询/依赖/审计、安全导入/重导入、Static Mesh/Texture 配置、Material、Niagara graph 审计与受审批写入、UMG 与事件 Handler 验证 |
+| Blueprint | 111 | 资产生命周期、Graph 几何/排版/截图、声明式 BuildGraph、变量、组件、调用图、规则扫描、运行时调试、Diff、Validation |
+| Scene | 99 | Actor、PIE Runtime、可信输入/等待/截图、Viewport 调试视图证据、World Partition、Data Layer、HLOD、PCG、渲染诊断、Landscape/Water |
+| Content | 208 | 资产查询/依赖/审计、安全导入/重导入、Static Mesh/Texture 配置、Material、Niagara graph 审计与受审批写入、UMG 与事件 Handler 验证 |
 | Animation | 19 | AnimBlueprint、状态机与 BlendSpace 的创建、读取、校验和 Diff |
 | AI | 17 | Behavior Tree 与 Blackboard 的创建、读取、引用、校验和 Diff |
 | Production | 110 | Durable Job、Recipe/SAL、租约协调、性能标准 suite、恢复管理、Editor/Development Trace、离线工程与资产查询、受限 Runtime Bridge、测试、Cook/Package、Source Control、DDC、Epic BuildGraph |
@@ -115,7 +116,8 @@ Development Game Target ──► UEAITraceRuntime（非 Shipping，仅受约束
 - Unreal Engine 5.3–5.7
 - Node.js 20 或更高版本
 - C++ Unreal 项目，或与目标引擎匹配的预编译插件
-- 支持 MCP stdio server 的客户端
+- 源码构建原生 CLI 时需要 CMake 3.24+ 和 C++20 工具链
+- 支持终端命令的 Agent 客户端；使用 MCP 回退时需支持 stdio server
 
 ## 安装 UE 插件
 
@@ -128,7 +130,14 @@ YourProject/
         ├── UE_AI_integration.uplugin
         ├── Source/
         ├── Resources/
-        └── MCP/
+        ├── MCP/
+        ├── CMakeLists.txt
+        ├── CLI/
+        ├── Workflow/
+        ├── Recipes/
+        ├── skills/
+        ├── scripts/
+        └── docs/
 ```
 
 替换已经打包的 Win64 插件时，先在工程外生成 staging，再使用仓库提供的安装器；
@@ -150,7 +159,7 @@ Engine 时不会回退到其他安装。安装器还会拒绝包含
 旧插件备份到工程外后再原子激活。可先附加 `-PreflightOnly` 只做校验。手工复制仅
 适用于没有加载二进制的源码开发初次安装，不是正式替换流程。
 
-构建 TypeScript bridge：
+构建 TypeScript bridge（部分 CLI 本地 backend 也需要其 Node 运行时）：
 
 ```powershell
 cd YourProject\Plugins\UE_AI_integration\MCP
@@ -159,11 +168,41 @@ npm run build
 npm test
 ```
 
-启动 Unreal Editor 并确认插件已启用。Editor 侧服务启动后，可检查：
+**源码安装还须单独构建并安装两个原生 CLI；编译 UE 插件不会生成 CLI。**
+正常发布包已包含 `CLI/bin/ue-cli(.exe)` 与 `ue-workflow-cli(.exe)`，通过版本、
+宿主平台及目录验收后可复用。源码安装使用根 CMake 工程；将下列占位符替换为
+绝对路径，`<BuildDir>` 放在插件目录之外，各步骤成功后再继续：
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:9847/api/health
+$uePluginRoot = '<PluginRoot>'
+$ueCliBuild = '<BuildDir>'
+cmake -S $uePluginRoot -B $ueCliBuild -DUE_WORKFLOW_BUILD_CLI=ON -DUE_WORKFLOW_BUILD_TESTS=OFF
+cmake --build $ueCliBuild --config Release --target ue ue-workflow
+cmake --install $ueCliBuild --config Release --prefix "$uePluginRoot/CLI"
+
+$env:UE_CLI = "$uePluginRoot/CLI/bin/ue-cli.exe"
+$env:UE_WORKFLOW_CLI = "$uePluginRoot/CLI/bin/ue-workflow-cli.exe"
+& $env:UE_CLI --version --json
+& $env:UE_WORKFLOW_CLI --version --json
+& $env:UE_CLI capabilities --limit 1 --json
+& $env:UE_CLI skills --query blueprint --json
+& $env:UE_WORKFLOW_CLI doctor --json
 ```
+
+`cmake --install` 会同时安装 `CLI/share/ue-workflow-cli/` 下的
+Capabilities、Contracts、Skills 和 Recipes，不能只复制 exe。
+Windows 工具链、Linux/macOS 命令与详细验收见
+[CLI 构建与分发](docs/UE_SHORT_CLI.md#构建与分发)。上述命令可在 Editor 关闭时验收。
+
+目标 Unreal Editor 已运行且插件已启用时，再验收在线连接：
+
+```powershell
+& $env:UE_CLI status --json
+& $env:UE_CLI doctor --full --no-clean-stale-instances --json
+```
+
+分别记录 CLI/catalog、Editor 模块和 Trace Worker 的状态；Editor 未运行时，
+说明在线验收待完成。Agent 不自动启动或重启用户的 Editor。
 
 Level Editor 右下角会显示 `UE AI · N` 状态入口。绿色表示服务可用，
 黄色表示 manifest/Handler 绑定降级，红色表示监听失败，`Off` 表示用户已禁用
@@ -181,7 +220,7 @@ Level Editor 右下角会显示 `UE AI · N` 状态入口。绿色表示服务�
 
 ## 配置 Codex CLI
 
-在 `~/.codex/config.toml` 中加入：
+原生 UE CLI 是默认调用入口；需要 MCP 回退时，在 `~/.codex/config.toml` 中加入：
 
 ```toml
 [mcp_servers.ue_ai_integration]
@@ -206,9 +245,10 @@ claude mcp add ue_ai_integration -- node Plugins\UE_AI_integration\MCP\dist\inde
 
 ## 安装 UE AI 入口 Skill
 
-MCP 注册完成后，把 `$ue-ai` 安装到当前 Agent 客户端。入口 Skill 会先检查
-连接与能力目录，再通过 `ue_skills` 选择 Blueprint、UMG、资产、Landscape、
-渲染、性能、Trace 或恢复 Skill；它本身不绕过现有执行门禁。
+CLI 安装验收后，把 `$ue-ai` 安装到当前 Agent 客户端。入口 Skill 优先使用
+`ue-cli skills` 和 `ue-cli help` 发现领域配方与参数，再通过 `ue-cli` /
+`ue-workflow-cli` 执行和验证。CLI 缺失、不可用、版本不兼容、不支持所需操作，
+或用户明确要求 MCP 时才回退；两条路径保留相同的审批、恢复和验收合同。
 
 Codex：
 
@@ -223,8 +263,9 @@ Claude Code / Bash：
 bash ./scripts/install_entry_skill.sh --client claude
 ```
 
-相同内容重复安装不会改写文件。升级已有不同版本时显式添加 `-Force` 或
-`--force`；旧副本会保留在同一 `skills` 目录的时间戳备份中。随后可直接说：
+相同内容重复安装不会改写文件。升级前先检查并合并本地定制；显式替换时添加
+`-Force` 或 `--force`，旧副本会保留在同一 `skills` 目录的时间戳备份中。
+重新加载客户端技能或开启新会话后可直接说：
 “使用 `$ue-ai` 检查这个 UE 工程并选择正确的工具或领域 Skill”。
 
 ## MCP 工具

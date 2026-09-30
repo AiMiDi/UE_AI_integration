@@ -1,0 +1,559 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-material-editing",
+  "version": "1.0.0",
+  "title": "UE Material Editing",
+  "description": "Batch material and function node edits, Custom HLSL correction, material instance overrides and bounded GraphIR queries with explicit preview, shader and save evidence.",
+  "domains": [
+    "content"
+  ],
+  "risk": "mixed",
+  "triggers": [
+    "material editing",
+    "Custom HLSL",
+    "material function",
+    "material instance",
+    "GraphIR",
+    "material wiring",
+    "材质编辑",
+    "材质函数",
+    "材质实例",
+    "材质连线",
+    "材质参数",
+    "HLSL 修错",
+    "大图查询"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.3"
+    },
+    "capabilities": [
+      "content.material.custom.get",
+      "content.material.custom.set",
+      "content.material.diagnostics.get",
+      "content.material.editor.apply.prepare",
+      "content.material.editor.apply.verify",
+      "content.material.editor.batch",
+      "content.material.editor.context.get",
+      "content.material.editor.open",
+      "content.material.editor.close",
+      "content.material.editor.state",
+      "content.material.editor.nodes.select",
+      "content.material.expression.add",
+      "content.material.expression.delete",
+      "content.material.function.call.get",
+      "content.material.function.call.set",
+      "content.material.function.interface.set",
+      "content.material.function.validate",
+      "content.material.graph.index",
+      "content.material.graph.node.source.resolve",
+      "content.material.graph.nodes.list",
+      "content.material.graph.snapshot.release",
+      "content.material.graph.subgraph.get",
+      "content.material.instance.parameters.batch",
+      "content.material.instance.parameters.get",
+      "content.material.parameter.list",
+      "content.material.parameter.set",
+      "content.material.pin.connect",
+      "content.material.validate",
+      "content.material.graph.boundary.get",
+      "content.material.graph.definitions.list",
+      "content.material.graph.snapshots.diff",
+      "content.material.graph.execute_plan",
+      "content.material.instance.set_parent",
+      "content.material.instance.list",
+      "content.material.instance.parameter.clear",
+      "content.material.function.create",
+      "content.material.function.instance.create",
+      "content.material.save",
+      "content.material.recompile",
+      "content.material.compilation.stats",
+      "content.material.texture.properties",
+      "content.material.texture.import",
+      "content.material.thumbnail.get",
+      "content.material.tiling.quality"
+    ],
+    "optionalCapabilities": [
+      "content.material.graph.snapshot",
+      "content.material.graph.diff",
+      "content.material.graph.restore"
+    ]
+  },
+  "recipes": [
+    {
+      "id": "material-editor-lifecycle",
+      "title": "Open, inspect, and select Material Editor state",
+      "description": "Open or close a material editor explicitly, read its current selection and preview state, and select graph nodes by stable identity without editing or saving the graph.",
+      "risk": "mixed",
+      "inputs": [
+        { "name": "assetPath", "type": "string", "required": true, "description": "Exact Material, Material Instance, or Material Function asset path." },
+        { "name": "nodeIds", "type": "array", "required": false, "description": "Stable expression or graph node IDs to select after the editor is open." }
+      ],
+      "steps": [
+        { "id": "open", "phase": "discover", "purpose": "Open the requested asset editor and capture the resulting editor identity.", "operations": ["content.material.editor.open"] },
+        { "id": "state", "phase": "discover", "purpose": "Read current open-editor, preview, dirty and selection state before selection.", "operations": ["content.material.editor.state"] },
+        { "id": "select", "phase": "execute", "purpose": "Resolve all requested node IDs before selecting them in the native editor; this does not edit, compile, apply or save.", "operations": ["content.material.editor.nodes.select"], "optional": true },
+        { "id": "close", "phase": "verify", "purpose": "Close the explicitly targeted editor when the workflow owns its lifecycle and read back the closed state.", "operations": ["content.material.editor.close"], "optional": true }
+      ],
+      "result": {
+        "summary": "Material Editor lifecycle and selection evidence with explicit editor state.",
+        "evidence": ["asset identity", "open/closed state", "preview and dirty state", "requested and selected node IDs"],
+        "success": ["editor operations target only the requested asset", "selection failures do not partially select unresolved IDs", "graph content and disk persistence remain unchanged"]
+      }
+    },
+    {
+      "id": "inspect-graph",
+      "title": "Inspect a bounded material graph",
+      "description": "Capture the intended asset/preview and query sources or consumers with explicit coverage.",
+      "risk": "readOnly",
+      "inputs": [
+        {
+          "name": "assetPath",
+          "type": "string",
+          "required": true,
+          "description": "Original material or function asset path."
+        },
+        {
+          "name": "targetContext",
+          "type": "string",
+          "required": false,
+          "description": "asset or editorPreview, matching the requested context."
+        }
+      ],
+      "steps": [
+        {
+          "id": "capture",
+          "phase": "discover",
+          "purpose": "Capture the correct expression collection; opt into named reroute dependencies as needed.",
+          "operations": [
+            "content.material.graph.index"
+          ]
+        },
+        {
+          "id": "query",
+          "phase": "execute",
+          "purpose": "Page/filter nodes and traverse within independent node, depth, edge and scan budgets.",
+          "operations": [
+            "content.material.graph.nodes.list",
+            "content.material.graph.subgraph.get",
+            "content.material.graph.boundary.get",
+            "content.material.graph.node.source.resolve"
+          ]
+        },
+        {
+          "id": "definition-contracts",
+          "phase": "execute",
+          "purpose": "Discover bounded property and pin templates without treating reflected fields as generic writable properties.",
+          "operations": [
+            "content.material.graph.definitions.list"
+          ],
+          "optional": true
+        },
+        {
+          "id": "compare-revisions",
+          "phase": "execute",
+          "purpose": "When comparing edits, recapture the same context/mode and page snapshots.diff; follow empty pages with hasMore.",
+          "operations": [
+            "content.material.graph.snapshots.diff"
+          ],
+          "optional": true
+        },
+        {
+          "id": "verify-and-release",
+          "phase": "verify",
+          "purpose": "Check coverage, truncation and immutable-source identity; release finished snapshots.",
+          "operations": [
+            "content.material.graph.nodes.list",
+            "content.material.graph.snapshot.release"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Bounded graph evidence for the requested context.",
+        "evidence": [
+          "snapshot identity and projection mode",
+          "typed edges, boundaries and coverage",
+          "bounded definition and writer contracts when requested"
+        ],
+        "success": [
+          "queries used the same snapshot",
+          "incomplete reference or traversal coverage was reported",
+          "boundary proof was reported as consumed by execute_plan when a plan was executed",
+          "no mutation, compilation or save was used for the query"
+        ]
+      }
+    },
+    {
+      "id": "edit-preview",
+      "title": "Batch edits in an open material editor",
+      "description": "Edit a working copy in one native batch and verify preview state without silently applying it.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "assetPath",
+          "type": "string",
+          "required": true,
+          "description": "Original material/function path with an already-open editor."
+        },
+        {
+          "name": "operations",
+          "type": "array",
+          "required": true,
+          "description": "Requested create/configure/connect/delete operations."
+        }
+      ],
+      "steps": [
+        {
+          "id": "preview-baseline",
+          "phase": "discover",
+          "purpose": "Read preview identity/graph hash and needed node settings.",
+          "operations": [
+            "content.material.editor.context.get",
+            "content.material.custom.get",
+            "content.material.parameter.list",
+            "content.material.function.call.get"
+          ]
+        },
+        {
+          "id": "batch",
+          "phase": "execute",
+          "purpose": "Use editor.batch with current preview identity/state and one final refresh; no Apply/save.",
+          "operations": [
+            "content.material.editor.batch"
+          ]
+        },
+        {
+          "id": "readback",
+          "phase": "verify",
+          "purpose": "Check batch business result and current same-context node/diagnostic evidence; prepare an Apply review when acceptance is requested.",
+          "operations": [
+            "content.material.editor.context.get",
+            "content.material.custom.get",
+            "content.material.parameter.list",
+            "content.material.diagnostics.get",
+            "content.material.editor.apply.prepare"
+          ]
+        },
+        {
+          "id": "after-native-apply",
+          "phase": "verify",
+          "purpose": "After native Apply actually occurred, verify the prepared content receipt; this step does not perform Apply.",
+          "operations": [
+            "content.material.editor.apply.verify"
+          ],
+          "optional": true
+        }
+      ],
+      "result": {
+        "summary": "Verified preview edits with explicit unapplied/applied status.",
+        "evidence": [
+          "preview identity and before/after state",
+          "batch result and rollback evidence",
+          "current diagnostic/resource state",
+          "Apply receipt when relevant"
+        ],
+        "success": [
+          "only the requested preview was changed",
+          "batch final update was not duplicated",
+          "shader success was scoped to available evidence",
+          "unapplied state and disk persistence were not conflated"
+        ]
+      }
+    },
+    {
+      "id": "edit-assets",
+      "title": "Batch authored material and function edits",
+      "description": "Use Workflow scopes for continuous authored changes with deferred updates, readback and rollback.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "scopes",
+          "type": "object",
+          "required": true,
+          "description": "Material/materialFunction scope(s), including actual host when needed."
+        },
+        {
+          "name": "changes",
+          "type": "array",
+          "required": true,
+          "description": "Requested authored edits; use live Workflow admission."
+        }
+      ],
+      "steps": [
+        {
+          "id": "asset-baseline",
+          "phase": "discover",
+          "purpose": "Read graph/node baselines for the authored scope, checking any open preview separately.",
+          "operations": [
+            "content.material.graph.index",
+            "content.material.custom.get",
+            "content.material.parameter.list",
+            "content.material.function.call.get",
+            "content.material.editor.context.get"
+          ]
+        },
+        {
+          "id": "workflow-edit",
+          "phase": "execute",
+          "purpose": "Plan and execute exact requested changes through material/materialFunction Workflow scopes; finalizer owns compile/readback/rollback.",
+          "operations": [
+            "content.material.expression.add",
+            "content.material.expression.delete",
+            "content.material.custom.set",
+            "content.material.parameter.set",
+            "content.material.function.call.set",
+            "content.material.function.interface.set",
+            "content.material.pin.connect"
+          ],
+          "route": "workflow"
+        },
+        {
+          "id": "readback",
+          "phase": "verify",
+          "purpose": "Read intended node changes and current diagnostics. Do not compile again if Workflow already produced current validation.",
+          "operations": [
+            "content.material.custom.get",
+            "content.material.parameter.list",
+            "content.material.function.call.get",
+            "content.material.diagnostics.get"
+          ]
+        },
+        {
+          "id": "host-validation-if-needed",
+          "phase": "verify",
+          "purpose": "Only when shader proof is still required, validate the actual host/material once and read its result.",
+          "operations": [
+            "content.material.validate",
+            "content.material.function.validate"
+          ],
+          "optional": true
+        }
+      ],
+      "result": {
+        "summary": "Authored batch with Workflow and scoped validation evidence.",
+        "evidence": [
+          "scope identities and approved plan/run evidence",
+          "readback and rollback state",
+          "current host shader result and requested persistence"
+        ],
+        "success": [
+          "the exact Workflow admission/digest contract was followed",
+          "intermediate updates and saves were deferred by Workflow",
+          "a missing shader verdict was not reported as success",
+          "persisted state was distinguished from dirty memory edits"
+        ]
+      }
+    },
+    {
+      "id": "edit-instance",
+      "title": "Batch material instance overrides",
+      "description": "Set or clear scalar/vector/texture/switch overrides by full identity with inheritance readback.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "instance",
+          "type": "string",
+          "required": true,
+          "description": "Exact material instance object path."
+        },
+        {
+          "name": "operations",
+          "type": "array",
+          "required": true,
+          "description": "Unique typed set/clear operations with association/index."
+        },
+        {
+          "name": "save",
+          "type": "boolean",
+          "required": false,
+          "description": "Persist explicitly when the requested outcome requires it; otherwise false."
+        }
+      ],
+      "steps": [
+        {
+          "id": "baseline",
+          "phase": "discover",
+          "purpose": "Read local/inherited/effective values and current state hash; keep full identities.",
+          "operations": [
+            "content.material.instance.parameters.get"
+          ]
+        },
+        {
+          "id": "batch",
+          "phase": "execute",
+          "purpose": "Preflight and apply one batch with expectedStateHash; use dryRun where useful and save only as requested.",
+          "operations": [
+            "content.material.instance.parameters.batch"
+          ]
+        },
+        {
+          "id": "readback",
+          "phase": "verify",
+          "purpose": "Verify intended overrides or restored inheritance and inspect separate readback/save/restore receipts.",
+          "operations": [
+            "content.material.instance.parameters.get"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Verified instance overrides with one final update and explicit persistence.",
+        "evidence": [
+          "before/after parameter state hashes",
+          "full parameter identities and effective/inherited values",
+          "readbackVerified, saved and restoreVerified when applicable"
+        ],
+        "success": [
+          "the batch used the current expected state",
+          "cleared overrides inherit the expected value",
+          "save/readback/shader evidence were kept distinct"
+        ]
+      }
+    },
+    {
+      "id": "asset-utilities",
+      "title": "Inspect and persist material utility state",
+      "description": "Read bounded texture or shader statistics, request an explicit material recompile, and persist a standalone material when authorized.",
+      "risk": "mixed",
+      "inputs": [
+        {
+          "name": "assetPath",
+          "type": "string",
+          "required": true,
+          "description": "Exact material, material instance, or texture asset path."
+        },
+        {
+          "name": "onlyIfDirty",
+          "type": "boolean",
+          "required": false,
+          "description": "Skip a clean package when saving; defaults to true."
+        },
+        {
+          "name": "includeStats",
+          "type": "boolean",
+          "required": false,
+          "description": "Include bounded statistics after a recompile when the resource is complete."
+        }
+      ],
+      "steps": [
+        {
+          "id": "utility-baseline",
+          "phase": "discover",
+          "purpose": "Read current shader statistics or texture metadata without requesting compilation.",
+          "operations": [
+            "content.material.compilation.stats",
+            "content.material.texture.properties",
+            "content.material.tiling.quality"
+          ]
+        },
+        {
+          "id": "utility-change",
+          "phase": "execute",
+          "purpose": "Perform the explicitly requested recompile or package save; queries remain read-only.",
+          "operations": [
+            "content.material.recompile",
+            "content.material.save"
+          ]
+        },
+        {
+          "id": "utility-readback",
+          "phase": "verify",
+          "purpose": "Re-read statistics or texture metadata and report completion, availability, errors, dirty state, and persistence separately.",
+          "operations": [
+            "content.material.compilation.stats",
+            "content.material.texture.properties",
+            "content.material.tiling.quality"
+          ]
+        },
+        {
+          "id": "thumbnail-readback",
+          "phase": "verify",
+          "optional": true,
+          "purpose": "Optionally render a bounded thumbnail for visual evidence; file output is external evidence and is never required to prove the asset save.",
+          "operations": [
+            "content.material.thumbnail.get"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Material utility evidence with explicit compile, statistics, save, and texture metadata boundaries.",
+        "evidence": [
+          "compile request and completion state",
+          "bounded compiler errors and statistics availability",
+          "package save outcome or texture metadata"
+        ],
+        "success": [
+          "queries did not trigger compilation",
+          "incomplete resources did not report invented statistics",
+          "memory compile state and disk persistence remained distinct"
+        ]
+      }
+    },
+    {
+      "id": "material-instance-inventory",
+      "title": "Inventory material instances and clear a parameter override",
+      "description": "Enumerate authored material instances for a parent, then clear one named parameter override so it inherits the parent value.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "parent", "type": "string", "required": true, "description": "Exact Material or MaterialInstance object or package path to enumerate from." },
+        { "name": "instance", "type": "string", "required": false, "description": "Exact UMaterialInstance object or package path whose override is cleared." },
+        { "name": "parameter", "type": "string", "required": false, "description": "Exact parameter name; case-insensitive match." },
+        { "name": "recursive", "type": "boolean", "required": false, "description": "Include instances whose parent ancestry reaches the parent; defaults to false." },
+        { "name": "maxResults", "type": "integer", "required": false, "description": "Bound the inventory to 1..4096 rows; default 256." }
+      ],
+      "steps": [
+        { "id": "inventory-baseline", "phase": "discover", "purpose": "Enumerate authored instances for the parent and read the target instance's current override/inheritance state.", "operations": ["content.material.instance.list", "content.material.instance.parameters.get"] },
+        { "id": "clear-override", "phase": "execute", "purpose": "Remove one named override from the exact instance so it inherits the parent value.", "operations": ["content.material.instance.parameter.clear"] },
+        { "id": "inheritance-readback", "phase": "verify", "purpose": "Re-read the instance parameters and confirm the cleared override now inherits the parent value.", "operations": ["content.material.instance.parameters.get", "content.material.instance.list"] }
+      ],
+      "result": {
+        "summary": "Bounded authored instance inventory with one cleared override and inheritance readback.",
+        "evidence": ["parent and instance identities", "recursive and pagination inventory bounds", "inherited value after the cleared override"],
+        "success": ["only a named override on the exact instance was cleared", "the inherited value was read back", "inventory queries did not compile or save"]
+      }
+    },
+    {
+      "id": "execute-graph-plan",
+      "title": "Execute a bounded authored GraphIR plan",
+      "description": "Apply an exact fresh GraphIR plan to an authored Material or MaterialFunction, then verify the new projection or roll back the whole batch.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "assetPath", "type": "string", "required": true, "description": "Exact authored Material or MaterialFunction path." },
+        { "name": "snapshotId", "type": "string", "required": true, "description": "Immutable snapshot returned by content.material.graph.index." },
+        { "name": "expectedProjectionHash", "type": "string", "required": true, "description": "Projection hash from the same snapshot." },
+        { "name": "operations", "type": "array", "required": true, "description": "Ordered move_node, connect, disconnect, Material-only duplicate_node, or MaterialFunction set_function_metadata operations. duplicate_node may publish resultId/result_id for later operations in the same plan." },
+        { "name": "boundaryId", "type": "string", "required": false, "description": "Optional writable boundary proof that constrains referenced expression nodes." },
+        { "name": "expectedAfterProjectionHash", "type": "string", "required": false, "description": "Optional exact postcondition hash; mismatch triggers rollback." }
+      ],
+      "steps": [
+        { "id": "plan-baseline", "phase": "discover", "purpose": "Capture the immutable graph and, when editing a bounded selection, derive a complete writable boundary.", "operations": ["content.material.graph.index", "content.material.graph.boundary.get"] },
+        { "id": "execute", "phase": "execute", "purpose": "Apply supported topology operations in one transaction after re-capturing the live projection. Material plans may duplicate_node with an explicit position or offset; MaterialFunction plans may also set_function_metadata (description, expose_to_library, library_categories) with property readback. Unsupported operations are rejected without mutation.", "operations": ["content.material.graph.execute_plan"] },
+        { "id": "readback", "phase": "verify", "purpose": "Verify the new projection hash and operation results, or verify that transaction rollback restored the pre-plan projection.", "operations": ["content.material.graph.index", "content.material.graph.snapshots.diff"] }
+      ],
+      "result": {
+        "summary": "Freshness-bound GraphIR topology execution with explicit commit, readback and rollback evidence.",
+        "evidence": ["snapshot and projection identity", "ordered per-operation results", "before/after projection hashes", "rollbackVerified on failure"],
+        "success": ["the plan was applied only against its exact current snapshot", "postcondition mismatch restored the original graph", "unsupported operations were reported explicitly"]
+      }
+    }
+  ],
+  "resources": [
+    {
+      "path": "references/preview-batches.md",
+      "description": "Preview batch identity, final refresh, rollback and native Apply boundary."
+    },
+    {
+      "path": "references/asset-workflow.md",
+      "description": "Authored Workflow scopes, finalization and actual function-host validation."
+    },
+    {
+      "path": "references/instance-batches.md",
+      "description": "Typed override identity, inheritance and explicit persistence."
+    },
+    {
+      "path": "references/queries-and-diagnostics.md",
+      "description": "Immutable query coverage and current shader diagnostic interpretation."
+    }
+  ]
+}

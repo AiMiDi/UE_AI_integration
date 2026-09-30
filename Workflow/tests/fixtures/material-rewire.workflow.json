@@ -1,0 +1,68 @@
+{
+  "dsl": "ue.workflow",
+  "dslVersion": "1.0",
+  "workflowKind": "assetEdit",
+  "workflowId": "material-rewire",
+  "scope": {
+    "kind": "material",
+    "asset": "/Game/Automation/M_WorkflowRewire",
+    "createIfMissing": true
+  },
+  "persistence": "dirtyOnly",
+  "operations": [
+    {
+      "id": "oldConstant",
+      "type": "content.material.expression.add",
+      "params": {"expressionClass": "Constant", "posX": -400, "posY": 0}
+    },
+    {
+      "id": "sum",
+      "type": "content.material.expression.add",
+      "params": {"expressionClass": "Add", "posX": 0, "posY": 0}
+    },
+    {
+      "id": "connectOldA",
+      "type": "content.material.pin.connect",
+      "params": {"sourcePinName": "Output", "targetPinName": "A"},
+      "bindings": {
+        "/sourceNodeId": {"from": "oldConstant", "path": "/nodeId"},
+        "/targetNodeId": {"from": "sum", "path": "/nodeId"}
+      }
+    },
+    {
+      "id": "connectOldB",
+      "type": "content.material.pin.connect",
+      "params": {"sourcePinName": "Output", "targetPinName": "B"},
+      "bindings": {
+        "/sourceNodeId": {"from": "oldConstant", "path": "/nodeId"},
+        "/targetNodeId": {"from": "sum", "path": "/nodeId"}
+      }
+    },
+    {
+      "id": "disconnectA",
+      "type": "content.material.pin.disconnect",
+      "params": {"pinName": "A"},
+      "bindings": {"/nodeId": {"from": "sum", "path": "/nodeId"}}
+    },
+    {
+      "id": "deleteOld",
+      "type": "content.material.expression.delete",
+      "params": {},
+      "bindings": {"/nodeId": {"from": "oldConstant", "path": "/nodeId"}}
+    },
+    {
+      "id": "replacement",
+      "type": "content.material.expression.add",
+      "params": {"expressionClass": "Constant", "posX": -400, "posY": 80}
+    },
+    {
+      "id": "connectNewA",
+      "type": "content.material.pin.connect",
+      "params": {"sourcePinName": "Output", "targetPinName": "A"},
+      "bindings": {
+        "/sourceNodeId": {"from": "replacement", "path": "/nodeId"},
+        "/targetNodeId": {"from": "sum", "path": "/nodeId"}
+      }
+    }
+  ]
+}

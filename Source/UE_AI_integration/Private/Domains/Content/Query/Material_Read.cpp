@@ -1,11 +1,15 @@
+#include "Infrastructure/MaterialGraphIdentity.h"
 // Material Read Tools — list, get, describe, search materials and material functions
 #include "Tools/MCPToolBase.h"
 #include "Tools/MCPToolRegistry.h"
 #include "Infrastructure/MaterialAssetHelpers.h"
 #include "Infrastructure/MCPToolHelpers.h"
+#include "Engine/Texture.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialFunction.h"
+#include "Materials/MaterialFunctionMaterialLayer.h"
+#include "Materials/MaterialFunctionMaterialLayerBlend.h"
 #include "Materials/MaterialExpression.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionVectorParameter.h"
@@ -30,6 +34,72 @@
 
 using namespace MCPMaterialInfrastructure;
 
+namespace
+{
+struct FMaterialQueryPage
+{
+	int32 Offset = 0;
+	int32 Limit = 50;
+};
+
+bool ReadMaterialQueryPage(
+	const TSharedPtr<FJsonObject>& Params,
+	FMaterialQueryPage& OutPage,
+	FString& OutError,
+	bool bAllowLegacyMaxResults = false)
+{
+	const TCHAR* LimitField = bAllowLegacyMaxResults
+		&& !Params->HasField(TEXT("limit")) && Params->HasField(TEXT("maxResults"))
+		? TEXT("maxResults") : TEXT("limit");
+	auto ReadInteger = [&](const TCHAR* Field, int32 Minimum, int32 Maximum, int32& OutValue)
+	{
+		if (!Params->HasField(Field))
+		{
+			return true;
+		}
+		double Value = 0;
+		if (!Params->TryGetNumberField(Field, Value) || !FMath::IsFinite(Value)
+			|| Value != FMath::FloorToDouble(Value) || Value < Minimum || Value > Maximum)
+		{
+			OutError = FString::Printf(TEXT("%s must be an integer in [%d, %d]."), Field, Minimum, Maximum);
+			return false;
+		}
+		OutValue = static_cast<int32>(Value);
+		return true;
+	};
+	return ReadInteger(LimitField, 1, 200, OutPage.Limit)
+		&& ReadInteger(TEXT("offset"), 0, MAX_int32, OutPage.Offset);
+}
+
+void SortMaterialQueryAssets(TArray<FAssetData>& Assets)
+{
+	Assets.Sort([](const FAssetData& Left, const FAssetData& Right)
+	{
+		return Left.GetObjectPathString() < Right.GetObjectPathString();
+	});
+}
+
+bool IsMaterialQueryPageEntry(const FMaterialQueryPage& Page, int64 MatchIndex)
+{
+	return MatchIndex >= Page.Offset && MatchIndex - Page.Offset < Page.Limit;
+}
+
+void AddMaterialQueryPageFields(
+	const TSharedRef<FJsonObject>& Result,
+	const FMaterialQueryPage& Page,
+	int64 Total,
+	int32 Count)
+{
+	const bool bHasMore = static_cast<int64>(Page.Offset) + Count < Total;
+	Result->SetNumberField(TEXT("offset"), Page.Offset);
+	Result->SetNumberField(TEXT("limit"), Page.Limit);
+	Result->SetNumberField(TEXT("total"), static_cast<double>(Total));
+	Result->SetNumberField(TEXT("count"), Count);
+	Result->SetBoolField(TEXT("hasMore"), bHasMore);
+	Result->SetBoolField(TEXT("truncated"), bHasMore);
+}
+}
+
 // ============================================================
 // list_materials
 // ============================================================
@@ -48,54 +118,56 @@ public:
 		FString TypeFilter;
 		Params->TryGetStringField(TEXT("type"), TypeFilter);
 
-		bool bIncludeMaterials = TypeFilter.IsEmpty() || TypeFilter == TEXT("all") || TypeFilter == TEXT("material");
-		bool bIncludeInstances = TypeFilter.IsEmpty() || TypeFilter == TEXT("all") || TypeFilter == TEXT("instance");
-
-		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
-		TArray<TSharedPtr<FJsonValue>> Entries;
-		int32 Total = 0;
-
-		if (bIncludeMaterials)
+		const bool bIncludeMaterials = TypeFilter.IsEmpty() || TypeFilter == TEXT("all") || TypeFilter == TEXT("material");
+		const bool bIncludeInstances = TypeFilter.IsEmpty() || TypeFilter == TEXT("all") || TypeFilter == TEXT("instance");
+		if (!bIncludeMaterials && !bIncludeInstances)
 		{
-			TArray<FAssetData> MatAssets;
-			Registry.GetAssetsByClass(UMaterial::StaticClass()->GetClassPathName(), MatAssets, false);
-			Total += MatAssets.Num();
-			for (const FAssetData& Asset : MatAssets)
-			{
-				FString Name = Asset.AssetName.ToString();
-				FString Path = Asset.PackageName.ToString();
-				if (!Filter.IsEmpty() && !Name.Contains(Filter, ESearchCase::IgnoreCase) && !Path.Contains(Filter, ESearchCase::IgnoreCase))
-					continue;
-				TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
-				Entry->SetStringField(TEXT("name"), Name);
-				Entry->SetStringField(TEXT("path"), Path);
-				Entry->SetStringField(TEXT("type"), TEXT("Material"));
-				Entries.Add(MakeShared<FJsonValueObject>(Entry));
-			}
+			return FMCPToolResult::Error(TEXT("type must be material, instance, or all."), TEXT("invalid_request"), 400);
+		}
+		FMaterialQueryPage Page;
+		FString PageError;
+		if (!ReadMaterialQueryPage(Params, Page, PageError))
+		{
+			return FMCPToolResult::Error(PageError, TEXT("invalid_request"), 400);
 		}
 
+		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+		TArray<FAssetData> Assets;
+		if (bIncludeMaterials)
+		{
+			Registry.GetAssetsByClass(UMaterial::StaticClass()->GetClassPathName(), Assets, false);
+		}
 		if (bIncludeInstances)
 		{
 			TArray<FAssetData> MIAssets;
 			Registry.GetAssetsByClass(UMaterialInstanceConstant::StaticClass()->GetClassPathName(), MIAssets, false);
-			Total += MIAssets.Num();
-			for (const FAssetData& Asset : MIAssets)
+			Assets.Append(MoveTemp(MIAssets));
+		}
+		SortMaterialQueryAssets(Assets);
+
+		TArray<TSharedPtr<FJsonValue>> Entries;
+		int64 Total = 0;
+		for (const FAssetData& Asset : Assets)
+		{
+			const FString Name = Asset.AssetName.ToString();
+			const FString Path = Asset.PackageName.ToString();
+			if (!Filter.IsEmpty() && !Name.Contains(Filter, ESearchCase::IgnoreCase) && !Path.Contains(Filter, ESearchCase::IgnoreCase))
 			{
-				FString Name = Asset.AssetName.ToString();
-				FString Path = Asset.PackageName.ToString();
-				if (!Filter.IsEmpty() && !Name.Contains(Filter, ESearchCase::IgnoreCase) && !Path.Contains(Filter, ESearchCase::IgnoreCase))
-					continue;
+				continue;
+			}
+			if (IsMaterialQueryPageEntry(Page, Total++))
+			{
 				TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
 				Entry->SetStringField(TEXT("name"), Name);
 				Entry->SetStringField(TEXT("path"), Path);
-				Entry->SetStringField(TEXT("type"), TEXT("MaterialInstance"));
+				Entry->SetStringField(TEXT("type"), Asset.AssetClassPath == UMaterial::StaticClass()->GetClassPathName()
+					? TEXT("Material") : TEXT("MaterialInstance"));
 				Entries.Add(MakeShared<FJsonValueObject>(Entry));
 			}
 		}
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetNumberField(TEXT("count"), Entries.Num());
-		Result->SetNumberField(TEXT("total"), Total);
+		AddMaterialQueryPageFields(Result, Page, Total, Entries.Num());
 		Result->SetArrayField(TEXT("materials"), Entries);
 		return FMCPToolResult::Ok(Result);
 	}
@@ -281,7 +353,8 @@ public:
 				PObj->SetStringField(TEXT("value"), Param.ParameterValue ? Param.ParameterValue->GetPathName() : TEXT("None"));
 				OverriddenParams.Add(MakeShared<FJsonValueObject>(PObj));
 			}
-			for (const FStaticSwitchParameter& Param : MI->GetStaticParameters().StaticSwitchParameters)
+			const FStaticParameterSet StaticParameters = MI->GetStaticParameters();
+			for (const FStaticSwitchParameter& Param : StaticParameters.StaticSwitchParameters)
 			{
 				TSharedRef<FJsonObject> PObj = MakeShared<FJsonObject>();
 				PObj->SetStringField(TEXT("name"), Param.ParameterInfo.Name.ToString());
@@ -478,26 +551,28 @@ public:
 		if (Query.IsEmpty())
 			return FMCPToolResult::Error(TEXT("Missing required field: query"));
 
-		int32 MaxResults = 50;
-		double MaxD = 0;
-		if (Params->TryGetNumberField(TEXT("maxResults"), MaxD)) MaxResults = FMath::Clamp((int32)MaxD, 1, 200);
+		FMaterialQueryPage Page;
+		FString PageError;
+		if (!ReadMaterialQueryPage(Params, Page, PageError, true))
+		{
+			return FMCPToolResult::Error(PageError, TEXT("invalid_request"), 400);
+		}
 
 		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
 		TArray<FAssetData> MatAssets;
 		Registry.GetAssetsByClass(UMaterial::StaticClass()->GetClassPathName(), MatAssets, false);
+		SortMaterialQueryAssets(MatAssets);
 
 		TArray<TSharedPtr<FJsonValue>> Results;
+		int64 Total = 0;
+		int32 UnavailableAssets = 0;
 
 		for (const FAssetData& Asset : MatAssets)
 		{
-			if (Results.Num() >= MaxResults) break;
-			FString MatName = Asset.AssetName.ToString();
-			bool bNameMatch = MatName.Contains(Query, ESearchCase::IgnoreCase);
+			const FString MatName = Asset.AssetName.ToString();
+			const bool bNameMatch = MatName.Contains(Query, ESearchCase::IgnoreCase);
 
-			UMaterial* Material = Cast<UMaterial>(const_cast<FAssetData&>(Asset).GetAsset());
-			if (!Material) continue;
-
-			if (bNameMatch)
+			if (bNameMatch && IsMaterialQueryPageEntry(Page, Total++))
 			{
 				TSharedRef<FJsonObject> R = MakeShared<FJsonObject>();
 				R->SetStringField(TEXT("material"), MatName);
@@ -506,28 +581,44 @@ public:
 				Results.Add(MakeShared<FJsonValueObject>(R));
 			}
 
-			auto Expressions = Material->GetExpressions();
+			UMaterial* Material = Cast<UMaterial>(Asset.GetAsset());
+			if (!Material)
+			{
+				++UnavailableAssets;
+				continue;
+			}
+
+			// Scan authored expressions directly. Querying does not build an editor
+			// graph or request compilation, and only returned rows allocate JSON.
+			TArray<UMaterialExpression*> Expressions;
+			for (UMaterialExpression* Expression : Material->GetExpressions())
+			{
+				if (Expression)
+				{
+					Expressions.Add(Expression);
+				}
+			}
+			Expressions.Sort([](const UMaterialExpression& Left, const UMaterialExpression& Right)
+			{
+				return Left.GetPathName() < Right.GetPathName();
+			});
 			for (UMaterialExpression* Expr : Expressions)
 			{
-				if (!Expr || Results.Num() >= MaxResults) continue;
-				FString ExprDesc = Expr->GetDescription();
-				FString ExprClass = Expr->GetClass()->GetName();
-				FString ParamName;
-				if (auto* SP = Cast<UMaterialExpressionScalarParameter>(Expr)) ParamName = SP->ParameterName.ToString();
-				else if (auto* VP = Cast<UMaterialExpressionVectorParameter>(Expr)) ParamName = VP->ParameterName.ToString();
-				else if (auto* TP = Cast<UMaterialExpressionTextureSampleParameter2D>(Expr)) ParamName = TP->ParameterName.ToString();
-				else if (auto* SSP = Cast<UMaterialExpressionStaticSwitchParameter>(Expr)) ParamName = SSP->ParameterName.ToString();
+				const FString ExprDesc = Expr->GetDescription();
+				const FString ExprClass = Expr->GetClass()->GetName();
+				const FString ParamName = Expr->HasAParameterName() ? Expr->GetParameterName().ToString() : FString();
 
 				bool bMatch = ExprDesc.Contains(Query, ESearchCase::IgnoreCase) ||
 					ExprClass.Contains(Query, ESearchCase::IgnoreCase) ||
 					(!ParamName.IsEmpty() && ParamName.Contains(Query, ESearchCase::IgnoreCase));
 
-				if (bMatch)
+				if (bMatch && IsMaterialQueryPageEntry(Page, Total++))
 				{
 					TSharedRef<FJsonObject> R = MakeShared<FJsonObject>();
 					R->SetStringField(TEXT("material"), MatName);
 					R->SetStringField(TEXT("materialPath"), Asset.PackageName.ToString());
 					R->SetStringField(TEXT("matchType"), TEXT("expression"));
+					R->SetStringField(TEXT("nodeId"), ExpressionNodeId(Expr));
 					R->SetStringField(TEXT("expressionClass"), ExprClass);
 					if (!ExprDesc.IsEmpty()) R->SetStringField(TEXT("description"), ExprDesc);
 					if (!ParamName.IsEmpty()) R->SetStringField(TEXT("parameterName"), ParamName);
@@ -538,7 +629,10 @@ public:
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("query"), Query);
+		AddMaterialQueryPageFields(Result, Page, Total, Results.Num());
 		Result->SetNumberField(TEXT("resultCount"), Results.Num());
+		Result->SetNumberField(TEXT("unavailableAssetCount"), UnavailableAssets);
+		Result->SetBoolField(TEXT("complete"), UnavailableAssets == 0);
 		Result->SetArrayField(TEXT("results"), Results);
 		return FMCPToolResult::Ok(Result);
 	}
@@ -629,18 +723,30 @@ public:
 	{
 		FString Filter;
 		Params->TryGetStringField(TEXT("filter"), Filter);
+		FMaterialQueryPage Page;
+		FString PageError;
+		if (!ReadMaterialQueryPage(Params, Page, PageError))
+		{
+			return FMCPToolResult::Error(PageError, TEXT("invalid_request"), 400);
+		}
 
 		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
 		TArray<FAssetData> MFAssets;
 		Registry.GetAssetsByClass(UMaterialFunction::StaticClass()->GetClassPathName(), MFAssets, false);
+		SortMaterialQueryAssets(MFAssets);
 
 		TArray<TSharedPtr<FJsonValue>> Entries;
+		int64 Total = 0;
 		for (const FAssetData& Asset : MFAssets)
 		{
 			FString Name = Asset.AssetName.ToString();
 			FString Path = Asset.PackageName.ToString();
 			if (!Filter.IsEmpty() && !Name.Contains(Filter, ESearchCase::IgnoreCase) && !Path.Contains(Filter, ESearchCase::IgnoreCase))
 				continue;
+			if (!IsMaterialQueryPageEntry(Page, Total++))
+			{
+				continue;
+			}
 			TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
 			Entry->SetStringField(TEXT("name"), Name);
 			Entry->SetStringField(TEXT("path"), Path);
@@ -648,8 +754,7 @@ public:
 		}
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetNumberField(TEXT("count"), Entries.Num());
-		Result->SetNumberField(TEXT("total"), MFAssets.Num());
+		AddMaterialQueryPageFields(Result, Page, Total, Entries.Num());
 		Result->SetArrayField(TEXT("functions"), Entries);
 		return FMCPToolResult::Ok(Result);
 	}
@@ -680,6 +785,29 @@ public:
 		Result->SetStringField(TEXT("name"), MF->GetName());
 		Result->SetStringField(TEXT("path"), MF->GetPathName());
 		Result->SetStringField(TEXT("description"), MF->GetDescription());
+		Result->SetStringField(TEXT("userExposedCaption"), MF->UserExposedCaption);
+		Result->SetBoolField(TEXT("exposeToLibrary"), MF->bExposeToLibrary);
+		Result->SetBoolField(TEXT("prefixParameterNames"), MF->bPrefixParameterNames);
+		Result->SetBoolField(TEXT("enableExecWire"), MF->bEnableExecWire);
+		Result->SetBoolField(TEXT("enableNewHLSLGenerator"), MF->bEnableNewHLSLGenerator);
+		if (Cast<UMaterialFunctionMaterialLayer>(MF))
+		{
+			Result->SetStringField(TEXT("type"), TEXT("MaterialLayer"));
+		}
+		else if (Cast<UMaterialFunctionMaterialLayerBlend>(MF))
+		{
+			Result->SetStringField(TEXT("type"), TEXT("MaterialLayerBlend"));
+		}
+		else
+		{
+			Result->SetStringField(TEXT("type"), TEXT("MaterialFunction"));
+		}
+		TArray<TSharedPtr<FJsonValue>> LibraryCategories;
+		for (const FText& Category : MF->LibraryCategoriesText)
+		{
+			LibraryCategories.Add(MakeShared<FJsonValueString>(Category.ToString()));
+		}
+		Result->SetArrayField(TEXT("libraryCategories"), LibraryCategories);
 
 		auto Expressions = MF->GetExpressions();
 		Result->SetNumberField(TEXT("expressionCount"), Expressions.Num());
@@ -692,7 +820,25 @@ public:
 			{
 				TSharedRef<FJsonObject> InputObj = MakeShared<FJsonObject>();
 				InputObj->SetStringField(TEXT("name"), FI->InputName.ToString());
+				InputObj->SetStringField(TEXT("expressionName"), FI->GetName());
+				InputObj->SetStringField(TEXT("id"), FI->Id.ToString());
+				InputObj->SetStringField(TEXT("description"), FI->Description);
 				InputObj->SetStringField(TEXT("type"), TEXT("FunctionInput"));
+				const UEnum* InputTypeEnum = StaticEnum<EFunctionInputType>();
+				if (InputTypeEnum)
+				{
+					FString InputType = InputTypeEnum->GetNameStringByIndex(static_cast<int32>(FI->InputType));
+					InputType.RemoveFromStart(TEXT("FunctionInput_"));
+					InputObj->SetStringField(TEXT("inputType"), InputType);
+				}
+				InputObj->SetNumberField(TEXT("sortPriority"), FI->SortPriority);
+				InputObj->SetBoolField(TEXT("usePreviewValueAsDefault"), FI->bUsePreviewValueAsDefault);
+				TArray<TSharedPtr<FJsonValue>> PreviewValue;
+				PreviewValue.Add(MakeShared<FJsonValueNumber>(FI->PreviewValue.X));
+				PreviewValue.Add(MakeShared<FJsonValueNumber>(FI->PreviewValue.Y));
+				PreviewValue.Add(MakeShared<FJsonValueNumber>(FI->PreviewValue.Z));
+				PreviewValue.Add(MakeShared<FJsonValueNumber>(FI->PreviewValue.W));
+				InputObj->SetArrayField(TEXT("previewValue"), PreviewValue);
 				InputObj->SetNumberField(TEXT("posX"), FI->MaterialExpressionEditorX);
 				InputObj->SetNumberField(TEXT("posY"), FI->MaterialExpressionEditorY);
 				Inputs.Add(MakeShared<FJsonValueObject>(InputObj));
@@ -701,7 +847,11 @@ public:
 			{
 				TSharedRef<FJsonObject> OutputObj = MakeShared<FJsonObject>();
 				OutputObj->SetStringField(TEXT("name"), FO->OutputName.ToString());
+				OutputObj->SetStringField(TEXT("expressionName"), FO->GetName());
+				OutputObj->SetStringField(TEXT("id"), FO->Id.ToString());
+				OutputObj->SetStringField(TEXT("description"), FO->Description);
 				OutputObj->SetStringField(TEXT("type"), TEXT("FunctionOutput"));
+				OutputObj->SetNumberField(TEXT("sortPriority"), FO->SortPriority);
 				OutputObj->SetNumberField(TEXT("posX"), FO->MaterialExpressionEditorX);
 				OutputObj->SetNumberField(TEXT("posY"), FO->MaterialExpressionEditorY);
 				Outputs.Add(MakeShared<FJsonValueObject>(OutputObj));
@@ -709,6 +859,7 @@ public:
 
 			// Basic expression info
 			TSharedRef<FJsonObject> ExprJson = MakeShared<FJsonObject>();
+			ExprJson->SetStringField(TEXT("nodeId"), MCPMaterialInfrastructure::ExpressionNodeId(Expr));
 			ExprJson->SetStringField(TEXT("class"), Expr->GetClass()->GetName());
 			ExprJson->SetStringField(TEXT("description"), Expr->GetDescription());
 			ExprJson->SetNumberField(TEXT("posX"), Expr->MaterialExpressionEditorX);

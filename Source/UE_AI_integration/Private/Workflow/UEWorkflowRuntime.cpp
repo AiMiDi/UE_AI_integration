@@ -35,6 +35,10 @@
 #include "Kismet2/KismetEditorUtilities.h"
 #include "MaterialGraph/MaterialGraph.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialFunction.h"
+#include "MaterialEditingLibrary.h"
+#include "Infrastructure/MaterialGraphIdentity.h"
+#include "UObject/UnrealType.h"
 #include "Materials/MaterialExpression.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
@@ -193,6 +197,13 @@ UObject* LoadWorkflowLogicalAsset(
 	UObject* PersistenceAsset = LoadAssetWithoutLogging(AssetPath);
 	if (!IsLevelBlueprintScope(ScopeKind))
 	{
+		if (PersistenceAsset && ((ScopeKind == TEXT("materialFunction") && !PersistenceAsset->IsA<UMaterialFunction>())
+			|| (ScopeKind == TEXT("material") && !PersistenceAsset->IsA<UMaterial>())))
+		{
+			if (OutErrorCode) *OutErrorCode = TEXT("workflow_scope_kind_mismatch");
+			if (OutErrorMessage) *OutErrorMessage = TEXT("Asset class does not match the material/function scope kind.");
+			return nullptr;
+		}
 		if ((ScopeKind == TEXT("blueprint")
 				|| ScopeKind == TEXT("widgetBlueprint"))
 			&& PersistenceAsset && PersistenceAsset->IsA<UWorld>())
@@ -1251,6 +1262,12 @@ void RebuildDomainAfterRollback(UObject* Asset)
 		return;
 	}
 
+	if (UMaterialFunction* Function = Cast<UMaterialFunction>(Asset))
+	{
+		Function->PostEditUndo();
+		UMaterialEditingLibrary::UpdateMaterialFunction(Function, nullptr);
+		return;
+	}
 	Asset->PostEditUndo();
 }
 
@@ -1623,15 +1640,19 @@ bool DeleteWorkflowAsset(
 	UPackage* Package = Asset
 		? Asset->GetOutermost()
 		: FindPackage(nullptr, *PackageName);
+	// DeleteObjectsUnchecked can collect both objects. Weak handles let us
+	// finish cleanup without dereferencing freed memory or keeping assets alive.
+	TWeakObjectPtr<UObject> RemainingAsset(Asset);
+	TWeakObjectPtr<UPackage> RemainingPackage(Package);
 	if (IsValid(Asset))
 	{
 		FAssetRegistryModule::AssetDeleted(Asset);
 		Asset->ClearFlags(RF_Public | RF_Standalone);
 		const TArray<UObject*> Objects = {Asset};
 		ObjectTools::DeleteObjectsUnchecked(Objects);
-		if (IsValid(Asset))
+		if (UObject* LiveAsset = RemainingAsset.Get())
 		{
-			Asset->MarkAsGarbage();
+			LiveAsset->MarkAsGarbage();
 		}
 	}
 	const FString Filename = PackageFilenameForAsset(AssetPath, ScopeKind);
@@ -1639,10 +1660,10 @@ bool DeleteWorkflowAsset(
 		Filename.IsEmpty()
 		|| !IFileManager::Get().FileExists(*Filename)
 		|| IFileManager::Get().Delete(*Filename, false, true, true);
-	if (Package)
+	if (UPackage* LivePackage = RemainingPackage.Get())
 	{
-		Package->SetDirtyFlag(false);
-		IAssetRegistry::GetChecked().PackageDeleted(Package);
+		LivePackage->SetDirtyFlag(false);
+		IAssetRegistry::GetChecked().PackageDeleted(LivePackage);
 	}
 	return bFileRemoved && !AssetExistsWithoutLogging(AssetPath);
 }
@@ -4493,7 +4514,8 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 				PackageDigest);
 		}
 	};
-	auto CaptureDurableCheckpoint = [&](FString& OutError) -> bool
+	auto CaptureDurableCheckpoint = [&](FString& OutError,
+		const FString& MutatedScope, bool bMayChangeDependencies) -> bool
 	{
 		OutError.Reset();
 		if (Record.CheckpointId.IsEmpty())
@@ -4542,6 +4564,33 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 					*ScopeId,
 					*Record.CheckpointId);
 				return false;
+			}
+
+			// Prepared-operation journals and read-only finalizers often describe
+			// exactly the image we just saved. Reuse it, including for untouched
+			// scopes in a multi-asset workflow, without another canonical save /
+			// copy / restore cycle. Always capture the mutated scope, and capture
+			// all scopes after compilation (generated classes / dependencies need
+			// not be covered by the domain-owned UObject memory digest).
+			const FString MemorySha256 = ComputeAssetMemorySha256(Asset);
+			if (!bMayChangeDependencies && ScopeId != MutatedScope
+				&& !MemorySha256.IsEmpty()
+				&& MemorySha256 == GetStringField(AssetRecord, TEXT("checkpointMemorySha256"))
+				&& GetStringField(AssetRecord, TEXT("checkpointState")) == TEXT("present"))
+			{
+				FString ArtifactSha256;
+				const FString ArtifactFilename =
+					GetStringField(AssetRecord, TEXT("checkpointFilename"));
+				if (!TryHashFile(ArtifactFilename, ArtifactSha256)
+					|| ArtifactSha256 != GetStringField(AssetRecord, TEXT("checkpointSha256")))
+				{
+					OutError = FString::Printf(
+						TEXT("The reusable checkpoint for scope '%s' is unavailable or corrupt."),
+						*ScopeId);
+					return false;
+				}
+				AssetRecord->SetStringField(TEXT("checkpointId"), Record.CheckpointId);
+				continue;
 			}
 
 			const FString ScopeKind =
@@ -4701,6 +4750,8 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 				CheckpointFilename);
 			AssetRecord->SetStringField(TEXT("checkpointState"), TEXT("present"));
 			AssetRecord->SetStringField(
+				TEXT("checkpointMemorySha256"), ComputeAssetMemorySha256(Asset));
+			AssetRecord->SetStringField(
 				TEXT("checkpointSha256"),
 				CheckpointSha256);
 			AssetRecord->SetStringField(
@@ -4717,10 +4768,11 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 			UEAIIntegration::Infrastructure::DigestJson(CheckpointDescriptor);
 		return true;
 	};
-	auto SaveCheckpoint = [&]() -> bool
+	auto SaveCheckpoint = [&](const FString& MutatedScope = FString(),
+		bool bMayChangeDependencies = false) -> bool
 	{
 		FString Error;
-		if (!CaptureDurableCheckpoint(Error))
+		if (!CaptureDurableCheckpoint(Error, MutatedScope, bMayChangeDependencies))
 		{
 			ExecutionFailure = FMCPResult::Fail(
 				TEXT("recovery_snapshot_failed"),
@@ -4859,7 +4911,7 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 			}
 			Record.NextInitializerIndex = Index + 1;
 			UpdateCheckpointHash(ScopeId);
-			bExecutionOk = SaveCheckpoint();
+			bExecutionOk = SaveCheckpoint(ScopeId);
 		}
 
 		Record.CurrentPhase = TEXT("operations");
@@ -4950,7 +5002,7 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 			UpdateCheckpointHash(ScopeId);
 			Record.SnapshotDigest =
 				UEAIIntegration::Infrastructure::DigestJson(Record.OperationOutputs);
-			bExecutionOk = SaveCheckpoint();
+			bExecutionOk = SaveCheckpoint(ScopeId);
 #if WITH_DEV_AUTOMATION_TESTS
 			if (bExecutionOk
 				&& TriggerProcessFaultForTest(TEXT("afterCheckpoint"), Record))
@@ -5162,7 +5214,7 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 			}
 			Record.NextFinalizerIndex = Index + 1;
 			UpdateCheckpointHash(ScopeId);
-			bExecutionOk = SaveCheckpoint();
+			bExecutionOk = SaveCheckpoint(FString(), Kind == TEXT("compile"));
 		}
 	}
 
@@ -5552,7 +5604,7 @@ bool FWorkflowRuntime::ExecuteOperation(
 			const FString Destination =
 				Segments.Num() == 1 ? Segments[0] : FString();
 			if (ScopeParameters.Contains(Destination)
-				|| Destination == TEXT("materialFunction"))
+				|| Destination == TEXT("materialFunction") || Destination == TEXT("material"))
 			{
 				TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
 				Details->SetStringField(
@@ -5581,12 +5633,13 @@ bool FWorkflowRuntime::ExecuteOperation(
 	}
 	if (!InjectScopeParams(CapabilityId, Scope, Params, Error)
 		|| (CapabilityId.StartsWith(TEXT("content.material."))
-			&& Params->HasField(TEXT("materialFunction"))))
+			&& ((GetStringField(Scope, TEXT("kind")) != TEXT("materialFunction") && Params->HasField(TEXT("materialFunction")))
+				|| (GetStringField(Scope, TEXT("kind")) == TEXT("materialFunction") && Params->HasField(TEXT("material"))))))
 	{
 		if (Error.IsEmpty())
 		{
 			Error =
-				TEXT("UE Workflow v1 material scope cannot target 'materialFunction'.");
+				TEXT("Material and materialFunction targets cannot escape their scoped asset kind.");
 		}
 		OutFailure = FMCPResult::Fail(
 			TEXT("workflow_scope_mismatch"),
@@ -5658,7 +5711,8 @@ bool FWorkflowRuntime::ExecuteOperation(
 
 	if (CapabilityId == TEXT("blueprint.asset.create")
 		|| CapabilityId == TEXT("content.widget.blueprint.create")
-		|| CapabilityId == TEXT("content.material.create"))
+		|| CapabilityId == TEXT("content.material.create")
+		|| CapabilityId == TEXT("content.material.function.create"))
 	{
 		FString CreatedPath;
 		if (!OutResult->TryGetStringField(TEXT("assetPath"), CreatedPath))
@@ -5822,7 +5876,7 @@ bool FWorkflowRuntime::InjectScopeParams(
 				PackagePath,
 				OutError);
 	}
-	if (CapabilityId == TEXT("content.material.create"))
+	if (CapabilityId == TEXT("content.material.create") || CapabilityId == TEXT("content.material.function.create"))
 	{
 		return SetScopedString(Params, TEXT("name"), AssetName, OutError)
 			&& SetScopedString(Params, TEXT("packagePath"), PackagePath, OutError);
@@ -5844,9 +5898,9 @@ bool FWorkflowRuntime::InjectScopeParams(
 	if (CapabilityId.StartsWith(TEXT("content.material.")))
 	{
 		const FString Field =
-			CapabilityId == TEXT("content.material.graph.get")
+			(CapabilityId == TEXT("content.material.graph.get") || CapabilityId == TEXT("content.material.function.get"))
 				? TEXT("name")
-				: TEXT("material");
+				: (GetStringField(Scope, TEXT("kind")) == TEXT("materialFunction") ? TEXT("materialFunction") : TEXT("material"));
 		return SetScopedString(Params, Field, Asset, OutError);
 	}
 
@@ -8307,6 +8361,17 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::CaptureAssetStructure(UObject* Asset)
 			ExpressionJson->SetNumberField(
 				TEXT("y"),
 				Expression->MaterialExpressionEditorY);
+			// Code, Custom interfaces/defines/includes and parameter defaults must
+			// participate in preconditions, diffs and rollback verification.
+			auto EditableValues = MakeShared<FJsonObject>();
+			for (TFieldIterator<FProperty> It(Expression->GetClass()); It; ++It)
+			{
+				if (!It->HasAnyPropertyFlags(CPF_Edit) || It->HasAnyPropertyFlags(CPF_Transient)) continue;
+				FString Value;
+				It->ExportTextItem_Direct(Value, It->ContainerPtrToValuePtr<void>(Expression), nullptr, Expression, PPF_None);
+				EditableValues->SetStringField(It->GetName(), Value);
+			}
+			ExpressionJson->SetObjectField(TEXT("properties"), EditableValues);
 			if (Expression->HasAParameterName())
 			{
 				ExpressionJson->SetStringField(
@@ -8358,11 +8423,75 @@ TSharedPtr<FJsonObject> FWorkflowRuntime::CaptureAssetStructure(UObject* Asset)
 		}
 		SortById(Expressions);
 		MaterialJson->SetArrayField(TEXT("expressions"), Expressions);
+		TArray<TSharedPtr<FJsonValue>> RootInputs;
+		for (int32 Index = 0; Index < MP_MAX; ++Index)
+		{
+			const auto* Input = Material->GetExpressionInputForProperty(static_cast<EMaterialProperty>(Index));
+			if (!Input || !Input->Expression) continue;
+			auto RootInput = MakeShared<FJsonObject>();
+			RootInput->SetNumberField(TEXT("property"), Index);
+			RootInput->SetStringField(TEXT("source"), MCPMaterialInfrastructure::ExpressionNodeId(Input->Expression));
+			RootInput->SetNumberField(TEXT("outputIndex"), Input->OutputIndex);
+			RootInput->SetStringField(TEXT("mask"), FString::Printf(TEXT("%d:%d:%d:%d:%d"), Input->Mask, Input->MaskR, Input->MaskG, Input->MaskB, Input->MaskA));
+			RootInputs.Add(MakeShared<FJsonValueObject>(RootInput));
+		}
+		MaterialJson->SetArrayField(TEXT("rootInputs"), RootInputs);
 		// MaterialGraph is a transient editor projection and may be created
 		// lazily by an edit or by opening the material editor. Durable expression
 		// connections are captured above; hashing transient graph nodes would
 		// still cause false mismatches after an otherwise exact rollback.
 		Snapshot->SetObjectField(TEXT("material"), MaterialJson);
+	}
+
+	if (UMaterialFunction* Function = Cast<UMaterialFunction>(Asset))
+	{
+		// Hash authored editable values as well as topology; a scalar-only edit
+		// must invalidate plans and be observable in rollback verification.
+		auto EditableFields = [](UObject* Object)
+		{
+			auto Values = MakeShared<FJsonObject>();
+			for (TFieldIterator<FProperty> It(Object->GetClass()); It; ++It)
+			{
+				if (!It->HasAnyPropertyFlags(CPF_Edit) || It->HasAnyPropertyFlags(CPF_Transient)) continue;
+				FString Value;
+				It->ExportTextItem_Direct(Value, It->ContainerPtrToValuePtr<void>(Object), nullptr, Object, PPF_None);
+				Values->SetStringField(It->GetName(), Value);
+			}
+			return Values;
+		};
+		auto FunctionJson = MakeShared<FJsonObject>();
+		FunctionJson->SetObjectField(TEXT("properties"), EditableFields(Function));
+		TArray<TSharedPtr<FJsonValue>> Expressions;
+		for (UMaterialExpression* Expression : Function->GetExpressions())
+		{
+			if (!Expression) continue;
+			auto Node = MakeShared<FJsonObject>();
+			Node->SetStringField(TEXT("id"), MCPMaterialInfrastructure::ExpressionNodeId(Expression));
+			Node->SetStringField(TEXT("class"), Expression->GetClass()->GetPathName());
+			Node->SetNumberField(TEXT("x"), Expression->MaterialExpressionEditorX);
+			Node->SetNumberField(TEXT("y"), Expression->MaterialExpressionEditorY);
+			Node->SetObjectField(TEXT("properties"), EditableFields(Expression));
+			TArray<TSharedPtr<FJsonValue>> Connections;
+			int32 Index = 0;
+			for (const FExpressionInput* Input : Expression->GetInputsView())
+			{
+				if (Input && Input->Expression)
+				{
+					auto Connection = MakeShared<FJsonObject>();
+					Connection->SetNumberField(TEXT("inputIndex"), Index);
+					Connection->SetStringField(TEXT("source"), MCPMaterialInfrastructure::ExpressionNodeId(Input->Expression));
+					Connection->SetNumberField(TEXT("outputIndex"), Input->OutputIndex);
+					Connection->SetStringField(TEXT("mask"), FString::Printf(TEXT("%d:%d:%d:%d:%d"), Input->Mask, Input->MaskR, Input->MaskG, Input->MaskB, Input->MaskA));
+					Connections.Add(MakeShared<FJsonValueObject>(Connection));
+				}
+				++Index;
+			}
+			Node->SetArrayField(TEXT("connections"), Connections);
+			Expressions.Add(MakeShared<FJsonValueObject>(Node));
+		}
+		SortById(Expressions);
+		FunctionJson->SetArrayField(TEXT("expressions"), Expressions);
+		Snapshot->SetObjectField(TEXT("materialFunction"), FunctionJson);
 	}
 
 	return Snapshot;

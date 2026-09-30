@@ -88,7 +88,13 @@ Engine、协议、contract digest、Provider 表和匹配的 Unreal Insights 路
 插件管理的 Editor、PIE、Development 和诊断录制会额外写入
 `UEAI_TRACE_ENGINE_VERSION=<major>.<minor>` Bookmark；只有该 marker 精确匹配
 Worker 时才接受不可解析的 BuildVersion，并返回 `matchedManagedMarker`。无 marker、
-marker 畸形/冲突或跨次版本的 Trace 继续 fail closed。
+marker 畸形/冲突或跨次版本的 Trace 默认 fail closed。离线诊断时，可在每次分析
+请求中显式传入 `unknownEngineVersionOverride`：包含导入结果中的精确
+`traceSha256` 和与 Worker 匹配的 `assumedEngineVersion`（major.minor，例如
+`5.4`）。仅当 BuildVersion 恰为 `UE5-CL-0` 且没有 managed marker 时，该请求
+返回 `engineVersionStatus=unknownExplicitAssumption`。这个状态表示调用方的版本
+假设，不是 Trace 自身证明了版本。已知版本不匹配、marker 畸形或冲突仍拒绝；
+不带参数的后续请求不会复用按假设打开的分析会话。
 
 Win64 使用当前用户专属 Named Pipe；Unix 平台使用用户专属 Unix domain socket。
 CLI/MCP 按需启动 Worker，空闲十分钟后退出，最多保留两个 Analysis Session；

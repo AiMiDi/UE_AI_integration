@@ -1,0 +1,21 @@
+{
+  "dsl": "ue.workflow",
+  "dslVersion": "2.0",
+  "workflowKind": "assetEdit",
+  "workflowId": "custom-function-host-v2",
+  "persistence": "dirtyOnly",
+  "scopes": {
+    "host": {"kind": "material", "asset": "/Game/Automation/A_CustomFunctionHost", "createIfMissing": true},
+    "function": {"kind": "materialFunction", "asset": "/Game/Automation/Z_CustomHostFunction", "createIfMissing": true}
+  },
+  "operations": [
+    {"id": "custom", "scope": "function", "type": "content.material.expression.add", "params": {"expressionClass": "Custom", "posX": -300}},
+    {"id": "code", "scope": "function", "type": "content.material.custom.set", "params": {"code": "return float3(0.2, 0.4, 0.8);", "outputType": "Float3", "inputs": []}, "bindings": {"/nodeId": {"from": "custom", "path": "/nodeId"}}},
+    {"id": "output", "scope": "function", "type": "content.material.expression.add", "params": {"expressionClass": "FunctionOutput"}},
+    {"id": "outputName", "scope": "function", "type": "content.material.function.interface.set", "params": {"name": "Result"}, "bindings": {"/nodeId": {"from": "output", "path": "/nodeId"}}},
+    {"id": "functionWire", "scope": "function", "type": "content.material.pin.connect", "params": {"sourcePinName": "Output", "targetPinName": "Input"}, "bindings": {"/sourceNodeId": {"from": "custom", "path": "/nodeId"}, "/targetNodeId": {"from": "output", "path": "/nodeId"}}},
+    {"id": "call", "scope": "host", "type": "content.material.expression.add", "params": {"expressionClass": "MaterialFunctionCall", "posX": -200}},
+    {"id": "assign", "scope": "host", "type": "content.material.function.call.set", "params": {"function": "/Game/Automation/Z_CustomHostFunction"}, "dependsOn": ["code", "outputName", "functionWire"], "bindings": {"/nodeId": {"from": "call", "path": "/nodeId"}}},
+    {"id": "hostWire", "scope": "host", "type": "content.material.pin.connect", "params": {"sourcePinName": "Result", "targetNodeId": "root", "targetPinName": "Emissive Color"}, "dependsOn": ["assign"], "bindings": {"/sourceNodeId": {"from": "call", "path": "/nodeId"}}}
+  ]
+}

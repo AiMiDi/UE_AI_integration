@@ -6,6 +6,7 @@
 #include "Engine/Blueprint.h"
 #include "GameFramework/Actor.h"
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "K2Node.h"
 
 namespace UEAIIntegration::Workflow
 {
@@ -100,9 +101,27 @@ inline void MarkBlueprintChanged(
 	}
 	if (ShouldDeferCompile(Params))
 	{
-		// MarkBlueprintAsStructurallyModified synchronously regenerates the
-		// skeleton in UE 5.3. Workflow steps defer that work to the finalizer.
-		FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+		// Even MarkBlueprintAsModified broadcasts PostEditChange and refreshes
+		// the editor. Keep query caches coherent, but defer asset notifications,
+		// generated-class updates and skeleton compilation to the finalizer.
+		Blueprint->bCachedDependenciesUpToDate = false;
+		if (Blueprint->Status != BS_BeingCreated)
+		{
+			TArray<UEdGraph*> Graphs;
+			Blueprint->GetAllGraphs(Graphs);
+			for (UEdGraph* Graph : Graphs)
+			{
+				for (UEdGraphNode* Node : Graph->Nodes)
+				{
+					if (UK2Node* K2Node = Cast<UK2Node>(Node))
+					{
+						K2Node->ClearCachedBlueprintData(Blueprint);
+					}
+				}
+			}
+			FBlueprintEditorUtils::ClearMacroCosmeticInfoCache(Blueprint);
+			Blueprint->Status = BS_Dirty;
+		}
 		Blueprint->MarkPackageDirty();
 		return;
 	}

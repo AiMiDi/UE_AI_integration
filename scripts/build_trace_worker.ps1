@@ -121,7 +121,7 @@ try {
     $ExpectedInsights = [IO.Path]::GetFullPath(
         (Join-Path $EngineDirectory 'Binaries\Win64\UnrealInsights.exe'))
     $RawHandshake = $Request | & $StagedWorker --stdio -NoLog -NoDefaultLog -SaveToUserDir `
-        "-EngineDir=$EngineDirectory"
+        "-EngineDir=$EngineDirectory" "-Project=$HostProject"
     if ($LASTEXITCODE -ne 0) {
         throw "Staged Trace Worker handshake failed with exit code $LASTEXITCODE."
     }
@@ -149,7 +149,7 @@ try {
         params = @{}
     } | ConvertTo-Json -Depth 5 -Compress
     $RawTargets = $TargetRequest | & $StagedWorker --stdio -NoLog -NoDefaultLog -SaveToUserDir `
-        "-EngineDir=$EngineDirectory"
+        "-EngineDir=$EngineDirectory" "-Project=$HostProject"
     if ($LASTEXITCODE -ne 0) {
         throw "Staged Trace Worker target.list failed with exit code $LASTEXITCODE."
     }
@@ -189,7 +189,7 @@ try {
             params = @{}
         } | ConvertTo-Json -Depth 5 -Compress
         $RawTamperResult = $TamperRequest | & $StagedWorker --stdio -NoLog -NoDefaultLog -SaveToUserDir `
-            "-EngineDir=$EngineDirectory"
+            "-EngineDir=$EngineDirectory" "-Project=$HostProject"
         if ($LASTEXITCODE -ne 0) {
             throw "Staged Trace Worker tamper probe failed with exit code $LASTEXITCODE."
         }

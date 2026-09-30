@@ -1,5 +1,6 @@
 // Blueprint Mutation Tools — modify nodes, pins, connections, assets
 #include "Tools/MCPToolBase.h"
+#include "Infrastructure/DeferredGraphMutation.h"
 #include "Tools/MCPToolRegistry.h"
 #include "Infrastructure/MCPToolHelpers.h"
 #include "Infrastructure/BlueprintMutationGuard.h"
@@ -9,6 +10,7 @@
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
+#include "EdGraphUtilities.h"
 #include "EdGraphSchema_K2.h"
 #include "EdGraphSchema_K2_Actions.h"
 #include "K2Node.h"
@@ -45,6 +47,8 @@
 #include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Logging/TokenizedMessage.h"
+#include "Editor.h"
+#include "ScopedTransaction.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "AssetToolsModule.h"
@@ -57,6 +61,34 @@
 
 namespace
 {
+UEdGraphPin* FindUniquePinByIdentity(
+	UEdGraphNode* Node,
+	const FGuid* PinId,
+	const FName PinName,
+	bool& bOutAmbiguous)
+{
+	bOutAmbiguous = false;
+	UEdGraphPin* Match = nullptr;
+	if (!Node)
+	{
+		return nullptr;
+	}
+	for (UEdGraphPin* Candidate : Node->Pins)
+	{
+		if (!Candidate || (PinId ? Candidate->PinId != *PinId : Candidate->PinName != PinName))
+		{
+			continue;
+		}
+		if (Match)
+		{
+			bOutAmbiguous = true;
+			return nullptr;
+		}
+		Match = Candidate;
+	}
+	return Match;
+}
+
 bool ReadRequiredNumber(
 	const TSharedPtr<FJsonObject>& Object,
 	const TCHAR* Field,
@@ -597,7 +629,9 @@ public:
 
 		SourceNode->Modify();
 		TargetNode->Modify();
-		bool bConnected = Schema->TryCreateConnection(SourcePin, TargetPin);
+		bool bConnected = UEAIIntegration::Infrastructure::TryCreateConnection(
+			Schema, SourcePin, TargetPin,
+			UEAIIntegration::Workflow::ShouldDeferCompile(Params));
 		if (!bConnected)
 			return RollbackDirectMutation(
 				Guard,
@@ -929,6 +963,762 @@ void RollbackAddedGraphNodes(
 		Package->SetDirtyFlag(bPackageWasDirty);
 	}
 }
+
+class FScopedBlueprintPropertyValue
+{
+public:
+	explicit FScopedBlueprintPropertyValue(FProperty* InProperty)
+		: Property(InProperty)
+	{
+		if (Property)
+		{
+			Value = FMemory::Malloc(
+				Property->GetSize(),
+				Property->GetMinAlignment());
+			Property->InitializeValue(Value);
+		}
+	}
+
+	~FScopedBlueprintPropertyValue()
+	{
+		if (Property && Value)
+		{
+			Property->DestroyValue(Value);
+			FMemory::Free(Value);
+		}
+	}
+
+	FScopedBlueprintPropertyValue(
+		const FScopedBlueprintPropertyValue&) = delete;
+	FScopedBlueprintPropertyValue& operator=(
+		const FScopedBlueprintPropertyValue&) = delete;
+
+	void* Get() const
+	{
+		return Value;
+	}
+
+private:
+	FProperty* Property = nullptr;
+	void* Value = nullptr;
+};
+
+bool ImportBlueprintPropertyText(
+	UObject* Object,
+	FProperty* Property,
+	const FString& SerializedValue,
+	const bool bApply,
+	FString& OutNormalizedValue)
+{
+	if (!Object || !Property)
+	{
+		return false;
+	}
+	FScopedBlueprintPropertyValue ScratchValue(Property);
+	if (!ScratchValue.Get())
+	{
+		return false;
+	}
+	const TCHAR* ImportEnd = Property->ImportText_Direct(
+		*SerializedValue,
+		ScratchValue.Get(),
+		Object,
+		PPF_None);
+	if (!ImportEnd || !FString(ImportEnd).TrimStartAndEnd().IsEmpty())
+	{
+		return false;
+	}
+	OutNormalizedValue.Reset();
+	Property->ExportText_Direct(
+		OutNormalizedValue,
+		ScratchValue.Get(),
+		ScratchValue.Get(),
+		Object,
+		PPF_None);
+	if (!bApply)
+	{
+		return true;
+	}
+
+	void* Address = Property->ContainerPtrToValuePtr<void>(Object);
+	Object->SetFlags(RF_Transactional);
+	Object->Modify();
+	FEditPropertyChain PropertyChain;
+	PropertyChain.AddHead(Property);
+	PropertyChain.SetActivePropertyNode(Property);
+	Object->PreEditChange(PropertyChain);
+	Property->CopyCompleteValue(Address, ScratchValue.Get());
+	FPropertyChangedEvent PropertyEvent(
+		Property,
+		EPropertyChangeType::ValueSet);
+	FPropertyChangedChainEvent ChainEvent(PropertyChain, PropertyEvent);
+	Object->PostEditChangeChainProperty(ChainEvent);
+
+	FString AppliedValue;
+	Property->ExportText_Direct(
+		AppliedValue,
+		Address,
+		Address,
+		Object,
+		PPF_None);
+	return AppliedValue == OutNormalizedValue;
+}
+
+// Creates exactly one node in TargetGraph from Params (nodeType plus any
+// type-specific fields).  Returns Ok with OutNode set on success, or an Error
+// describing the failure.  A node added before a late validation failure is
+// left in the graph so the caller can roll it back atomically; the caller owns
+// transaction, compile, and rollback.
+FMCPToolResult TryCreateNodeInGraph(
+	UBlueprint* BP,
+	UEdGraph* TargetGraph,
+	const TSharedPtr<FJsonObject>& Params,
+	const int32 PosX,
+	const int32 PosY,
+	const bool bDeferred,
+	UEdGraphNode*& OutNode)
+{
+	OutNode = nullptr;
+	const FString NodeType = Params->GetStringField(TEXT("nodeType"));
+	UEdGraphNode* NewNode = nullptr;
+
+	if (NodeType == TEXT("CallFunction"))
+	{
+		FString FunctionName = Params->GetStringField(TEXT("functionName"));
+		FString ClassName = Params->GetStringField(TEXT("className"));
+		if (FunctionName.IsEmpty()) return FMCPToolResult::Error(TEXT("Missing 'functionName'"));
+
+		UFunction* TargetFunc =
+			FindNodeFunction(
+				FunctionName,
+				ClassName,
+				BP);
+		if (!TargetFunc)
+		{
+			for (TObjectIterator<UClass> It; It; ++It)
+			{
+				UFunction* F = It->FindFunctionByName(FName(*FunctionName));
+				if (F) { TargetFunc = F; break; }
+			}
+		}
+		if (!TargetFunc) return FMCPToolResult::Error(FString::Printf(TEXT("Function '%s' not found"), *FunctionName));
+		bool bRequireLatent = false;
+		Params->TryGetBoolField(
+			TEXT("latent"),
+			bRequireLatent);
+		if (bRequireLatent
+			&& !TargetFunc->HasMetaData(
+				TEXT("Latent")))
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Function '%s' is not latent."),
+					*FunctionName),
+				TEXT("signature_mismatch"),
+				422);
+		}
+
+		UK2Node_CallFunction* CallNode = NewObject<UK2Node_CallFunction>(
+			TargetGraph,
+			NAME_None,
+			RF_Transactional);
+		CallNode->Modify();
+		CallNode->SetFromFunction(TargetFunc);
+		CallNode->NodePosX = PosX; CallNode->NodePosY = PosY;
+		TargetGraph->AddNode(CallNode, false, false);
+		CallNode->AllocateDefaultPins();
+		NewNode = CallNode;
+	}
+	else if (NodeType == TEXT("VariableGet") || NodeType == TEXT("VariableSet"))
+	{
+		FString VariableName = Params->GetStringField(TEXT("variableName"));
+		if (VariableName.IsEmpty()) return FMCPToolResult::Error(TEXT("Missing 'variableName'"));
+
+		if (NodeType == TEXT("VariableGet"))
+		{
+			UK2Node_VariableGet* N = NewObject<UK2Node_VariableGet>(
+				TargetGraph,
+				NAME_None,
+				RF_Transactional);
+			N->Modify();
+			N->VariableReference.SetSelfMember(FName(*VariableName));
+			N->NodePosX = PosX; N->NodePosY = PosY;
+			TargetGraph->AddNode(N, false, false);
+			N->AllocateDefaultPins();
+			NewNode = N;
+		}
+		else
+		{
+			UK2Node_VariableSet* N = NewObject<UK2Node_VariableSet>(
+				TargetGraph,
+				NAME_None,
+				RF_Transactional);
+			N->Modify();
+			N->VariableReference.SetSelfMember(FName(*VariableName));
+			N->NodePosX = PosX; N->NodePosY = PosY;
+			TargetGraph->AddNode(N, false, false);
+			N->AllocateDefaultPins();
+			NewNode = N;
+		}
+	}
+	else if (NodeType == TEXT("BreakStruct") || NodeType == TEXT("MakeStruct"))
+	{
+		FString TypeNameStr = Params->GetStringField(TEXT("typeName"));
+		if (TypeNameStr.IsEmpty()) return FMCPToolResult::Error(TEXT("Missing 'typeName'"));
+		FString SearchName = TypeNameStr.StartsWith(TEXT("F")) ? TypeNameStr.Mid(1) : TypeNameStr;
+		UScriptStruct* FoundStruct = FindFirstObject<UScriptStruct>(*SearchName);
+		if (!FoundStruct) FoundStruct = FindFirstObject<UScriptStruct>(*TypeNameStr);
+		if (!FoundStruct) return FMCPToolResult::Error(FString::Printf(TEXT("Struct '%s' not found"), *TypeNameStr));
+
+		if (NodeType == TEXT("BreakStruct"))
+		{
+			UK2Node_BreakStruct* N = NewObject<UK2Node_BreakStruct>(
+				TargetGraph,
+				NAME_None,
+				RF_Transactional);
+			N->Modify();
+			N->StructType = FoundStruct; N->NodePosX = PosX; N->NodePosY = PosY;
+			TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
+		}
+		else
+		{
+			UK2Node_MakeStruct* N = NewObject<UK2Node_MakeStruct>(
+				TargetGraph,
+				NAME_None,
+				RF_Transactional);
+			N->Modify();
+			N->StructType = FoundStruct; N->NodePosX = PosX; N->NodePosY = PosY;
+			TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
+		}
+	}
+	else if (NodeType == TEXT("Branch"))
+	{
+		UK2Node_IfThenElse* N = NewObject<UK2Node_IfThenElse>(
+			TargetGraph,
+			NAME_None,
+			RF_Transactional);
+		N->Modify();
+		N->NodePosX = PosX; N->NodePosY = PosY;
+		TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
+	}
+	else if (NodeType == TEXT("Sequence"))
+	{
+		UK2Node_ExecutionSequence* N =
+			NewObject<UK2Node_ExecutionSequence>(
+				TargetGraph,
+				NAME_None,
+				RF_Transactional);
+		N->Modify();
+		N->NodePosX = PosX; N->NodePosY = PosY;
+		TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
+	}
+	else if (NodeType == TEXT("CustomEvent"))
+	{
+		FString EventName = Params->GetStringField(TEXT("eventName"));
+		if (EventName.IsEmpty()) return FMCPToolResult::Error(TEXT("Missing 'eventName'"));
+		UK2Node_CustomEvent* N = NewObject<UK2Node_CustomEvent>(
+			TargetGraph,
+			NAME_None,
+			RF_Transactional);
+		N->Modify();
+		N->CustomFunctionName = FName(*EventName);
+		N->NodePosX = PosX; N->NodePosY = PosY;
+		TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
+	}
+	else if (NodeType == TEXT("OverrideEvent"))
+	{
+		FString FunctionName;
+		FString ClassName;
+		Params->TryGetStringField(
+			TEXT("functionName"),
+			FunctionName);
+		Params->TryGetStringField(
+			TEXT("className"),
+			ClassName);
+		UFunction* Function =
+			FindNodeFunction(
+				FunctionName,
+				ClassName,
+				BP);
+		if (!Function
+			|| !Function->HasAnyFunctionFlags(
+				FUNC_BlueprintEvent)
+			|| Function->HasAnyFunctionFlags(FUNC_Final))
+		{
+			return FMCPToolResult::Error(
+				TEXT("OverrideEvent requires a non-final Blueprint event function."),
+				TEXT("signature_mismatch"),
+				422);
+		}
+		UClass* FunctionOwner =
+			Function->GetOuterUClass();
+		NewNode = SpawnConfiguredNode<UK2Node_Event>(
+			TargetGraph,
+			PosX,
+			PosY,
+			[Function, FunctionOwner](UK2Node_Event* Node)
+			{
+				Node->bOverrideFunction = true;
+				Node->EventReference.SetExternalMember(
+					Function->GetFName(),
+					FunctionOwner);
+			});
+	}
+	else if (NodeType == TEXT("ComponentBoundEvent"))
+	{
+		FString ComponentName;
+		FString DelegateName;
+		Params->TryGetStringField(
+			TEXT("componentName"),
+			ComponentName);
+		Params->TryGetStringField(
+			TEXT("delegateName"),
+			DelegateName);
+		UClass* BlueprintClass =
+			BP->SkeletonGeneratedClass
+				? BP->SkeletonGeneratedClass
+				: BP->GeneratedClass;
+		FObjectProperty* ComponentProperty =
+			BlueprintClass
+			? FindFProperty<FObjectProperty>(
+				BlueprintClass,
+				FName(*ComponentName))
+			: nullptr;
+		FMulticastDelegateProperty* DelegateProperty =
+			ComponentProperty
+			&& ComponentProperty->PropertyClass
+			? FindFProperty<FMulticastDelegateProperty>(
+				ComponentProperty->PropertyClass,
+				FName(*DelegateName))
+			: nullptr;
+		if (!ComponentProperty || !DelegateProperty)
+		{
+			return FMCPToolResult::Error(
+				TEXT("ComponentBoundEvent could not resolve componentName and delegateName."),
+				TEXT("signature_mismatch"),
+				422);
+		}
+		NewNode =
+			SpawnConfiguredNode<UK2Node_ComponentBoundEvent>(
+				TargetGraph,
+				PosX,
+				PosY,
+				[ComponentProperty, DelegateProperty](
+					UK2Node_ComponentBoundEvent* Node)
+				{
+					Node->InitializeComponentBoundEventParams(
+						ComponentProperty,
+						DelegateProperty);
+				});
+	}
+	else if (NodeType == TEXT("ActorBoundEvent"))
+	{
+		FString ActorPath;
+		FString DelegateName;
+		Params->TryGetStringField(
+			TEXT("actorPath"),
+			ActorPath);
+		Params->TryGetStringField(
+			TEXT("delegateName"),
+			DelegateName);
+		AActor* Actor = FindObject<AActor>(
+			nullptr,
+			*ActorPath);
+		FMulticastDelegateProperty* DelegateProperty =
+			Actor
+			? FindFProperty<FMulticastDelegateProperty>(
+				Actor->GetClass(),
+				FName(*DelegateName))
+			: nullptr;
+		if (!Actor || !DelegateProperty)
+		{
+			return FMCPToolResult::Error(
+				TEXT("ActorBoundEvent could not resolve actorPath and delegateName."),
+				TEXT("signature_mismatch"),
+				422);
+		}
+		NewNode =
+			SpawnConfiguredNode<UK2Node_ActorBoundEvent>(
+				TargetGraph,
+				PosX,
+				PosY,
+				[Actor, DelegateProperty](
+					UK2Node_ActorBoundEvent* Node)
+				{
+					Node->InitializeActorBoundEventParams(
+						Actor,
+						DelegateProperty);
+				});
+	}
+	else if (NodeType == TEXT("AssignDelegate")
+		|| NodeType == TEXT("AddDelegate")
+		|| NodeType == TEXT("RemoveDelegate")
+		|| NodeType == TEXT("ClearDelegate")
+		|| NodeType == TEXT("CallDelegate"))
+	{
+		FString ClassName;
+		FString DelegateName;
+		Params->TryGetStringField(
+			TEXT("className"),
+			ClassName);
+		Params->TryGetStringField(
+			TEXT("delegateName"),
+			DelegateName);
+		if (NodeType == TEXT("AssignDelegate"))
+		{
+			NewNode = SpawnDelegateNode<UK2Node_AssignDelegate>(
+				TargetGraph,
+				BP,
+				ClassName,
+				DelegateName,
+				PosX,
+				PosY);
+		}
+		else if (NodeType == TEXT("AddDelegate"))
+		{
+			NewNode = SpawnDelegateNode<UK2Node_AddDelegate>(
+				TargetGraph,
+				BP,
+				ClassName,
+				DelegateName,
+				PosX,
+				PosY);
+		}
+		else if (NodeType == TEXT("RemoveDelegate"))
+		{
+			NewNode = SpawnDelegateNode<UK2Node_RemoveDelegate>(
+				TargetGraph,
+				BP,
+				ClassName,
+				DelegateName,
+				PosX,
+				PosY);
+		}
+		else if (NodeType == TEXT("ClearDelegate"))
+		{
+			NewNode = SpawnDelegateNode<UK2Node_ClearDelegate>(
+				TargetGraph,
+				BP,
+				ClassName,
+				DelegateName,
+				PosX,
+				PosY);
+		}
+		else
+		{
+			NewNode = SpawnDelegateNode<UK2Node_CallDelegate>(
+				TargetGraph,
+				BP,
+				ClassName,
+				DelegateName,
+				PosX,
+				PosY);
+		}
+		if (!NewNode)
+		{
+			return FMCPToolResult::Error(
+				TEXT("Delegate node could not resolve delegateName on className/self."),
+				TEXT("signature_mismatch"),
+				422);
+		}
+	}
+	else if (NodeType == TEXT("CreateDelegate"))
+	{
+		FString FunctionName;
+		Params->TryGetStringField(
+			TEXT("functionName"),
+			FunctionName);
+		if (FunctionName.IsEmpty())
+		{
+			return FMCPToolResult::Error(
+				TEXT("CreateDelegate requires functionName."),
+				TEXT("invalid_params"),
+				422);
+		}
+		NewNode = SpawnConfiguredNode<UK2Node_CreateDelegate>(
+			TargetGraph,
+			PosX,
+			PosY,
+			[FunctionName](UK2Node_CreateDelegate* Node)
+			{
+				Node->SetFunction(FName(*FunctionName));
+			});
+	}
+	else if (NodeType == TEXT("InputAction"))
+	{
+		FString InputActionName;
+		if (!Params->TryGetStringField(
+				TEXT("inputActionName"),
+				InputActionName))
+		{
+			Params->TryGetStringField(
+				TEXT("eventName"),
+				InputActionName);
+		}
+		if (InputActionName.IsEmpty())
+		{
+			return FMCPToolResult::Error(
+				TEXT("InputAction requires inputActionName."),
+				TEXT("invalid_params"),
+				422);
+		}
+		bool bConsumeInput = true;
+		bool bExecuteWhenPaused = false;
+		bool bOverrideParentBinding = true;
+		Params->TryGetBoolField(
+			TEXT("consumeInput"),
+			bConsumeInput);
+		Params->TryGetBoolField(
+			TEXT("executeWhenPaused"),
+			bExecuteWhenPaused);
+		Params->TryGetBoolField(
+			TEXT("overrideParentBinding"),
+			bOverrideParentBinding);
+		NewNode = SpawnConfiguredNode<UK2Node_InputAction>(
+			TargetGraph,
+			PosX,
+			PosY,
+			[InputActionName,
+				bConsumeInput,
+				bExecuteWhenPaused,
+				bOverrideParentBinding](
+				UK2Node_InputAction* Node)
+			{
+				Node->InputActionName =
+					FName(*InputActionName);
+				Node->bConsumeInput = bConsumeInput;
+				Node->bExecuteWhenPaused =
+					bExecuteWhenPaused;
+				Node->bOverrideParentBinding =
+					bOverrideParentBinding;
+			});
+	}
+	else if (NodeType == TEXT("EnhancedInputAction"))
+	{
+		FString InputActionPath;
+		Params->TryGetStringField(
+			TEXT("inputAction"),
+			InputActionPath);
+		if (InputActionPath.IsEmpty())
+		{
+			Params->TryGetStringField(
+				TEXT("inputActionPath"),
+				InputActionPath);
+		}
+		UObject* InputAction = LoadObject<UObject>(
+			nullptr,
+			*InputActionPath);
+		FModuleManager::Get().LoadModulePtr<IModuleInterface>(
+			TEXT("InputBlueprintNodes"));
+		UClass* EnhancedNodeClass = FindObject<UClass>(
+			nullptr,
+			TEXT("/Script/InputBlueprintNodes.K2Node_EnhancedInputAction"));
+		if (!InputAction || !EnhancedNodeClass)
+		{
+			return FMCPToolResult::Error(
+				TEXT("EnhancedInputAction requires a valid inputAction asset and InputBlueprintNodes module."),
+				TEXT("target_not_found"),
+				404);
+		}
+		NewNode = FEdGraphSchemaAction_K2NewNode::CreateNode(
+			TargetGraph,
+			TArrayView<UEdGraphPin*>(),
+			FVector2D(PosX, PosY),
+			[EnhancedNodeClass](
+				UEdGraph* InParentGraph) -> UK2Node*
+			{
+				return NewObject<UK2Node>(
+					InParentGraph,
+					EnhancedNodeClass);
+			},
+			[InputAction](UK2Node* Node)
+			{
+				SetReflectedObjectProperty(
+					Node,
+					TEXT("InputAction"),
+					InputAction);
+			},
+			EK2NewNodeFlags::None);
+	}
+	else if (NodeType == TEXT("AsyncAction"))
+	{
+		FString FactoryFunctionName;
+		FString FactoryClassName;
+		if (!Params->TryGetStringField(
+				TEXT("factoryFunctionName"),
+				FactoryFunctionName))
+		{
+			Params->TryGetStringField(
+				TEXT("functionName"),
+				FactoryFunctionName);
+		}
+		if (!Params->TryGetStringField(
+				TEXT("factoryClassName"),
+				FactoryClassName))
+		{
+			Params->TryGetStringField(
+				TEXT("className"),
+				FactoryClassName);
+		}
+		UFunction* FactoryFunction =
+			FindNodeFunction(
+				FactoryFunctionName,
+				FactoryClassName,
+				BP);
+		FObjectPropertyBase* ReturnProperty =
+			FactoryFunction
+			? CastField<FObjectPropertyBase>(
+				FactoryFunction->GetReturnProperty())
+			: nullptr;
+		UClass* ProxyClass =
+			ReturnProperty
+				? ReturnProperty->PropertyClass
+				: nullptr;
+		if (!FactoryFunction
+			|| !FactoryFunction->HasAllFunctionFlags(
+				FUNC_Static | FUNC_BlueprintCallable)
+			|| !ProxyClass
+			|| !ProxyClass->IsChildOf(
+				UBlueprintAsyncActionBase::StaticClass()))
+		{
+			return FMCPToolResult::Error(
+				TEXT("AsyncAction requires a static BlueprintCallable factory returning UBlueprintAsyncActionBase."),
+				TEXT("signature_mismatch"),
+				422);
+		}
+		NewNode = SpawnConfiguredNode<UK2Node_AsyncAction>(
+			TargetGraph,
+			PosX,
+			PosY,
+			[FactoryFunction, ProxyClass](
+				UK2Node_AsyncAction* Node)
+			{
+				SetReflectedNameProperty(
+					Node,
+					TEXT("ProxyFactoryFunctionName"),
+					FactoryFunction->GetFName());
+				SetReflectedObjectProperty(
+					Node,
+					TEXT("ProxyFactoryClass"),
+					FactoryFunction->GetOuterUClass());
+				SetReflectedObjectProperty(
+					Node,
+					TEXT("ProxyClass"),
+					ProxyClass);
+				SetReflectedNameProperty(
+					Node,
+					TEXT("ProxyActivateFunctionName"),
+					GET_FUNCTION_NAME_CHECKED(
+						UBlueprintAsyncActionBase,
+						Activate));
+			});
+	}
+	else if (NodeType == TEXT("DynamicCast"))
+	{
+		FString CastTarget = Params->GetStringField(TEXT("castTarget"));
+		if (CastTarget.IsEmpty()) return FMCPToolResult::Error(TEXT("Missing 'castTarget'"));
+		UClass* TargetClass = nullptr;
+		for (TObjectIterator<UClass> It; It; ++It)
+		{
+			if (It->GetName() == CastTarget || It->GetName() == CastTarget + TEXT("_C"))
+			{ TargetClass = *It; break; }
+		}
+		if (!TargetClass) return FMCPToolResult::Error(FString::Printf(TEXT("Class '%s' not found"), *CastTarget));
+		UK2Node_DynamicCast* N = NewObject<UK2Node_DynamicCast>(
+			TargetGraph,
+			NAME_None,
+			RF_Transactional);
+		N->Modify();
+		N->TargetType = TargetClass; N->NodePosX = PosX; N->NodePosY = PosY;
+		TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
+	}
+	else if (NodeType == TEXT("Comment"))
+	{
+		FString CommentText = Params->GetStringField(TEXT("comment"));
+		if (CommentText.IsEmpty()) CommentText = TEXT("Comment");
+		UEdGraphNode_Comment* N =
+			NewObject<UEdGraphNode_Comment>(
+				TargetGraph,
+				NAME_None,
+				RF_Transactional);
+		N->Modify();
+		N->NodeComment = CommentText; N->NodePosX = PosX; N->NodePosY = PosY;
+		N->NodeWidth = 400; N->NodeHeight = 200;
+		TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
+	}
+	else if (NodeType == TEXT("Reroute"))
+	{
+		UK2Node_Knot* N = NewObject<UK2Node_Knot>(
+			TargetGraph,
+			NAME_None,
+			RF_Transactional);
+		N->Modify();
+		N->NodePosX = PosX; N->NodePosY = PosY;
+		TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
+	}
+	else
+	{
+		return FMCPToolResult::Error(FString::Printf(TEXT("Unsupported nodeType '%s'"), *NodeType));
+	}
+
+	if (!NewNode)
+	{
+		return FMCPToolResult::Error(
+			TEXT("Failed to create node."),
+			TEXT("execution_failed"),
+			500);
+	}
+	if (!NewNode->NodeGuid.IsValid())
+	{
+		NewNode->CreateNewGuid();
+	}
+
+	NewNode->ReconstructNode();
+	if (!bDeferred
+		&& NodeType != TEXT("Reroute")
+		&& HasUnresolvedWildcardPins(NewNode))
+	{
+		return FMCPToolResult::Error(
+			TEXT("Node contains unresolved wildcard pins."),
+			TEXT("signature_mismatch"),
+			422);
+	}
+	if (!bDeferred)
+	{
+		if (UK2Node_CreateDelegate* CreateDelegate =
+			Cast<UK2Node_CreateDelegate>(NewNode))
+		{
+			FCompilerResultsLog DelegateValidationLog;
+			DelegateValidationLog.bSilentMode = true;
+			CreateDelegate->ValidationAfterFunctionsAreCreated(
+				DelegateValidationLog,
+				false);
+			if (DelegateValidationLog.NumErrors > 0)
+			{
+				FString DelegateValidationError =
+					TEXT("CreateDelegate signature validation failed.");
+				for (const TSharedRef<FTokenizedMessage>& Message :
+					DelegateValidationLog.Messages)
+				{
+					if (Message->GetSeverity()
+						== EMessageSeverity::Error)
+					{
+						DelegateValidationError =
+							Message->ToText().ToString();
+						break;
+					}
+				}
+				return FMCPToolResult::Error(
+					DelegateValidationError,
+					TEXT("signature_mismatch"),
+					422);
+			}
+		}
+	}
+
+	OutNode = NewNode;
+	return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+}
 } // namespace
 
 class FTool_AddNode : public FMCPToolBase
@@ -971,7 +1761,6 @@ public:
 				Guard.GetErrorMessage(), Guard.GetErrorCode(), 422);
 		}
 
-		UEdGraphNode* NewNode = nullptr;
 		TSet<UEdGraphNode*> NodesBefore;
 		for (UEdGraphNode* ExistingNode : TargetGraph->Nodes)
 		{
@@ -986,655 +1775,25 @@ public:
 		Guard.MarkMutationStarted();
 		TargetGraph->Modify();
 
-		if (NodeType == TEXT("CallFunction"))
-		{
-			FString FunctionName = Params->GetStringField(TEXT("functionName"));
-			FString ClassName = Params->GetStringField(TEXT("className"));
-			if (FunctionName.IsEmpty()) return FMCPToolResult::Error(TEXT("Missing 'functionName'"));
-
-			UFunction* TargetFunc =
-				FindNodeFunction(
-					FunctionName,
-					ClassName,
-					BP);
-			if (!TargetFunc)
-			{
-				for (TObjectIterator<UClass> It; It; ++It)
-				{
-					UFunction* F = It->FindFunctionByName(FName(*FunctionName));
-					if (F) { TargetFunc = F; break; }
-				}
-			}
-			if (!TargetFunc) return FMCPToolResult::Error(FString::Printf(TEXT("Function '%s' not found"), *FunctionName));
-			bool bRequireLatent = false;
-			Params->TryGetBoolField(
-				TEXT("latent"),
-				bRequireLatent);
-			if (bRequireLatent
-				&& !TargetFunc->HasMetaData(
-					TEXT("Latent")))
-			{
-				return FMCPToolResult::Error(
-					FString::Printf(
-						TEXT("Function '%s' is not latent."),
-						*FunctionName),
-					TEXT("signature_mismatch"),
-					422);
-			}
-
-			UK2Node_CallFunction* CallNode = NewObject<UK2Node_CallFunction>(
-				TargetGraph,
-				NAME_None,
-				RF_Transactional);
-			CallNode->Modify();
-			CallNode->SetFromFunction(TargetFunc);
-			CallNode->NodePosX = PosX; CallNode->NodePosY = PosY;
-			TargetGraph->AddNode(CallNode, false, false);
-			CallNode->AllocateDefaultPins();
-			NewNode = CallNode;
-		}
-		else if (NodeType == TEXT("VariableGet") || NodeType == TEXT("VariableSet"))
-		{
-			FString VariableName = Params->GetStringField(TEXT("variableName"));
-			if (VariableName.IsEmpty()) return FMCPToolResult::Error(TEXT("Missing 'variableName'"));
-
-			if (NodeType == TEXT("VariableGet"))
-			{
-				UK2Node_VariableGet* N = NewObject<UK2Node_VariableGet>(
-					TargetGraph,
-					NAME_None,
-					RF_Transactional);
-				N->Modify();
-				N->VariableReference.SetSelfMember(FName(*VariableName));
-				N->NodePosX = PosX; N->NodePosY = PosY;
-				TargetGraph->AddNode(N, false, false);
-				N->AllocateDefaultPins();
-				NewNode = N;
-			}
-			else
-			{
-				UK2Node_VariableSet* N = NewObject<UK2Node_VariableSet>(
-					TargetGraph,
-					NAME_None,
-					RF_Transactional);
-				N->Modify();
-				N->VariableReference.SetSelfMember(FName(*VariableName));
-				N->NodePosX = PosX; N->NodePosY = PosY;
-				TargetGraph->AddNode(N, false, false);
-				N->AllocateDefaultPins();
-				NewNode = N;
-			}
-		}
-		else if (NodeType == TEXT("BreakStruct") || NodeType == TEXT("MakeStruct"))
-		{
-			FString TypeNameStr = Params->GetStringField(TEXT("typeName"));
-			if (TypeNameStr.IsEmpty()) return FMCPToolResult::Error(TEXT("Missing 'typeName'"));
-			FString SearchName = TypeNameStr.StartsWith(TEXT("F")) ? TypeNameStr.Mid(1) : TypeNameStr;
-			UScriptStruct* FoundStruct = FindFirstObject<UScriptStruct>(*SearchName);
-			if (!FoundStruct) FoundStruct = FindFirstObject<UScriptStruct>(*TypeNameStr);
-			if (!FoundStruct) return FMCPToolResult::Error(FString::Printf(TEXT("Struct '%s' not found"), *TypeNameStr));
-
-			if (NodeType == TEXT("BreakStruct"))
-			{
-				UK2Node_BreakStruct* N = NewObject<UK2Node_BreakStruct>(
-					TargetGraph,
-					NAME_None,
-					RF_Transactional);
-				N->Modify();
-				N->StructType = FoundStruct; N->NodePosX = PosX; N->NodePosY = PosY;
-				TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
-			}
-			else
-			{
-				UK2Node_MakeStruct* N = NewObject<UK2Node_MakeStruct>(
-					TargetGraph,
-					NAME_None,
-					RF_Transactional);
-				N->Modify();
-				N->StructType = FoundStruct; N->NodePosX = PosX; N->NodePosY = PosY;
-				TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
-			}
-		}
-		else if (NodeType == TEXT("Branch"))
-		{
-			UK2Node_IfThenElse* N = NewObject<UK2Node_IfThenElse>(
-				TargetGraph,
-				NAME_None,
-				RF_Transactional);
-			N->Modify();
-			N->NodePosX = PosX; N->NodePosY = PosY;
-			TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
-		}
-		else if (NodeType == TEXT("Sequence"))
-		{
-			UK2Node_ExecutionSequence* N =
-				NewObject<UK2Node_ExecutionSequence>(
-					TargetGraph,
-					NAME_None,
-					RF_Transactional);
-			N->Modify();
-			N->NodePosX = PosX; N->NodePosY = PosY;
-			TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
-		}
-		else if (NodeType == TEXT("CustomEvent"))
-		{
-			FString EventName = Params->GetStringField(TEXT("eventName"));
-			if (EventName.IsEmpty()) return FMCPToolResult::Error(TEXT("Missing 'eventName'"));
-			UK2Node_CustomEvent* N = NewObject<UK2Node_CustomEvent>(
-				TargetGraph,
-				NAME_None,
-				RF_Transactional);
-			N->Modify();
-			N->CustomFunctionName = FName(*EventName);
-			N->NodePosX = PosX; N->NodePosY = PosY;
-			TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
-		}
-		else if (NodeType == TEXT("OverrideEvent"))
-		{
-			FString FunctionName;
-			FString ClassName;
-			Params->TryGetStringField(
-				TEXT("functionName"),
-				FunctionName);
-			Params->TryGetStringField(
-				TEXT("className"),
-				ClassName);
-			UFunction* Function =
-				FindNodeFunction(
-					FunctionName,
-					ClassName,
-					BP);
-			if (!Function
-				|| !Function->HasAnyFunctionFlags(
-					FUNC_BlueprintEvent)
-				|| Function->HasAnyFunctionFlags(FUNC_Final))
-			{
-				return FMCPToolResult::Error(
-					TEXT("OverrideEvent requires a non-final Blueprint event function."),
-					TEXT("signature_mismatch"),
-					422);
-			}
-			UClass* FunctionOwner =
-				Function->GetOuterUClass();
-			NewNode = SpawnConfiguredNode<UK2Node_Event>(
-				TargetGraph,
-				PosX,
-				PosY,
-				[Function, FunctionOwner](UK2Node_Event* Node)
-				{
-					Node->bOverrideFunction = true;
-					Node->EventReference.SetExternalMember(
-						Function->GetFName(),
-						FunctionOwner);
-				});
-		}
-		else if (NodeType == TEXT("ComponentBoundEvent"))
-		{
-			FString ComponentName;
-			FString DelegateName;
-			Params->TryGetStringField(
-				TEXT("componentName"),
-				ComponentName);
-			Params->TryGetStringField(
-				TEXT("delegateName"),
-				DelegateName);
-			UClass* BlueprintClass =
-				BP->SkeletonGeneratedClass
-					? BP->SkeletonGeneratedClass
-					: BP->GeneratedClass;
-			FObjectProperty* ComponentProperty =
-				BlueprintClass
-				? FindFProperty<FObjectProperty>(
-					BlueprintClass,
-					FName(*ComponentName))
-				: nullptr;
-			FMulticastDelegateProperty* DelegateProperty =
-				ComponentProperty
-				&& ComponentProperty->PropertyClass
-				? FindFProperty<FMulticastDelegateProperty>(
-					ComponentProperty->PropertyClass,
-					FName(*DelegateName))
-				: nullptr;
-			if (!ComponentProperty || !DelegateProperty)
-			{
-				return FMCPToolResult::Error(
-					TEXT("ComponentBoundEvent could not resolve componentName and delegateName."),
-					TEXT("signature_mismatch"),
-					422);
-			}
-			NewNode =
-				SpawnConfiguredNode<UK2Node_ComponentBoundEvent>(
-					TargetGraph,
-					PosX,
-					PosY,
-					[ComponentProperty, DelegateProperty](
-						UK2Node_ComponentBoundEvent* Node)
-					{
-						Node->InitializeComponentBoundEventParams(
-							ComponentProperty,
-							DelegateProperty);
-					});
-		}
-		else if (NodeType == TEXT("ActorBoundEvent"))
-		{
-			FString ActorPath;
-			FString DelegateName;
-			Params->TryGetStringField(
-				TEXT("actorPath"),
-				ActorPath);
-			Params->TryGetStringField(
-				TEXT("delegateName"),
-				DelegateName);
-			AActor* Actor = FindObject<AActor>(
-				nullptr,
-				*ActorPath);
-			FMulticastDelegateProperty* DelegateProperty =
-				Actor
-				? FindFProperty<FMulticastDelegateProperty>(
-					Actor->GetClass(),
-					FName(*DelegateName))
-				: nullptr;
-			if (!Actor || !DelegateProperty)
-			{
-				return FMCPToolResult::Error(
-					TEXT("ActorBoundEvent could not resolve actorPath and delegateName."),
-					TEXT("signature_mismatch"),
-					422);
-			}
-			NewNode =
-				SpawnConfiguredNode<UK2Node_ActorBoundEvent>(
-					TargetGraph,
-					PosX,
-					PosY,
-					[Actor, DelegateProperty](
-						UK2Node_ActorBoundEvent* Node)
-					{
-						Node->InitializeActorBoundEventParams(
-							Actor,
-							DelegateProperty);
-					});
-		}
-		else if (NodeType == TEXT("AssignDelegate")
-			|| NodeType == TEXT("AddDelegate")
-			|| NodeType == TEXT("RemoveDelegate")
-			|| NodeType == TEXT("ClearDelegate")
-			|| NodeType == TEXT("CallDelegate"))
-		{
-			FString ClassName;
-			FString DelegateName;
-			Params->TryGetStringField(
-				TEXT("className"),
-				ClassName);
-			Params->TryGetStringField(
-				TEXT("delegateName"),
-				DelegateName);
-			if (NodeType == TEXT("AssignDelegate"))
-			{
-				NewNode = SpawnDelegateNode<UK2Node_AssignDelegate>(
-					TargetGraph,
-					BP,
-					ClassName,
-					DelegateName,
-					PosX,
-					PosY);
-			}
-			else if (NodeType == TEXT("AddDelegate"))
-			{
-				NewNode = SpawnDelegateNode<UK2Node_AddDelegate>(
-					TargetGraph,
-					BP,
-					ClassName,
-					DelegateName,
-					PosX,
-					PosY);
-			}
-			else if (NodeType == TEXT("RemoveDelegate"))
-			{
-				NewNode = SpawnDelegateNode<UK2Node_RemoveDelegate>(
-					TargetGraph,
-					BP,
-					ClassName,
-					DelegateName,
-					PosX,
-					PosY);
-			}
-			else if (NodeType == TEXT("ClearDelegate"))
-			{
-				NewNode = SpawnDelegateNode<UK2Node_ClearDelegate>(
-					TargetGraph,
-					BP,
-					ClassName,
-					DelegateName,
-					PosX,
-					PosY);
-			}
-			else
-			{
-				NewNode = SpawnDelegateNode<UK2Node_CallDelegate>(
-					TargetGraph,
-					BP,
-					ClassName,
-					DelegateName,
-					PosX,
-					PosY);
-			}
-			if (!NewNode)
-			{
-				return FMCPToolResult::Error(
-					TEXT("Delegate node could not resolve delegateName on className/self."),
-					TEXT("signature_mismatch"),
-					422);
-			}
-		}
-		else if (NodeType == TEXT("CreateDelegate"))
-		{
-			FString FunctionName;
-			Params->TryGetStringField(
-				TEXT("functionName"),
-				FunctionName);
-			if (FunctionName.IsEmpty())
-			{
-				return FMCPToolResult::Error(
-					TEXT("CreateDelegate requires functionName."),
-					TEXT("invalid_params"),
-					422);
-			}
-			NewNode = SpawnConfiguredNode<UK2Node_CreateDelegate>(
-				TargetGraph,
-				PosX,
-				PosY,
-				[FunctionName](UK2Node_CreateDelegate* Node)
-				{
-					Node->SetFunction(FName(*FunctionName));
-				});
-		}
-		else if (NodeType == TEXT("InputAction"))
-		{
-			FString InputActionName;
-			if (!Params->TryGetStringField(
-					TEXT("inputActionName"),
-					InputActionName))
-			{
-				Params->TryGetStringField(
-					TEXT("eventName"),
-					InputActionName);
-			}
-			if (InputActionName.IsEmpty())
-			{
-				return FMCPToolResult::Error(
-					TEXT("InputAction requires inputActionName."),
-					TEXT("invalid_params"),
-					422);
-			}
-			bool bConsumeInput = true;
-			bool bExecuteWhenPaused = false;
-			bool bOverrideParentBinding = true;
-			Params->TryGetBoolField(
-				TEXT("consumeInput"),
-				bConsumeInput);
-			Params->TryGetBoolField(
-				TEXT("executeWhenPaused"),
-				bExecuteWhenPaused);
-			Params->TryGetBoolField(
-				TEXT("overrideParentBinding"),
-				bOverrideParentBinding);
-			NewNode = SpawnConfiguredNode<UK2Node_InputAction>(
-				TargetGraph,
-				PosX,
-				PosY,
-				[InputActionName,
-					bConsumeInput,
-					bExecuteWhenPaused,
-					bOverrideParentBinding](
-					UK2Node_InputAction* Node)
-				{
-					Node->InputActionName =
-						FName(*InputActionName);
-					Node->bConsumeInput = bConsumeInput;
-					Node->bExecuteWhenPaused =
-						bExecuteWhenPaused;
-					Node->bOverrideParentBinding =
-						bOverrideParentBinding;
-				});
-		}
-		else if (NodeType == TEXT("EnhancedInputAction"))
-		{
-			FString InputActionPath;
-			Params->TryGetStringField(
-				TEXT("inputAction"),
-				InputActionPath);
-			if (InputActionPath.IsEmpty())
-			{
-				Params->TryGetStringField(
-					TEXT("inputActionPath"),
-					InputActionPath);
-			}
-			UObject* InputAction = LoadObject<UObject>(
-				nullptr,
-				*InputActionPath);
-			FModuleManager::Get().LoadModulePtr<IModuleInterface>(
-				TEXT("InputBlueprintNodes"));
-			UClass* EnhancedNodeClass = FindObject<UClass>(
-				nullptr,
-				TEXT("/Script/InputBlueprintNodes.K2Node_EnhancedInputAction"));
-			if (!InputAction || !EnhancedNodeClass)
-			{
-				return FMCPToolResult::Error(
-					TEXT("EnhancedInputAction requires a valid inputAction asset and InputBlueprintNodes module."),
-					TEXT("target_not_found"),
-					404);
-			}
-			NewNode = FEdGraphSchemaAction_K2NewNode::CreateNode(
-				TargetGraph,
-				TArrayView<UEdGraphPin*>(),
-				FVector2D(PosX, PosY),
-				[EnhancedNodeClass](
-					UEdGraph* InParentGraph) -> UK2Node*
-				{
-					return NewObject<UK2Node>(
-						InParentGraph,
-						EnhancedNodeClass);
-				},
-				[InputAction](UK2Node* Node)
-				{
-					SetReflectedObjectProperty(
-						Node,
-						TEXT("InputAction"),
-						InputAction);
-				},
-				EK2NewNodeFlags::None);
-		}
-		else if (NodeType == TEXT("AsyncAction"))
-		{
-			FString FactoryFunctionName;
-			FString FactoryClassName;
-			if (!Params->TryGetStringField(
-					TEXT("factoryFunctionName"),
-					FactoryFunctionName))
-			{
-				Params->TryGetStringField(
-					TEXT("functionName"),
-					FactoryFunctionName);
-			}
-			if (!Params->TryGetStringField(
-					TEXT("factoryClassName"),
-					FactoryClassName))
-			{
-				Params->TryGetStringField(
-					TEXT("className"),
-					FactoryClassName);
-			}
-			UFunction* FactoryFunction =
-				FindNodeFunction(
-					FactoryFunctionName,
-					FactoryClassName,
-					BP);
-			FObjectPropertyBase* ReturnProperty =
-				FactoryFunction
-				? CastField<FObjectPropertyBase>(
-					FactoryFunction->GetReturnProperty())
-				: nullptr;
-			UClass* ProxyClass =
-				ReturnProperty
-					? ReturnProperty->PropertyClass
-					: nullptr;
-			if (!FactoryFunction
-				|| !FactoryFunction->HasAllFunctionFlags(
-					FUNC_Static | FUNC_BlueprintCallable)
-				|| !ProxyClass
-				|| !ProxyClass->IsChildOf(
-					UBlueprintAsyncActionBase::StaticClass()))
-			{
-				return FMCPToolResult::Error(
-					TEXT("AsyncAction requires a static BlueprintCallable factory returning UBlueprintAsyncActionBase."),
-					TEXT("signature_mismatch"),
-					422);
-			}
-			NewNode = SpawnConfiguredNode<UK2Node_AsyncAction>(
-				TargetGraph,
-				PosX,
-				PosY,
-				[FactoryFunction, ProxyClass](
-					UK2Node_AsyncAction* Node)
-				{
-					SetReflectedNameProperty(
-						Node,
-						TEXT("ProxyFactoryFunctionName"),
-						FactoryFunction->GetFName());
-					SetReflectedObjectProperty(
-						Node,
-						TEXT("ProxyFactoryClass"),
-						FactoryFunction->GetOuterUClass());
-					SetReflectedObjectProperty(
-						Node,
-						TEXT("ProxyClass"),
-						ProxyClass);
-					SetReflectedNameProperty(
-						Node,
-						TEXT("ProxyActivateFunctionName"),
-						GET_FUNCTION_NAME_CHECKED(
-							UBlueprintAsyncActionBase,
-							Activate));
-				});
-		}
-		else if (NodeType == TEXT("DynamicCast"))
-		{
-			FString CastTarget = Params->GetStringField(TEXT("castTarget"));
-			if (CastTarget.IsEmpty()) return FMCPToolResult::Error(TEXT("Missing 'castTarget'"));
-			UClass* TargetClass = nullptr;
-			for (TObjectIterator<UClass> It; It; ++It)
-			{
-				if (It->GetName() == CastTarget || It->GetName() == CastTarget + TEXT("_C"))
-				{ TargetClass = *It; break; }
-			}
-			if (!TargetClass) return FMCPToolResult::Error(FString::Printf(TEXT("Class '%s' not found"), *CastTarget));
-			UK2Node_DynamicCast* N = NewObject<UK2Node_DynamicCast>(
-				TargetGraph,
-				NAME_None,
-				RF_Transactional);
-			N->Modify();
-			N->TargetType = TargetClass; N->NodePosX = PosX; N->NodePosY = PosY;
-			TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
-		}
-		else if (NodeType == TEXT("Comment"))
-		{
-			FString CommentText = Params->GetStringField(TEXT("comment"));
-			if (CommentText.IsEmpty()) CommentText = TEXT("Comment");
-			UEdGraphNode_Comment* N =
-				NewObject<UEdGraphNode_Comment>(
-					TargetGraph,
-					NAME_None,
-					RF_Transactional);
-			N->Modify();
-			N->NodeComment = CommentText; N->NodePosX = PosX; N->NodePosY = PosY;
-			N->NodeWidth = 400; N->NodeHeight = 200;
-			TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
-		}
-		else if (NodeType == TEXT("Reroute"))
-		{
-			UK2Node_Knot* N = NewObject<UK2Node_Knot>(
-				TargetGraph,
-				NAME_None,
-				RF_Transactional);
-			N->Modify();
-			N->NodePosX = PosX; N->NodePosY = PosY;
-			TargetGraph->AddNode(N, false, false); N->AllocateDefaultPins(); NewNode = N;
-		}
-		else
-		{
-			return FMCPToolResult::Error(FString::Printf(TEXT("Unsupported nodeType '%s'"), *NodeType));
-		}
-
-		if (!NewNode)
-		{
-			RollbackAddedGraphNodes(
-				TargetGraph,
-				NodesBefore,
-				BlueprintPackage,
-				bPackageWasDirty);
-			return FMCPToolResult::Error(
-				TEXT("Failed to create node."),
-				TEXT("execution_failed"),
-				500);
-		}
-		if (!NewNode->NodeGuid.IsValid())
-		{
-			NewNode->CreateNewGuid();
-		}
-
-		NewNode->ReconstructNode();
 		const bool bDeferred =
 			UEAIIntegration::Workflow::ShouldDeferCompile(Params);
-		if (!bDeferred
-			&& NodeType != TEXT("Reroute")
-			&& HasUnresolvedWildcardPins(NewNode))
+		UEdGraphNode* NewNode = nullptr;
+		const FMCPToolResult CreateResult = TryCreateNodeInGraph(
+			BP,
+			TargetGraph,
+			Params,
+			PosX,
+			PosY,
+			bDeferred,
+			NewNode);
+		if (!CreateResult.bSuccess)
 		{
 			RollbackAddedGraphNodes(
 				TargetGraph,
 				NodesBefore,
 				BlueprintPackage,
 				bPackageWasDirty);
-			return FMCPToolResult::Error(
-				TEXT("Node contains unresolved wildcard pins."),
-				TEXT("signature_mismatch"),
-				422);
-		}
-		if (!bDeferred)
-		{
-			if (UK2Node_CreateDelegate* CreateDelegate =
-				Cast<UK2Node_CreateDelegate>(NewNode))
-			{
-				FCompilerResultsLog DelegateValidationLog;
-				DelegateValidationLog.bSilentMode = true;
-				CreateDelegate->ValidationAfterFunctionsAreCreated(
-					DelegateValidationLog,
-					false);
-				if (DelegateValidationLog.NumErrors > 0)
-				{
-					FString DelegateValidationError =
-						TEXT("CreateDelegate signature validation failed.");
-					for (const TSharedRef<FTokenizedMessage>& Message :
-						DelegateValidationLog.Messages)
-					{
-						if (Message->GetSeverity()
-							== EMessageSeverity::Error)
-						{
-							DelegateValidationError =
-								Message->ToText().ToString();
-							break;
-						}
-					}
-					RollbackAddedGraphNodes(
-						TargetGraph,
-						NodesBefore,
-						BlueprintPackage,
-						bPackageWasDirty);
-					return FMCPToolResult::Error(
-						DelegateValidationError,
-						TEXT("signature_mismatch"),
-						422);
-				}
-			}
+			return CreateResult;
 		}
 
 		UEAIIntegration::Workflow::MarkBlueprintChanged(
@@ -1809,9 +1968,29 @@ public:
 	{
 		FString BlueprintName = Params->GetStringField(TEXT("blueprint"));
 		FString NodeId = Params->GetStringField(TEXT("nodeId"));
-		FString PinName = Params->GetStringField(TEXT("pinName"));
-		if (BlueprintName.IsEmpty() || NodeId.IsEmpty() || PinName.IsEmpty())
-			return FMCPToolResult::Error(TEXT("Missing required fields"));
+		FString PinName;
+		FString RequestedPinId;
+		Params->TryGetStringField(TEXT("pinName"), PinName);
+		Params->TryGetStringField(TEXT("pinId"), RequestedPinId);
+		if (BlueprintName.IsEmpty() || NodeId.IsEmpty()
+			|| (PinName.IsEmpty() && RequestedPinId.IsEmpty()))
+		{
+			return FMCPToolResult::Error(
+				TEXT("blueprint, nodeId, and either pinId or pinName are required."),
+				TEXT("invalid_params"),
+				422);
+		}
+		FGuid ParsedNodeId;
+		FGuid ParsedPinId;
+		const bool bUsePinId = Params->HasField(TEXT("pinId"));
+		if (!FGuid::Parse(NodeId, ParsedNodeId) || !ParsedNodeId.IsValid()
+			|| (bUsePinId && (!FGuid::Parse(RequestedPinId, ParsedPinId) || !ParsedPinId.IsValid())))
+		{
+			return FMCPToolResult::Error(
+				TEXT("nodeId and optional pinId must be nonzero GUIDs."),
+				TEXT("invalid_params"),
+				422);
+		}
 		FString Value;
 		const bool bHasValue =
 			Params->TryGetStringField(TEXT("value"), Value);
@@ -1836,8 +2015,34 @@ public:
 		UEdGraphNode* Node = MCPHelpers::FindNodeByGuid(BP, NodeId, &Graph);
 		if (!Node) return FMCPToolResult::Error(TEXT("Node not found"));
 
-		UEdGraphPin* Pin = Node->FindPin(FName(*PinName));
-		if (!Pin) return FMCPToolResult::Error(TEXT("Pin not found"));
+		bool bAmbiguousPin = false;
+		UEdGraphPin* Pin = FindUniquePinByIdentity(
+			Node, bUsePinId ? &ParsedPinId : nullptr, FName(*PinName), bAmbiguousPin);
+		if (bAmbiguousPin)
+		{
+			return FMCPToolResult::Error(
+				bUsePinId
+					? TEXT("The node contains duplicate pin IDs. Reconstruct the node and query blueprint.graph.get again.")
+					: TEXT("The node has multiple pins with this name. Use pinId from blueprint.graph.get."),
+				TEXT("pin_ambiguous"),
+				409);
+		}
+		if (!Pin)
+		{
+			return FMCPToolResult::Error(
+				TEXT("Pin not found on the selected node. Query blueprint.graph.get for current pin identities."),
+				TEXT("pin_not_found"),
+				404);
+		}
+		if (!PinName.IsEmpty() && Pin->PinName != FName(*PinName))
+		{
+			return FMCPToolResult::Error(
+				TEXT("pinId and pinName refer to different pins. Query blueprint.graph.get again."),
+				TEXT("pin_identity_mismatch"),
+				409);
+		}
+		PinName = Pin->PinName.ToString();
+		const FGuid SelectedPinId = Pin->PinId;
 		if (Pin->Direction != EGPD_Input)
 			return FMCPToolResult::Error(
 				TEXT("Can only set defaults on input pins."),
@@ -1920,9 +2125,9 @@ public:
 				BP,
 				NodeId,
 				nullptr);
-			UEdGraphPin* CurrentPin = CurrentNode
-				? CurrentNode->FindPin(FName(*PinName))
-				: nullptr;
+			bool bAmbiguousCurrentPin = false;
+			UEdGraphPin* CurrentPin = FindUniquePinByIdentity(
+				CurrentNode, &SelectedPinId, NAME_None, bAmbiguousCurrentPin);
 			if (CurrentNode && CurrentPin)
 			{
 				CurrentNode->Modify();
@@ -1941,7 +2146,9 @@ public:
 		};
 		SingleRequestGuard.MarkMutationStarted();
 		Node->Modify();
-		Schema->TrySetDefaultValue(*Pin, SerializedValue);
+		Schema->TrySetDefaultValue(
+			*Pin, SerializedValue,
+			!UEAIIntegration::Workflow::ShouldDeferCompile(Params));
 		FString ImmediateNormalized;
 		UScriptStruct* PinStruct = Cast<UScriptStruct>(
 			Pin->PinType.PinSubCategoryObject.Get());
@@ -1983,9 +2190,9 @@ public:
 			BP,
 			NodeId,
 			nullptr);
-		UEdGraphPin* ReadBackPin = ReadBackNode
-			? ReadBackNode->FindPin(FName(*PinName))
-			: nullptr;
+		bool bAmbiguousReadBackPin = false;
+		UEdGraphPin* ReadBackPin = FindUniquePinByIdentity(
+			ReadBackNode, &SelectedPinId, NAME_None, bAmbiguousReadBackPin);
 		FString ReadBackNormalized;
 		const bool bReadBackMatches = ReadBackPin && (bHasTypedValue
 			? NormalizePinStructText(
@@ -2031,7 +2238,8 @@ public:
 		Result->SetStringField(TEXT("serializedValue"), ReadBackPin->DefaultValue);
 		TSharedPtr<FJsonObject> ReadBack = MakeShared<FJsonObject>();
 		ReadBack->SetStringField(TEXT("nodeId"), NodeId);
-		ReadBack->SetStringField(TEXT("pinName"), PinName);
+		ReadBack->SetStringField(TEXT("pinName"), ReadBackPin->PinName.ToString());
+		ReadBack->SetStringField(TEXT("pinId"), ReadBackPin->PinId.ToString());
 		ReadBack->SetStringField(TEXT("serializedValue"), ReadBackPin->DefaultValue);
 		Result->SetObjectField(TEXT("readBack"), ReadBack);
 		Result->SetBoolField(TEXT("saved"), bSaved);
@@ -2053,8 +2261,283 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		// Stub — duplication requires deep node cloning; return info about what would be duplicated
-		return FMCPToolResult::Error(TEXT("duplicate_nodes is not yet implemented in this version"));
+		const FString BlueprintName =
+			Params->GetStringField(TEXT("blueprint"));
+		const TArray<TSharedPtr<FJsonValue>>* NodeIdValues = nullptr;
+		if (BlueprintName.IsEmpty()
+			|| !Params->TryGetArrayField(TEXT("nodeIds"), NodeIdValues)
+			|| !NodeIdValues || NodeIdValues->IsEmpty())
+		{
+			return FMCPToolResult::Error(
+				TEXT("blueprint and a non-empty nodeIds array are required."),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (NodeIdValues->Num() > 256)
+		{
+			return FMCPToolResult::Error(
+				TEXT("nodeIds is limited to 256 nodes per request."),
+				TEXT("request_too_large"),
+				422);
+		}
+
+		auto ReadOffset = [&Params](
+			const TCHAR* Field,
+			int32& OutValue,
+			FString& OutError) -> bool
+		{
+			OutValue = 0;
+			if (!Params->HasField(Field))
+			{
+				return true;
+			}
+			double Number = 0.0;
+			if (!Params->TryGetNumberField(Field, Number)
+				|| !FMath::IsFinite(Number)
+				|| Number != FMath::FloorToDouble(Number)
+				|| Number < static_cast<double>(MIN_int32)
+				|| Number > static_cast<double>(MAX_int32))
+			{
+				OutError = FString::Printf(
+					TEXT("%s must be a finite 32-bit integer."),
+					Field);
+				return false;
+			}
+			OutValue = static_cast<int32>(Number);
+			return true;
+		};
+
+		int32 OffsetX = 0;
+		int32 OffsetY = 0;
+		FString OffsetError;
+		if (!ReadOffset(TEXT("offsetX"), OffsetX, OffsetError)
+			|| !ReadOffset(TEXT("offsetY"), OffsetY, OffsetError))
+		{
+			return FMCPToolResult::Error(
+				OffsetError,
+				TEXT("invalid_params"),
+				422);
+		}
+
+		FString LoadError;
+		UBlueprint* BP =
+			MCPHelpers::LoadBlueprintByName(BlueprintName, LoadError);
+		if (!BP)
+		{
+			return FMCPToolResult::Error(
+				LoadError,
+				TEXT("asset_not_found"),
+				404);
+		}
+
+		UEdGraph* SourceGraph = nullptr;
+		TSet<FGuid> RequestedIds;
+		TMap<FGuid, UEdGraphNode*> SourceNodesById;
+		TSet<UObject*> NodesToExport;
+		for (int32 Index = 0; Index < NodeIdValues->Num(); ++Index)
+		{
+			FString NodeIdText;
+			FGuid NodeId;
+			if (!(*NodeIdValues)[Index].IsValid()
+				|| !(*NodeIdValues)[Index]->TryGetString(NodeIdText)
+				|| !FGuid::Parse(NodeIdText, NodeId)
+				|| !NodeId.IsValid())
+			{
+				return FMCPToolResult::Error(
+					FString::Printf(
+						TEXT("nodeIds[%d] must be a nonzero node GUID."),
+						Index),
+					TEXT("invalid_params"),
+					422);
+			}
+			if (RequestedIds.Contains(NodeId))
+			{
+				return FMCPToolResult::Error(
+					FString::Printf(
+						TEXT("nodeIds contains duplicate GUID '%s'."),
+						*NodeId.ToString()),
+					TEXT("invalid_params"),
+					422);
+			}
+
+			UEdGraph* NodeGraph = nullptr;
+			UEdGraphNode* Node = MCPHelpers::FindNodeByGuid(
+				BP,
+				NodeIdText,
+				&NodeGraph);
+			if (!Node || !NodeGraph)
+			{
+				return FMCPToolResult::Error(
+					FString::Printf(
+						TEXT("Node '%s' was not found."),
+						*NodeIdText),
+					TEXT("node_not_found"),
+					404);
+			}
+			if (!Node->CanDuplicateNode())
+			{
+				return FMCPToolResult::Error(
+					FString::Printf(
+						TEXT("Node '%s' cannot be duplicated by its graph schema."),
+						*NodeIdText),
+					TEXT("node_not_duplicable"),
+					422);
+			}
+			if (SourceGraph && NodeGraph != SourceGraph)
+			{
+				return FMCPToolResult::Error(
+					TEXT("All nodes in one duplicate request must belong to the same graph."),
+					TEXT("graph_scope_mismatch"),
+					422);
+			}
+
+			SourceGraph = NodeGraph;
+			RequestedIds.Add(NodeId);
+			SourceNodesById.Add(NodeId, Node);
+			NodesToExport.Add(Node);
+		}
+
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard
+			Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(
+				Guard.GetErrorMessage(), Guard.GetErrorCode(), 422);
+		}
+		Guard.MarkMutationStarted();
+		SourceGraph->Modify();
+
+		FString ExportedText;
+		FEdGraphUtilities::ExportNodesToText(NodesToExport, ExportedText);
+		if (ExportedText.IsEmpty())
+		{
+			return RollbackDirectMutation(
+				Guard,
+				TEXT("The selected nodes could not be serialized for duplication."),
+				TEXT("node_duplicate_export_failed"));
+		}
+
+		TSet<UEdGraphNode*> ImportedNodes;
+		FEdGraphUtilities::ImportNodesFromText(
+			SourceGraph,
+			ExportedText,
+			ImportedNodes);
+		if (ImportedNodes.Num() != SourceNodesById.Num())
+		{
+			return RollbackDirectMutation(
+				Guard,
+				FString::Printf(
+					TEXT("Expected %d duplicated nodes but Unreal imported %d."),
+					SourceNodesById.Num(),
+					ImportedNodes.Num()),
+				TEXT("node_duplicate_import_failed"));
+		}
+
+		struct FDuplicateRecord
+		{
+			FGuid SourceId;
+			FGuid DuplicateId;
+			UEdGraphNode* Duplicate = nullptr;
+		};
+		TArray<FDuplicateRecord> Records;
+		Records.Reserve(ImportedNodes.Num());
+		bool bStructurallyModified = false;
+		for (UEdGraphNode* ImportedNode : ImportedNodes)
+		{
+			if (!ImportedNode
+				|| !ImportedNode->NodeGuid.IsValid()
+				|| !SourceNodesById.Contains(ImportedNode->NodeGuid))
+			{
+				return RollbackDirectMutation(
+					Guard,
+					TEXT("An imported node did not retain a source identity."),
+					TEXT("node_duplicate_identity_failed"));
+			}
+
+			const FGuid SourceId = ImportedNode->NodeGuid;
+			ImportedNode->Modify();
+			ImportedNode->NodePosX += OffsetX;
+			ImportedNode->NodePosY += OffsetY;
+			ImportedNode->CreateNewGuid();
+			if (!ImportedNode->NodeGuid.IsValid()
+				|| RequestedIds.Contains(ImportedNode->NodeGuid))
+			{
+				return RollbackDirectMutation(
+					Guard,
+					TEXT("Unreal did not assign a unique GUID to a duplicated node."),
+					TEXT("node_duplicate_identity_failed"));
+			}
+
+			if (const UK2Node* K2Node = Cast<UK2Node>(ImportedNode))
+			{
+				bStructurallyModified |=
+					K2Node->NodeCausesStructuralBlueprintChange();
+			}
+			Records.Add({SourceId, ImportedNode->NodeGuid, ImportedNode});
+		}
+
+		Records.Sort([](const FDuplicateRecord& Left, const FDuplicateRecord& Right)
+		{
+			return Left.SourceId.ToString() < Right.SourceId.ToString();
+		});
+		UEAIIntegration::Workflow::MarkBlueprintChanged(
+			BP,
+			Params,
+			bStructurallyModified);
+
+		bool bSaved = false;
+		bool bCompiled = false;
+		FMCPToolResult Failure;
+		if (!FinalizeDirectMutation(
+			BP, Params, Guard, bSaved, bCompiled, Failure))
+		{
+			return Failure;
+		}
+
+		TArray<TSharedPtr<FJsonValue>> MappingValues;
+		TArray<TSharedPtr<FJsonValue>> NodeValues;
+		for (const FDuplicateRecord& Record : Records)
+		{
+			UEdGraphNode* ReadBack = MCPHelpers::FindNodeByGuid(
+				BP,
+				Record.DuplicateId.ToString());
+			if (!ReadBack || ReadBack->GetGraph() != SourceGraph)
+			{
+				return FMCPToolResult::Error(
+					TEXT("A duplicated node was not present during read-back."),
+					TEXT("node_duplicate_readback_failed"),
+					500);
+			}
+
+			TSharedRef<FJsonObject> Mapping = MakeShared<FJsonObject>();
+			Mapping->SetStringField(
+				TEXT("sourceNodeId"), Record.SourceId.ToString());
+			Mapping->SetStringField(
+				TEXT("duplicateNodeId"), Record.DuplicateId.ToString());
+			MappingValues.Add(MakeShared<FJsonValueObject>(Mapping));
+			if (TSharedPtr<FJsonObject> NodeState =
+				MCPHelpers::SerializeNode(ReadBack))
+			{
+				NodeValues.Add(
+					MakeShared<FJsonValueObject>(NodeState.ToSharedRef()));
+			}
+		}
+
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), true);
+		Result->SetStringField(TEXT("blueprint"), BP->GetPathName());
+		Result->SetStringField(TEXT("graph"), SourceGraph->GetName());
+		Result->SetNumberField(TEXT("duplicatedCount"), Records.Num());
+		Result->SetNumberField(TEXT("offsetX"), OffsetX);
+		Result->SetNumberField(TEXT("offsetY"), OffsetY);
+		Result->SetArrayField(TEXT("nodeIdMappings"), MappingValues);
+		Result->SetArrayField(TEXT("nodes"), NodeValues);
+		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
+		Result->SetBoolField(
+			TEXT("deferredCompile"),
+			UEAIIntegration::Workflow::ShouldDeferCompile(Params));
+		return FMCPToolResult::Ok(Result);
 	}
 };
 
@@ -2239,14 +2722,144 @@ public:
 		FString AssetPath = Params->GetStringField(TEXT("assetPath"));
 		FString NewPath = Params->GetStringField(TEXT("newPath"));
 		if (AssetPath.IsEmpty() || NewPath.IsEmpty())
-			return FMCPToolResult::Error(TEXT("Missing required fields: assetPath, newPath"));
+		{
+			return FMCPToolResult::Error(
+				TEXT("Missing required fields: assetPath, newPath"),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (NewPath.EndsWith(TEXT("/")) || NewPath.Contains(TEXT("..")))
+		{
+			return FMCPToolResult::Error(
+				TEXT("newPath must identify one asset and may not contain '..'."),
+				TEXT("invalid_asset_path"),
+				422);
+		}
 
-		FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
-		// Stub: actual rename requires FAssetRenameData pipeline
+		FString LoadError;
+		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(AssetPath, LoadError);
+		if (!BP)
+		{
+			return FMCPToolResult::Error(
+				LoadError,
+				TEXT("asset_not_found"),
+				404);
+		}
+		const FString SourcePackageName = BP->GetOutermost()->GetName();
+		const FString SourceObjectPath = BP->GetPathName();
+
+		FString DestinationPackageName = NewPath;
+		if (DestinationPackageName.Contains(TEXT(".")))
+		{
+			DestinationPackageName =
+				FPackageName::ObjectPathToPackageName(DestinationPackageName);
+		}
+		if (!DestinationPackageName.StartsWith(TEXT("/")))
+		{
+			DestinationPackageName =
+				FPackageName::GetLongPackagePath(SourcePackageName)
+				+ TEXT("/") + DestinationPackageName;
+		}
+		if (!FPackageName::IsValidLongPackageName(DestinationPackageName))
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("newPath '%s' is not a valid long package name."),
+					*NewPath),
+				TEXT("invalid_asset_path"),
+				422);
+		}
+
+		const FString DestinationAssetName =
+			FPackageName::GetLongPackageAssetName(DestinationPackageName);
+		FText InvalidNameReason;
+		if (DestinationAssetName.IsEmpty()
+			|| !FName(*DestinationAssetName).IsValidObjectName(InvalidNameReason))
+		{
+			return FMCPToolResult::Error(
+				InvalidNameReason.IsEmpty()
+					? TEXT("newPath has an invalid asset name.")
+					: InvalidNameReason.ToString(),
+				TEXT("invalid_asset_path"),
+				422);
+		}
+
+		const FString DestinationObjectPath = FString::Printf(
+			TEXT("%s.%s"),
+			*DestinationPackageName,
+			*DestinationAssetName);
+		if (SourcePackageName.Equals(
+				DestinationPackageName,
+				ESearchCase::CaseSensitive))
+		{
+			TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+			Result->SetBoolField(TEXT("success"), true);
+			Result->SetBoolField(TEXT("renamed"), false);
+			Result->SetBoolField(TEXT("verified"), true);
+			Result->SetStringField(TEXT("oldPath"), SourceObjectPath);
+			Result->SetStringField(TEXT("newPath"), SourceObjectPath);
+			Result->SetStringField(TEXT("packagePath"), SourcePackageName);
+			return FMCPToolResult::Ok(Result);
+		}
+
+		IAssetRegistry& AssetRegistry =
+			FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+				TEXT("AssetRegistry")).Get();
+		if (FPackageName::DoesPackageExist(DestinationPackageName)
+			|| AssetRegistry.GetAssetByObjectPath(
+				FSoftObjectPath(DestinationObjectPath)).IsValid())
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("An asset already exists at '%s'."),
+					*DestinationPackageName),
+				TEXT("asset_already_exists"),
+				409);
+		}
+
+		FAssetToolsModule& AssetToolsModule =
+			FModuleManager::LoadModuleChecked<FAssetToolsModule>(
+				TEXT("AssetTools"));
+		TArray<FAssetRenameData> RenameData;
+		RenameData.Emplace(
+			BP,
+			FPackageName::GetLongPackagePath(DestinationPackageName),
+			DestinationAssetName);
+		const bool bRenameReportedSuccess =
+			AssetToolsModule.Get().RenameAssets(RenameData);
+		const FString ActualPackageName = BP->GetOutermost()->GetName();
+		const FString ActualObjectPath = BP->GetPathName();
+		const bool bVerified = bRenameReportedSuccess
+			&& ActualPackageName.Equals(
+				DestinationPackageName,
+				ESearchCase::CaseSensitive)
+			&& ActualObjectPath.Equals(
+				DestinationObjectPath,
+				ESearchCase::CaseSensitive);
+		if (!bVerified)
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Asset rename was not verified. Current path: '%s'."),
+					*ActualObjectPath),
+				bRenameReportedSuccess
+					? TEXT("asset_rename_verification_failed")
+					: TEXT("asset_rename_failed"),
+				500);
+		}
+
+		const FAssetData SourcePathState =
+			AssetRegistry.GetAssetByObjectPath(FSoftObjectPath(SourceObjectPath));
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
-		Result->SetStringField(TEXT("oldPath"), AssetPath);
-		Result->SetStringField(TEXT("newPath"), NewPath);
+		Result->SetBoolField(TEXT("renamed"), true);
+		Result->SetBoolField(TEXT("verified"), true);
+		Result->SetStringField(TEXT("oldPath"), SourceObjectPath);
+		Result->SetStringField(TEXT("newPath"), ActualObjectPath);
+		Result->SetStringField(TEXT("packagePath"), ActualPackageName);
+		Result->SetBoolField(
+			TEXT("redirectorCreated"),
+			SourcePathState.IsValid() && SourcePathState.IsRedirector());
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -2264,37 +2877,1758 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		FString BlueprintName = Params->GetStringField(TEXT("blueprint"));
-		FString VariableName = Params->GetStringField(TEXT("variable"));
-		FString Value = Params->GetStringField(TEXT("value"));
-		if (BlueprintName.IsEmpty() || VariableName.IsEmpty())
-			return FMCPToolResult::Error(TEXT("Missing required fields"));
+		FString BlueprintName;
+		FString VariableName;
+		FString Value;
+		if (!Params.IsValid()
+			|| !Params->TryGetStringField(
+				TEXT("blueprint"), BlueprintName)
+			|| !Params->TryGetStringField(
+				TEXT("variable"), VariableName)
+			|| !Params->TryGetStringField(TEXT("value"), Value)
+			|| BlueprintName.IsEmpty()
+			|| VariableName.IsEmpty())
+		{
+			return FMCPToolResult::Error(
+				TEXT("blueprint, variable, and value are required."),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (BlueprintName.Len() > 1024
+			|| VariableName.Len() > 256
+			|| Value.Len() > 65536)
+		{
+			return FMCPToolResult::Error(
+				TEXT("blueprint may contain at most 1024 characters, variable 256, and value 65536."),
+				TEXT("invalid_params"),
+				422);
+		}
 
 		FString LoadError;
 		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(BlueprintName, LoadError);
-		if (!BP) return FMCPToolResult::Error(LoadError);
+		if (!BP)
+		{
+			return FMCPToolResult::Error(
+				LoadError,
+				TEXT("asset_not_found"),
+				404);
+		}
 
 		if (!BP->GeneratedClass)
-			return FMCPToolResult::Error(TEXT("Blueprint has no generated class"));
+		{
+			return FMCPToolResult::Error(
+				TEXT("Blueprint has no generated class."),
+				TEXT("generated_class_unavailable"),
+				422);
+		}
 
 		UObject* CDO = BP->GeneratedClass->GetDefaultObject();
 		if (!CDO)
-			return FMCPToolResult::Error(TEXT("Could not get CDO"));
+		{
+			return FMCPToolResult::Error(
+				TEXT("Could not resolve the Blueprint class default object."),
+				TEXT("cdo_unavailable"),
+				422);
+		}
 
 		FProperty* Prop = BP->GeneratedClass->FindPropertyByName(FName(*VariableName));
 		if (!Prop)
-			return FMCPToolResult::Error(FString::Printf(TEXT("Variable '%s' not found"), *VariableName));
+		{
+			for (TFieldIterator<FProperty> It(BP->GeneratedClass); It; ++It)
+			{
+				if (It->GetName().Equals(
+						VariableName,
+						ESearchCase::IgnoreCase))
+				{
+					Prop = *It;
+					break;
+				}
+			}
+		}
+		if (!Prop)
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Property '%s' was not found on '%s'."),
+					*VariableName,
+					*BP->GeneratedClass->GetName()),
+				TEXT("property_not_found"),
+				404);
+		}
+		if (Prop->HasAnyPropertyFlags(
+			CPF_EditConst | CPF_Transient | CPF_DuplicateTransient
+			| CPF_NonPIEDuplicateTransient))
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Property '%s' is read-only or non-persistent."),
+					*Prop->GetName()),
+				TEXT("property_not_writable"),
+				422);
+		}
 
-		void* PropAddr = Prop->ContainerPtrToValuePtr<void>(CDO);
-		Prop->ImportText_Direct(*Value, PropAddr, CDO, PPF_None);
+		const FName PropertyName = Prop->GetFName();
+		auto ExportPropertyValue = [PropertyName](
+			UObject* Object,
+			FString& OutValue) -> bool
+		{
+			if (!Object)
+			{
+				return false;
+			}
+			FProperty* CurrentProperty =
+				Object->GetClass()->FindPropertyByName(PropertyName);
+			if (!CurrentProperty)
+			{
+				return false;
+			}
+			void* Address =
+				CurrentProperty->ContainerPtrToValuePtr<void>(Object);
+			OutValue.Reset();
+			CurrentProperty->ExportText_Direct(
+				OutValue,
+				Address,
+				Address,
+				Object,
+				PPF_None);
+			return true;
+		};
+		auto ImportPropertyValue = [PropertyName](
+			UObject* Object,
+			const FString& SerializedValue,
+			FString& OutNormalizedValue) -> bool
+		{
+			if (!Object)
+			{
+				return false;
+			}
+			FProperty* CurrentProperty =
+				Object->GetClass()->FindPropertyByName(PropertyName);
+			if (!CurrentProperty)
+			{
+				return false;
+			}
+			return ImportBlueprintPropertyText(
+				Object,
+				CurrentProperty,
+				SerializedValue,
+				true,
+				OutNormalizedValue);
+		};
 
-		bool bSaved = MCPHelpers::CompileAndSaveBlueprintPackage(BP);
+		FString OldValue;
+		if (!ExportPropertyValue(CDO, OldValue))
+		{
+			return FMCPToolResult::Error(
+				TEXT("Could not serialize the current CDO property value."),
+				TEXT("property_read_failed"),
+				500);
+		}
+		FString ExpectedValue;
+		if (!ImportBlueprintPropertyText(
+			CDO,
+			Prop,
+			Value,
+			false,
+			ExpectedValue))
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Property '%s' rejected the supplied Unreal text value."),
+					*PropertyName.ToString()),
+				TEXT("property_value_invalid"),
+				422);
+		}
+
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard
+			Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(
+				Guard.GetErrorMessage(), Guard.GetErrorCode(), 422);
+		}
+		Guard.MarkMutationStarted();
+		BP->Modify();
+
+		auto ResolveCurrentCDO = [BP]() -> UObject*
+		{
+			return BP && BP->GeneratedClass
+				? BP->GeneratedClass->GetDefaultObject()
+				: nullptr;
+		};
+		auto RestoreOldValue = [&]() -> bool
+		{
+			FString Ignored;
+			return ImportPropertyValue(
+				ResolveCurrentCDO(),
+				OldValue,
+				Ignored);
+		};
+		auto FailAndRollback = [&](
+			const FString& Message,
+			const FString& Code) -> FMCPToolResult
+		{
+			const bool bValueRestored = RestoreOldValue();
+			FString RollbackError;
+			const bool bGuardRestored = Guard.Rollback(RollbackError);
+			if (!bValueRestored || !bGuardRestored)
+			{
+				return FMCPToolResult::Error(
+					Message + TEXT(" The previous default could not be fully restored. ")
+					+ RollbackError,
+					TEXT("rollback_failed"),
+					500);
+			}
+			return FMCPToolResult::Error(
+				Message + TEXT(" The mutation was rolled back and verified."),
+				Code,
+				500);
+		};
+
+		FString AppliedValue;
+		if (!ImportPropertyValue(CDO, Value, AppliedValue)
+			|| AppliedValue != ExpectedValue)
+		{
+			return FailAndRollback(
+				FString::Printf(
+					TEXT("Property '%s' rejected the supplied Unreal text value."),
+					*PropertyName.ToString()),
+				TEXT("property_value_invalid"));
+		}
+		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, false);
+
+		const bool bDeferred =
+			UEAIIntegration::Workflow::ShouldDeferCompile(Params);
+		bool bCompiled = false;
+		bool bSaved = false;
+		if (!bDeferred)
+		{
+			FKismetEditorUtilities::CompileBlueprint(
+				BP,
+				EBlueprintCompileOptions::SkipSave);
+			bCompiled = BP->Status != BS_Error;
+			if (!bCompiled)
+			{
+				return FailAndRollback(
+					TEXT("The CDO property change introduced Blueprint compile errors."),
+					TEXT("asset_compile_failed"));
+			}
+		}
+
+		FString ReadBackValue;
+		if (!ExportPropertyValue(ResolveCurrentCDO(), ReadBackValue)
+			|| ReadBackValue != ExpectedValue)
+		{
+			return FailAndRollback(
+				TEXT("The CDO property value did not survive read-back."),
+				TEXT("property_persistence_failed"));
+		}
+		if (!bDeferred)
+		{
+			UEAIIntegration::Infrastructure::FBlueprintPersistenceError SaveError;
+			bSaved = UEAIIntegration::Infrastructure::SaveBlueprintPackage(
+				BP,
+				nullptr,
+				SaveError);
+			if (!bSaved)
+			{
+				return FailAndRollback(
+					SaveError.Message.IsEmpty()
+						? TEXT("The CDO property change could not be saved.")
+						: SaveError.Message,
+					SaveError.Code.IsEmpty()
+						? TEXT("asset_save_failed")
+						: SaveError.Code);
+			}
+		}
+		Guard.Commit();
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
-		Result->SetStringField(TEXT("blueprint"), BlueprintName);
-		Result->SetStringField(TEXT("variable"), VariableName);
+		Result->SetStringField(TEXT("blueprint"), BP->GetPathName());
+		Result->SetStringField(TEXT("variable"), PropertyName.ToString());
+		Result->SetStringField(TEXT("oldValue"), OldValue);
+		Result->SetStringField(TEXT("newValue"), ReadBackValue);
 		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
+		Result->SetBoolField(TEXT("deferredCompile"), bDeferred);
+		return FMCPToolResult::Ok(Result);
+	}
+};
+
+// ============================================================
+// Bulk graph authoring + pin promotion helpers
+// ============================================================
+namespace
+{
+UEdGraph* ResolveTargetGraph(UBlueprint* Blueprint, const FString& GraphName)
+{
+	if (!Blueprint)
+	{
+		return nullptr;
+	}
+	if (GraphName.IsEmpty())
+	{
+		for (UEdGraph* Graph : Blueprint->UbergraphPages)
+		{
+			if (Graph)
+			{
+				return Graph;
+			}
+		}
+		TArray<UEdGraph*> AllGraphs;
+		Blueprint->GetAllGraphs(AllGraphs);
+		for (UEdGraph* Graph : AllGraphs)
+		{
+			if (Graph)
+			{
+				return Graph;
+			}
+		}
+		return nullptr;
+	}
+	const FString DecodedGraphName = MCPHelpers::UrlDecode(GraphName);
+	TArray<UEdGraph*> AllGraphs;
+	Blueprint->GetAllGraphs(AllGraphs);
+	for (UEdGraph* Graph : AllGraphs)
+	{
+		if (Graph && Graph->GetName().Equals(DecodedGraphName, ESearchCase::IgnoreCase))
+		{
+			return Graph;
+		}
+	}
+	return nullptr;
+}
+
+// Compiles, saves, and commits a guarded mutation while keeping the surrounding
+// FScopedTransaction alive so a compile/save failure can still cancel it before
+// the deep snapshot rollback runs.  Reuses the same persistence + rollback
+// primitives as FinalizeDirectMutation.
+FMCPToolResult FinalizeGuardedMutation(
+	UBlueprint* Blueprint,
+	const TSharedPtr<FJsonObject>& Params,
+	UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard& Guard,
+	FScopedTransaction& Transaction,
+	bool& OutSaved,
+	bool& OutCompiled)
+{
+	OutSaved = false;
+	OutCompiled = false;
+	if (UEAIIntegration::Workflow::ShouldDeferCompile(Params))
+	{
+		Guard.Commit();
+		return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+	}
+	FKismetEditorUtilities::CompileBlueprint(
+		Blueprint,
+		EBlueprintCompileOptions::SkipSave);
+	OutCompiled = Blueprint->Status != BS_Error;
+	if (!OutCompiled)
+	{
+		Transaction.Cancel();
+		return RollbackDirectMutation(
+			Guard,
+			TEXT("The Blueprint mutation introduced compile errors."),
+			TEXT("asset_compile_failed"));
+	}
+	UEAIIntegration::Infrastructure::FBlueprintPersistenceError SaveError;
+	OutSaved = UEAIIntegration::Infrastructure::SaveBlueprintPackage(
+		Blueprint,
+		nullptr,
+		SaveError);
+	if (!OutSaved)
+	{
+		Transaction.Cancel();
+		return RollbackDirectMutation(
+			Guard,
+			SaveError.Message.IsEmpty()
+				? TEXT("The Blueprint mutation could not be saved.")
+				: SaveError.Message,
+			SaveError.Code.IsEmpty()
+				? TEXT("asset_save_failed")
+				: SaveError.Code);
+	}
+	Guard.Commit();
+	return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+}
+
+// Validates and applies one unlinked input-pin default.  Mirrors the validation
+// and persistence primitives of blueprint.pin.default.set; the caller owns the
+// transaction, compile, and read-back.
+FMCPToolResult TrySetSinglePinDefault(
+	UEdGraphNode* Node,
+	UEdGraphPin* Pin,
+	const UEdGraphSchema* Schema,
+	const FString& Value,
+	const bool bDeferred)
+{
+	if (!Node || !Pin || !Schema)
+	{
+		return FMCPToolResult::Error(
+			TEXT("The pin default target could not be resolved."),
+			TEXT("pin_not_found"),
+			404);
+	}
+	if (Pin->Direction != EGPD_Input)
+	{
+		return FMCPToolResult::Error(
+			TEXT("Can only set defaults on input pins."),
+			TEXT("pin_default_unsupported"),
+			422);
+	}
+	if (!Pin->LinkedTo.IsEmpty())
+	{
+		return FMCPToolResult::Error(
+			TEXT("Linked pins cannot accept a default value."),
+			TEXT("pin_linked"),
+			409);
+	}
+	if (Pin->PinType.bIsReference)
+	{
+		return FMCPToolResult::Error(
+			TEXT("By-reference pins cannot accept a persisted default value."),
+			TEXT("pin_by_ref"),
+			422);
+	}
+	if (Pin->bDefaultValueIsReadOnly)
+	{
+		return FMCPToolResult::Error(
+			TEXT("The pin default is read-only."),
+			TEXT("pin_default_read_only"),
+			409);
+	}
+	if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Wildcard)
+	{
+		return FMCPToolResult::Error(
+			TEXT("Wildcard pins must be resolved before setting a default."),
+			TEXT("pin_type_unresolved"),
+			422);
+	}
+	const FString ValidationError = Schema->IsPinDefaultValid(
+		Pin,
+		Value,
+		nullptr,
+		FText::GetEmpty());
+	if (!ValidationError.IsEmpty())
+	{
+		return FMCPToolResult::Error(
+			ValidationError,
+			TEXT("pin_default_invalid"),
+			422);
+	}
+	Node->Modify();
+	Schema->TrySetDefaultValue(*Pin, Value, !bDeferred);
+	if (!Schema->DoesDefaultValueMatch(*Pin, Value)
+		|| !Schema->IsCurrentPinDefaultValid(Pin).IsEmpty())
+	{
+		return FMCPToolResult::Error(
+			TEXT("The graph schema rejected or changed the requested pin default."),
+			TEXT("pin_default_persistence_failed"),
+			500);
+	}
+	return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+}
+} // namespace
+
+// ============================================================
+// promote_pin
+// ============================================================
+class FTool_PromotePin : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("blueprint.pin.promote");
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		const FString BlueprintName = Params->GetStringField(TEXT("blueprint"));
+		const FString NodeId = Params->GetStringField(TEXT("nodeId"));
+		FString PinName;
+		FString RequestedPinId;
+		Params->TryGetStringField(TEXT("pinName"), PinName);
+		Params->TryGetStringField(TEXT("pinId"), RequestedPinId);
+		if (BlueprintName.IsEmpty() || NodeId.IsEmpty()
+			|| (PinName.IsEmpty() && RequestedPinId.IsEmpty()))
+		{
+			return FMCPToolResult::Error(
+				TEXT("blueprint, nodeId, and either pinId or pinName are required."),
+				TEXT("invalid_params"),
+				422);
+		}
+		FGuid ParsedNodeId;
+		FGuid ParsedPinId;
+		const bool bUsePinId = Params->HasField(TEXT("pinId"));
+		if (!FGuid::Parse(NodeId, ParsedNodeId) || !ParsedNodeId.IsValid()
+			|| (bUsePinId && (!FGuid::Parse(RequestedPinId, ParsedPinId) || !ParsedPinId.IsValid())))
+		{
+			return FMCPToolResult::Error(
+				TEXT("nodeId and optional pinId must be nonzero GUIDs."),
+				TEXT("invalid_params"),
+				422);
+		}
+
+		FString LoadError;
+		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(BlueprintName, LoadError);
+		if (!BP) return FMCPToolResult::Error(LoadError, TEXT("asset_not_found"), 404);
+
+		UEdGraph* Graph = nullptr;
+		UEdGraphNode* Node = MCPHelpers::FindNodeByGuid(BP, NodeId, &Graph);
+		if (!Node) return FMCPToolResult::Error(TEXT("Node not found"), TEXT("node_not_found"), 404);
+		if (!Graph) return FMCPToolResult::Error(TEXT("The node's graph could not be resolved."), TEXT("graph_not_found"), 404);
+
+		bool bAmbiguousPin = false;
+		UEdGraphPin* Pin = FindUniquePinByIdentity(
+			Node, bUsePinId ? &ParsedPinId : nullptr, FName(*PinName), bAmbiguousPin);
+		if (bAmbiguousPin)
+		{
+			return FMCPToolResult::Error(
+				bUsePinId
+					? TEXT("The node contains duplicate pin IDs. Reconstruct the node and query blueprint.graph.get again.")
+					: TEXT("The node has multiple pins with this name. Use pinId from blueprint.graph.get."),
+				TEXT("pin_ambiguous"),
+				409);
+		}
+		if (!Pin)
+		{
+			return FMCPToolResult::Error(
+				TEXT("Pin not found on the selected node. Query blueprint.graph.get for current pin identities."),
+				TEXT("pin_not_found"),
+				404);
+		}
+		if (!PinName.IsEmpty() && Pin->PinName != FName(*PinName))
+		{
+			return FMCPToolResult::Error(
+				TEXT("pinId and pinName refer to different pins. Query blueprint.graph.get again."),
+				TEXT("pin_identity_mismatch"),
+				409);
+		}
+		PinName = Pin->PinName.ToString();
+
+		if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+			return FMCPToolResult::Error(
+				TEXT("Cannot promote execution (exec) pins to variables."),
+				TEXT("pin_promote_unsupported"),
+				422);
+		if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Wildcard)
+			return FMCPToolResult::Error(
+				TEXT("Cannot promote wildcard pins to variables — resolve the type first."),
+				TEXT("pin_type_unresolved"),
+				422);
+		if (Pin->PinType.ContainerType != EPinContainerType::None)
+			return FMCPToolResult::Error(
+				TEXT("Container types (Array, Map, Set) are not supported by pin promotion."),
+				TEXT("pin_container_unsupported"),
+				422);
+
+		FString VariableName;
+		if (!Params->TryGetStringField(TEXT("variableName"), VariableName)
+			|| VariableName.IsEmpty())
+		{
+			VariableName = PinName;
+		}
+		for (const FBPVariableDescription& Existing : BP->NewVariables)
+		{
+			if (Existing.VarName == FName(*VariableName))
+			{
+				return FMCPToolResult::Error(
+					FString::Printf(TEXT("A variable named '%s' already exists in this Blueprint."), *VariableName),
+					TEXT("variable_exists"),
+					409);
+			}
+		}
+
+		const FGuid SelectedPinId = Pin->PinId;
+		TArray<UEdGraphPin*> LinkedPins;
+		for (UEdGraphPin* Linked : Pin->LinkedTo)
+		{
+			if (Linked) LinkedPins.Add(Linked);
+		}
+
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(Guard.GetErrorMessage(), Guard.GetErrorCode(), 422);
+		}
+		FScopedTransaction Transaction(NSLOCTEXT("UEAIIntegration", "PromotePin", "Promote Pin To Variable"));
+		Guard.MarkMutationStarted();
+		BP->Modify();
+		Graph->Modify();
+
+		// Match the native promote semantics: strip const/ref/weak flags before
+		// the member variable is created.
+		FEdGraphPinType VariableType = Pin->PinType;
+		VariableType.bIsConst = false;
+		VariableType.bIsReference = false;
+		VariableType.bIsWeakPointer = false;
+		if (!FBlueprintEditorUtils::AddMemberVariable(BP, FName(*VariableName), VariableType))
+		{
+			Transaction.Cancel();
+			return RollbackDirectMutation(
+				Guard,
+				FString::Printf(TEXT("Failed to add variable '%s' — a variable with that name may already exist."), *VariableName),
+				TEXT("variable_add_failed"));
+		}
+
+		// Adding a variable can regenerate the skeleton and reconstruct nodes,
+		// so re-resolve the source pin before rewiring.
+		UEdGraphNode* SourceNode = MCPHelpers::FindNodeByGuid(BP, NodeId, nullptr);
+		bool bAmbiguousNow = false;
+		UEdGraphPin* SourcePin = FindUniquePinByIdentity(
+			SourceNode, &SelectedPinId, NAME_None, bAmbiguousNow);
+		if (!SourcePin && !PinName.IsEmpty())
+		{
+			SourcePin = FindUniquePinByIdentity(
+				SourceNode, nullptr, FName(*PinName), bAmbiguousNow);
+		}
+		if (!SourceNode || !SourcePin || bAmbiguousNow)
+		{
+			Transaction.Cancel();
+			return RollbackDirectMutation(
+				Guard,
+				TEXT("The promoted pin could not be re-resolved after adding the variable."),
+				TEXT("pin_resolution_failed"));
+		}
+
+		const EEdGraphPinDirection PinDir = SourcePin->Direction;
+		const int32 AccessorPosX = SourceNode->NodePosX + (PinDir == EGPD_Output ? 200 : -200);
+		const int32 AccessorPosY = SourceNode->NodePosY;
+		const UEdGraphSchema* Schema = Graph->GetSchema();
+		UEdGraphNode* AccessorNode = nullptr;
+		UEdGraphPin* RewiredPin = nullptr;
+		int32 ConnectionsMade = 0;
+		if (PinDir == EGPD_Output)
+		{
+			UK2Node_VariableGet* GetNode = NewObject<UK2Node_VariableGet>(
+				Graph, NAME_None, RF_Transactional);
+			GetNode->Modify();
+			GetNode->VariableReference.SetSelfMember(FName(*VariableName));
+			GetNode->NodePosX = AccessorPosX; GetNode->NodePosY = AccessorPosY;
+			Graph->AddNode(GetNode, false, false);
+			GetNode->AllocateDefaultPins();
+			AccessorNode = GetNode;
+		}
+		else
+		{
+			UK2Node_VariableSet* SetNode = NewObject<UK2Node_VariableSet>(
+				Graph, NAME_None, RF_Transactional);
+			SetNode->Modify();
+			SetNode->VariableReference.SetSelfMember(FName(*VariableName));
+			SetNode->NodePosX = AccessorPosX; SetNode->NodePosY = AccessorPosY;
+			Graph->AddNode(SetNode, false, false);
+			SetNode->AllocateDefaultPins();
+			AccessorNode = SetNode;
+		}
+		if (!AccessorNode)
+		{
+			Transaction.Cancel();
+			return RollbackDirectMutation(
+				Guard,
+				TEXT("Failed to create the variable accessor node."),
+				TEXT("execution_failed"));
+		}
+		if (!AccessorNode->NodeGuid.IsValid())
+		{
+			AccessorNode->CreateNewGuid();
+		}
+		for (UEdGraphPin* P : AccessorNode->Pins)
+		{
+			if (P && P->Direction == (PinDir == EGPD_Output ? EGPD_Output : EGPD_Input)
+				&& P->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+			{
+				RewiredPin = P;
+				break;
+			}
+		}
+
+		SourcePin->BreakAllPinLinks(true);
+		if (RewiredPin && Schema)
+		{
+			const bool bDeferred = UEAIIntegration::Workflow::ShouldDeferCompile(Params);
+			for (UEdGraphPin* Other : LinkedPins)
+			{
+				const bool bMade = PinDir == EGPD_Output
+					? UEAIIntegration::Infrastructure::TryCreateConnection(Schema, RewiredPin, Other, bDeferred)
+					: UEAIIntegration::Infrastructure::TryCreateConnection(Schema, Other, RewiredPin, bDeferred);
+				if (bMade)
+				{
+					ConnectionsMade++;
+				}
+			}
+		}
+
+		if (ConnectionsMade != LinkedPins.Num())
+		{
+			// A partial re-wire would silently drop a prior connection; roll
+			// back instead of reporting success.
+			Transaction.Cancel();
+			return RollbackDirectMutation(
+				Guard,
+				TEXT("The pin promote did not re-wire every prior connection."),
+				TEXT("promote_rewire_incomplete"));
+		}
+
+		const FGuid AccessorGuid = AccessorNode->NodeGuid;
+		const bool bPromotedOutput = (PinDir == EGPD_Output);
+		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, true);
+
+		bool bSaved = false;
+		bool bCompiled = false;
+		const FMCPToolResult Finalize = FinalizeGuardedMutation(
+			BP, Params, Guard, Transaction, bSaved, bCompiled);
+		if (!Finalize.bSuccess)
+		{
+			return Finalize;
+		}
+
+		UEdGraphNode* ReadBackAccessor = MCPHelpers::FindNodeByGuid(BP, AccessorGuid.ToString());
+		UEdGraphPin* ReadBackRewiredPin = nullptr;
+		if (ReadBackAccessor)
+		{
+			for (UEdGraphPin* P : ReadBackAccessor->Pins)
+			{
+				if (P && P->Direction == (bPromotedOutput ? EGPD_Output : EGPD_Input)
+					&& P->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec)
+				{
+					ReadBackRewiredPin = P;
+					break;
+				}
+			}
+		}
+
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), true);
+		Result->SetStringField(TEXT("blueprint"), BP->GetPathName());
+		Result->SetStringField(TEXT("variableName"), VariableName);
+		Result->SetObjectField(TEXT("variableType"), MCPHelpers::SerializePinType(VariableType));
+		Result->SetStringField(TEXT("accessorNodeId"), AccessorGuid.ToString());
+		Result->SetStringField(TEXT("accessorKind"), bPromotedOutput ? TEXT("VariableGet") : TEXT("VariableSet"));
+		if (ReadBackRewiredPin)
+		{
+			TSharedRef<FJsonObject> Rewired = MakeShared<FJsonObject>();
+			Rewired->SetStringField(TEXT("pinId"), ReadBackRewiredPin->PinId.ToString());
+			Rewired->SetStringField(TEXT("pinName"), ReadBackRewiredPin->PinName.ToString());
+			Rewired->SetNumberField(TEXT("linkedCount"), ReadBackRewiredPin->LinkedTo.Num());
+			Result->SetObjectField(TEXT("rewiredPin"), Rewired);
+		}
+		Result->SetNumberField(TEXT("connectionsMade"), ConnectionsMade);
+		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
+		Result->SetBoolField(TEXT("deferredCompile"), UEAIIntegration::Workflow::ShouldDeferCompile(Params));
+		return FMCPToolResult::Ok(Result);
+	}
+};
+
+// ============================================================
+// bulk_add_nodes
+// ============================================================
+class FTool_BulkAddNodes : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("blueprint.node.bulk.add");
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		const FString BlueprintName = Params->GetStringField(TEXT("blueprint"));
+		const TArray<TSharedPtr<FJsonValue>>* NodesValues = nullptr;
+		if (BlueprintName.IsEmpty()
+			|| !Params->TryGetArrayField(TEXT("nodes"), NodesValues)
+			|| !NodesValues || NodesValues->IsEmpty())
+		{
+			return FMCPToolResult::Error(
+				TEXT("blueprint and a non-empty nodes array are required."),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (NodesValues->Num() > 64)
+		{
+			return FMCPToolResult::Error(
+				TEXT("nodes is limited to 64 nodes per request."),
+				TEXT("request_too_large"),
+				422);
+		}
+
+		FString GraphName;
+		Params->TryGetStringField(TEXT("graph"), GraphName);
+
+		FString LoadError;
+		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(BlueprintName, LoadError);
+		if (!BP) return FMCPToolResult::Error(LoadError, TEXT("asset_not_found"), 404);
+
+		UEdGraph* TargetGraph = ResolveTargetGraph(BP, GraphName);
+		if (!TargetGraph)
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(TEXT("Graph '%s' not found"), GraphName.IsEmpty() ? TEXT("EventGraph") : *GraphName),
+				TEXT("graph_not_found"),
+				404);
+		}
+
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(Guard.GetErrorMessage(), Guard.GetErrorCode(), 422);
+		}
+		FScopedTransaction Transaction(NSLOCTEXT("UEAIIntegration", "BulkAddNodes", "Bulk Add Blueprint Nodes"));
+		Guard.MarkMutationStarted();
+		TargetGraph->Modify();
+
+		const bool bDeferred = UEAIIntegration::Workflow::ShouldDeferCompile(Params);
+		TArray<FGuid> AddedGuids;
+		for (int32 Index = 0; Index < NodesValues->Num(); ++Index)
+		{
+			const TSharedPtr<FJsonValue>& Value = (*NodesValues)[Index];
+			const TSharedPtr<FJsonObject>* Entry = nullptr;
+			if (!Value.IsValid() || !Value->TryGetObject(Entry) || !Entry || !Entry->IsValid())
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("nodes[%d] must be an object."), Index),
+					TEXT("invalid_params"));
+			}
+
+			// Build sub-params for the shared single-node resolution.  The
+			// canonical kind field is nodeType; 'class' is the bulk alias.
+			TSharedRef<FJsonObject> SubParams = MakeShared<FJsonObject>();
+			for (const auto& Pair : (*Entry)->Values)
+			{
+				SubParams->SetField(Pair.Key, Pair.Value);
+			}
+			FString NodeKind;
+			SubParams->TryGetStringField(TEXT("nodeType"), NodeKind);
+			if (NodeKind.IsEmpty())
+			{
+				SubParams->TryGetStringField(TEXT("class"), NodeKind);
+			}
+			if (NodeKind.IsEmpty())
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("nodes[%d] requires 'class' or 'nodeType'."), Index),
+					TEXT("invalid_params"));
+			}
+			SubParams->SetStringField(TEXT("nodeType"), NodeKind);
+
+			int32 PosX = 0;
+			int32 PosY = 0;
+			const TArray<TSharedPtr<FJsonValue>>* Position = nullptr;
+			if (SubParams->TryGetArrayField(TEXT("position"), Position) && Position && Position->Num() >= 2
+				&& (*Position)[0].IsValid() && (*Position)[1].IsValid()
+				&& (*Position)[0]->Type == EJson::Number && (*Position)[1]->Type == EJson::Number)
+			{
+				PosX = static_cast<int32>((*Position)[0]->AsNumber());
+				PosY = static_cast<int32>((*Position)[1]->AsNumber());
+			}
+
+			UEdGraphNode* NewNode = nullptr;
+			const FMCPToolResult CreateResult = TryCreateNodeInGraph(
+				BP, TargetGraph, SubParams, PosX, PosY, bDeferred, NewNode);
+			if (!CreateResult.bSuccess)
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					CreateResult.ErrorMessage,
+					CreateResult.ErrorCode);
+			}
+			AddedGuids.Add(NewNode->NodeGuid);
+		}
+
+		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, true);
+		bool bSaved = false;
+		bool bCompiled = false;
+		const FMCPToolResult Finalize = FinalizeGuardedMutation(
+			BP, Params, Guard, Transaction, bSaved, bCompiled);
+		if (!Finalize.bSuccess)
+		{
+			return Finalize;
+		}
+
+		TArray<TSharedPtr<FJsonValue>> NodeValues;
+		for (const FGuid& Guid : AddedGuids)
+		{
+			UEdGraphNode* ReadBack = MCPHelpers::FindNodeByGuid(BP, Guid.ToString());
+			if (ReadBack && ReadBack->GetGraph() == TargetGraph)
+			{
+				if (TSharedPtr<FJsonObject> NodeState = MCPHelpers::SerializeNode(ReadBack))
+				{
+					NodeValues.Add(MakeShared<FJsonValueObject>(NodeState.ToSharedRef()));
+				}
+			}
+		}
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), true);
+		Result->SetStringField(TEXT("blueprint"), BP->GetPathName());
+		Result->SetStringField(TEXT("graph"), TargetGraph->GetName());
+		Result->SetNumberField(TEXT("addedCount"), AddedGuids.Num());
+		Result->SetArrayField(TEXT("nodes"), NodeValues);
+		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
+		Result->SetBoolField(TEXT("deferredCompile"), UEAIIntegration::Workflow::ShouldDeferCompile(Params));
+		return FMCPToolResult::Ok(Result);
+	}
+};
+
+// ============================================================
+// bulk_connect_pins
+// ============================================================
+class FTool_BulkConnectPins : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("blueprint.pin.bulk.connect");
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		const FString BlueprintName = Params->GetStringField(TEXT("blueprint"));
+		const TArray<TSharedPtr<FJsonValue>>* Connections = nullptr;
+		if (BlueprintName.IsEmpty()
+			|| !Params->TryGetArrayField(TEXT("connections"), Connections)
+			|| !Connections || Connections->IsEmpty())
+		{
+			return FMCPToolResult::Error(
+				TEXT("blueprint and a non-empty connections array are required."),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (Connections->Num() > 256)
+		{
+			return FMCPToolResult::Error(
+				TEXT("connections is limited to 256 pairs per request."),
+				TEXT("request_too_large"),
+				422);
+		}
+
+		FString LoadError;
+		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(BlueprintName, LoadError);
+		if (!BP) return FMCPToolResult::Error(LoadError, TEXT("asset_not_found"), 404);
+
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(Guard.GetErrorMessage(), Guard.GetErrorCode(), 422);
+		}
+		FScopedTransaction Transaction(NSLOCTEXT("UEAIIntegration", "BulkConnectPins", "Bulk Connect Blueprint Pins"));
+		Guard.MarkMutationStarted();
+
+		const bool bDeferred = UEAIIntegration::Workflow::ShouldDeferCompile(Params);
+		TArray<TSharedPtr<FJsonValue>> ConnectionRows;
+		for (int32 Index = 0; Index < Connections->Num(); ++Index)
+		{
+			const TSharedPtr<FJsonValue>& Value = (*Connections)[Index];
+			const TSharedPtr<FJsonObject>* Entry = nullptr;
+			if (!Value.IsValid() || !Value->TryGetObject(Entry) || !Entry || !Entry->IsValid())
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("connections[%d] must be an object."), Index),
+					TEXT("invalid_params"));
+			}
+			const FString SourceNodeId = (*Entry)->GetStringField(TEXT("sourceNodeId"));
+			const FString SourcePinName = (*Entry)->GetStringField(TEXT("sourcePinName"));
+			const FString TargetNodeId = (*Entry)->GetStringField(TEXT("targetNodeId"));
+			const FString TargetPinName = (*Entry)->GetStringField(TEXT("targetPinName"));
+			if (SourceNodeId.IsEmpty() || SourcePinName.IsEmpty() || TargetNodeId.IsEmpty() || TargetPinName.IsEmpty())
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("connections[%d] requires sourceNodeId, sourcePinName, targetNodeId, targetPinName."), Index),
+					TEXT("invalid_params"));
+			}
+
+			UEdGraph* SourceGraph = nullptr;
+			UEdGraphNode* SourceNode = MCPHelpers::FindNodeByGuid(BP, SourceNodeId, &SourceGraph);
+			if (!SourceNode)
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("connections[%d]: source node '%s' not found."), Index, *SourceNodeId),
+					TEXT("node_not_found"));
+			}
+			UEdGraphNode* TargetNode = MCPHelpers::FindNodeByGuid(BP, TargetNodeId);
+			if (!TargetNode)
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("connections[%d]: target node '%s' not found."), Index, *TargetNodeId),
+					TEXT("node_not_found"));
+			}
+			UEdGraphPin* SourcePin = SourceNode->FindPin(FName(*SourcePinName));
+			if (!SourcePin)
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("connections[%d]: source pin '%s' not found."), Index, *SourcePinName),
+					TEXT("pin_not_found"));
+			}
+			UEdGraphPin* TargetPin = TargetNode->FindPin(FName(*TargetPinName));
+			if (!TargetPin)
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("connections[%d]: target pin '%s' not found."), Index, *TargetPinName),
+					TEXT("pin_not_found"));
+			}
+			if (SourcePin == TargetPin)
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("connections[%d]: a pin cannot be connected to itself."), Index),
+					TEXT("pin_self_connection"));
+			}
+			if (SourcePin->LinkedTo.Contains(TargetPin) || TargetPin->LinkedTo.Contains(SourcePin))
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("connections[%d]: the pins are already connected."), Index),
+					TEXT("pin_already_connected"));
+			}
+			const UEdGraphSchema* Schema = SourceGraph ? SourceGraph->GetSchema() : nullptr;
+			if (!Schema)
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("connections[%d]: the graph schema is unavailable."), Index),
+					TEXT("schema_unavailable"));
+			}
+
+			SourceNode->Modify();
+			TargetNode->Modify();
+			const bool bConnected = UEAIIntegration::Infrastructure::TryCreateConnection(
+				Schema, SourcePin, TargetPin, bDeferred);
+			if (!bConnected)
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("connections[%d]: the schema rejected the connection (incompatible or would create a cycle)."), Index),
+					TEXT("pin_connection_rejected"));
+			}
+
+			TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+			Row->SetNumberField(TEXT("index"), Index);
+			Row->SetStringField(TEXT("sourceNodeId"), SourceNodeId);
+			Row->SetStringField(TEXT("sourcePinName"), SourcePinName);
+			Row->SetStringField(TEXT("targetNodeId"), TargetNodeId);
+			Row->SetStringField(TEXT("targetPinName"), TargetPinName);
+			ConnectionRows.Add(MakeShared<FJsonValueObject>(Row));
+		}
+
+		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, false);
+		bool bSaved = false;
+		bool bCompiled = false;
+		const FMCPToolResult Finalize = FinalizeGuardedMutation(
+			BP, Params, Guard, Transaction, bSaved, bCompiled);
+		if (!Finalize.bSuccess)
+		{
+			return Finalize;
+		}
+
+		for (TSharedPtr<FJsonValue>& RowValue : ConnectionRows)
+		{
+			const TSharedPtr<FJsonObject> Row = RowValue->AsObject();
+			if (!Row.IsValid()) continue;
+			UEdGraphNode* SourceNode = MCPHelpers::FindNodeByGuid(
+				BP, Row->GetStringField(TEXT("sourceNodeId")));
+			UEdGraphNode* TargetNode = MCPHelpers::FindNodeByGuid(
+				BP, Row->GetStringField(TEXT("targetNodeId")));
+			UEdGraphPin* SourcePin = SourceNode
+				? SourceNode->FindPin(FName(*Row->GetStringField(TEXT("sourcePinName"))))
+				: nullptr;
+			UEdGraphPin* TargetPin = TargetNode
+				? TargetNode->FindPin(FName(*Row->GetStringField(TEXT("targetPinName"))))
+				: nullptr;
+			Row->SetBoolField(
+				TEXT("verified"),
+				SourcePin && TargetPin && SourcePin->LinkedTo.Contains(TargetPin));
+		}
+
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), true);
+		Result->SetStringField(TEXT("blueprint"), BP->GetPathName());
+		Result->SetNumberField(TEXT("connectedCount"), ConnectionRows.Num());
+		Result->SetArrayField(TEXT("connections"), ConnectionRows);
+		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
+		Result->SetBoolField(TEXT("deferredCompile"), UEAIIntegration::Workflow::ShouldDeferCompile(Params));
+		return FMCPToolResult::Ok(Result);
+	}
+};
+
+// ============================================================
+// bulk_set_pin_defaults
+// ============================================================
+class FTool_BulkSetPinDefaults : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("blueprint.pin.default.bulk.set");
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		const FString BlueprintName = Params->GetStringField(TEXT("blueprint"));
+		const TArray<TSharedPtr<FJsonValue>>* DefaultsValues = nullptr;
+		if (BlueprintName.IsEmpty()
+			|| !Params->TryGetArrayField(TEXT("defaults"), DefaultsValues)
+			|| !DefaultsValues || DefaultsValues->IsEmpty())
+		{
+			return FMCPToolResult::Error(
+				TEXT("blueprint and a non-empty defaults array are required."),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (DefaultsValues->Num() > 256)
+		{
+			return FMCPToolResult::Error(
+				TEXT("defaults is limited to 256 entries per request."),
+				TEXT("request_too_large"),
+				422);
+		}
+
+		FString LoadError;
+		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(BlueprintName, LoadError);
+		if (!BP) return FMCPToolResult::Error(LoadError, TEXT("asset_not_found"), 404);
+
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(Guard.GetErrorMessage(), Guard.GetErrorCode(), 422);
+		}
+		FScopedTransaction Transaction(NSLOCTEXT("UEAIIntegration", "BulkSetPinDefaults", "Bulk Set Pin Defaults"));
+		Guard.MarkMutationStarted();
+
+		const bool bDeferred = UEAIIntegration::Workflow::ShouldDeferCompile(Params);
+		TArray<TSharedPtr<FJsonValue>> EntryRows;
+		for (int32 Index = 0; Index < DefaultsValues->Num(); ++Index)
+		{
+			const TSharedPtr<FJsonValue>& Value = (*DefaultsValues)[Index];
+			const TSharedPtr<FJsonObject>* Entry = nullptr;
+			if (!Value.IsValid() || !Value->TryGetObject(Entry) || !Entry || !Entry->IsValid())
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("defaults[%d] must be an object."), Index),
+					TEXT("invalid_params"));
+			}
+			const FString NodeId = (*Entry)->GetStringField(TEXT("nodeId"));
+			const FString PinName = (*Entry)->GetStringField(TEXT("pinName"));
+			const FString PinValue = (*Entry)->GetStringField(TEXT("value"));
+			if (NodeId.IsEmpty() || PinName.IsEmpty())
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("defaults[%d] requires nodeId, pinName, and value."), Index),
+					TEXT("invalid_params"));
+			}
+
+			UEdGraph* Graph = nullptr;
+			UEdGraphNode* Node = MCPHelpers::FindNodeByGuid(BP, NodeId, &Graph);
+			if (!Node)
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("defaults[%d]: node '%s' not found."), Index, *NodeId),
+					TEXT("node_not_found"));
+			}
+			bool bAmbiguous = false;
+			UEdGraphPin* Pin = FindUniquePinByIdentity(
+				Node, nullptr, FName(*PinName), bAmbiguous);
+			if (bAmbiguous)
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("defaults[%d]: pin '%s' is ambiguous."), Index, *PinName),
+					TEXT("pin_ambiguous"));
+			}
+			if (!Pin)
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("defaults[%d]: pin '%s' not found."), Index, *PinName),
+					TEXT("pin_not_found"));
+			}
+			const UEdGraphSchema* Schema = Graph ? Graph->GetSchema() : nullptr;
+			const FMCPToolResult SetResult = TrySetSinglePinDefault(
+				Node, Pin, Schema, PinValue, bDeferred);
+			if (!SetResult.bSuccess)
+			{
+				Transaction.Cancel();
+				return RollbackDirectMutation(
+					Guard,
+					FString::Printf(TEXT("defaults[%d]: %s"), Index, *SetResult.ErrorMessage),
+					SetResult.ErrorCode);
+			}
+
+			TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+			Row->SetNumberField(TEXT("index"), Index);
+			Row->SetStringField(TEXT("nodeId"), NodeId);
+			Row->SetStringField(TEXT("pinName"), Pin->PinName.ToString());
+			Row->SetStringField(TEXT("pinId"), Pin->PinId.ToString());
+			Row->SetStringField(TEXT("value"), Pin->DefaultValue);
+			EntryRows.Add(MakeShared<FJsonValueObject>(Row));
+		}
+
+		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params, false);
+		bool bSaved = false;
+		bool bCompiled = false;
+		const FMCPToolResult Finalize = FinalizeGuardedMutation(
+			BP, Params, Guard, Transaction, bSaved, bCompiled);
+		if (!Finalize.bSuccess)
+		{
+			return Finalize;
+		}
+
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), true);
+		Result->SetStringField(TEXT("blueprint"), BP->GetPathName());
+		Result->SetNumberField(TEXT("setCount"), EntryRows.Num());
+		Result->SetArrayField(TEXT("defaults"), EntryRows);
+		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
+		Result->SetBoolField(TEXT("deferredCompile"), UEAIIntegration::Workflow::ShouldDeferCompile(Params));
+		return FMCPToolResult::Ok(Result);
+	}
+};
+
+// ============================================================
+// duplicate_graph
+// ============================================================
+namespace
+{
+UEdGraph* ResolveDuplicateSourceGraph(
+	UBlueprint* Blueprint,
+	const FString& GraphInput)
+{
+	// Reuse the shared name/default resolution first, then fall back to
+	// matching the full object path for callers that pass a subobject path.
+	UEdGraph* Graph = ResolveTargetGraph(Blueprint, GraphInput);
+	if (Graph || GraphInput.IsEmpty())
+	{
+		return Graph;
+	}
+	const FString Decoded = MCPHelpers::UrlDecode(GraphInput);
+	TArray<UEdGraph*> AllGraphs;
+	Blueprint->GetAllGraphs(AllGraphs);
+	for (UEdGraph* Candidate : AllGraphs)
+	{
+		if (Candidate
+			&& (Candidate->GetPathName().Equals(
+					Decoded, ESearchCase::IgnoreCase)
+				|| Candidate->GetPathName().EndsWith(
+					TEXT(":") + Decoded)
+				|| Candidate->GetPathName().EndsWith(
+					TEXT("/") + Decoded)))
+		{
+			return Candidate;
+		}
+	}
+	return nullptr;
+}
+
+bool DuplicateGraphNameExists(
+	UBlueprint* Blueprint,
+	const FString& Name)
+{
+	if (!Blueprint || Name.IsEmpty())
+	{
+		return true;
+	}
+	TArray<UEdGraph*> AllGraphs;
+	Blueprint->GetAllGraphs(AllGraphs);
+	for (UEdGraph* Graph : AllGraphs)
+	{
+		if (Graph
+			&& Graph->GetName().Equals(Name, ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+int32 DuplicateGraphNonNullNodeCount(UEdGraph* Graph)
+{
+	int32 Count = 0;
+	if (Graph)
+	{
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (Node)
+			{
+				++Count;
+			}
+		}
+	}
+	return Count;
+}
+} // namespace
+
+class FTool_DuplicateGraph : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("blueprint.graph.duplicate");
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		FString BlueprintInput;
+		if (!Params.IsValid()
+			|| !Params->TryGetStringField(TEXT("blueprint"), BlueprintInput)
+			|| BlueprintInput.IsEmpty()
+			|| BlueprintInput.Len() > 1024)
+		{
+			return FMCPToolResult::Error(
+				TEXT("blueprint must be a non-empty string of at most 1024 characters."),
+				TEXT("invalid_params"),
+				422);
+		}
+		FString GraphInput;
+		if ((Params->HasField(TEXT("graph"))
+				&& !Params->TryGetStringField(TEXT("graph"), GraphInput))
+			|| GraphInput.Len() > 256)
+		{
+			return FMCPToolResult::Error(
+				TEXT("graph must be a string of at most 256 characters."),
+				TEXT("invalid_params"),
+				422);
+		}
+		FString NewName;
+		if ((Params->HasField(TEXT("newName"))
+				&& !Params->TryGetStringField(TEXT("newName"), NewName))
+			|| NewName.Len() > 256)
+		{
+			return FMCPToolResult::Error(
+				TEXT("newName must be a string of at most 256 characters."),
+				TEXT("invalid_params"),
+				422);
+		}
+		NewName.TrimStartAndEndInline();
+
+		FString LoadError;
+		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(
+			BlueprintInput,
+			LoadError);
+		if (!BP)
+		{
+			return FMCPToolResult::Error(
+				LoadError,
+				TEXT("blueprint_not_found"),
+				404);
+		}
+
+		UEdGraph* SourceGraph = ResolveDuplicateSourceGraph(
+			BP,
+			GraphInput);
+		if (!SourceGraph)
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Graph '%s' was not found in Blueprint '%s'."),
+					GraphInput.IsEmpty()
+						? TEXT("(primary event graph)")
+						: *MCPHelpers::UrlDecode(GraphInput),
+					*BlueprintInput),
+				TEXT("graph_not_found"),
+				404);
+		}
+
+		// Writes require a non-transient /Game/ Blueprint; runtime/PIE
+		// overrides are out of scope for structural duplication.
+		if (BP->HasAnyFlags(RF_Transient)
+			|| BP->GetOutermost() == GetTransientPackage()
+			|| !BP->GetPathName().StartsWith(TEXT("/Game/")))
+		{
+			return FMCPToolResult::Error(
+				TEXT("Writes require a non-transient /Game/ Blueprint."),
+				TEXT("blueprint_read_only"),
+				409);
+		}
+
+		if (NewName.IsEmpty())
+		{
+			NewName = SourceGraph->GetName() + TEXT("_Copy");
+		}
+		FText InvalidNameReason;
+		if (!FName(*NewName).IsValidObjectName(InvalidNameReason))
+		{
+			return FMCPToolResult::Error(
+				InvalidNameReason.IsEmpty()
+					? FString::Printf(
+						TEXT("newName '%s' is not a valid object name."),
+						*NewName)
+					: InvalidNameReason.ToString(),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (DuplicateGraphNameExists(BP, NewName))
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("A graph named '%s' already exists in this Blueprint."),
+					*NewName),
+				TEXT("graph_name_conflict"),
+				409);
+		}
+
+		// Classify the source graph so the clone lands in the correct list.
+		// 0 = event graph, 1 = function graph, 2 = macro graph.
+		int32 GraphListKind = -1;
+		if (BP->UbergraphPages.Contains(SourceGraph))
+		{
+			GraphListKind = 0;
+		}
+		else if (BP->FunctionGraphs.Contains(SourceGraph))
+		{
+			GraphListKind = 1;
+		}
+		else if (BP->MacroGraphs.Contains(SourceGraph))
+		{
+			GraphListKind = 2;
+		}
+		else
+		{
+			return FMCPToolResult::Error(
+				TEXT("Only event graphs, function graphs, and macro graphs can be duplicated."),
+				TEXT("graph_type_unsupported"),
+				422);
+		}
+
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard
+			Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(
+				Guard.GetErrorMessage(),
+				Guard.GetErrorCode(),
+				422);
+		}
+		FScopedTransaction Transaction(NSLOCTEXT(
+			"UEAIIntegration",
+			"DuplicateGraph",
+			"Duplicate Blueprint Graph"));
+		Guard.MarkMutationStarted();
+		BP->Modify();
+
+		UEdGraph* NewGraph = FEdGraphUtilities::CloneGraph(SourceGraph, BP, nullptr, false);
+		if (!NewGraph)
+		{
+			Transaction.Cancel();
+			return RollbackDirectMutation(
+				Guard,
+				TEXT("Failed to allocate the duplicated graph."),
+				TEXT("graph_create_failed"));
+		}
+		if (!NewName.IsEmpty())
+		{
+			NewGraph->Rename(*NewName);
+		}
+		NewGraph->Schema = SourceGraph->Schema;
+		// CloneGraph preserves node identities from DuplicateObject; assign
+		// fresh GUIDs so the copy never collides with the source graph.
+		for (UEdGraphNode* Node : NewGraph->Nodes)
+		{
+			if (Node)
+			{
+				Node->CreateNewGuid();
+			}
+		}
+
+		if (GraphListKind == 0)
+		{
+			BP->UbergraphPages.Add(NewGraph);
+		}
+		else if (GraphListKind == 1)
+		{
+			BP->FunctionGraphs.Add(NewGraph);
+		}
+		else
+		{
+			BP->MacroGraphs.Add(NewGraph);
+		}
+
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+		BP->MarkPackageDirty();
+
+		FKismetEditorUtilities::CompileBlueprint(
+			BP,
+			EBlueprintCompileOptions::SkipSave);
+		const bool bCompiled = BP->Status != BS_Error;
+		if (!bCompiled)
+		{
+			Transaction.Cancel();
+			return RollbackDirectMutation(
+				Guard,
+				TEXT("The duplicated graph introduced Blueprint compile errors."),
+				TEXT("asset_compile_failed"));
+		}
+
+		const int32 NodeCount = NewGraph->Nodes.Num();
+		const bool bStillPresent =
+			BP->UbergraphPages.Contains(NewGraph)
+			|| BP->FunctionGraphs.Contains(NewGraph)
+			|| BP->MacroGraphs.Contains(NewGraph);
+		if (!bStillPresent
+			|| NodeCount != DuplicateGraphNonNullNodeCount(SourceGraph))
+		{
+			Transaction.Cancel();
+			return RollbackDirectMutation(
+				Guard,
+				TEXT("The duplicated graph was not present during read-back."),
+				TEXT("graph_duplicate_readback_failed"));
+		}
+		Guard.Commit();
+
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), true);
+		Result->SetStringField(
+			TEXT("schema"), TEXT("ue.blueprint.graph-duplicate.v1"));
+		Result->SetStringField(TEXT("blueprint"), BP->GetName());
+		Result->SetStringField(
+			TEXT("blueprintPath"), BP->GetPathName());
+		Result->SetStringField(
+			TEXT("sourceGraph"), SourceGraph->GetName());
+		Result->SetStringField(
+			TEXT("newGraph"), NewGraph->GetPathName());
+		Result->SetStringField(TEXT("newGraphName"), NewName);
+		Result->SetNumberField(TEXT("nodeCount"), NodeCount);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
+		Result->SetBoolField(TEXT("saved"), false);
+		Result->SetStringField(
+			TEXT("scope"),
+			TEXT("authored structural duplication; runtime unverified"));
+		return FMCPToolResult::Ok(Result);
+	}
+};
+
+// ============================================================
+// copy_nodes
+// ============================================================
+class FTool_CopyNodes : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("blueprint.graph.copy_nodes");
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		FString BlueprintInput;
+		if (!Params.IsValid()
+			|| !Params->TryGetStringField(TEXT("blueprint"), BlueprintInput)
+			|| BlueprintInput.IsEmpty()
+			|| BlueprintInput.Len() > 1024)
+		{
+			return FMCPToolResult::Error(
+				TEXT("blueprint must be a non-empty string of at most 1024 characters."),
+				TEXT("invalid_params"),
+				422);
+		}
+		FString SourceGraphInput;
+		if (!Params->TryGetStringField(TEXT("sourceGraph"), SourceGraphInput)
+			|| SourceGraphInput.IsEmpty()
+			|| SourceGraphInput.Len() > 256)
+		{
+			return FMCPToolResult::Error(
+				TEXT("sourceGraph must be a non-empty string of at most 256 characters."),
+				TEXT("invalid_params"),
+				422);
+		}
+		FString TargetGraphInput;
+		if (!Params->TryGetStringField(TEXT("targetGraph"), TargetGraphInput)
+			|| TargetGraphInput.IsEmpty()
+			|| TargetGraphInput.Len() > 256)
+		{
+			return FMCPToolResult::Error(
+				TEXT("targetGraph must be a non-empty string of at most 256 characters."),
+				TEXT("invalid_params"),
+				422);
+		}
+
+		FString LoadError;
+		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(
+			BlueprintInput,
+			LoadError);
+		if (!BP)
+		{
+			return FMCPToolResult::Error(
+				LoadError,
+				TEXT("blueprint_not_found"),
+				404);
+		}
+
+		UEdGraph* SourceGraph = ResolveDuplicateSourceGraph(
+			BP,
+			SourceGraphInput);
+		if (!SourceGraph)
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Source graph '%s' was not found in Blueprint '%s'."),
+					*MCPHelpers::UrlDecode(SourceGraphInput),
+					*BlueprintInput),
+				TEXT("graph_not_found"),
+				404);
+		}
+		UEdGraph* TargetGraph = ResolveDuplicateSourceGraph(
+			BP,
+			TargetGraphInput);
+		if (!TargetGraph)
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Target graph '%s' was not found in Blueprint '%s'."),
+					*MCPHelpers::UrlDecode(TargetGraphInput),
+					*BlueprintInput),
+				TEXT("graph_not_found"),
+				404);
+		}
+		if (SourceGraph == TargetGraph)
+		{
+			return FMCPToolResult::Error(
+				TEXT("sourceGraph and targetGraph must refer to different graphs."),
+				TEXT("graph_copy_self"),
+				422);
+		}
+
+		// Writes require a non-transient /Game/ Blueprint; runtime/PIE
+		// overrides are out of scope for structural node copying.
+		if (BP->HasAnyFlags(RF_Transient)
+			|| BP->GetOutermost() == GetTransientPackage()
+			|| !BP->GetPathName().StartsWith(TEXT("/Game/")))
+		{
+			return FMCPToolResult::Error(
+				TEXT("Writes require a non-transient /Game/ Blueprint."),
+				TEXT("blueprint_read_only"),
+				409);
+		}
+
+		UEAIIntegration::Infrastructure::FBlueprintSingleRequestMutationGuard
+			Guard(BP);
+		if (!Guard.IsValid())
+		{
+			return FMCPToolResult::Error(
+				Guard.GetErrorMessage(),
+				Guard.GetErrorCode(),
+				422);
+		}
+		FScopedTransaction Transaction(NSLOCTEXT(
+			"UEAIIntegration",
+			"CopyGraphNodes",
+			"Copy Blueprint Graph Nodes"));
+		Guard.MarkMutationStarted();
+		BP->Modify();
+		TargetGraph->Modify();
+
+		const int32 SourceNodeCount =
+			DuplicateGraphNonNullNodeCount(SourceGraph);
+		const int32 TargetNodeCountBefore =
+			DuplicateGraphNonNullNodeCount(TargetGraph);
+
+		FCompilerResultsLog MessageLog;
+		MessageLog.bSilentMode = true;
+		TArray<UEdGraphNode*> ClonedNodes;
+		FEdGraphUtilities::CloneAndMergeGraphIn(
+			TargetGraph,
+			SourceGraph,
+			MessageLog,
+			true,
+			false,
+			&ClonedNodes);
+
+		// CloneAndMergeGraphIn clones through the compile path (transient,
+		// non-transactional), so each copied node must be re-identified and
+		// re-flagged as durable graph content before it can be trusted.
+		int32 CopiedNodeCount = 0;
+		for (UEdGraphNode* Node : ClonedNodes)
+		{
+			if (!Node)
+			{
+				continue;
+			}
+			Node->ClearFlags(RF_Transient);
+			Node->SetFlags(RF_Transactional);
+			Node->CreateNewGuid();
+			++CopiedNodeCount;
+		}
+
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
+		BP->MarkPackageDirty();
+
+		FKismetEditorUtilities::CompileBlueprint(
+			BP,
+			EBlueprintCompileOptions::SkipSave);
+		const bool bCompiled = BP->Status != BS_Error;
+		if (!bCompiled)
+		{
+			Transaction.Cancel();
+			return RollbackDirectMutation(
+				Guard,
+				TEXT("The copied nodes introduced Blueprint compile errors."),
+				TEXT("asset_compile_failed"));
+		}
+
+		const int32 TargetNodeCountAfter =
+			DuplicateGraphNonNullNodeCount(TargetGraph);
+		if (CopiedNodeCount != SourceNodeCount
+			|| TargetNodeCountAfter != TargetNodeCountBefore + SourceNodeCount)
+		{
+			Transaction.Cancel();
+			return RollbackDirectMutation(
+				Guard,
+				TEXT("The target graph did not gain the source graph's nodes during read-back."),
+				TEXT("graph_copy_readback_failed"));
+		}
+		Guard.Commit();
+
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), true);
+		Result->SetStringField(
+			TEXT("schema"), TEXT("ue.blueprint.graph-copy-nodes.v1"));
+		Result->SetStringField(TEXT("blueprint"), BP->GetName());
+		Result->SetStringField(
+			TEXT("blueprintPath"), BP->GetPathName());
+		Result->SetStringField(
+			TEXT("sourceGraph"), SourceGraph->GetName());
+		Result->SetStringField(
+			TEXT("targetGraph"), TargetGraph->GetName());
+		Result->SetNumberField(
+			TEXT("sourceNodeCount"), SourceNodeCount);
+		Result->SetNumberField(
+			TEXT("copiedNodeCount"), CopiedNodeCount);
+		Result->SetNumberField(
+			TEXT("targetNodeCount"), TargetNodeCountAfter);
+		Result->SetBoolField(TEXT("compiled"), bCompiled);
+		Result->SetBoolField(TEXT("saved"), false);
+		Result->SetStringField(
+			TEXT("scope"),
+			TEXT("authored structural copy; runtime unverified"));
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -2320,5 +4654,11 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_RefreshAllNodes>());
 		Registry.Register(MakeShared<FTool_RenameAsset>());
 		Registry.Register(MakeShared<FTool_SetBlueprintDefault>());
+		Registry.Register(MakeShared<FTool_PromotePin>());
+		Registry.Register(MakeShared<FTool_BulkAddNodes>());
+		Registry.Register(MakeShared<FTool_BulkConnectPins>());
+		Registry.Register(MakeShared<FTool_BulkSetPinDefaults>());
+		Registry.Register(MakeShared<FTool_DuplicateGraph>());
+		Registry.Register(MakeShared<FTool_CopyNodes>());
 	}
 }

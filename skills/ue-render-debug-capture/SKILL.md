@@ -1,12 +1,13 @@
 ---
 name: ue-render-debug-capture
-description: Capture Unreal viewport debug views, collect Niagara AsyncGpuTrace runtime evidence, or analyze DRED and rendering failure logs offline. Use for GPU crashes, Niagara runtime diagnosis, Buffer Visualization, Ray Tracing Debug, Nanite, Lumen, and before/after rendering evidence.
+description: Capture Unreal viewport debug views, inspect loaded Niagara runtime objects, or analyze DRED and rendering failure logs offline. Use for GPU crashes, Niagara runtime diagnosis, Buffer Visualization, Ray Tracing Debug, Nanite, Lumen, and before/after rendering evidence.
 ---
 
 # UE Render Debug Capture
 
-For retained crash logs, load recipe `offline-render-failure`. For Niagara GPU
-queries, load `niagara-runtime-evidence`. Both use
+For retained crash logs, load recipe `offline-render-failure`. For loaded Niagara
+objects and configured values, load `niagara-runtime-inspect`. For recorded
+particle/system attributes, load `niagara-simcache-observe`. These use
 `references/runtime-and-failure-evidence.md`. Offline log analysis does not
 require a running Editor. Read operation schemas before executing them.
 

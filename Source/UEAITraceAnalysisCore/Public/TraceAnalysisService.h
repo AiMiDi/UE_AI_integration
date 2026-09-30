@@ -10,6 +10,13 @@ class IAnalysisSession;
 
 namespace UEAI::Trace
 {
+enum class EUnknownEngineVersionPolicy : uint8
+{
+	Reject,
+	VerifiedTestFixture,
+	ExplicitDiagnosticAssumption
+};
+
 /**
  * Bounded, UI-independent TraceServices facade shared by the Editor adapter
  * and UEAITraceWorker. The public contract intentionally contains no JSON,
@@ -29,7 +36,7 @@ public:
 		double TimeoutSeconds,
 		FString& OutErrorCode,
 		FString& OutErrorMessage,
-		bool bAllowUnknownEngineVersionForTestFixture = false);
+		EUnknownEngineVersionPolicy UnknownVersionPolicy = EUnknownEngineVersionPolicy::Reject);
 	/** Attach an already completed same-process TraceServices session. */
 	bool AttachCompletedSession(
 		const FString& TracePath,
@@ -57,7 +64,7 @@ public:
 private:
 	bool InitializeCompletedSession(
 		const FString& TracePath,
-		bool bAllowUnknownEngineVersionForTestFixture,
+		EUnknownEngineVersionPolicy UnknownVersionPolicy,
 		FString& OutErrorCode,
 		FString& OutErrorMessage);
 

@@ -15,14 +15,15 @@ NiagaraShader and the plugin modules; other branches still lack full validation.
 
 ## Highlights
 
-- The current release snapshot contains 431 manifest-driven Editor, PIE,
+- The current release snapshot contains 564 manifest-driven Editor, PIE,
   Development, and local Trace capabilities; the service derives the count from
   the manifests at startup.
+- `content.niagara.simcache.*` captures explicit particle attributes through public APIs, inspects retained frames, reads paged values, exports JSON evidence and releases caches. No engine patch is needed. GPU readback may stall and does not expose private AsyncGpuTrace buffers. See the [observation workflow](skills/ue-render-debug-capture/references/runtime-and-failure-evidence.md).
 - The Content domain includes Niagara graph inspection/collision audit and
   plan/apply/rollback operations for node enabled states and input-pin defaults.
-- `content.niagara.runtime.inspect/capture` locates worlds and DIs and reads a
-  bounded GPU result prefix with provider/frame context through an optional
-  Editor engine bridge.
+- `content.niagara.runtime.inspect` lists loaded worlds, components, DIs and
+  configured values through existing Niagara APIs without engine changes.
+  Inventory does not establish GPU collision execution or results.
 - `scene.render.failure.analyze` analyzes retained DRED, rendering call stacks,
   Ensures and CrashContext offline, preserving source ranges and evidence limits.
   See [runtime and failure evidence](skills/ue-render-debug-capture/references/runtime-and-failure-evidence.md).
@@ -120,9 +121,9 @@ manifests and does not infer categories from operation names.
 
 | Domain | Count | Scope |
 |---|---:|---|
-| Blueprint | 87 | Asset lifecycle, Graph geometry/layout/capture, declarative BuildGraph, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
-| Scene | 98 | Actors, PIE runtime, trusted input/waits/capture, viewport debug-view evidence, World Partition, Data Layers, HLOD, PCG, rendering diagnostics, Landscape/Water |
-| Content | 100 | Asset query/dependency/audit, safe import/reimport, Static Mesh and Texture settings, materials, Niagara graph audit and approved writes, UMG, and event-handler verification |
+| Blueprint | 111 | Asset lifecycle, Graph geometry/layout/capture, declarative BuildGraph, variables, components, call graphs, rule scans, runtime debugging, diff, validation |
+| Scene | 99 | Actors, PIE runtime, trusted input/waits/capture, viewport debug-view evidence, World Partition, Data Layers, HLOD, PCG, rendering diagnostics, Landscape/Water |
+| Content | 208 | Asset query/dependency/audit, safe import/reimport, Static Mesh and Texture settings, materials, Niagara graph audit and approved writes, UMG, and event-handler verification |
 | Animation | 19 | Animation Blueprint, state machine, and BlendSpace authoring, inspection, validation, and diff |
 | AI | 17 | Behavior Tree and Blackboard authoring, inspection, references, validation, and diff |
 | Production | 110 | Durable jobs, Recipe/SAL, lease coordination, performance suites, recovery, Editor/Development Trace, offline project and asset queries, the restricted Runtime Bridge, tests, cook/package, source control, DDC, and Epic BuildGraph |
@@ -132,7 +133,8 @@ manifests and does not infer categories from operation names.
 - Unreal Engine 5.3–5.7
 - Node.js 20 or newer
 - A C++ Unreal project, or a prebuilt plugin matching the target engine
-- An MCP client with stdio server support
+- CMake 3.24+ and a C++20 toolchain when building native CLIs from source
+- An agent client with terminal access; stdio server support for MCP fallback
 
 ## Install the Unreal Plugin
 
@@ -146,7 +148,14 @@ YourProject/
         ├── UE_AI_integration.uplugin
         ├── Source/
         ├── Resources/
-        └── MCP/
+        ├── MCP/
+        ├── CMakeLists.txt
+        ├── CLI/
+        ├── Workflow/
+        ├── Recipes/
+        ├── skills/
+        ├── scripts/
+        └── docs/
 ```
 
 When replacing a packaged Win64 plugin, build into staging outside the project
@@ -168,7 +177,7 @@ outside the project, and then atomically activates the package. Add
 first source-development setup with no loaded binaries; it is not the release
 replacement path.
 
-Build and test the TypeScript bridge:
+Build and test the TypeScript bridge (some local CLI backends also use its Node runtime):
 
 ```powershell
 cd YourProject\Plugins\UE_AI_integration\MCP
@@ -177,12 +186,49 @@ npm run build
 npm test
 ```
 
-Start Unreal Editor and make sure the plugin is enabled. Once the Editor-side
-service is running, check its health:
+**A source installation must also build and install both native CLIs.
+Compiling the UE plugin does not generate them.** Normal release packages
+already include `CLI/bin/ue-cli(.exe)` and `ue-workflow-cli(.exe)`; reuse them
+after verifying the host platform, version/revision, and installed catalogs.
+For source builds, replace the placeholders below with absolute paths and keep
+`<BuildDir>` outside the plugin directory. Proceed only after each step succeeds:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:9847/api/health
+$uePluginRoot = '<PluginRoot>'
+$ueCliBuild = '<BuildDir>'
+cmake -S $uePluginRoot -B $ueCliBuild -DUE_WORKFLOW_BUILD_CLI=ON -DUE_WORKFLOW_BUILD_TESTS=OFF
+cmake --build $ueCliBuild --config Release --target ue ue-workflow
+cmake --install $ueCliBuild --config Release --prefix "$uePluginRoot/CLI"
+
+$env:UE_CLI = "$uePluginRoot/CLI/bin/ue-cli.exe"
+$env:UE_WORKFLOW_CLI = "$uePluginRoot/CLI/bin/ue-workflow-cli.exe"
+& $env:UE_CLI --version --json
+& $env:UE_WORKFLOW_CLI --version --json
+& $env:UE_CLI capabilities --limit 1 --json
+& $env:UE_CLI skills --query blueprint --json
+& $env:UE_WORKFLOW_CLI doctor --json
 ```
+
+`cmake --install` also installs Capabilities, Contracts, Skills, and Recipes
+under `CLI/share/ue-workflow-cli/`; copying the executables alone is incomplete.
+On Windows, use VS 2022 Build Tools or a newer toolchain supported by the
+installed CMake generator. Linux/macOS use the same configure/build/install
+commands with a C++20 compiler and `-DCMAKE_BUILD_TYPE=Release` for
+single-configuration generators; invoke the binaries without `.exe`.
+See [CLI build and acceptance](docs/UE_SHORT_CLI.md#构建与分发) for shell examples
+and detailed checks. The commands above work with Editor closed.
+
+With the intended Unreal Editor already running and the plugin enabled,
+validate the online connection:
+
+```powershell
+& $env:UE_CLI status --json
+& $env:UE_CLI doctor --full --no-clean-stale-instances --json
+```
+
+Report CLI/catalog, loaded Editor module, and Trace Worker readiness separately.
+If Editor is closed, retain the local results and report online checks as pending.
+Agents must not automatically start or restart a user-owned Editor.
 
 The bottom-right Level Editor status entry shows `UE AI · N`. Green means the
 service is ready, yellow means manifest/handler registration is degraded, red
@@ -208,7 +254,8 @@ has activated and verified the replacement.
 
 ## Configure Codex CLI
 
-Add the following entry to `~/.codex/config.toml`:
+Native UE CLIs are the default entry point. For MCP fallback, add the following
+entry to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.ue_ai_integration]
@@ -233,11 +280,12 @@ claude mcp add ue_ai_integration -- node Plugins\UE_AI_integration\MCP\dist\inde
 
 ## Install the UE AI Entry Skill
 
-After registering MCP, install `$ue-ai` for the current agent client. The
-entry Skill checks connectivity and the capability catalog, then loads the
-most specific Blueprint, UMG, asset, Landscape, rendering, performance,
-Trace, or recovery Skill through `ue_skills`. It never bypasses the existing
-execution gates.
+After validating the CLI installation, install `$ue-ai` for the current agent
+client. It prefers `ue-cli skills` and `ue-cli help` for discovery, then
+`ue-cli` / `ue-workflow-cli` for execution and verification. MCP is the fallback
+when CLI is absent, unusable, incompatible, lacks the required feature, or the
+user explicitly requests MCP. Both routes preserve the same approval, recovery,
+and acceptance contracts.
 
 Codex:
 
@@ -252,9 +300,10 @@ Claude Code / Bash:
 bash ./scripts/install_entry_skill.sh --client claude
 ```
 
-Reinstalling identical content is a no-op. Add `-Force` or `--force` only for
-an explicit upgrade; the installer preserves the previous copy as a timestamped
-backup. Agents can then start with: “Use `$ue-ai` to inspect this Unreal
+Reinstalling identical content is a no-op. Inspect and merge local customizations
+before upgrading. For an explicit replacement, `-Force` or `--force` preserves
+the previous copy as a timestamped backup. Reload client Skills or start a new
+session, then ask: “Use `$ue-ai` to inspect this Unreal
 project and choose the correct tool or domain Skill.”
 
 ## MCP Tools

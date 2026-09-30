@@ -12,7 +12,7 @@ export interface AgentSkillRequirement {
 }
 export interface AgentSkillInput {
     name: string;
-    type: "string" | "integer" | "number" | "boolean" | "object" | "array";
+    type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "json";
     required: boolean;
     description: string;
     example?: unknown;

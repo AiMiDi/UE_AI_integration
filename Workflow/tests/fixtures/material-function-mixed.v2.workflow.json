@@ -1,0 +1,98 @@
+{
+  "dsl": "ue.workflow",
+  "dslVersion": "2.0",
+  "workflowKind": "assetEdit",
+  "workflowId": "material-function-mixed-v2",
+  "persistence": "dirtyOnly",
+  "operations": [
+    {
+      "id": "input",
+      "type": "content.material.expression.add",
+      "params": {
+        "expressionClass": "FunctionInput",
+        "posX": -400,
+        "posY": 0
+      },
+      "scope": "function"
+    },
+    {
+      "id": "configureInput",
+      "type": "content.material.function.interface.set",
+      "params": {
+        "name": "Value",
+        "inputType": "Scalar",
+        "usePreviewValueAsDefault": true
+      },
+      "bindings": {
+        "/nodeId": {
+          "from": "input",
+          "path": "/nodeId"
+        }
+      },
+      "scope": "function"
+    },
+    {
+      "id": "output",
+      "type": "content.material.expression.add",
+      "params": {
+        "expressionClass": "FunctionOutput",
+        "posX": 100,
+        "posY": 0
+      },
+      "scope": "function"
+    },
+    {
+      "id": "configureOutput",
+      "type": "content.material.function.interface.set",
+      "params": {
+        "name": "Result"
+      },
+      "bindings": {
+        "/nodeId": {
+          "from": "output",
+          "path": "/nodeId"
+        }
+      },
+      "scope": "function"
+    },
+    {
+      "id": "connect",
+      "type": "content.material.pin.connect",
+      "params": {
+        "sourcePinName": "Output",
+        "targetPinName": "Input"
+      },
+      "bindings": {
+        "/sourceNodeId": {
+          "from": "input",
+          "path": "/nodeId"
+        },
+        "/targetNodeId": {
+          "from": "output",
+          "path": "/nodeId"
+        }
+      },
+      "scope": "function"
+    },
+    {
+      "id": "materialConstant",
+      "type": "content.material.expression.add",
+      "scope": "material",
+      "params": {
+        "expressionClass": "Constant"
+      }
+    }
+  ],
+  "scopes": {
+    "function": {
+      "kind": "materialFunction",
+      "asset": "/Game/Automation/MF_WorkflowBatchV2",
+      "createIfMissing": true
+    },
+    "material": {
+      "kind": "material",
+      "asset": "/Game/Automation/M_WorkflowBatchV2",
+      "createIfMissing": true
+    }
+  }
+}

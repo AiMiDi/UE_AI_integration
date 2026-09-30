@@ -9,6 +9,8 @@
 #include "Engine/LevelScriptBlueprint.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
+#include "EdGraph/EdGraphPin.h"
+#include "EdGraphSchema_K2.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_Event.h"
 #include "K2Node_CustomEvent.h"
@@ -17,8 +19,761 @@
 #include "K2Node_BreakStruct.h"
 #include "K2Node_MakeStruct.h"
 #include "K2Node_FunctionEntry.h"
+#include "K2Node_FunctionResult.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+
+namespace
+{
+	bool ReadBlueprintListPageInteger(
+		const TSharedPtr<FJsonObject>& Params,
+		const TCHAR* Field,
+		int32 DefaultValue,
+		int32 Minimum,
+		int32 Maximum,
+		int32& OutValue)
+	{
+		OutValue = DefaultValue;
+		if (!Params->HasField(Field))
+		{
+			return true;
+		}
+		double Number = 0.0;
+		if (!Params->TryGetNumberField(Field, Number)
+			|| !FMath::IsFinite(Number)
+			|| Number < Minimum || Number > Maximum
+			|| Number != FMath::FloorToDouble(Number))
+		{
+			return false;
+		}
+		OutValue = static_cast<int32>(Number);
+		return true;
+	}
+
+	struct FBlueprintListEntry
+	{
+		FString Name;
+		FString Path;
+		FString ParentClass;
+		bool bIsLevelBlueprint = false;
+	};
+
+	struct FBlueprintExecutionEdge
+	{
+		UEdGraphNode* FromNode = nullptr;
+		UEdGraphPin* FromPin = nullptr;
+		UEdGraphNode* ToNode = nullptr;
+		UEdGraphPin* ToPin = nullptr;
+	};
+
+	FMCPToolResult DescribeBlueprintExecutionFlow(
+		UBlueprint* Blueprint,
+		UEdGraph* Graph,
+		const FString& RequestedEntryPoint,
+		const FString& RequestedEntryNodeId,
+		const int32 MaxNodes,
+		const int32 MaxEdges,
+		const int32 NodeOffset,
+		const int32 EdgeOffset,
+		const int32 MaxScannedNodes,
+		const int32 MaxScannedPins,
+		const int32 MaxScannedLinks)
+	{
+		TArray<UEdGraphNode*> ExecutionNodes;
+		TArray<FBlueprintExecutionEdge> ExecutionEdges;
+		TMap<UEdGraphNode*, int32> IncomingEdgeCounts;
+		TArray<UEdGraphNode*> NodesToScan;
+		const int32 GraphNodeSlotCount = Graph->Nodes.Num();
+		const int32 NodeSlotScanCount = FMath::Min(
+			GraphNodeSlotCount,
+			MaxScannedNodes);
+		NodesToScan.Reserve(NodeSlotScanCount);
+		for (int32 NodeIndex = 0;
+		     NodeIndex < NodeSlotScanCount;
+		     ++NodeIndex)
+		{
+			UEdGraphNode* Node = Graph->Nodes[NodeIndex];
+			if (Node)
+			{
+				NodesToScan.Add(Node);
+			}
+		}
+		NodesToScan.Sort([](
+			const UEdGraphNode& Left,
+			const UEdGraphNode& Right)
+			{
+				return Left.NodeGuid.ToString() < Right.NodeGuid.ToString();
+			});
+		TSet<UEdGraphNode*> ScannedNodeSet;
+		int32 ScannedNodeCount = 0;
+		int32 ScannedPinCount = 0;
+		int32 ScannedLinkCount = 0;
+		bool bScanExhausted = false;
+		for (UEdGraphNode* Node : NodesToScan)
+		{
+			if (ScannedNodeCount >= MaxScannedNodes)
+			{
+				bScanExhausted = true;
+				break;
+			}
+			++ScannedNodeCount;
+			// UE seeds actor event graphs with ReceiveBeginPlay,
+			// ReceiveActorBeginOverlap, and ReceiveTick as DefaultGraphNode
+			// metadata. They are editor scaffolding rather than authored flow and
+			// must not inflate the user-visible execution graph totals.
+			if (Node->GetOutermost()->GetMetaData()->HasValue(
+				Node,
+				FNodeMetadata::DefaultGraphNode))
+			{
+				continue;
+			}
+			ScannedNodeSet.Add(Node);
+			bool bHasExecutionPin = false;
+			for (UEdGraphPin* Pin : Node->Pins)
+			{
+				if (ScannedPinCount >= MaxScannedPins)
+				{
+					bScanExhausted = true;
+					break;
+				}
+				++ScannedPinCount;
+				if (!Pin || Pin->PinType.PinCategory
+					!= UEdGraphSchema_K2::PC_Exec)
+				{
+					continue;
+				}
+				bHasExecutionPin = true;
+				if (Pin->Direction != EGPD_Output)
+				{
+					continue;
+				}
+				for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
+				{
+					if (ScannedLinkCount >= MaxScannedLinks)
+					{
+						bScanExhausted = true;
+						break;
+					}
+					++ScannedLinkCount;
+					UEdGraphNode* LinkedNode =
+						LinkedPin ? LinkedPin->GetOwningNode() : nullptr;
+					if (!LinkedPin || !LinkedNode
+						|| LinkedNode->GetGraph() != Graph
+						|| LinkedPin->Direction != EGPD_Input
+						|| LinkedPin->PinType.PinCategory
+						!= UEdGraphSchema_K2::PC_Exec)
+					{
+						continue;
+					}
+					ExecutionEdges.Add({Node, Pin, LinkedNode, LinkedPin});
+					IncomingEdgeCounts.FindOrAdd(LinkedNode)++;
+				}
+				if (bScanExhausted)
+				{
+					break;
+				}
+			}
+			if (bHasExecutionPin)
+			{
+				ExecutionNodes.Add(Node);
+				IncomingEdgeCounts.FindOrAdd(Node);
+			}
+			if (bScanExhausted)
+			{
+				break;
+			}
+		}
+		bScanExhausted |= NodeSlotScanCount < GraphNodeSlotCount;
+		ExecutionEdges.RemoveAll([&](const FBlueprintExecutionEdge& Edge)
+		{
+			return !ScannedNodeSet.Contains(Edge.ToNode);
+		});
+		IncomingEdgeCounts.Reset();
+		for (UEdGraphNode* Node : ExecutionNodes)
+		{
+			IncomingEdgeCounts.Add(Node, 0);
+		}
+		for (const FBlueprintExecutionEdge& Edge : ExecutionEdges)
+		{
+			IncomingEdgeCounts.FindOrAdd(Edge.ToNode)++;
+		}
+		ExecutionNodes.Sort([](
+			const UEdGraphNode& Left,
+			const UEdGraphNode& Right)
+			{
+				return Left.NodeGuid.ToString() < Right.NodeGuid.ToString();
+			});
+		ExecutionEdges.Sort([](
+			const FBlueprintExecutionEdge& Left,
+			const FBlueprintExecutionEdge& Right)
+			{
+				const FString LeftKey =
+					Left.FromNode->NodeGuid.ToString()
+					+ TEXT("|") + Left.FromPin->PinName.ToString()
+					+ TEXT("|") + Left.FromPin->PinId.ToString()
+					+ TEXT("|") + Left.ToNode->NodeGuid.ToString()
+					+ TEXT("|") + Left.ToPin->PinId.ToString();
+				const FString RightKey =
+					Right.FromNode->NodeGuid.ToString()
+					+ TEXT("|") + Right.FromPin->PinName.ToString()
+					+ TEXT("|") + Right.FromPin->PinId.ToString()
+					+ TEXT("|") + Right.ToNode->NodeGuid.ToString()
+					+ TEXT("|") + Right.ToPin->PinId.ToString();
+				return LeftKey < RightKey;
+			});
+
+		TMap<UEdGraphNode*, TArray<int32>> OutgoingEdges;
+		for (int32 EdgeIndex = 0;
+		     EdgeIndex < ExecutionEdges.Num();
+		     ++EdgeIndex)
+		{
+			OutgoingEdges.FindOrAdd(
+				ExecutionEdges[EdgeIndex].FromNode).Add(EdgeIndex);
+		}
+		TArray<UEdGraphNode*> GraphEntryNodes;
+		TMap<UEdGraphNode*, FString> GraphEntryKinds;
+		for (UEdGraphNode* Node : ExecutionNodes)
+		{
+			FString EntryKind;
+			if (Node->IsA<UK2Node_FunctionEntry>())
+			{
+				EntryKind = TEXT("functionEntry");
+			}
+			else if (Node->IsA<UK2Node_Event>()
+				|| Node->IsA<UK2Node_CustomEvent>())
+			{
+				EntryKind = TEXT("event");
+			}
+			else if (IncomingEdgeCounts.FindRef(Node) == 0)
+			{
+				EntryKind = TEXT("executionRoot");
+			}
+			if (!EntryKind.IsEmpty())
+			{
+				GraphEntryNodes.Add(Node);
+				GraphEntryKinds.Add(Node, EntryKind);
+			}
+		}
+
+		UEdGraphNode* SelectedEntryNode = nullptr;
+		FString EntryMatchKind;
+		FString ResolvedEntryName;
+		const bool bEntryPointSelected = !RequestedEntryPoint.IsEmpty();
+		const bool bEntryNodeSelected = !RequestedEntryNodeId.IsEmpty();
+		if (bEntryPointSelected && bEntryNodeSelected)
+		{
+			return FMCPToolResult::Error(
+				TEXT("entryPoint and entryNodeId are mutually exclusive."),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (bEntryNodeSelected)
+		{
+			FGuid RequestedGuid;
+			if (!FGuid::Parse(RequestedEntryNodeId, RequestedGuid)
+				|| !RequestedGuid.IsValid())
+			{
+				return FMCPToolResult::Error(
+					TEXT("entryNodeId must be a valid non-zero Node GUID."),
+					TEXT("invalid_params"),
+					422);
+			}
+			for (UEdGraphNode* Node : ExecutionNodes)
+			{
+				if (Node->NodeGuid == RequestedGuid)
+				{
+					SelectedEntryNode = Node;
+					break;
+				}
+			}
+			if (!SelectedEntryNode)
+			{
+				if (bScanExhausted)
+				{
+					return FMCPToolResult::Error(
+						TEXT(
+							"The execution scan reached a safety limit before the requested entryNodeId could be resolved. Narrow the graph or raise the scan limits."),
+						TEXT("execution_entry_scan_incomplete"),
+						413);
+				}
+				for (UEdGraphNode* Node : NodesToScan)
+				{
+					if (Node && Node->NodeGuid == RequestedGuid)
+					{
+						return FMCPToolResult::Error(
+							TEXT("entryNodeId resolves to a node without K2 execution pins."),
+							TEXT("execution_entry_not_executable"),
+							422);
+					}
+				}
+				return FMCPToolResult::Error(
+					TEXT("entryNodeId was not found in the selected graph."),
+					TEXT("execution_entry_not_found"),
+					404);
+			}
+			EntryMatchKind = TEXT("nodeGuid");
+			ResolvedEntryName = SelectedEntryNode->GetNodeTitle(
+				ENodeTitleType::ListView).ToString();
+		}
+		else if (bEntryPointSelected)
+		{
+			struct FEntryPointMatch
+			{
+				UEdGraphNode* Node = nullptr;
+				FString MatchKind;
+				FString CanonicalName;
+			};
+			TArray<FEntryPointMatch> Matches;
+			auto AddMatch = [&](
+				UEdGraphNode* Node,
+				const FString& Candidate,
+				const TCHAR* MatchKind)
+			{
+				if (!Node || Candidate.IsEmpty()
+					|| !Candidate.Equals(
+						RequestedEntryPoint,
+						ESearchCase::IgnoreCase))
+				{
+					return;
+				}
+				for (const FEntryPointMatch& Existing : Matches)
+				{
+					if (Existing.Node == Node)
+					{
+						return;
+					}
+				}
+				Matches.Add({Node, MatchKind, Candidate});
+			};
+			for (UEdGraphNode* Node : ExecutionNodes)
+			{
+				if (const UK2Node_CustomEvent* CustomEvent =
+					Cast<UK2Node_CustomEvent>(Node))
+				{
+					AddMatch(
+						Node,
+						CustomEvent->CustomFunctionName.ToString(),
+						TEXT("customEventName"));
+				}
+				else if (const UK2Node_Event* Event =
+					Cast<UK2Node_Event>(Node))
+				{
+					AddMatch(
+						Node,
+						Event->EventReference.GetMemberName().ToString(),
+						TEXT("eventMemberName"));
+					AddMatch(
+						Node,
+						Event->CustomFunctionName.ToString(),
+						TEXT("eventCustomFunctionName"));
+				}
+				else if (Node->IsA<UK2Node_FunctionEntry>())
+				{
+					AddMatch(
+						Node,
+						Graph->GetName(),
+						TEXT("functionGraphName"));
+				}
+				if (Node->IsA<UK2Node_Event>()
+					|| Node->IsA<UK2Node_CustomEvent>()
+					|| Node->IsA<UK2Node_FunctionEntry>())
+				{
+					AddMatch(
+						Node,
+						Node->GetNodeTitle(
+							ENodeTitleType::ListView).ToString(),
+						TEXT("entryTitle"));
+					AddMatch(
+						Node,
+						Node->GetName(),
+						TEXT("entryObjectName"));
+				}
+			}
+			if (Matches.IsEmpty())
+			{
+				if (bScanExhausted)
+				{
+					return FMCPToolResult::Error(
+						TEXT(
+							"The execution scan reached a safety limit before the requested entryPoint could be resolved. Narrow the graph or raise the scan limits."),
+						TEXT("execution_entry_scan_incomplete"),
+						413);
+				}
+				return FMCPToolResult::Error(
+					FString::Printf(
+						TEXT(
+							"Exact execution entry point '%s' was not found in graph '%s'. Use an event/custom-event name, a function graph name, or entryNodeId."),
+						*RequestedEntryPoint,
+						*Graph->GetName()),
+					TEXT("execution_entry_not_found"),
+					404);
+			}
+			if (Matches.Num() > 1)
+			{
+				TArray<FString> CandidateIds;
+				const int32 CandidateLimit = FMath::Min(Matches.Num(), 8);
+				for (int32 Index = 0; Index < CandidateLimit; ++Index)
+				{
+					CandidateIds.Add(Matches[Index].Node->NodeGuid.ToString());
+				}
+				return FMCPToolResult::Error(
+					FString::Printf(
+						TEXT("Execution entry point '%s' is ambiguous across %d nodes (%s%s). Retry with entryNodeId."),
+						*RequestedEntryPoint,
+						Matches.Num(),
+						*FString::Join(CandidateIds, TEXT(", ")),
+						Matches.Num() > CandidateLimit ? TEXT(", ...") : TEXT("")),
+					TEXT("execution_entry_ambiguous"),
+					409);
+			}
+			SelectedEntryNode = Matches[0].Node;
+			EntryMatchKind = Matches[0].MatchKind;
+			ResolvedEntryName = Matches[0].CanonicalName;
+		}
+
+		TArray<UEdGraphNode*> OrderedNodes;
+		TSet<UEdGraphNode*> VisitedNodes;
+		TSet<UEdGraphNode*> QueuedNodes;
+		auto TraverseFrom = [&](UEdGraphNode* StartNode)
+		{
+			TArray<UEdGraphNode*> Queue;
+			Queue.Add(StartNode);
+			QueuedNodes.Add(StartNode);
+			int32 QueueIndex = 0;
+			while (QueueIndex < Queue.Num())
+			{
+				UEdGraphNode* Current = Queue[QueueIndex++];
+				if (!Current || VisitedNodes.Contains(Current))
+				{
+					continue;
+				}
+				VisitedNodes.Add(Current);
+				OrderedNodes.Add(Current);
+				if (const TArray<int32>* EdgeIndices =
+					OutgoingEdges.Find(Current))
+				{
+					for (const int32 EdgeIndex : *EdgeIndices)
+					{
+						UEdGraphNode* Next = ExecutionEdges[EdgeIndex].ToNode;
+						if (!VisitedNodes.Contains(Next)
+							&& !QueuedNodes.Contains(Next))
+						{
+							Queue.Add(Next);
+							QueuedNodes.Add(Next);
+						}
+					}
+				}
+			}
+		};
+		TArray<UEdGraphNode*> TraversalEntryNodes;
+		TMap<UEdGraphNode*, FString> ProjectedEntryKinds = GraphEntryKinds;
+		if (SelectedEntryNode)
+		{
+			TraversalEntryNodes.Add(SelectedEntryNode);
+			TraverseFrom(SelectedEntryNode);
+		}
+		else
+		{
+			TraversalEntryNodes = GraphEntryNodes;
+			for (UEdGraphNode* EntryNode : TraversalEntryNodes)
+			{
+				TraverseFrom(EntryNode);
+			}
+			for (UEdGraphNode* Node : ExecutionNodes)
+			{
+				if (!VisitedNodes.Contains(Node))
+				{
+					ProjectedEntryKinds.Add(Node, TEXT("disconnected"));
+					TraversalEntryNodes.Add(Node);
+					TraverseFrom(Node);
+				}
+			}
+		}
+
+		TSet<UEdGraphNode*> SelectedNodes;
+		for (UEdGraphNode* Node : OrderedNodes)
+		{
+			SelectedNodes.Add(Node);
+		}
+		TArray<const FBlueprintExecutionEdge*> SelectedEdges;
+		TMap<UEdGraphNode*, int32> SelectedOutgoingEdgeCounts;
+		for (const FBlueprintExecutionEdge& Edge : ExecutionEdges)
+		{
+			if (SelectedNodes.Contains(Edge.FromNode)
+				&& SelectedNodes.Contains(Edge.ToNode))
+			{
+				SelectedEdges.Add(&Edge);
+				SelectedOutgoingEdgeCounts.FindOrAdd(Edge.FromNode)++;
+			}
+		}
+
+		const int32 NodePageStart = FMath::Min(NodeOffset, OrderedNodes.Num());
+		const int32 NodePageEnd = NodePageStart
+			+ FMath::Min(MaxNodes, OrderedNodes.Num() - NodePageStart);
+		TSet<UEdGraphNode*> IncludedNodes;
+		for (int32 Index = NodePageStart; Index < NodePageEnd; ++Index)
+		{
+			IncludedNodes.Add(OrderedNodes[Index]);
+		}
+		TArray<TSharedPtr<FJsonValue>> NodeValues;
+		TArray<TSharedPtr<FJsonValue>> DescriptionLines;
+		TArray<FString> DescriptionText;
+		for (int32 Order = NodePageStart; Order < NodePageEnd; ++Order)
+		{
+			UEdGraphNode* Node = OrderedNodes[Order];
+			FString Title = Node->GetNodeTitle(
+				ENodeTitleType::ListView).ToString();
+			const bool bTitleTruncated = Title.Len() > 512;
+			if (bTitleTruncated)
+			{
+				Title.LeftInline(512, false);
+			}
+			TSharedRef<FJsonObject> NodeValue = MakeShared<FJsonObject>();
+			NodeValue->SetNumberField(TEXT("order"), Order);
+			NodeValue->SetStringField(
+				TEXT("nodeId"), Node->NodeGuid.ToString());
+			NodeValue->SetStringField(
+				TEXT("nodeClass"), Node->GetClass()->GetPathName());
+			NodeValue->SetStringField(TEXT("title"), Title);
+			NodeValue->SetBoolField(
+				TEXT("titleTruncated"), bTitleTruncated);
+			const FString* EntryKind = ProjectedEntryKinds.Find(Node);
+			NodeValue->SetBoolField(
+				TEXT("isEntryPoint"), EntryKind != nullptr);
+			if (EntryKind)
+			{
+				NodeValue->SetStringField(TEXT("entryKind"), *EntryKind);
+			}
+			NodeValue->SetBoolField(
+				TEXT("isSelectedEntry"), Node == SelectedEntryNode);
+			const int32 OutgoingCount =
+				SelectedOutgoingEdgeCounts.FindRef(Node);
+			NodeValue->SetNumberField(
+				TEXT("outgoingExecutionEdgeCount"), OutgoingCount);
+			NodeValues.Add(MakeShared<FJsonValueObject>(NodeValue));
+			const FString DescriptionLine = FString::Printf(
+				TEXT("%d. %s [%s] -> %d execution edge(s)"),
+				Order + 1,
+				*Title,
+				*Node->NodeGuid.ToString(),
+				OutgoingCount);
+			DescriptionLines.Add(
+				MakeShared<FJsonValueString>(DescriptionLine));
+			DescriptionText.Add(DescriptionLine);
+		}
+
+		TArray<TSharedPtr<FJsonValue>> EdgeValues;
+		const int32 EdgePageStart = FMath::Min(EdgeOffset, SelectedEdges.Num());
+		const int32 EdgePageEnd = EdgePageStart
+			+ FMath::Min(MaxEdges, SelectedEdges.Num() - EdgePageStart);
+		for (int32 Index = EdgePageStart; Index < EdgePageEnd; ++Index)
+		{
+			const FBlueprintExecutionEdge& Edge = *SelectedEdges[Index];
+			TSharedRef<FJsonObject> EdgeValue = MakeShared<FJsonObject>();
+			EdgeValue->SetStringField(
+				TEXT("edgeId"),
+				Edge.FromNode->NodeGuid.ToString()
+				+ TEXT(":") + Edge.FromPin->PinId.ToString()
+				+ TEXT("->") + Edge.ToNode->NodeGuid.ToString()
+				+ TEXT(":") + Edge.ToPin->PinId.ToString());
+			EdgeValue->SetStringField(
+				TEXT("fromNodeId"), Edge.FromNode->NodeGuid.ToString());
+			EdgeValue->SetStringField(
+				TEXT("fromPinId"), Edge.FromPin->PinId.ToString());
+			EdgeValue->SetStringField(
+				TEXT("fromPin"), Edge.FromPin->PinName.ToString());
+			EdgeValue->SetStringField(
+				TEXT("toNodeId"), Edge.ToNode->NodeGuid.ToString());
+			EdgeValue->SetStringField(
+				TEXT("toPinId"), Edge.ToPin->PinId.ToString());
+			EdgeValue->SetStringField(
+				TEXT("toPin"), Edge.ToPin->PinName.ToString());
+			EdgeValue->SetBoolField(
+				TEXT("sourceIncluded"), IncludedNodes.Contains(Edge.FromNode));
+			EdgeValue->SetBoolField(
+				TEXT("targetIncluded"), IncludedNodes.Contains(Edge.ToNode));
+			EdgeValues.Add(MakeShared<FJsonValueObject>(EdgeValue));
+		}
+
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetStringField(TEXT("blueprint"), Blueprint->GetPathName());
+		Result->SetStringField(TEXT("graph"), Graph->GetName());
+		Result->SetStringField(
+			TEXT("selectionMode"),
+			bEntryPointSelected
+				? TEXT("entryPoint")
+				: bEntryNodeSelected
+				? TEXT("entryNodeId")
+				: TEXT("allEntries"));
+		if (SelectedEntryNode)
+		{
+			const bool bResolvedEntryNameTruncated =
+				ResolvedEntryName.Len() > 512;
+			if (bResolvedEntryNameTruncated)
+			{
+				ResolvedEntryName.LeftInline(512, false);
+			}
+			Result->SetStringField(
+				TEXT("resolvedEntryNodeId"),
+				SelectedEntryNode->NodeGuid.ToString());
+			Result->SetStringField(TEXT("resolvedEntryName"), ResolvedEntryName);
+			Result->SetBoolField(
+				TEXT("resolvedEntryNameTruncated"),
+				bResolvedEntryNameTruncated);
+			Result->SetStringField(TEXT("entryMatchKind"), EntryMatchKind);
+		}
+		Result->SetStringField(
+			TEXT("description"), FString::Join(DescriptionText, TEXT("\n")));
+		Result->SetNumberField(
+			TEXT("executionNodeTotal"), ExecutionNodes.Num());
+		Result->SetNumberField(
+			TEXT("executionEdgeTotal"), ExecutionEdges.Num());
+		Result->SetNumberField(
+			TEXT("selectedExecutionNodeTotal"), OrderedNodes.Num());
+		Result->SetNumberField(
+			TEXT("selectedExecutionEdgeTotal"), SelectedEdges.Num());
+		Result->SetNumberField(TEXT("nodeCount"), NodeValues.Num());
+		Result->SetNumberField(TEXT("edgeCount"), EdgeValues.Num());
+		Result->SetNumberField(
+			TEXT("entryPointCount"), TraversalEntryNodes.Num());
+		Result->SetNumberField(
+			TEXT("graphEntryPointCount"), GraphEntryNodes.Num());
+		Result->SetNumberField(TEXT("maxNodes"), MaxNodes);
+		Result->SetNumberField(TEXT("maxEdges"), MaxEdges);
+		Result->SetNumberField(TEXT("nodeOffset"), NodeOffset);
+		Result->SetNumberField(TEXT("edgeOffset"), EdgeOffset);
+		Result->SetNumberField(TEXT("maxScannedNodes"), MaxScannedNodes);
+		Result->SetNumberField(TEXT("maxScannedPins"), MaxScannedPins);
+		Result->SetNumberField(TEXT("maxScannedLinks"), MaxScannedLinks);
+		Result->SetNumberField(TEXT("scannedNodeCount"), ScannedNodeCount);
+		Result->SetNumberField(TEXT("scannedPinCount"), ScannedPinCount);
+		Result->SetNumberField(TEXT("scannedLinkCount"), ScannedLinkCount);
+		Result->SetNumberField(TEXT("graphNodeTotal"), GraphNodeSlotCount);
+		Result->SetNumberField(
+			TEXT("scannedNodeSlotCount"), NodeSlotScanCount);
+		Result->SetBoolField(TEXT("scanExhausted"), bScanExhausted);
+		Result->SetBoolField(TEXT("executionTotalsComplete"), !bScanExhausted);
+		Result->SetBoolField(
+			TEXT("nodesTruncated"),
+			NodePageStart > 0 || NodePageEnd < OrderedNodes.Num());
+		Result->SetBoolField(
+			TEXT("edgesTruncated"),
+			EdgePageStart > 0 || EdgePageEnd < SelectedEdges.Num());
+		Result->SetBoolField(
+			TEXT("nodesHasMore"), NodePageEnd < OrderedNodes.Num());
+		Result->SetBoolField(
+			TEXT("edgesHasMore"), EdgePageEnd < SelectedEdges.Num());
+		if (NodePageEnd < OrderedNodes.Num())
+		{
+			Result->SetNumberField(TEXT("nextNodeOffset"), NodePageEnd);
+		}
+		if (EdgePageEnd < SelectedEdges.Num())
+		{
+			Result->SetNumberField(TEXT("nextEdgeOffset"), EdgePageEnd);
+		}
+		Result->SetBoolField(
+			TEXT("partial"),
+			bScanExhausted
+			|| NodePageStart > 0 || NodePageEnd < OrderedNodes.Num()
+			|| EdgePageStart > 0 || EdgePageEnd < SelectedEdges.Num());
+		Result->SetArrayField(TEXT("nodes"), NodeValues);
+		Result->SetArrayField(TEXT("executionEdges"), EdgeValues);
+		Result->SetArrayField(TEXT("descriptionLines"), DescriptionLines);
+		return FMCPToolResult::Ok(Result);
+	}
+
+	FString TypeNameWithoutUnrealPrefix(const FString& TypeName)
+	{
+		return TypeName.Len() > 1
+		       && (TypeName[0] == TEXT('F')
+			       || TypeName[0] == TEXT('E')
+			       || TypeName[0] == TEXT('U')
+			       || TypeName[0] == TEXT('A'))
+			       ? TypeName.Mid(1)
+			       : TypeName;
+	}
+
+	bool PinTypeMatchesRequestedType(
+		const FEdGraphPinType& PinType,
+		const FString& RequestedType,
+		const FString& RequestedTypeWithoutPrefix)
+	{
+		auto MatchesCandidate = [&](const FString& Candidate)
+		{
+			return !Candidate.IsEmpty()
+				&& (Candidate.Equals(
+						RequestedType,
+						ESearchCase::IgnoreCase)
+					|| Candidate.Equals(
+						RequestedTypeWithoutPrefix,
+						ESearchCase::IgnoreCase)
+					|| TypeNameWithoutUnrealPrefix(Candidate).Equals(
+						RequestedTypeWithoutPrefix,
+						ESearchCase::IgnoreCase));
+		};
+		if (MatchesCandidate(PinType.PinCategory.ToString())
+			|| MatchesCandidate(PinType.PinSubCategory.ToString()))
+		{
+			return true;
+		}
+		if (const UObject* TypeObject = PinType.PinSubCategoryObject.Get())
+		{
+			return MatchesCandidate(TypeObject->GetName())
+				|| MatchesCandidate(TypeObject->GetPathName());
+		}
+		return false;
+	}
+
+	void AddPinTypeIdentity(
+		const FEdGraphPinType& PinType,
+		const TSharedRef<FJsonObject>& Result)
+	{
+		Result->SetStringField(
+			TEXT("currentType"), PinType.PinCategory.ToString());
+		if (!PinType.PinSubCategory.IsNone())
+		{
+			Result->SetStringField(
+				TEXT("currentSubcategory"),
+				PinType.PinSubCategory.ToString());
+		}
+		if (const UObject* TypeObject = PinType.PinSubCategoryObject.Get())
+		{
+			Result->SetStringField(TEXT("typeObject"), TypeObject->GetPathName());
+			Result->SetStringField(
+				TEXT("canonicalTypePath"), TypeObject->GetPathName());
+		}
+		else
+		{
+			Result->SetStringField(
+				TEXT("canonicalTypePath"), PinType.PinCategory.ToString());
+		}
+		const TCHAR* Container = TEXT("none");
+		switch (PinType.ContainerType)
+		{
+		case EPinContainerType::Array:
+			Container = TEXT("array");
+			break;
+		case EPinContainerType::Set:
+			Container = TEXT("set");
+			break;
+		case EPinContainerType::Map:
+			Container = TEXT("map");
+			break;
+		default:
+			break;
+		}
+		Result->SetStringField(TEXT("containerType"), Container);
+	}
+
+	bool IsBlueprintParameterNode(const UEdGraphNode* Node)
+	{
+		return Node
+			&& (Node->IsA<UK2Node_FunctionEntry>()
+				|| Node->IsA<UK2Node_FunctionResult>()
+				|| Node->IsA<UK2Node_CustomEvent>()
+				|| Node->IsA<UK2Node_Event>());
+	}
+}
 
 // ============================================================
 // list_blueprints
@@ -33,30 +788,82 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		FString Filter = Params->GetStringField(TEXT("filter"));
-		FString ParentClassFilter = Params->GetStringField(TEXT("parentClass"));
-		FString TypeFilter = Params->GetStringField(TEXT("type"));
+		FString Filter;
+		FString ParentClassFilter;
+		FString TypeFilter;
+		if (!Params.IsValid()
+			|| (Params->HasField(TEXT("filter"))
+				&& !Params->TryGetStringField(TEXT("filter"), Filter))
+			|| (Params->HasField(TEXT("parentClass"))
+				&& !Params->TryGetStringField(
+					TEXT("parentClass"), ParentClassFilter))
+			|| (Params->HasField(TEXT("type"))
+				&& !Params->TryGetStringField(TEXT("type"), TypeFilter))
+			|| Filter.Len() > 512
+			|| ParentClassFilter.Len() > 256
+			|| TypeFilter.Len() > 16)
+		{
+			return FMCPToolResult::Error(
+				TEXT("Invalid or oversized Blueprint list filter."),
+				TEXT("invalid_params"),
+				422);
+		}
+		int32 Limit = 50;
+		int32 Offset = 0;
+		int32 MaxScannedAssets = 5000;
+		if (!ReadBlueprintListPageInteger(Params, TEXT("limit"), 50, 1, 200, Limit)
+			|| !ReadBlueprintListPageInteger(Params, TEXT("offset"), 0, 0, MAX_int32, Offset)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxScannedAssets"),
+				5000,
+				1,
+				50000,
+				MaxScannedAssets))
+		{
+			return FMCPToolResult::Error(
+				TEXT("limit must be an integer in [1, 200] and offset must be an integer in [0, 2147483647]."),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (!TypeFilter.IsEmpty() && TypeFilter != TEXT("all")
+			&& TypeFilter != TEXT("regular") && TypeFilter != TEXT("level"))
+		{
+			return FMCPToolResult::Error(
+				TEXT("type must be all, regular, or level."), TEXT("invalid_params"), 422);
+		}
 
-		bool bIncludeRegular = TypeFilter.IsEmpty() || TypeFilter == TEXT("all") || TypeFilter == TEXT("regular");
-		bool bIncludeLevel = TypeFilter.IsEmpty() || TypeFilter == TEXT("all") || TypeFilter == TEXT("level");
+		const bool bIncludeRegular = TypeFilter.IsEmpty() || TypeFilter == TEXT("all") || TypeFilter == TEXT("regular");
+		const bool bIncludeLevel = TypeFilter.IsEmpty() || TypeFilter == TEXT("all") || TypeFilter == TEXT("level");
 
 		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
 
-		TArray<TSharedPtr<FJsonValue>> Entries;
-		int32 Total = 0;
+		TArray<FBlueprintListEntry> Matches;
+		int32 ScannedAssetCount = 0;
+		bool bScanExhausted = false;
 
 		if (bIncludeRegular)
 		{
 			TArray<FAssetData> AllBP;
 			Registry.GetAssetsByClass(UBlueprint::StaticClass()->GetClassPathName(), AllBP, true);
-			Total += AllBP.Num();
+			AllBP.Sort([](const FAssetData& Left, const FAssetData& Right)
+			{
+				return Left.PackageName.LexicalLess(Right.PackageName);
+			});
 
 			for (const FAssetData& Asset : AllBP)
 			{
+				if (ScannedAssetCount >= MaxScannedAssets)
+				{
+					bScanExhausted = true;
+					break;
+				}
+				++ScannedAssetCount;
 				FString Name = Asset.AssetName.ToString();
 				FString Path = Asset.PackageName.ToString();
 
-				if (!Filter.IsEmpty() && !Name.Contains(Filter, ESearchCase::IgnoreCase) && !Path.Contains(Filter, ESearchCase::IgnoreCase))
+				if (!Filter.IsEmpty() && !Name.Contains(Filter, ESearchCase::IgnoreCase) && !Path.Contains(
+					Filter, ESearchCase::IgnoreCase))
 					continue;
 
 				FString ParentClass;
@@ -68,43 +875,87 @@ public:
 				if (!ParentClassFilter.IsEmpty() && !ParentClass.Contains(ParentClassFilter, ESearchCase::IgnoreCase))
 					continue;
 
-				TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
-				Entry->SetStringField(TEXT("name"), Name);
-				Entry->SetStringField(TEXT("path"), Path);
-				Entry->SetStringField(TEXT("parentClass"), ParentClass);
-				Entries.Add(MakeShared<FJsonValueObject>(Entry));
+				FBlueprintListEntry& Entry = Matches.AddDefaulted_GetRef();
+				Entry.Name = MoveTemp(Name);
+				Entry.Path = MoveTemp(Path);
+				Entry.ParentClass = MoveTemp(ParentClass);
 			}
 		}
 
-		if (bIncludeLevel)
+		if (bIncludeLevel && !bScanExhausted)
 		{
 			TArray<FAssetData> AllMaps;
 			Registry.GetAssetsByClass(UWorld::StaticClass()->GetClassPathName(), AllMaps, false);
-			Total += AllMaps.Num();
+			AllMaps.Sort([](const FAssetData& Left, const FAssetData& Right)
+			{
+				return Left.PackageName.LexicalLess(Right.PackageName);
+			});
 
 			for (const FAssetData& Asset : AllMaps)
 			{
+				if (ScannedAssetCount >= MaxScannedAssets)
+				{
+					bScanExhausted = true;
+					break;
+				}
+				++ScannedAssetCount;
 				FString Name = Asset.AssetName.ToString();
 				FString Path = Asset.PackageName.ToString();
 
-				if (!Filter.IsEmpty() && !Name.Contains(Filter, ESearchCase::IgnoreCase) && !Path.Contains(Filter, ESearchCase::IgnoreCase))
+				if (!Filter.IsEmpty() && !Name.Contains(Filter, ESearchCase::IgnoreCase) && !Path.Contains(
+					Filter, ESearchCase::IgnoreCase))
 					continue;
 
-				if (!ParentClassFilter.IsEmpty() && !FString(TEXT("LevelScriptActor")).Contains(ParentClassFilter, ESearchCase::IgnoreCase))
+				if (!ParentClassFilter.IsEmpty() && !FString(TEXT("LevelScriptActor")).Contains(
+					ParentClassFilter, ESearchCase::IgnoreCase))
 					continue;
 
-				TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
-				Entry->SetStringField(TEXT("name"), Name);
-				Entry->SetStringField(TEXT("path"), Path);
-				Entry->SetStringField(TEXT("parentClass"), TEXT("LevelScriptActor"));
-				Entry->SetBoolField(TEXT("isLevelBlueprint"), true);
-				Entries.Add(MakeShared<FJsonValueObject>(Entry));
+				FBlueprintListEntry& Entry = Matches.AddDefaulted_GetRef();
+				Entry.Name = MoveTemp(Name);
+				Entry.Path = MoveTemp(Path);
+				Entry.ParentClass = TEXT("LevelScriptActor");
+				Entry.bIsLevelBlueprint = true;
 			}
+		}
+
+		Matches.Sort([](const FBlueprintListEntry& Left, const FBlueprintListEntry& Right)
+		{
+			return Left.Path.Compare(Right.Path, ESearchCase::CaseSensitive) < 0;
+		});
+		const int32 Total = Matches.Num();
+		const int32 PageStart = FMath::Min(Offset, Total);
+		const int32 PageEnd = PageStart + FMath::Min(Limit, Total - PageStart);
+		TArray<TSharedPtr<FJsonValue>> Entries;
+		Entries.Reserve(PageEnd - PageStart);
+		for (int32 Index = PageStart; Index < PageEnd; ++Index)
+		{
+			const FBlueprintListEntry& Match = Matches[Index];
+			TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+			Entry->SetStringField(TEXT("name"), Match.Name);
+			Entry->SetStringField(TEXT("path"), Match.Path);
+			Entry->SetStringField(TEXT("parentClass"), Match.ParentClass);
+			Entry->SetBoolField(TEXT("isLevelBlueprint"), Match.bIsLevelBlueprint);
+			Entries.Add(MakeShared<FJsonValueObject>(Entry));
 		}
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetNumberField(TEXT("count"), Entries.Num());
 		Result->SetNumberField(TEXT("total"), Total);
+		Result->SetNumberField(TEXT("limit"), Limit);
+		Result->SetNumberField(TEXT("offset"), Offset);
+		Result->SetNumberField(
+			TEXT("scannedAssetCount"), ScannedAssetCount);
+		Result->SetNumberField(
+			TEXT("maxScannedAssets"), MaxScannedAssets);
+		Result->SetBoolField(TEXT("scanExhausted"), bScanExhausted);
+		Result->SetBoolField(TEXT("totalComplete"), !bScanExhausted);
+		Result->SetBoolField(TEXT("partial"), bScanExhausted);
+		Result->SetBoolField(
+			TEXT("hasMore"), PageEnd < Total || bScanExhausted);
+		if (!bScanExhausted && PageEnd < Total)
+		{
+			Result->SetNumberField(TEXT("nextOffset"), PageEnd);
+		}
 		Result->SetArrayField(TEXT("blueprints"), Entries);
 		return FMCPToolResult::Ok(Result);
 	}
@@ -298,19 +1149,19 @@ public:
 			}
 			Contained.Sort(
 				[](const TSharedPtr<FJsonValue>& Left,
-					const TSharedPtr<FJsonValue>& Right)
+				   const TSharedPtr<FJsonValue>& Right)
 				{
 					return Left->AsString() < Right->AsString();
 				});
 			Intersecting.Sort(
 				[](const TSharedPtr<FJsonValue>& Left,
-					const TSharedPtr<FJsonValue>& Right)
+				   const TSharedPtr<FJsonValue>& Right)
 				{
 					return Left->AsString() < Right->AsString();
 				});
 			Unresolved.Sort(
 				[](const TSharedPtr<FJsonValue>& Left,
-					const TSharedPtr<FJsonValue>& Right)
+				   const TSharedPtr<FJsonValue>& Right)
 				{
 					return Left->AsString() < Right->AsString();
 				});
@@ -337,8 +1188,8 @@ public:
 				: NodeCount > 0 && ExactCount == NodeCount
 				? TEXT("exact")
 				: ExactCount > 0
-					? TEXT("partial")
-					: TEXT("storedOnly");
+				? TEXT("partial")
+				: TEXT("storedOnly");
 		if (GeometryMode == TEXT("editor")
 			&& GeometryStatus != TEXT("exact"))
 		{
@@ -374,38 +1225,126 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		FString Query = Params->GetStringField(TEXT("query"));
-		if (Query.IsEmpty()) return FMCPToolResult::Error(TEXT("Missing 'query' parameter"));
-
-		FString PathFilter = Params->GetStringField(TEXT("path"));
+		FString Query;
+		FString PathFilter;
+		if (!Params.IsValid()
+			|| !Params->TryGetStringField(TEXT("query"), Query)
+			|| Query.IsEmpty()
+			|| (Params->HasField(TEXT("path"))
+				&& !Params->TryGetStringField(TEXT("path"), PathFilter))
+			|| Query.Len() > 512
+			|| PathFilter.Len() > 1024)
+		{
+			return FMCPToolResult::Error(
+				TEXT("query must be a string of 1..512 characters and path at most 1024."),
+				TEXT("invalid_params"),
+				422);
+		}
 		int32 MaxResults = 50;
-		if (Params->HasField(TEXT("maxResults")))
-			MaxResults = FMath::Clamp((int32)Params->GetNumberField(TEXT("maxResults")), 1, 200);
+		int32 MaxAssets = 500;
+		int32 MaxScannedNodes = 50000;
+		if (!ReadBlueprintListPageInteger(
+				Params, TEXT("maxResults"), 50, 1, 200, MaxResults)
+			|| !ReadBlueprintListPageInteger(
+				Params, TEXT("maxAssets"), 500, 1, 5000, MaxAssets)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxScannedNodes"),
+				50000,
+				1,
+				200000,
+				MaxScannedNodes))
+		{
+			return FMCPToolResult::Error(
+				TEXT("Invalid Blueprint search result or scan limit."),
+				TEXT("invalid_params"),
+				422);
+		}
 
 		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
 		TArray<FAssetData> AllBP;
 		Registry.GetAssetsByClass(UBlueprint::StaticClass()->GetClassPathName(), AllBP, true);
+		AllBP.Sort([](const FAssetData& Left, const FAssetData& Right)
+		{
+			return Left.PackageName.LexicalLess(Right.PackageName);
+		});
 
 		TArray<TSharedPtr<FJsonValue>> Results;
+		int32 ScannedAssetCount = 0;
+		int32 SkippedLoadCount = 0;
+		int32 ScannedNodeCount = 0;
+		bool bResultTruncated = false;
+		bool bScanExhausted = false;
 
 		for (const FAssetData& Asset : AllBP)
 		{
-			if (Results.Num() >= MaxResults) break;
+			if (bResultTruncated || bScanExhausted)
+			{
+				break;
+			}
 			FString Path = Asset.PackageName.ToString();
-			if (!PathFilter.IsEmpty() && !Path.Contains(PathFilter, ESearchCase::IgnoreCase)) continue;
+			if (!PathFilter.IsEmpty()
+				&& !Path.Contains(PathFilter, ESearchCase::IgnoreCase))
+			{
+				continue;
+			}
+			if (ScannedAssetCount >= MaxAssets)
+			{
+				bScanExhausted = true;
+				break;
+			}
+			++ScannedAssetCount;
 
 			UBlueprint* BP = Cast<UBlueprint>(const_cast<FAssetData&>(Asset).GetAsset());
-			if (!BP) continue;
+			if (!BP)
+			{
+				++SkippedLoadCount;
+				continue;
+			}
 
 			TArray<UEdGraph*> Graphs;
 			BP->GetAllGraphs(Graphs);
+			Graphs.RemoveAll([](const UEdGraph* Graph)
+			{
+				return Graph == nullptr;
+			});
+			Graphs.Sort([](const UEdGraph& Left, const UEdGraph& Right)
+			{
+				return Left.GraphGuid.ToString() < Right.GraphGuid.ToString();
+			});
 
 			for (UEdGraph* Graph : Graphs)
 			{
-				if (!Graph || Results.Num() >= MaxResults) break;
-				for (UEdGraphNode* Node : Graph->Nodes)
+				const int32 RemainingNodeBudget = FMath::Max(
+					0,
+					MaxScannedNodes - ScannedNodeCount);
+				const int32 NodeSlotScanCount = FMath::Min(
+					Graph->Nodes.Num(),
+					RemainingNodeBudget);
+				const bool bGraphNodeScanExhausted =
+					NodeSlotScanCount < Graph->Nodes.Num();
+				TArray<UEdGraphNode*> Nodes;
+				Nodes.Reserve(NodeSlotScanCount);
+				for (int32 NodeIndex = 0;
+				     NodeIndex < NodeSlotScanCount;
+				     ++NodeIndex)
 				{
-					if (!Node || Results.Num() >= MaxResults) break;
+					++ScannedNodeCount;
+					UEdGraphNode* Node = Graph->Nodes[NodeIndex];
+					if (Node)
+					{
+						Nodes.Add(Node);
+					}
+				}
+				Nodes.Sort([](
+					const UEdGraphNode& Left,
+					const UEdGraphNode& Right)
+					{
+						return Left.NodeGuid.ToString()
+							< Right.NodeGuid.ToString();
+					});
+				for (UEdGraphNode* Node : Nodes)
+				{
 					FString Title = Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
 
 					FString FuncName, EventName, VarName;
@@ -427,11 +1366,27 @@ public:
 
 					if (bMatch)
 					{
+						if (Results.Num() >= MaxResults)
+						{
+							bResultTruncated = true;
+							break;
+						}
 						TSharedRef<FJsonObject> R = MakeShared<FJsonObject>();
 						R->SetStringField(TEXT("blueprint"), Asset.AssetName.ToString());
 						R->SetStringField(TEXT("blueprintPath"), Path);
 						R->SetStringField(TEXT("graph"), Graph->GetName());
+						R->SetStringField(
+							TEXT("graphId"), Graph->GraphGuid.ToString());
+						R->SetStringField(
+							TEXT("nodeId"), Node->NodeGuid.ToString());
+						const bool bTitleTruncated = Title.Len() > 512;
+						if (bTitleTruncated)
+						{
+							Title.LeftInline(512, false);
+						}
 						R->SetStringField(TEXT("nodeTitle"), Title);
+						R->SetBoolField(
+							TEXT("nodeTitleTruncated"), bTitleTruncated);
 						R->SetStringField(TEXT("nodeClass"), Node->GetClass()->GetName());
 						if (!FuncName.IsEmpty()) R->SetStringField(TEXT("functionName"), FuncName);
 						if (!EventName.IsEmpty()) R->SetStringField(TEXT("eventName"), EventName);
@@ -439,12 +1394,29 @@ public:
 						Results.Add(MakeShared<FJsonValueObject>(R));
 					}
 				}
+				bScanExhausted |= bGraphNodeScanExhausted;
+				if (bResultTruncated || bScanExhausted)
+				{
+					break;
+				}
 			}
 		}
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("query"), Query);
 		Result->SetNumberField(TEXT("resultCount"), Results.Num());
+		Result->SetNumberField(TEXT("maxResults"), MaxResults);
+		Result->SetNumberField(TEXT("maxAssets"), MaxAssets);
+		Result->SetNumberField(
+			TEXT("maxScannedNodes"), MaxScannedNodes);
+		Result->SetNumberField(
+			TEXT("scannedAssetCount"), ScannedAssetCount);
+		Result->SetNumberField(TEXT("skippedLoadCount"), SkippedLoadCount);
+		Result->SetNumberField(TEXT("scannedNodeCount"), ScannedNodeCount);
+		Result->SetBoolField(TEXT("resultTruncated"), bResultTruncated);
+		Result->SetBoolField(TEXT("scanExhausted"), bScanExhausted);
+		Result->SetBoolField(
+			TEXT("partial"), bResultTruncated || bScanExhausted);
 		Result->SetArrayField(TEXT("results"), Results);
 		return FMCPToolResult::Ok(Result);
 	}
@@ -487,10 +1459,108 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		FString Name = Params->GetStringField(TEXT("name"));
-		FString GraphName = Params->GetStringField(TEXT("graph"));
-		if (Name.IsEmpty() || GraphName.IsEmpty())
-			return FMCPToolResult::Error(TEXT("Missing 'name' or 'graph' parameter"));
+		FString Name;
+		FString GraphName;
+		FString EntryPoint;
+		FString EntryNodeId;
+		if (!Params.IsValid()
+			|| !Params->TryGetStringField(TEXT("name"), Name)
+			|| !Params->TryGetStringField(TEXT("graph"), GraphName)
+			|| (Params->HasField(TEXT("entryPoint"))
+				&& !Params->TryGetStringField(
+					TEXT("entryPoint"), EntryPoint))
+			|| (Params->HasField(TEXT("entryNodeId"))
+				&& !Params->TryGetStringField(
+					TEXT("entryNodeId"), EntryNodeId))
+			|| Name.IsEmpty() || Name.Len() > 1024
+			|| GraphName.IsEmpty() || GraphName.Len() > 256
+			|| EntryPoint.Len() > 256
+			|| EntryNodeId.Len() > 36
+			|| (!EntryPoint.IsEmpty() && !EntryNodeId.IsEmpty()))
+		{
+			return FMCPToolResult::Error(
+				TEXT(
+					"name must be a string of 1..1024 characters, graph a string of 1..256 characters, and at most one bounded entry selector may be supplied."),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (Params->HasField(TEXT("entryPoint")) && EntryPoint.IsEmpty())
+		{
+			return FMCPToolResult::Error(
+				TEXT("entryPoint must contain between 1 and 256 characters when supplied."),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (Params->HasField(TEXT("entryNodeId"))
+			&& (EntryNodeId.Len() < 32 || EntryNodeId.Len() > 36))
+		{
+			return FMCPToolResult::Error(
+				TEXT("entryNodeId must contain a Node GUID."),
+				TEXT("invalid_params"),
+				422);
+		}
+		int32 MaxNodes = 200;
+		int32 MaxEdges = 1000;
+		int32 NodeOffset = 0;
+		int32 EdgeOffset = 0;
+		int32 MaxScannedNodes = 5000;
+		int32 MaxScannedPins = 50000;
+		int32 MaxScannedLinks = 100000;
+		if (!ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxNodes"),
+				200,
+				1,
+				500,
+				MaxNodes)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxEdges"),
+				1000,
+				1,
+				2000,
+				MaxEdges)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("nodeOffset"),
+				0,
+				0,
+				MAX_int32,
+				NodeOffset)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("edgeOffset"),
+				0,
+				0,
+				MAX_int32,
+				EdgeOffset)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxScannedNodes"),
+				5000,
+				1,
+				20000,
+				MaxScannedNodes)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxScannedPins"),
+				50000,
+				1,
+				200000,
+				MaxScannedPins)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxScannedLinks"),
+				100000,
+				1,
+				500000,
+				MaxScannedLinks))
+		{
+			return FMCPToolResult::Error(
+				TEXT("Invalid execution-flow result or scan limit."),
+				TEXT("invalid_params"),
+				422);
+		}
 
 		FString LoadError;
 		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(Name, LoadError);
@@ -502,9 +1572,18 @@ public:
 		{
 			if (Graph && Graph->GetName().Equals(GraphName, ESearchCase::IgnoreCase))
 			{
-				TSharedPtr<FJsonObject> GraphJson = MCPHelpers::SerializeGraph(Graph);
-				if (GraphJson.IsValid())
-					return FMCPToolResult::Ok(GraphJson);
+				return DescribeBlueprintExecutionFlow(
+					BP,
+					Graph,
+					EntryPoint,
+					EntryNodeId,
+					MaxNodes,
+					MaxEdges,
+					NodeOffset,
+					EdgeOffset,
+					MaxScannedNodes,
+					MaxScannedPins,
+					MaxScannedLinks);
 			}
 		}
 		return FMCPToolResult::Error(FString::Printf(TEXT("Graph '%s' not found"), *GraphName));
@@ -571,59 +1650,452 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		FString TypeName = Params->GetStringField(TEXT("typeName"));
-		if (TypeName.IsEmpty()) return FMCPToolResult::Error(TEXT("Missing 'typeName' parameter"));
-
-		FString FilterStr = Params->GetStringField(TEXT("filter"));
-		int32 MaxResults = 200;
-		if (Params->HasField(TEXT("maxResults")))
-			MaxResults = FMath::Clamp((int32)Params->GetNumberField(TEXT("maxResults")), 1, 500);
-
-		FString TypeNameNoPrefix = TypeName;
-		if (TypeNameNoPrefix.StartsWith(TEXT("F")) || TypeNameNoPrefix.StartsWith(TEXT("E")) || TypeNameNoPrefix.StartsWith(TEXT("U")))
-			TypeNameNoPrefix = TypeNameNoPrefix.Mid(1);
-
-		auto MatchesType = [&TypeName, &TypeNameNoPrefix](const FString& TestType) -> bool
+		FString TypeName;
+		if (!Params.IsValid()
+			|| !Params->TryGetStringField(TEXT("typeName"), TypeName)
+			|| TypeName.IsEmpty())
 		{
-			return TestType.Equals(TypeName, ESearchCase::IgnoreCase) || TestType.Equals(TypeNameNoPrefix, ESearchCase::IgnoreCase);
-		};
+			return FMCPToolResult::Error(
+				TEXT("typeName must be a non-empty string."),
+				TEXT("invalid_params"),
+				422);
+		}
+		FString FilterStr;
+		if (Params->HasField(TEXT("filter"))
+			&& !Params->TryGetStringField(TEXT("filter"), FilterStr))
+		{
+			return FMCPToolResult::Error(
+				TEXT("filter must be a string."),
+				TEXT("invalid_params"),
+				422);
+		}
+		int32 MaxResults = 200;
+		int32 MaxConnectionsPerPin = 16;
+		int32 MaxAssets = 500;
+		int32 AssetOffset = 0;
+		int32 MaxScannedVariables = 10000;
+		int32 MaxScannedNodes = 5000;
+		int32 MaxScannedPins = 50000;
+		int32 MaxScannedLinks = 100000;
+		if (!ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxResults"),
+				200,
+				1,
+				500,
+				MaxResults)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxConnectionsPerPin"),
+				16,
+				1,
+				64,
+				MaxConnectionsPerPin)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxAssets"),
+				500,
+				1,
+				5000,
+				MaxAssets)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("assetOffset"),
+				0,
+				0,
+				MAX_int32,
+				AssetOffset)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxScannedVariables"),
+				10000,
+				1,
+				100000,
+				MaxScannedVariables)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxScannedNodes"),
+				5000,
+				1,
+				50000,
+				MaxScannedNodes)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxScannedPins"),
+				50000,
+				1,
+				200000,
+				MaxScannedPins)
+			|| !ReadBlueprintListPageInteger(
+				Params,
+				TEXT("maxScannedLinks"),
+				100000,
+				1,
+				500000,
+				MaxScannedLinks))
+		{
+			return FMCPToolResult::Error(
+				TEXT("Invalid result, asset-page, or source-scan limit."),
+				TEXT("invalid_params"),
+				422);
+		}
+		if (TypeName.Len() > 256 || FilterStr.Len() > 512)
+		{
+			return FMCPToolResult::Error(
+				TEXT("typeName may contain at most 256 characters and filter at most 512."),
+				TEXT("invalid_params"),
+				422);
+		}
+		const FString TypeNameNoPrefix =
+			TypeNameWithoutUnrealPrefix(TypeName);
 
 		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
 		TArray<FAssetData> AllBP;
 		Registry.GetAssetsByClass(UBlueprint::StaticClass()->GetClassPathName(), AllBP, true);
-
-		TArray<TSharedPtr<FJsonValue>> Results;
-
+		AllBP.Sort([](const FAssetData& Left, const FAssetData& Right)
+		{
+			return Left.PackageName.LexicalLess(Right.PackageName);
+		});
+		TArray<const FAssetData*> CandidateAssets;
 		for (const FAssetData& Asset : AllBP)
 		{
-			if (Results.Num() >= MaxResults) break;
+			const FString Path = Asset.PackageName.ToString();
+			const FString BPName = Asset.AssetName.ToString();
+			if (FilterStr.IsEmpty()
+				|| BPName.Contains(FilterStr, ESearchCase::IgnoreCase)
+				|| Path.Contains(FilterStr, ESearchCase::IgnoreCase))
+			{
+				CandidateAssets.Add(&Asset);
+			}
+		}
+		const int32 AssetStart = FMath::Min(
+			AssetOffset,
+			CandidateAssets.Num());
+		const int32 AssetEnd = AssetStart + FMath::Min(
+			MaxAssets,
+			CandidateAssets.Num() - AssetStart);
 
-			FString Path = Asset.PackageName.ToString();
-			FString BPName = Asset.AssetName.ToString();
-			if (!FilterStr.IsEmpty() && !BPName.Contains(FilterStr, ESearchCase::IgnoreCase) && !Path.Contains(FilterStr, ESearchCase::IgnoreCase))
-				continue;
+		TArray<TSharedPtr<FJsonValue>> Results;
+		int32 ScannedBlueprintCount = 0;
+		int32 SkippedLoadCount = 0;
+		int32 ScannedVariableCount = 0;
+		int32 ScannedNodeCount = 0;
+		int32 ScannedPinCount = 0;
+		int32 ScannedLinkCount = 0;
+		bool bResultTruncated = false;
+		bool bScanExhausted = false;
+		auto AddResult = [&](const TSharedRef<FJsonObject>& Result)
+		{
+			if (Results.Num() >= MaxResults)
+			{
+				bResultTruncated = true;
+				return false;
+			}
+			Results.Add(MakeShared<FJsonValueObject>(Result));
+			return true;
+		};
+
+		for (int32 AssetIndex = AssetStart;
+		     AssetIndex < AssetEnd;
+		     ++AssetIndex)
+		{
+			if (bResultTruncated || bScanExhausted)
+			{
+				break;
+			}
+
+			const FAssetData& Asset = *CandidateAssets[AssetIndex];
+			const FString Path = Asset.PackageName.ToString();
+			const FString BPName = Asset.AssetName.ToString();
 
 			UBlueprint* BP = Cast<UBlueprint>(const_cast<FAssetData&>(Asset).GetAsset());
-			if (!BP) continue;
-
-			// Check variables
-			for (const FBPVariableDescription& Var : BP->NewVariables)
+			if (!BP)
 			{
-				if (Results.Num() >= MaxResults) break;
-				FString VarSubtype;
-				if (Var.VarType.PinSubCategoryObject.IsValid())
-					VarSubtype = Var.VarType.PinSubCategoryObject->GetName();
+				++SkippedLoadCount;
+				continue;
+			}
+			++ScannedBlueprintCount;
 
-				if (MatchesType(VarSubtype) || MatchesType(Var.VarType.PinCategory.ToString()))
+			const int32 RemainingVariableBudget = FMath::Max(
+				0,
+				MaxScannedVariables - ScannedVariableCount);
+			const int32 VariableScanCount = FMath::Min(
+				BP->NewVariables.Num(),
+				RemainingVariableBudget);
+			const bool bVariableScanExhausted =
+				VariableScanCount < BP->NewVariables.Num();
+			TArray<const FBPVariableDescription*> Variables;
+			Variables.Reserve(VariableScanCount);
+			for (int32 VariableIndex = 0;
+			     VariableIndex < VariableScanCount;
+			     ++VariableIndex)
+			{
+				++ScannedVariableCount;
+				Variables.Add(&BP->NewVariables[VariableIndex]);
+			}
+			Variables.Sort([](
+				const FBPVariableDescription& Left,
+				const FBPVariableDescription& Right)
+				{
+					const FString LeftKey =
+						Left.VarName.ToString() + TEXT("|") + Left.VarGuid.ToString();
+					const FString RightKey =
+						Right.VarName.ToString() + TEXT("|") + Right.VarGuid.ToString();
+					return LeftKey < RightKey;
+				});
+			for (const FBPVariableDescription* Variable : Variables)
+			{
+				if (PinTypeMatchesRequestedType(
+					Variable->VarType,
+					TypeName,
+					TypeNameNoPrefix))
 				{
 					TSharedRef<FJsonObject> R = MakeShared<FJsonObject>();
 					R->SetStringField(TEXT("blueprint"), BPName);
 					R->SetStringField(TEXT("blueprintPath"), Path);
 					R->SetStringField(TEXT("usage"), TEXT("variable"));
-					R->SetStringField(TEXT("location"), Var.VarName.ToString());
-					R->SetStringField(TEXT("currentType"), Var.VarType.PinCategory.ToString());
-					if (!VarSubtype.IsEmpty()) R->SetStringField(TEXT("currentSubtype"), VarSubtype);
-					Results.Add(MakeShared<FJsonValueObject>(R));
+					R->SetStringField(
+						TEXT("location"), Variable->VarName.ToString());
+					R->SetStringField(
+						TEXT("variableGuid"), Variable->VarGuid.ToString());
+					AddPinTypeIdentity(Variable->VarType, R);
+					if (!AddResult(R))
+					{
+						break;
+					}
+				}
+			}
+			bScanExhausted |= bVariableScanExhausted;
+			if (bResultTruncated || bScanExhausted)
+			{
+				break;
+			}
+
+			TArray<UEdGraph*> Graphs;
+			BP->GetAllGraphs(Graphs);
+			Graphs.RemoveAll([](const UEdGraph* Graph)
+			{
+				return Graph == nullptr;
+			});
+			Graphs.Sort([](const UEdGraph& Left, const UEdGraph& Right)
+			{
+				const FString LeftKey =
+					Left.GetName() + TEXT("|") + Left.GraphGuid.ToString();
+				const FString RightKey =
+					Right.GetName() + TEXT("|") + Right.GraphGuid.ToString();
+				return LeftKey < RightKey;
+			});
+			for (UEdGraph* Graph : Graphs)
+			{
+				const int32 RemainingNodeBudget = FMath::Max(
+					0,
+					MaxScannedNodes - ScannedNodeCount);
+				const int32 NodeSlotScanCount = FMath::Min(
+					Graph->Nodes.Num(),
+					RemainingNodeBudget);
+				const bool bGraphNodeScanExhausted =
+					NodeSlotScanCount < Graph->Nodes.Num();
+				TArray<UEdGraphNode*> Nodes;
+				Nodes.Reserve(NodeSlotScanCount);
+				for (int32 NodeIndex = 0;
+				     NodeIndex < NodeSlotScanCount;
+				     ++NodeIndex)
+				{
+					++ScannedNodeCount;
+					UEdGraphNode* Node = Graph->Nodes[NodeIndex];
+					if (Node)
+					{
+						Nodes.Add(Node);
+					}
+				}
+				Nodes.Sort([](
+					const UEdGraphNode& Left,
+					const UEdGraphNode& Right)
+					{
+						return Left.NodeGuid.ToString()
+							< Right.NodeGuid.ToString();
+					});
+				for (UEdGraphNode* Node : Nodes)
+				{
+					const int32 RemainingPinBudget = FMath::Max(
+						0,
+						MaxScannedPins - ScannedPinCount);
+					const int32 PinSlotScanCount = FMath::Min(
+						Node->Pins.Num(),
+						RemainingPinBudget);
+					const bool bNodePinScanExhausted =
+						PinSlotScanCount < Node->Pins.Num();
+					TArray<UEdGraphPin*> Pins;
+					Pins.Reserve(PinSlotScanCount);
+					for (int32 PinIndex = 0;
+					     PinIndex < PinSlotScanCount;
+					     ++PinIndex)
+					{
+						++ScannedPinCount;
+						UEdGraphPin* Pin = Node->Pins[PinIndex];
+						if (Pin)
+						{
+							Pins.Add(Pin);
+						}
+					}
+					Pins.Sort([](
+						const UEdGraphPin& Left,
+						const UEdGraphPin& Right)
+						{
+							const FString LeftKey =
+								Left.PinName.ToString() + TEXT("|")
+								+ FString::FromInt(Left.Direction) + TEXT("|")
+								+ Left.PinId.ToString();
+							const FString RightKey =
+								Right.PinName.ToString() + TEXT("|")
+								+ FString::FromInt(Right.Direction) + TEXT("|")
+								+ Right.PinId.ToString();
+							return LeftKey < RightKey;
+						});
+					for (UEdGraphPin* Pin : Pins)
+					{
+						if (!PinTypeMatchesRequestedType(
+							Pin->PinType,
+							TypeName,
+							TypeNameNoPrefix))
+						{
+							continue;
+						}
+
+						auto MakePinResult = [&](const TCHAR* Usage)
+						{
+							TSharedRef<FJsonObject> R = MakeShared<FJsonObject>();
+							R->SetStringField(TEXT("blueprint"), BPName);
+							R->SetStringField(TEXT("blueprintPath"), Path);
+							R->SetStringField(TEXT("usage"), Usage);
+							R->SetStringField(TEXT("graph"), Graph->GetName());
+							R->SetStringField(
+								TEXT("graphId"), Graph->GraphGuid.ToString());
+							R->SetStringField(
+								TEXT("nodeId"), Node->NodeGuid.ToString());
+							R->SetStringField(
+								TEXT("nodeClass"), Node->GetClass()->GetPathName());
+							R->SetStringField(
+								TEXT("pinId"), Pin->PinId.ToString());
+							R->SetStringField(
+								TEXT("pinName"), Pin->PinName.ToString());
+							R->SetStringField(
+								TEXT("direction"),
+								Pin->Direction == EGPD_Input
+									? TEXT("input")
+									: TEXT("output"));
+							AddPinTypeIdentity(Pin->PinType, R);
+							return R;
+						};
+
+						if (IsBlueprintParameterNode(Node)
+							&& Pin->PinType.PinCategory
+							!= UEdGraphSchema_K2::PC_Exec)
+						{
+							TSharedRef<FJsonObject> Parameter =
+								MakePinResult(TEXT("parameter"));
+							Parameter->SetStringField(
+								TEXT("parameterDirection"),
+								Node->IsA<UK2Node_FunctionResult>()
+									? TEXT("output")
+									: TEXT("input"));
+							if (!AddResult(Parameter))
+							{
+								break;
+							}
+						}
+						if (!Pin->LinkedTo.IsEmpty())
+						{
+							TSharedRef<FJsonObject> ConnectionResult =
+								MakePinResult(TEXT("pinConnection"));
+							const int32 RemainingLinkBudget = FMath::Max(
+								0,
+								MaxScannedLinks - ScannedLinkCount);
+							const int32 LinkSlotScanCount = FMath::Min(
+								Pin->LinkedTo.Num(),
+								RemainingLinkBudget);
+							const bool bPinLinkScanExhausted =
+								LinkSlotScanCount < Pin->LinkedTo.Num();
+							TArray<UEdGraphPin*> LinkedPins;
+							LinkedPins.Reserve(LinkSlotScanCount);
+							for (int32 LinkIndex = 0;
+							     LinkIndex < LinkSlotScanCount;
+							     ++LinkIndex)
+							{
+								++ScannedLinkCount;
+								UEdGraphPin* LinkedPin =
+									Pin->LinkedTo[LinkIndex];
+								if (LinkedPin && LinkedPin->GetOwningNode())
+								{
+									LinkedPins.Add(LinkedPin);
+								}
+							}
+							LinkedPins.Sort([](
+								const UEdGraphPin& Left,
+								const UEdGraphPin& Right)
+								{
+									const FString LeftKey =
+										Left.GetOwningNode()->NodeGuid.ToString()
+										+ TEXT("|") + Left.PinId.ToString();
+									const FString RightKey =
+										Right.GetOwningNode()->NodeGuid.ToString()
+										+ TEXT("|") + Right.PinId.ToString();
+									return LeftKey < RightKey;
+								});
+							TArray<TSharedPtr<FJsonValue>> Connections;
+							const int32 ConnectionLimit = FMath::Min(
+								MaxConnectionsPerPin,
+								LinkedPins.Num());
+							for (int32 Index = 0;
+							     Index < ConnectionLimit;
+							     ++Index)
+							{
+								UEdGraphPin* LinkedPin = LinkedPins[Index];
+								TSharedRef<FJsonObject> Connection =
+									MakeShared<FJsonObject>();
+								Connection->SetStringField(
+									TEXT("nodeId"),
+									LinkedPin->GetOwningNode()->NodeGuid.ToString());
+								Connection->SetStringField(
+									TEXT("pinId"), LinkedPin->PinId.ToString());
+								Connection->SetStringField(
+									TEXT("pinName"),
+									LinkedPin->PinName.ToString());
+								Connections.Add(
+									MakeShared<FJsonValueObject>(Connection));
+							}
+							ConnectionResult->SetNumberField(
+								TEXT("connectionCount"), Pin->LinkedTo.Num());
+							ConnectionResult->SetNumberField(
+								TEXT("scannedValidConnectionCount"),
+								LinkedPins.Num());
+							ConnectionResult->SetBoolField(
+								TEXT("connectionsTruncated"),
+								bPinLinkScanExhausted
+								|| LinkedPins.Num() > ConnectionLimit);
+							ConnectionResult->SetArrayField(
+								TEXT("connections"), Connections);
+							if (!AddResult(ConnectionResult))
+							{
+								break;
+							}
+							bScanExhausted |= bPinLinkScanExhausted;
+						}
+						if (bResultTruncated || bScanExhausted)
+						{
+							break;
+						}
+					}
+					bScanExhausted |= bNodePinScanExhausted;
+					if (bResultTruncated || bScanExhausted)
+					{
+						break;
+					}
+				}
+				bScanExhausted |= bGraphNodeScanExhausted;
+				if (bResultTruncated || bScanExhausted)
+				{
+					break;
 				}
 			}
 		}
@@ -631,8 +2103,385 @@ public:
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("typeName"), TypeName);
 		Result->SetNumberField(TEXT("resultCount"), Results.Num());
+		Result->SetNumberField(TEXT("maxResults"), MaxResults);
+		Result->SetNumberField(
+			TEXT("maxConnectionsPerPin"), MaxConnectionsPerPin);
+		Result->SetNumberField(TEXT("maxAssets"), MaxAssets);
+		Result->SetNumberField(TEXT("assetOffset"), AssetOffset);
+		Result->SetNumberField(
+			TEXT("candidateAssetTotal"), CandidateAssets.Num());
+		Result->SetNumberField(
+			TEXT("scannedBlueprintCount"), ScannedBlueprintCount);
+		Result->SetNumberField(TEXT("skippedLoadCount"), SkippedLoadCount);
+		Result->SetNumberField(
+			TEXT("scannedVariableCount"), ScannedVariableCount);
+		Result->SetNumberField(TEXT("scannedNodeCount"), ScannedNodeCount);
+		Result->SetNumberField(TEXT("scannedPinCount"), ScannedPinCount);
+		Result->SetNumberField(TEXT("scannedLinkCount"), ScannedLinkCount);
+		Result->SetNumberField(
+			TEXT("maxScannedVariables"), MaxScannedVariables);
+		Result->SetNumberField(TEXT("maxScannedNodes"), MaxScannedNodes);
+		Result->SetNumberField(TEXT("maxScannedPins"), MaxScannedPins);
+		Result->SetNumberField(TEXT("maxScannedLinks"), MaxScannedLinks);
+		Result->SetBoolField(TEXT("resultTruncated"), bResultTruncated);
+		Result->SetBoolField(TEXT("scanExhausted"), bScanExhausted);
+		Result->SetBoolField(
+			TEXT("partial"), bResultTruncated || bScanExhausted);
+		const bool bAssetPageHasMore = AssetEnd < CandidateAssets.Num();
+		Result->SetBoolField(TEXT("assetPageHasMore"), bAssetPageHasMore);
+		Result->SetBoolField(
+			TEXT("assetsHasMore"),
+			bAssetPageHasMore);
+		if (!bResultTruncated && !bScanExhausted && bAssetPageHasMore)
+		{
+			Result->SetNumberField(TEXT("nextAssetOffset"), AssetEnd);
+		}
+		Result->SetStringField(
+			TEXT("resumeMode"),
+			bResultTruncated || bScanExhausted
+				? TEXT("restartWithNarrowerFilterOrHigherLimits")
+				: bAssetPageHasMore
+				? TEXT("nextAssetOffset")
+				: TEXT("complete"));
 		Result->SetArrayField(TEXT("results"), Results);
 		return FMCPToolResult::Ok(Result);
+	}
+};
+
+// ============================================================
+// get_blueprint_graph_export — full structural graph export (read-only)
+// ============================================================
+namespace
+{
+	constexpr int32 BlueprintGraphExportMaxNodes = 4096;
+	constexpr int32 BlueprintGraphExportMaxPins = 16384;
+	constexpr int32 BlueprintGraphExportMaxLinks = 16384;
+
+	UEdGraph* ResolveBlueprintGraphExportTarget(
+		UBlueprint* Blueprint,
+		const FString& GraphInput)
+	{
+		if (!Blueprint)
+		{
+			return nullptr;
+		}
+		if (GraphInput.IsEmpty())
+		{
+			// Default to the primary event graph, then any authored graph.
+			for (UEdGraph* Graph : Blueprint->UbergraphPages)
+			{
+				if (Graph)
+				{
+					return Graph;
+				}
+			}
+			TArray<UEdGraph*> AllGraphs;
+			Blueprint->GetAllGraphs(AllGraphs);
+			for (UEdGraph* Graph : AllGraphs)
+			{
+				if (Graph)
+				{
+					return Graph;
+				}
+			}
+			return nullptr;
+		}
+		const FString DecodedGraph = MCPHelpers::UrlDecode(GraphInput);
+		TArray<UEdGraph*> AllGraphs;
+		Blueprint->GetAllGraphs(AllGraphs);
+		for (UEdGraph* Graph : AllGraphs)
+		{
+			if (Graph
+				&& (Graph->GetName().Equals(
+						DecodedGraph, ESearchCase::IgnoreCase)
+					|| Graph->GetPathName().Equals(
+						DecodedGraph, ESearchCase::IgnoreCase)))
+			{
+				return Graph;
+			}
+		}
+		return nullptr;
+	}
+
+	struct FBlueprintGraphExportLink
+	{
+		FString FromPinId;
+		FString ToPinId;
+	};
+
+	TSharedRef<FJsonObject> BuildBlueprintGraphExportResult(
+		UBlueprint* Blueprint,
+		UEdGraph* Graph)
+	{
+		TArray<UEdGraphNode*> Nodes;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (Node)
+			{
+				Nodes.Add(Node);
+			}
+		}
+		Nodes.Sort([](const UEdGraphNode& Left, const UEdGraphNode& Right)
+		{
+			return Left.NodeGuid.ToString() < Right.NodeGuid.ToString();
+		});
+
+		const bool bNodesTruncated = Nodes.Num() > BlueprintGraphExportMaxNodes;
+		const int32 NodeLimit = FMath::Min(
+			Nodes.Num(),
+			BlueprintGraphExportMaxNodes);
+
+		TArray<TSharedPtr<FJsonValue>> NodeValues;
+		NodeValues.Reserve(NodeLimit);
+		for (int32 NodeIndex = 0; NodeIndex < NodeLimit; ++NodeIndex)
+		{
+			UEdGraphNode* Node = Nodes[NodeIndex];
+			FString Title = Node->GetNodeTitle(
+				ENodeTitleType::ListView).ToString();
+			if (Title.Len() > 512)
+			{
+				Title.LeftInline(512, false);
+			}
+			TSharedRef<FJsonObject> NodeJson = MakeShared<FJsonObject>();
+			NodeJson->SetStringField(TEXT("id"), Node->NodeGuid.ToString());
+			NodeJson->SetStringField(
+				TEXT("class"), Node->GetClass()->GetName());
+			NodeJson->SetStringField(TEXT("title"), Title);
+			NodeJson->SetNumberField(TEXT("x"), Node->NodePosX);
+			NodeJson->SetNumberField(TEXT("y"), Node->NodePosY);
+			NodeJson->SetStringField(TEXT("comment"), Node->NodeComment);
+			NodeValues.Add(MakeShared<FJsonValueObject>(NodeJson));
+		}
+
+		TArray<TSharedPtr<FJsonValue>> PinValues;
+		TArray<FBlueprintGraphExportLink> Links;
+		TSet<FString> LinkKeys;
+		int32 PinCount = 0;
+		bool bPinsTruncated = false;
+		bool bLinksTruncated = false;
+		bool bPinOrLinkExhausted = false;
+		for (int32 NodeIndex = 0;
+		     NodeIndex < NodeLimit && !bPinOrLinkExhausted;
+		     ++NodeIndex)
+		{
+			UEdGraphNode* Node = Nodes[NodeIndex];
+			TArray<UEdGraphPin*> Pins;
+			for (UEdGraphPin* Pin : Node->Pins)
+			{
+				if (Pin)
+				{
+					Pins.Add(Pin);
+				}
+			}
+			Pins.Sort([](const UEdGraphPin& Left, const UEdGraphPin& Right)
+			{
+				const FString LeftId = Left.PinId.ToString();
+				const FString RightId = Right.PinId.ToString();
+				if (LeftId != RightId)
+				{
+					return LeftId < RightId;
+				}
+				if (Left.Direction != Right.Direction)
+				{
+					return static_cast<int32>(Left.Direction)
+						< static_cast<int32>(Right.Direction);
+				}
+				return Left.PinName.ToString() < Right.PinName.ToString();
+			});
+			for (UEdGraphPin* Pin : Pins)
+			{
+				if (PinCount >= BlueprintGraphExportMaxPins)
+				{
+					bPinsTruncated = true;
+					bPinOrLinkExhausted = true;
+					break;
+				}
+				++PinCount;
+				TSharedRef<FJsonObject> PinJson = MakeShared<FJsonObject>();
+				PinJson->SetStringField(TEXT("id"), Pin->PinId.ToString());
+				PinJson->SetStringField(
+					TEXT("nodeId"), Node->NodeGuid.ToString());
+				PinJson->SetStringField(TEXT("name"), Pin->PinName.ToString());
+				PinJson->SetStringField(
+					TEXT("direction"),
+					Pin->Direction == EGPD_Input
+						? TEXT("input")
+						: TEXT("output"));
+				PinJson->SetStringField(
+					TEXT("category"), Pin->PinType.PinCategory.ToString());
+				PinJson->SetBoolField(
+					TEXT("isLink"), !Pin->LinkedTo.IsEmpty());
+				PinValues.Add(MakeShared<FJsonValueObject>(PinJson));
+
+				for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
+				{
+					if (!LinkedPin)
+					{
+						continue;
+					}
+					// Orient each link from the output (source) pin to the input
+					// (destination) pin, matching the capture snapshot convention.
+					UEdGraphPin* FromPin = nullptr;
+					UEdGraphPin* ToPin = nullptr;
+					if (Pin->Direction == EGPD_Output
+						&& LinkedPin->Direction == EGPD_Input)
+					{
+						FromPin = Pin;
+						ToPin = LinkedPin;
+					}
+					else if (Pin->Direction == EGPD_Input
+						&& LinkedPin->Direction == EGPD_Output)
+					{
+						FromPin = LinkedPin;
+						ToPin = Pin;
+					}
+					else
+					{
+						const FString PinId = Pin->PinId.ToString();
+						const FString LinkedId = LinkedPin->PinId.ToString();
+						if (PinId <= LinkedId)
+						{
+							FromPin = Pin;
+							ToPin = LinkedPin;
+						}
+						else
+						{
+							FromPin = LinkedPin;
+							ToPin = Pin;
+						}
+					}
+					const FString LinkKey = FromPin->PinId.ToString()
+						+ TEXT("|") + ToPin->PinId.ToString();
+					if (LinkKeys.Contains(LinkKey))
+					{
+						continue;
+					}
+					if (Links.Num() >= BlueprintGraphExportMaxLinks)
+					{
+						bLinksTruncated = true;
+						bPinOrLinkExhausted = true;
+						break;
+					}
+					LinkKeys.Add(LinkKey);
+					Links.Add(
+						{
+							FromPin->PinId.ToString(),
+							ToPin->PinId.ToString()
+						});
+				}
+				if (bPinOrLinkExhausted)
+				{
+					break;
+				}
+			}
+		}
+
+		Links.Sort([](
+			const FBlueprintGraphExportLink& Left,
+			const FBlueprintGraphExportLink& Right)
+			{
+				const FString LeftKey = Left.FromPinId + TEXT("|") + Left.ToPinId;
+				const FString RightKey = Right.FromPinId + TEXT("|") + Right.ToPinId;
+				return LeftKey < RightKey;
+			});
+		TArray<TSharedPtr<FJsonValue>> LinkValues;
+		LinkValues.Reserve(Links.Num());
+		for (const FBlueprintGraphExportLink& Link : Links)
+		{
+			TSharedRef<FJsonObject> LinkJson = MakeShared<FJsonObject>();
+			LinkJson->SetStringField(TEXT("fromPinId"), Link.FromPinId);
+			LinkJson->SetStringField(TEXT("toPinId"), Link.ToPinId);
+			LinkValues.Add(MakeShared<FJsonValueObject>(LinkJson));
+		}
+
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetStringField(
+			TEXT("schema"), TEXT("ue.blueprint.graph-export.v1"));
+		Result->SetStringField(TEXT("blueprint"), Blueprint->GetName());
+		Result->SetStringField(
+			TEXT("blueprintPath"), Blueprint->GetPathName());
+		Result->SetStringField(TEXT("graph"), Graph->GetName());
+		Result->SetStringField(TEXT("graphPath"), Graph->GetPathName());
+		Result->SetNumberField(TEXT("nodeCount"), NodeValues.Num());
+		Result->SetNumberField(TEXT("pinCount"), PinValues.Num());
+		Result->SetNumberField(TEXT("linkCount"), LinkValues.Num());
+		Result->SetArrayField(TEXT("nodes"), NodeValues);
+		Result->SetArrayField(TEXT("pins"), PinValues);
+		Result->SetArrayField(TEXT("links"), LinkValues);
+		Result->SetBoolField(TEXT("nodesTruncated"), bNodesTruncated);
+		Result->SetBoolField(TEXT("pinsTruncated"), bPinsTruncated);
+		Result->SetBoolField(TEXT("linksTruncated"), bLinksTruncated);
+		Result->SetBoolField(TEXT("saved"), false);
+		Result->SetBoolField(TEXT("compiled"), false);
+		Result->SetStringField(
+			TEXT("scope"),
+			TEXT("authored structural export; runtime/debugger state not included"));
+		return Result;
+	}
+} // namespace
+
+class FTool_GetBlueprintGraphExport : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("blueprint.graph.export");
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		FString BlueprintInput;
+		if (!Params.IsValid()
+			|| !Params->TryGetStringField(TEXT("blueprint"), BlueprintInput)
+			|| BlueprintInput.IsEmpty()
+			|| BlueprintInput.Len() > 1024)
+		{
+			return FMCPToolResult::Error(
+				TEXT("blueprint must be a non-empty string of at most 1024 characters."),
+				TEXT("invalid_params"),
+				422);
+		}
+		FString GraphInput;
+		if ((Params->HasField(TEXT("graph"))
+				&& !Params->TryGetStringField(TEXT("graph"), GraphInput))
+			|| GraphInput.Len() > 256)
+		{
+			return FMCPToolResult::Error(
+				TEXT("graph must be a string of at most 256 characters."),
+				TEXT("invalid_params"),
+				422);
+		}
+
+		FString LoadError;
+		UBlueprint* Blueprint = MCPHelpers::LoadBlueprintByName(
+			BlueprintInput,
+			LoadError);
+		if (!Blueprint)
+		{
+			return FMCPToolResult::Error(
+				LoadError,
+				TEXT("blueprint_not_found"),
+				404);
+		}
+
+		UEdGraph* Graph = ResolveBlueprintGraphExportTarget(
+			Blueprint,
+			GraphInput);
+		if (!Graph)
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Graph '%s' was not found in Blueprint '%s'."),
+					GraphInput.IsEmpty()
+						? TEXT("(primary event graph)")
+						: *MCPHelpers::UrlDecode(GraphInput),
+					*BlueprintInput),
+				TEXT("graph_not_found"),
+				404);
+		}
+
+		return FMCPToolResult::Ok(
+			BuildBlueprintGraphExportResult(Blueprint, Graph));
 	}
 };
 
@@ -651,5 +2500,6 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_DescribeGraph>());
 		Registry.Register(MakeShared<FTool_FindAssetReferences>());
 		Registry.Register(MakeShared<FTool_SearchByType>());
+		Registry.Register(MakeShared<FTool_GetBlueprintGraphExport>());
 	}
 }

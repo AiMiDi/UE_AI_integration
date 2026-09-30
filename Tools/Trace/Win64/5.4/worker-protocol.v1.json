@@ -1,0 +1,32 @@
+{
+  "schema": "ue.trace-worker-protocol.v1",
+  "protocolVersion": 1,
+  "requestSchema": "ue.trace-worker-request.v1",
+  "responseSchema": "ue.trace-worker-response.v1",
+  "actions": ["handshake", "execute"],
+  "frame": {
+    "encoding": "utf-8-json",
+    "lengthPrefix": "uint32-little-endian",
+    "maximumBytes": 4194304,
+    "requestsPerConnection": 1
+  },
+  "residentService": {
+    "windows": "current-user-named-pipe",
+    "unix": "current-user-unix-domain-socket",
+    "tcp": false,
+    "defaultIdleSeconds": 600,
+    "maximumConcurrentConnections": 2,
+    "maximumConcurrentAnalyses": 1,
+    "analysisSessionCacheCapacity": 2,
+    "analysisSessionPolicy": "sha256-lru"
+  },
+  "diagnosticTransport": {
+    "stdioOneShot": true,
+    "default": false
+  },
+  "jobIdPrefixes": [
+    "trace-local-",
+    "trace-analysis-local-",
+    "trace-launch-local-"
+  ]
+}

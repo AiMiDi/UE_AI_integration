@@ -646,6 +646,41 @@
       }
     },
     {
+      "id": "scene.level.save",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Save the currently loaded Editor level and verify that its map package is persisted and clean.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "onlyIfDirty": {
+            "type": "boolean",
+            "default": true,
+            "description": "Skip the write when the current map is clean and its .umap file already exists."
+          }
+        },
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "write",
+        "world": "write",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "scene.level.save"
+      }
+    },
+    {
       "id": "scene.navigation.bounds.add",
       "domain": "scene",
       "kind": "command",

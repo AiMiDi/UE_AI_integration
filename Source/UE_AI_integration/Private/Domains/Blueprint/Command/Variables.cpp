@@ -171,6 +171,100 @@ public:
 };
 
 // ============================================================
+// rename_variable
+// ============================================================
+
+// Member-variable names become C++ identifiers on the generated class, so a
+// rename target must be a plain identifier (letter/underscore first, then
+// alphanumeric/underscore). FName accepts characters that would break the
+// generated UHT code, so validate explicitly before mutating anything.
+static bool IsValidBlueprintVariableName(const FString& Name)
+{
+	if (Name.IsEmpty())
+	{
+		return false;
+	}
+	for (int32 Index = 0; Index < Name.Len(); ++Index)
+	{
+		const TCHAR Character = Name[Index];
+		if (!FChar::IsAlnum(Character) && !FChar::IsUnderscore(Character))
+		{
+			return false;
+		}
+	}
+	return !FChar::IsDigit(Name[0]);
+}
+
+class FTool_RenameVariable : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("blueprint.variable.rename");
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		FString BlueprintName = Params->GetStringField(TEXT("blueprint"));
+		FString VariableName = Params->GetStringField(TEXT("variableName"));
+		FString NewName = Params->GetStringField(TEXT("newName"));
+
+		if (BlueprintName.IsEmpty() || VariableName.IsEmpty() || NewName.IsEmpty())
+			return FMCPToolResult::Error(TEXT("Missing required fields: blueprint, variableName, newName"));
+
+		FString LoadError;
+		UBlueprint* BP = MCPHelpers::LoadBlueprintByName(BlueprintName, LoadError);
+		if (!BP) return FMCPToolResult::Error(LoadError);
+
+		// Resolve the current name case-insensitively and preserve the stored
+		// casing so the canonical FName is passed to RenameMemberVariable.
+		FName OldVarName;
+		bool bVarFound = false;
+		for (const FBPVariableDescription& Var : BP->NewVariables)
+		{
+			if (Var.VarName.ToString().Equals(VariableName, ESearchCase::IgnoreCase))
+			{
+				OldVarName = Var.VarName;
+				bVarFound = true;
+				break;
+			}
+		}
+		if (!bVarFound)
+			return FMCPToolResult::Error(FString::Printf(TEXT("Variable '%s' not found in Blueprint '%s'"), *VariableName, *BlueprintName));
+
+		if (!IsValidBlueprintVariableName(NewName))
+			return FMCPToolResult::Error(FString::Printf(TEXT("Invalid variable name '%s': must start with a letter or underscore and contain only letters, digits, and underscores"), *NewName));
+
+		// Reject collisions so a rename can never shadow another member variable.
+		const FName NewVarName(*NewName);
+		for (const FBPVariableDescription& Var : BP->NewVariables)
+		{
+			if (Var.VarName == NewVarName && Var.VarName != OldVarName)
+				return FMCPToolResult::Error(FString::Printf(TEXT("Variable '%s' already exists"), *NewName));
+		}
+
+		// RenameMemberVariable updates the NewVariables entry and every graph node
+		// that references it (VariableGet/VariableSet, delegate nodes, etc.) via
+		// ReplaceVariableReferences, refreshes the CDO default value, validates
+		// child Blueprints, and marks the Blueprint structurally modified.
+		FBlueprintEditorUtils::RenameMemberVariable(BP, OldVarName, NewVarName);
+
+		UEAIIntegration::Workflow::MarkBlueprintChanged(BP, Params);
+		const bool bSaved =
+			UEAIIntegration::Workflow::ShouldSaveImmediately(Params)
+			&& MCPHelpers::CompileAndSaveBlueprintPackage(BP);
+
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), true);
+		Result->SetStringField(TEXT("blueprint"), BlueprintName);
+		Result->SetStringField(TEXT("variableName"), OldVarName.ToString());
+		Result->SetStringField(TEXT("newName"), NewName);
+		Result->SetBoolField(TEXT("saved"), bSaved);
+		return FMCPToolResult::Ok(Result);
+	}
+};
+
+// ============================================================
 // change_variable_type
 // ============================================================
 class FTool_ChangeVariableType : public FMCPToolBase
@@ -476,6 +570,7 @@ namespace UEAIIntegrationTools
 	{
 		Registry.Register(MakeShared<FTool_AddVariable>());
 		Registry.Register(MakeShared<FTool_RemoveVariable>());
+		Registry.Register(MakeShared<FTool_RenameVariable>());
 		Registry.Register(MakeShared<FTool_ChangeVariableType>());
 		Registry.Register(MakeShared<FTool_SetVariableMetadata>());
 	}

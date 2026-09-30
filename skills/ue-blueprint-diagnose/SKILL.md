@@ -33,19 +33,35 @@ source of truth.
 2. Run `blueprint.scan` only within the selected scope.
 3. Inspect high-value findings before informational noise. Use stable
    `findingId`, `ruleId`, severity, confidence, graph, node GUID, and evidence.
-4. Read the finding's exact graph. For a Tick claim, begin at `Event Tick` and
-   follow connected execution output pins node by node to the candidate call.
-   Data-pin proximity, membership in the same graph, and a cross-asset call
-   edge do not establish execution reachability.
-5. Follow cross-asset calls and references only after locating the candidate
-   node.
-6. Compile-validate the Blueprint without saving it.
-7. Correlate a retained scan with Kismet trace evidence only when a valid
+4. Read the finding's exact graph, then use `blueprint.graph.describe` for a
+   bounded K2 execution-edge projection. Select one subflow with the exact
+   `entryPoint` name, or use the stable `entryNodeId` from the graph read when
+   names are ambiguous. For a Tick claim, begin at `Event Tick` and follow the
+   returned `edgeId` records by node GUID and pin GUID to the candidate call.
+5. Continue independent node and edge pages only through `nextNodeOffset` and
+   `nextEdgeOffset`. Treat `partial`, `scanExhausted`, `nodesTruncated`, or
+   `edgesTruncated` as incomplete evidence. An
+   `execution_entry_scan_incomplete` error means the entry itself was not
+   disproved; narrow the graph or raise limits within the live schema.
+6. Follow cross-asset calls and references only after locating the candidate
+   node. Use `blueprint.asset.search_by_type` only for an explicit type-impact
+   question and honor its asset page plus variable/node/pin/link budgets. A
+   same-graph result or data-pin connection still does not establish execution
+   reachability.
+7. Compile-validate the Blueprint without saving it.
+8. Correlate a retained scan with Kismet trace evidence only when a valid
    runtime run exists.
 
 Do not claim that a call is Tick-reachable merely because it appears in the
 same graph. Do not put Blueprint debug sessions, breakpoints, or trace capture
 inside UE Workflow DSL.
+
+`blueprint.component.list`, `blueprint.component.get`, and
+`blueprint.component.property.set` currently address components declared by
+the selected Actor Blueprint's local SCS. Read-only `BlueprintVisible`
+properties may appear in `component.get`, but the setter accepts only editable,
+persistent local-template properties. Native, inherited, Widget Blueprint, and
+Level Blueprint components are not covered by this component mutation surface.
 
 ## See results
 

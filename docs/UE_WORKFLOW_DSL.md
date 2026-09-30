@@ -9,7 +9,7 @@
 
 只有同时满足以下条件的 operation 才能标记为 `editStep`：
 
-- 围绕一个 `blueprint`、`widgetBlueprint` 或 `material` 主 scope。
+- 围绕一个 `blueprint`、`widgetBlueprint`、`material` 或 `materialFunction` 主 scope。
 - 前一步的结构化输出可以通过 JSON Pointer 绑定给后一步。
 - 能参加同一个 UE Transaction。
 - 中间步骤可以延迟 Compile 和 Save。
@@ -20,6 +20,31 @@ Blueprint/PIE 调试、断点、调用栈、日志分析、性能采样、Cook�
 接口。
 
 ## Workflow AST
+
+### 材质函数与大图查询
+
+Custom HLSL 的代码、输入输出、宏及 include 可通过 `content.material.custom.set`
+一次配置，参数通过 `content.material.parameter.set` 修改；两者均支持材质和材质函数
+scope，连续步骤延迟刷新和保存。使用方法与编译诊断边界见
+[Custom HLSL 编辑](MATERIAL_CUSTOM_HLSL.md)。
+
+`materialFunction` scope 支持 v1 和 v2：创建函数、增删/移动表达式、修改值、
+连接/断开引脚，以及 `content.material.function.interface.set` 配置函数输入输出。
+目标函数由 scope 注入，operation 和 bindings 不能切换到其他材质或函数。
+连续步骤只标脏，最后执行一次 `content.material.function.validate`，统一更新函数
+及已加载的依赖。该 finalizer 校验结构并调用原生更新，不表示 Shader 或画面验证通过。
+最终保存和故障恢复仍遵守 Workflow 的 persistence、checkpoint 和 rollback 契约。
+
+可运行示例：[材质函数批处理](../Workflow/tests/fixtures/material-function.workflow.json)。
+表达式使用 `expr:<对象名>` 稳定标识；仍接受已有编辑器节点 GUID。稳定标识仅限同一资产，
+删除、替换或重命名后需要重新查询。函数引脚支持名称或 `index:N`；断开操作要求名称
+能唯一确定输入或输出，引脚名称有歧义时拒绝执行。
+
+大图查询通过 `content.material.graph.index` 建立只读快照，再用
+`content.material.graph.nodes.list` 和 `content.material.graph.subgraph.get`
+分页或取局部子图。每页不会重新读取资产。修改后应重新捕获，再准备当前 Workflow plan；
+查询的 `projectionHash` 不能替代 Workflow 的资产前置条件。
+设计、预算、覆盖边界见 [大图查询方案](MATERIAL_GRAPH_QUERY.md)。
 
 ```json
 {
@@ -332,6 +357,35 @@ package baseline 重放未完成部分。显式 rollback 优先使用同实例 U
 compile。UE 5.3 的 Blueprint/Widget Blueprint 创建工厂会在创建时同步生成
 skeleton class，因此 `createIfMissing` 或显式 create 可能额外产生一次
 bootstrap compile；该引擎边界会在 receipt 中与最终 edit finalizer 分开记录。
+
+同一轮材质或蓝图的连续改线、改参数、移动节点，应把可组合操作放入同一个
+Workflow。批次内保留图连线校验和节点通知，延迟资产级刷新；收尾时统一发出
+Blueprint 修改通知，或同步 Material 表达式连线并更新预览。自定义 Graph Schema、
+自动转换节点和节点自身的必要回调仍使用引擎行为，不能把一次 finalizer 等同于
+所有情况下只触发一次 shader 编译。
+
+`saveOnSuccess=true` 在验证通过后执行最终保存一次；`dirtyOnly` 不提交最终文件。
+两者仍会为实际变化保存恢复检查点。检查点会比较 domain 对象内存摘要，复用未变化且
+校验通过的 package 镜像，减少每步执行前、只读收尾及多资产中未变化 scope 的
+重复保存；执行写操作的 scope 和编译后的依赖集合仍会保存检查点。恢复 journal
+仍逐步持久化；这不表示批次期间完全没有磁盘写入。
+独立 domain command 保留立即刷新和保存行为，不会跨请求自动合并。
+
+材质的 `content.material.pin.disconnect` 和
+`content.material.expression.delete` 已开放为 v1/v2 `material` scope 的
+`editStep`，可与新增节点、改值及连线混合执行。两者均为 `confirmWrite`：
+执行需要当前计划的 `approvePlanDigest` 和 `confirmWrite=true`，CLI 对应
+`--approve-plan` 与 `--confirm-write`。编辑步骤不单独保存或编译，最终校验后按
+`saveOnSuccess` 决定是否保存；恢复检查点仍会写盘。
+
+删除同时移除图节点、表达式及引用它的下游/材质输出连线。复合子图及边界节点
+暂不支持单表达式删除，命令会在修改前拒绝。MaterialFunction 的独立编辑入口
+仍不属于 Workflow `material` scope，不能通过 operation 参数切换目标。
+
+可运行示例：`Workflow/tests/fixtures/material-rewire.workflow.json`，演示
+创建连接、断线、删除旧节点，再绑定新节点并重新连线。先执行本地
+`ue-workflow-cli validate --file <示例路径> --json`，实际执行前通过
+`plan --connect` 获取与当前 Editor 状态绑定的计划。
 
 ## Contract 与准入
 

@@ -1,84 +1,127 @@
-# Runtime and rendering failure evidence
+# Runtime inspection and rendering failure evidence
 
-The local SilverPalace 5.4.1 validation record is
-[`2026-09-08-niagara-render-evidence.json`](../../../docs/validation/2026-09-08-niagara-render-evidence.json).
-It records the module hashes, CPU contract results, D3D12 GPU smoke result and
-remaining scene acceptance limits. Restart the MCP stdio server after updating
-its built `dist` and manifests so discovery exposes the new operations.
+The current removal and validation record is
+[`2026-09-08-niagara-no-engine-bridge.json`](../../../docs/validation/2026-09-08-niagara-no-engine-bridge.json).
+The earlier GPU bridge validation record is historical and does not describe
+the current implementation. The plugin uses existing engine APIs; it does not
+install an engine patch.
 
-## Niagara AsyncGpuTrace
+## Niagara runtime inventory
 
-1. Discover schemas with `ue_context` for `content.niagara.runtime.inspect` and
-   `content.niagara.runtime.capture`.
-2. Execute `content.niagara.runtime.inspect` through `ue_content`. Select exact
-   loaded world and Data Interface paths; use `offset` and `limit` to page both
-   object arrays independently. Loaded asset DIs can be shared: inventory alone
-   does not prove that a component uses a particular proxy at runtime.
-3. For PIE, get the current `sessionId` and `generation` from `scene.pie.status`.
-   Pass them to capture. Do not start/restart PIE just to obtain a session.
-4. Capture with `world`, `dataInterface`, `resultLimit` (1–1024; default 64), and
-   `timeoutSeconds` (1–30; default 5). The asynchronous request observes the next
-   matching dispatch. It never waits for GPU idle or changes provider settings.
-5. Require `state=complete` before using GPU counts. A timeout without a matching
-   dispatch means no execution was observed in the window; it does not mean zero
-   queries or prove that the DI is unused. Cancellation and unsupported bridge
-   builds have distinct errors. World cleanup and PIE generation changes cancel.
+1. Discover `content.niagara.runtime.inspect` with
+   `ue-cli help content.niagara.runtime.inspect --json`; check its live schema
+   when connected to Editor.
+2. Execute `ue-cli content.niagara.runtime.inspect --limit 32 --json` to list
+   loaded Editor/PIE worlds, components, and AsyncGpuTrace Data Interfaces.
+3. Select an exact world returned by the inventory and pass `--world <path>`
+   when narrowing component ownership. Use `--offset` and `--limit` to page
+   the component and DI arrays independently.
+4. Verify the returned identities, page bounds, and `bindingEvidence`. A loaded
+   asset DI can be shared across components and worlds; its presence does not
+   establish which component uses its proxy during simulation.
+5. Report `active`, `paused`, the System asset, and the configured provider enum
+   as observed object state. Do not promote configuration to the actual selected
+   GPU provider or infer a dispatch count, collision rate, or particle result.
+   This inspection neither starts PIE nor changes its current generation.
 
-Evidence is **one dispatch per DI in one world, aggregated across instances**.
-`queryHighWatermark` is TraceCounts[0], including reservations, rejected indices
-and possible holes. It can exceed capacity. It is not an issued-ray count.
-`hitDistancesByQueryIndex` is a bounded prefix. Unwritten holes can retain old
-allocation bytes. `positiveHitSlots` counts positive finite distances in that
-prefix, not verified collision events or a statistical hit rate. Non-finite
-distances are JSON null and counted separately. Missing readback metrics are null.
+MCP fallback uses `ue_context` for schema discovery and `ue_content` with the
+same operation and parameters. Niagara must be enabled; no custom engine header,
+provider extension, GPU readback hook, or session controller is required.
 
-`configuredProvider` is the dispatch's resolved configuration; compare it with
-the inventory's original asset enum before discussing fallback. The ordered
-provider rows report availability reasons, dispatch path, and relevant resource
-references. Missing providers can be unsupported or absent from the configured
-priority list. `selectedProvider=none` plus `resultsCleared=true` observes the
-clear path. Setup frames describe the helper's last PostRenderOpaque call and
-its first ViewFamily; a provider can retain older state if it skipped that call.
-TLAS/view/resource reference presence does not prove build completion, ownership
-or safe lifetime. Previous result allocation presence and frame do not prove
-valid particle Query IDs or previous-frame consumption.
+### Scope without engine changes
 
-### Optional engine bridge
+The plugin retains graph/configuration audits, loaded-object inventory, viewport
+debug captures, existing Trace capabilities, and offline rendering-failure
+analysis. The former `content.niagara.runtime.capture` operation has been
+removed from the handler registry, capability catalog, and Skill recipes.
 
-Inventory works with Niagara enabled. GPU capture additionally needs the
-`NiagaraAsyncGpuTraceDiagnostics.h` bridge in the local engine. Without the
-header, the plugin compiles and returns `niagara_runtime_evidence_unavailable`.
-Stock engines are not silently given an approximation.
+Use recipe `niagara-simcache-observe` for recorded particle/system attributes.
+The plugin implements capture, inspect, read, export and release through public
+UE SimCache APIs; no engine patch is required. This is separate from inventory
+and cannot read AsyncGpuTrace's private request/result buffers.
 
-The SilverPalace implementation is in `Engine/Plugins/FX/Niagara/Source/`:
+### SimCache observation through CLI
 
-- `Niagara/Public/NiagaraAsyncGpuTraceDiagnostics.h` and
-  `Niagara/Private/NiagaraAsyncGpuTraceDiagnostics.cpp` own requests and readbacks.
-- `Niagara/Private/NiagaraAsyncGpuTraceHelper.{h,cpp}` observes dispatch and setup.
-- `NiagaraShader/Public/NiagaraAsyncGpuTraceProvider.h` and the HWRT/GSDF provider
-  headers and implementations expose diagnostic context.
+Discover the live schema before each call with `ue-cli help <operation>
+--live-schema --json`. Then execute the same operation through `ue-cli`, using
+`--params-file` for JSON parameters. Do not infer runtime support from the local
+catalog when Editor still has an older plugin DLL loaded.
 
-All bridge code and provider virtual additions are `WITH_EDITOR` only. Keep the
-plugin and engine changes together; rebuild `Niagara`, `NiagaraShader`, and
-`UE_AI_integration`, then load matching DLLs before testing. Disabling the plugin
-does not leave a background collector running. Requests are bounded to 16 pending
-or in-flight readbacks, and completed callbacks release their budget even when
-discarded during world teardown. The plugin allows one pending capture at a time.
+1. Call `content.niagara.runtime.inspect` and select its exact `world` and
+   `component` paths. Emitter rows include `captureAttributePrefix`, for example
+   `Fountain.Particles.`. Append compiled attribute names such as `Position`,
+   `Velocity`, `Color`, `Age` or `ID` only when they exist in this system.
+2. Call `content.niagara.simcache.capture` with `world`, `component`, `attributes`
+   (1-32 fully qualified names), `frames` (1-32, default 8), `captureRate`
+   (1-16, default 1), and `timeoutSeconds` (1-20, default 10). The component must
+   already be active and unpaused. No activation, manual simulation advance,
+   asset edit, replay attachment, or PIE restart occurs.
+3. Check `status`, `reason`, `frameCount` and `retained`. `complete` means the
+   requested frame count was written. `partial` preserves fewer valid frames
+   after timeout/cancellation/target loss. `failed` is not usable evidence even
+   when the transport returned successfully. A simulation reset invalidates the
+   cache; a paused simulation cannot create duplicate frames.
+4. Call `content.niagara.simcache.inspect` with `captureId`. Its emitter indices,
+   stored attribute names and `frameInstanceCounts` are authoritative. Index -1
+   selects system attributes. These names differ from the fully qualified
+   capture input: a particle attribute is usually stored as `Position`. Omit
+   `captureId` to list retained recordings, including after a disconnected client.
+5. Call `content.niagara.simcache.read` with `captureId`, `frame`, `emitterIndex`,
+   `attribute`, `offset` and `limit` (1-256, default 64). Read `hasMore` and
+   `nextOffset`. Each instance contains separate `floats`, `halfs` and `ints`,
+   with the corresponding component counts and Niagara type. Values are raw
+   recorded simulation coordinates, without world-space conversion or rebasing.
+   Nonfinite values become JSON null with `nonFiniteValues`; row indices are
+   frame-local, so use an explicitly recorded particle ID for correlation.
+6. `content.niagara.simcache.export` accepts the same parameters as `read` and
+   saves that page plus capture metadata under `Saved/UEAI/NiagaraSimCache`.
+   It returns the UTF-8 file path, byte count and SHA-256. This exports bounded
+   diagnostic JSON, not an entire replayable `.uasset` cache. Follow pagination
+   and iterate frames/attributes when collecting more evidence.
+7. Call `content.niagara.simcache.release` with `captureId` after use. Four
+   recordings can be retained per Editor instance, with no silent eviction.
+   Shutdown clears transient caches; exported JSON files remain on disk.
 
-CPU contract tests: `Niagara.AsyncGpuTrace.Evidence.ReadbackSemantics`,
-`Niagara.AsyncGpuTrace.Evidence.FailureAndCancellation` and
-`UE_AI_integration.Niagara.Runtime`. These test readback interpretation, failure,
-late callbacks and cancellation. `Niagara.AsyncGpuTrace.Evidence.GpuReadback`
-requires a real RHI and uses an isolated helper with temporary scratch buffers to
-exercise the clear shader, GPU-written count, bounded copy and asynchronous fence.
-Neither set replaces a live HWRT/GSDF collision scene test.
-For GPU acceptance, collect complete captures from known HWRT, GSDF and no-provider
-cases, and test world teardown/PIE restart while pending. Keep each result with
-engine/module identity and the exact world/DI; never call a CPU test GPU evidence.
+Capture uses explicit attributes and disables Data Interface caching, debug
+data, interpolation and rebasing. At most 64 emitters are supported. A 64 MiB
+logical attribute payload budget is checked after each captured frame; an
+oversized cache is discarded. This is **not** a hard process-memory limit:
+UE ID tables, cache overhead and GPU readback staging are additional. A public
+`WriteFrame` call cannot be preempted by the plugin's wall-clock deadline.
+GPU recording can flush pending ticks and wait for readback, so these captures
+are unsuitable as undisturbed GPU timing measurements. Attribute reads reject
+more than 16 MiB of scratch data or 64 components before calling the public API,
+which otherwise reads the entire attribute before output pagination.
+
+The previous exact-dispatch sampler depended on Niagara's internal provider
+selection and buffer lifetime points. Those details are not exposed as a
+complete supported public capture contract in this branch. Do not restore the
+engine bridge or reach into private headers to recreate it. A loaded TLAS
+reference, a configured provider, or an active component alone does not prove
+a successful collision.
+
+### Upgrade and verification
+
+Rebuild the affected engine modules and plugin after removing an already
+compiled bridge, then reload matching binaries during an authorized Editor
+restart. Removing source files does not unload the bridge from an existing
+Editor process. Do not use its old capture operation as verification of this
+change.
+
+Automation under `UE_AI_integration.Niagara.Runtime` checks missing-world
+handling, removed bridge capture registration, inventory pagination and scope.
+`UE_AI_integration.Niagara.SimCache` adds attribute layout/nonfinite/pagination
+checks, input preflight, and CPU/GPU lifecycle fixtures covering two real frames,
+attribute reads, JSON export/hash verification, release and partial cancellation.
+Both lifecycle fixtures require a real RHI: Niagara does not activate components
+under NullRHI, including CPU emitters. Run isolated Automation with the existing
+`-UEAIDisableServer` process flag to avoid unrelated clients' HTTP errors entering
+test results. No private GPU collision capture is claimed by these tests.
 
 ## Offline render failures
 
-Execute `scene.render.failure.analyze` through `ue_scene` with:
+Discover `scene.render.failure.analyze` through `ue-cli help` and execute it
+through the short CLI; MCP fallback uses `ue_scene` with these parameters:
 
 ```json
 {

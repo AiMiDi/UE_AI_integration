@@ -33,6 +33,7 @@
 #include "Misc/PackageName.h"
 #include "ContentStreaming.h"
 #include "HAL/PlatformFileManager.h"
+#include "UObject/Package.h"
 
 // ---------------------------------------------------------------------------
 // capture_viewport
@@ -623,6 +624,123 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// save_level
+// ---------------------------------------------------------------------------
+
+class FTool_SaveLevel : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("scene.level.save");
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+		if (!World)
+		{
+			return FMCPToolResult::Error(
+				TEXT("No editor world"),
+				TEXT("editor_world_unavailable"),
+				409);
+		}
+		if (World->WorldType != EWorldType::Editor)
+		{
+			return FMCPToolResult::Error(
+				TEXT("The current world is not an Editor world."),
+				TEXT("editor_world_required"),
+				409);
+		}
+
+		UPackage* Package = World->GetOutermost();
+		const FString PackageName = Package ? Package->GetName() : FString();
+		if (!Package
+			|| Package == GetTransientPackage()
+			|| Package->HasAnyPackageFlags(PKG_PlayInEditor)
+			|| !FPackageName::IsValidLongPackageName(PackageName)
+			|| FPackageName::IsTempPackage(PackageName))
+		{
+			return FMCPToolResult::Error(
+				TEXT("The current level is not a saved, mounted map package."),
+				TEXT("level_package_not_persistable"),
+				409);
+		}
+
+		FString Filename;
+		if (!FPackageName::TryConvertLongPackageNameToFilename(
+			PackageName,
+			Filename,
+			FPackageName::GetMapPackageExtension()))
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Cannot resolve map package '%s' to a filename."),
+					*PackageName),
+				TEXT("level_package_path_unavailable"),
+				409);
+		}
+
+		bool bOnlyIfDirty = true;
+		if (Params.IsValid())
+		{
+			Params->TryGetBoolField(TEXT("onlyIfDirty"), bOnlyIfDirty);
+		}
+
+		const bool bDirtyBefore = Package->IsDirty();
+		const bool bFileExistsBefore = FPaths::FileExists(Filename);
+		const FString AbsoluteFilename =
+			FPaths::ConvertRelativePathToFull(Filename);
+
+		auto MakeResult =
+			[&](const bool bSaved, const bool bSkipped, const bool bVerified)
+			{
+				TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+				Result->SetStringField(TEXT("levelPath"), PackageName);
+				Result->SetStringField(TEXT("map_name"), World->GetMapName());
+				Result->SetStringField(TEXT("filename"), AbsoluteFilename);
+				Result->SetBoolField(TEXT("saved"), bSaved);
+				Result->SetBoolField(TEXT("skipped"), bSkipped);
+				Result->SetBoolField(TEXT("dirtyBefore"), bDirtyBefore);
+				Result->SetBoolField(TEXT("dirtyAfter"), Package->IsDirty());
+				Result->SetBoolField(
+					TEXT("fileExistsBefore"),
+					bFileExistsBefore);
+				Result->SetBoolField(
+					TEXT("fileExistsAfter"),
+					FPaths::FileExists(Filename));
+				Result->SetBoolField(TEXT("verified"), bVerified);
+				return Result;
+			};
+
+		if (bOnlyIfDirty && !bDirtyBefore && bFileExistsBefore)
+		{
+			return FMCPToolResult::Ok(MakeResult(false, true, true));
+		}
+
+		const bool bSaved = UEditorLoadingAndSavingUtils::SaveMap(
+			World,
+			PackageName);
+		const bool bFileExistsAfter = FPaths::FileExists(Filename);
+		const bool bVerified =
+			bSaved && bFileExistsAfter && !Package->IsDirty();
+		TSharedPtr<FJsonObject> Result =
+			MakeResult(bSaved, false, bVerified);
+		if (!bVerified)
+		{
+			FMCPToolResult Failure = FMCPToolResult::Error(
+				TEXT("The level save did not pass post-save verification."),
+				bSaved ? TEXT("level_save_verification_failed") : TEXT("level_save_failed"),
+				500);
+			Failure.Data = Result;
+			return Failure;
+		}
+
+		return FMCPToolResult::Ok(Result);
+	}
+};
+
+// ---------------------------------------------------------------------------
 // get_level_info
 // ---------------------------------------------------------------------------
 
@@ -687,6 +805,7 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_GetOutputLog>());
 		Registry.Register(MakeShared<FTool_RunConsoleCommand>());
 		Registry.Register(MakeShared<FTool_OpenLevel>());
+		Registry.Register(MakeShared<FTool_SaveLevel>());
 		Registry.Register(MakeShared<FTool_GetLevelInfo>());
 	}
 }

@@ -6,7 +6,7 @@
   "title": "UE Blueprint BuildGraph",
   "description": "Validate and compile a declarative managed Blueprint Graph definition into an approved, recoverable Workflow v2 execution.",
   "domains": ["blueprint"],
-  "risk": "safeWrite",
+  "risk": "confirmWrite",
   "triggers": [
     "blueprint buildgraph",
     "declarative blueprint graph",
@@ -19,8 +19,10 @@
   "requirements": {
     "engine": { "min": "5.3" },
     "capabilities": [
+      "blueprint.build.from_spec",
       "blueprint.graph.build.validate",
       "blueprint.graph.build.plan",
+      "blueprint.graph.build.execute",
       "blueprint.graph.build.definition.get",
       "blueprint.graph.get",
       "blueprint.graph.snapshot",
@@ -29,6 +31,7 @@
       "blueprint.asset.validate"
     ],
     "optionalCapabilities": [
+      "blueprint.graph.describe",
       "blueprint.graph.capture",
       "blueprint.graph.visual.compare"
     ]
@@ -38,7 +41,7 @@
       "id": "build-and-verify",
       "title": "Build and verify one managed Blueprint Graph",
       "description": "Compile a versioned BuildGraph definition to Workflow v2, execute the approved plan, and verify ownership, structure, layout, and recovery evidence.",
-      "risk": "safeWrite",
+      "risk": "confirmWrite",
       "inputs": [
         { "name": "definition", "type": "object", "required": true, "description": "Complete ue.blueprint-buildgraph.v1 definition." }
       ],
@@ -58,14 +61,21 @@
         {
           "id": "execute-approved-workflow",
           "phase": "execute",
-          "purpose": "Execute the exact approved Workflow with one transaction, deferred compile, durable checkpoints, and existing rollback semantics.",
-          "operations": ["blueprint.graph.build.plan"]
+          "purpose": "Execute the exact approved Workflow through the Editor-bound BuildGraph command with explicit approval, one transaction, compile/read-back, durable checkpoints, and existing rollback semantics.",
+          "operations": ["blueprint.graph.build.execute"]
         },
         {
           "id": "verify",
           "phase": "verify",
           "purpose": "Verify managed refs, graph identity, structural diff, compile status, and layout diagnostics.",
           "operations": ["blueprint.graph.build.definition.get", "blueprint.graph.get", "blueprint.graph.diff", "blueprint.layout.validate", "blueprint.asset.validate"]
+        },
+        {
+          "id": "verify-execution-subflow",
+          "phase": "verify",
+          "purpose": "Verify stable execution node, pin, and edge identities from a declared event or function entry when flow evidence is requested.",
+          "operations": ["blueprint.graph.describe"],
+          "optional": true
         }
       ],
       "result": {

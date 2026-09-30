@@ -4,6 +4,10 @@
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
 #include "Engine/Blueprint.h"
+#include "Engine/TimelineTemplate.h"
+#include "Curves/CurveFloat.h"
+#include "Curves/CurveVector.h"
+#include "Curves/CurveLinearColor.h"
 #include "Infrastructure/BlueprintPersistence.h"
 #include "Infrastructure/Sha256.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -36,6 +40,45 @@ TArray<UObject*> GatherBlueprintGraphObjects(UBlueprint* Blueprint)
 		return Objects;
 	}
 	Objects.Add(Blueprint);
+	// Timeline templates and embedded curves are authored data owned by the
+	// generated class, so the graph/node walk below does not reach them. Capture
+	// them explicitly to restore keys and tracks if compilation or saving fails.
+	for (UTimelineTemplate* Timeline : Blueprint->Timelines)
+	{
+		if (!Timeline)
+		{
+			continue;
+		}
+		Objects.AddUnique(Timeline);
+		for (const FTTFloatTrack& Track : Timeline->FloatTracks)
+		{
+			if (Track.CurveFloat && !Track.bIsExternalCurve)
+			{
+				Objects.AddUnique(Track.CurveFloat);
+			}
+		}
+		for (const FTTVectorTrack& Track : Timeline->VectorTracks)
+		{
+			if (Track.CurveVector && !Track.bIsExternalCurve)
+			{
+				Objects.AddUnique(Track.CurveVector);
+			}
+		}
+		for (const FTTLinearColorTrack& Track : Timeline->LinearColorTracks)
+		{
+			if (Track.CurveLinearColor && !Track.bIsExternalCurve)
+			{
+				Objects.AddUnique(Track.CurveLinearColor);
+			}
+		}
+		for (const FTTEventTrack& Track : Timeline->EventTracks)
+		{
+			if (Track.CurveKeys && !Track.bIsExternalCurve)
+			{
+				Objects.AddUnique(Track.CurveKeys);
+			}
+		}
+	}
 	TArray<UEdGraph*> Graphs;
 	Blueprint->GetAllGraphs(Graphs);
 	for (UEdGraph* Graph : Graphs)

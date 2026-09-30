@@ -8,6 +8,7 @@
 #include "Materials/Material.h"
 #include "Materials/MaterialFunction.h"
 #include "Materials/MaterialInstanceConstant.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/PackageName.h"
 #include "UObject/SavePackage.h"
 
@@ -19,6 +20,16 @@ namespace MCPMaterialInfrastructure
 		const TCHAR* AssetLabel,
 		FString& OutError)
 	{
+		// Exact paths should not enumerate every material/function in the project.
+		if (Name.StartsWith(TEXT("/")))
+		{
+			const FString PackageName = FPackageName::ObjectPathToPackageName(Name);
+			const FString ObjectPath = Name.Contains(TEXT(".")) ? Name
+				: PackageName + TEXT(".") + FPackageName::GetShortName(PackageName);
+			if (AssetType* Asset = LoadObject<AssetType>(nullptr, *ObjectPath, nullptr, LOAD_NoWarn)) return Asset;
+			OutError = FString::Printf(TEXT("%s '%s' not found."), AssetLabel, *Name);
+			return nullptr;
+		}
 		IAssetRegistry& Registry =
 			FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
 		TArray<FAssetData> Assets;
@@ -82,6 +93,46 @@ namespace MCPMaterialInfrastructure
 			OutError);
 	}
 
+	inline UMaterialInterface* LoadMaterialInterfaceByName(
+		const FString& Name,
+		FString& OutError)
+	{
+		if (Name.StartsWith(TEXT("/")))
+		{
+			const FString PackageName = FPackageName::ObjectPathToPackageName(Name);
+			const FString ObjectPath = Name.Contains(TEXT("."))
+				? Name
+				: PackageName + TEXT(".") + FPackageName::GetShortName(PackageName);
+			if (UMaterialInterface* Asset = LoadObject<UMaterialInterface>(nullptr, *ObjectPath, nullptr, LOAD_NoWarn))
+			{
+				return Asset;
+			}
+		}
+
+		IAssetRegistry& Registry =
+			FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+		for (const UClass* AssetClass : { UMaterial::StaticClass(), UMaterialInstanceConstant::StaticClass() })
+		{
+			TArray<FAssetData> Assets;
+			Registry.GetAssetsByClass(AssetClass->GetClassPathName(), Assets, false);
+			for (const FAssetData& Asset : Assets)
+			{
+				if (Asset.AssetName.ToString().Equals(Name, ESearchCase::IgnoreCase)
+					|| Asset.PackageName.ToString().Equals(Name, ESearchCase::IgnoreCase)
+					|| Asset.GetObjectPathString().Equals(Name, ESearchCase::IgnoreCase))
+				{
+					if (UMaterialInterface* Loaded = Cast<UMaterialInterface>(Asset.GetAsset()))
+					{
+						return Loaded;
+					}
+				}
+			}
+		}
+
+		OutError = FString::Printf(TEXT("MaterialInterface '%s' not found."), *Name);
+		return nullptr;
+	}
+
 	inline void EnsureMaterialGraph(UMaterial* Material)
 	{
 		if (!Material || Material->MaterialGraph)
@@ -89,6 +140,11 @@ namespace MCPMaterialInfrastructure
 			return;
 		}
 
+		// Reconstructing the transient editor projection is a read operation.
+		// RebuildGraph calls Modify(), but must not make a clean loaded asset
+		// ineligible for the next Workflow plan (or clear existing dirty edits).
+		UPackage* Package = Material->GetOutermost();
+		const bool bWasDirty = Package->IsDirty();
 		Material->MaterialGraph = CastChecked<UMaterialGraph>(
 			FBlueprintEditorUtils::CreateNewGraph(
 				Material,
@@ -97,6 +153,7 @@ namespace MCPMaterialInfrastructure
 				UMaterialGraphSchema::StaticClass()));
 		Material->MaterialGraph->Material = Material;
 		Material->MaterialGraph->RebuildGraph();
+		Package->SetDirtyFlag(bWasDirty);
 	}
 
 	inline bool SaveMaterialPackage(UObject* Asset)

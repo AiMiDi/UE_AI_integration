@@ -484,6 +484,71 @@ int main()
     require(material["operations"][1]["bindings"].contains("/params/nodeId"),
             "typed nodeId binding canonicalized to capability params");
 
+    auto material_rewire = json::parse(read_file(
+        root / "Workflow" / "tests" / "fixtures" / "material-rewire.workflow.json"));
+    for (const bool multi_scope : {false, true})
+    {
+        auto workflow = material_rewire;
+        if (multi_scope)
+        {
+            workflow["dslVersion"] = "2.0";
+            workflow["scopes"] = {{"material", workflow["scope"]}};
+            workflow.erase("scope");
+            for (auto& operation : workflow["operations"])
+                operation["scope"] = "material";
+        }
+        const auto rewire_result = engine.PlanJson(workflow.dump());
+        require(rewire_result.ok, "material rewire plans in v1 and v2");
+        if (!rewire_result.ok) continue;
+        const auto rewire_plan = parse_result(rewire_result);
+        require(rewire_plan["risk"]["overall"] == "confirmWrite",
+                "material delete and disconnect retain destructive risk");
+        require(rewire_plan["approval"]["confirmWriteRequired"] == true,
+                "material rewire requires confirmation in addition to plan digest");
+        for (const auto& operation : rewire_plan["operations"])
+        {
+            if (operation["id"] == "deleteOld" || operation["id"] == "disconnectA")
+                require(operation["bindings"].contains("/params/nodeId"),
+                        "destructive material steps accept typed node bindings");
+        }
+        workflow["operations"][5]["params"]["materialFunction"] = "/Game/MF_Other";
+        const auto escaped = parse_result(engine.PlanJson(workflow.dump()));
+        require(escaped["ok"] == false,
+                "destructive material operation cannot escape into a function");
+    }
+
+    const auto function_fixture = json::parse(read_file(
+        root / "Workflow" / "tests" / "fixtures" / "material-function.workflow.json"));
+    for (const bool v2 : {false, true})
+    {
+        auto workflow = function_fixture;
+        if (v2)
+        {
+            workflow["dslVersion"] = "2.0";
+            workflow["scopes"] = {{"function", workflow["scope"]}};
+            workflow.erase("scope");
+            for (auto& operation : workflow["operations"]) operation["scope"] = "function";
+        }
+        require(engine.PlanJson(workflow.dump()).ok, "material function batch plans in v1 and v2");
+        auto escape = workflow;
+        escape["operations"][0]["params"]["material"] = "/Game/M_Other";
+        require(!engine.PlanJson(escape.dump()).ok, "function scope cannot escape to material");
+        escape = workflow;
+        escape["operations"][0]["params"]["materialFunction"] = "/Game/MF_Other";
+        require(!engine.PlanJson(escape.dump()).ok, "function scope target remains immutable");
+    }
+
+    auto function_host = json::parse(read_file(root / "Workflow" / "tests" / "fixtures" / "material-function-mixed.v2.workflow.json"));
+    function_host["scopes"]["material"]["asset"] = "/Game/A_HostFirstByLockOrder";
+    function_host["scopes"]["function"]["asset"] = "/Game/Z_FunctionLastByLockOrder";
+    const auto function_host_plan = parse_result(engine.PlanJson(function_host.dump()));
+    require(function_host_plan["ok"] == true, "mixed function host plans");
+    require(function_host_plan["finalizers"][0]["operationType"] == "content.material.function.validate", "function update precedes material compile regardless of asset lock order");
+    require(function_host_plan["finalizers"][1]["operationType"] == "content.material.validate", "all native function updates complete before host validation");
+    require(function_host_plan["finalizers"][2]["kind"] == "readBack", "read-back occurs after all compiles");
+    const auto& host_dependencies = function_host_plan["finalizers"][1]["dependsOn"];
+    require(std::find(host_dependencies.begin(), host_dependencies.end(), json("$finalizer.function.compile")) != host_dependencies.end(), "plan declares the function compile dependency");
+
     auto bypass_finalizers = json::parse(material_text);
     bypass_finalizers["verify"] = {
         { "compile", false },

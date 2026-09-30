@@ -172,6 +172,7 @@ bool ValidInputType(const std::string& value)
             "boolean",
             "object",
             "array",
+            "json",
         });
 }
 
@@ -381,7 +382,7 @@ bool ValidateSkill(
             *requirements,
             "capabilities",
             context + ".requirements",
-            true,
+            false,
             error))
     {
         return false;

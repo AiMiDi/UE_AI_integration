@@ -1,0 +1,65 @@
+{
+  "schema": "ue.trace-worker-bundle.v1",
+  "workerVersion": "1.0.0",
+  "engineVersion": "5.4",
+  "protocolVersion": 1,
+  "contractDigest": "sha256:3c4ee4e279815e985bb4295d9a53dd5ddac09da384a63811d747e40bf8ece9c5",
+  "providerSchemaDigest": "sha256:a9f83f367a0308cb936dc60ad481481a1d9282b32f5c0edbdcbd9a58655f50c1",
+  "files": [
+    {
+      "name": "bundle-manifest.json",
+      "size": 1921,
+      "sha256": "CF73815E123812A31260DA9EDB51D41AF7FE2B2DAE5A5F273D545376841946EA"
+    },
+    {
+      "name": "dbghelp.dll",
+      "size": 2221984,
+      "sha256": "4B803D0BFA5D360CFCB3237D260226743D2255EACF6A98615334FB55DEB7CF88"
+    },
+    {
+      "name": "insights-actions.5.4.json",
+      "size": 1781,
+      "sha256": "A9F83F367A0308CB936DC60AD481481A1D9282B32F5C0EDBDCBD9A58655F50C1"
+    },
+    {
+      "name": "launch-profiles.json",
+      "size": 922,
+      "sha256": "BD3403B7915C37DC6760E7F9A1ED848217626FE23B2911BE371F95757D84544D"
+    },
+    {
+      "name": "tbb.dll",
+      "size": 213504,
+      "sha256": "D5DB1D48D7025F2C59704DAD2E9BA8DFC5562C134FA49D8373B823CF9CCD1957"
+    },
+    {
+      "name": "tbbmalloc.dll",
+      "size": 55296,
+      "sha256": "C14EA6F54CDFE42B7E87455E220589799B764C5335DD3665E7343A404AFADB34"
+    },
+    {
+      "name": "UEAITraceWorker.exe",
+      "size": 25353216,
+      "sha256": "8CE5129DB09B7587802DB066417916360A937CC7E5805B6768E119507C1C2A01"
+    },
+    {
+      "name": "UEAITraceWorker.pdb",
+      "size": 171847680,
+      "sha256": "2C9F7C69ACD15481082E94DA32F8E9312AA8DA23846E5974D6F64CFA94DC91B6"
+    },
+    {
+      "name": "WinPixEventRuntime.dll",
+      "size": 57040,
+      "sha256": "BF87308D05A7C00B35071093831E404B4153A2CB61697522DB82ED068204F5C1"
+    },
+    {
+      "name": "worker-protocol.v1.json",
+      "size": 895,
+      "sha256": "D7325F89C1E99970A935FE3E21EA189A092C070D279CE2143F152277B4C4CA0E"
+    },
+    {
+      "name": "xinput1_3.dll",
+      "size": 107368,
+      "sha256": "756CAD002E1553CFA1A91EBE8C1B9380FFABE0B4B1916C4A4DB802396DDFBEF8"
+    }
+  ]
+}

@@ -149,7 +149,8 @@
                     "number",
                     "boolean",
                     "object",
-                    "array"
+                    "array",
+                    "json"
                   ]
                 },
                 "required": {

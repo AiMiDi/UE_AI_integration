@@ -1,0 +1,443 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-blueprint-authoring",
+  "version": "1.0.0",
+  "title": "UE Blueprint Authoring",
+  "description": "Inspect and edit authored Blueprint member variables, local SCS components, and event dispatchers with bounded readback and structural identity.",
+  "domains": [
+    "blueprint",
+    "scene"
+  ],
+  "risk": "mixed",
+  "triggers": [
+    "add Blueprint variable",
+    "rename Blueprint variable",
+    "Blueprint variable",
+    "Blueprint component",
+    "SCS component",
+    "reparent component",
+    "Blueprint event dispatcher",
+    "Blueprint member variable",
+    "Blueprint 变量",
+    "Blueprint 组件"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.3"
+    },
+    "capabilities": [
+      "blueprint.asset.get",
+      "blueprint.graph.get",
+      "blueprint.graph.describe",
+      "blueprint.component.list",
+      "blueprint.component.get",
+      "blueprint.dispatcher.list",
+      "blueprint.property.list",
+      "blueprint.variable.add",
+      "blueprint.variable.remove",
+      "blueprint.variable.rename",
+      "blueprint.variable.type.set",
+      "blueprint.variable.metadata.set",
+      "blueprint.component.add",
+      "blueprint.component.remove",
+      "blueprint.component.reparent",
+      "blueprint.component.property.set",
+      "blueprint.dispatcher.add",
+      "blueprint.timeline.add",
+      "blueprint.timeline.get",
+      "blueprint.timeline.track.add",
+      "blueprint.timeline.keys.set",
+      "blueprint.cdo.properties.get",
+      "blueprint.cdo.property.set",
+      "blueprint.class.list",
+      "blueprint.asset.dirty.get",
+      "blueprint.dispatcher.remove",
+      "blueprint.pin.promote",
+      "blueprint.node.bulk.add",
+      "blueprint.pin.bulk.connect",
+      "blueprint.pin.default.bulk.set",
+      "blueprint.graph.export",
+      "blueprint.graph.duplicate",
+      "blueprint.graph.copy_nodes",
+      "blueprint.data_asset.create",
+      "blueprint.actor.batch_spawn",
+      "scene.actor.list"
+    ]
+  },
+  "recipes": [
+    {
+      "id": "inspect-blueprint",
+      "title": "Inspect authored Blueprint structure",
+      "description": "Read member variables, local SCS component hierarchy, graphs, and event dispatchers without claiming runtime or debugger state.",
+      "risk": "readOnly",
+      "inputs": [
+        {
+          "name": "blueprint",
+          "type": "string",
+          "required": true,
+          "description": "Exact Blueprint asset path or name."
+        }
+      ],
+      "steps": [
+        {
+          "id": "blueprint-baseline",
+          "phase": "discover",
+          "purpose": "Resolve the Blueprint identity, graphs, and member variables.",
+          "operations": [
+            "blueprint.asset.get",
+            "blueprint.property.list"
+          ]
+        },
+        {
+          "id": "structure-inventory",
+          "phase": "execute",
+          "purpose": "Page the graph, local SCS component, and event dispatcher inventories.",
+          "operations": [
+            "blueprint.graph.get",
+            "blueprint.graph.describe",
+            "blueprint.component.list",
+            "blueprint.dispatcher.list"
+          ]
+        },
+        {
+          "id": "bounded-readback",
+          "phase": "verify",
+          "purpose": "Re-read the structure and report pagination and authored-only boundaries.",
+          "operations": [
+            "blueprint.graph.describe",
+            "blueprint.component.list"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Bounded authored Blueprint structure with explicit non-runtime scope.",
+        "evidence": [
+          "Blueprint, graph, component, and dispatcher identities",
+          "member variable and property pages",
+          "pagination and authored-only boundaries"
+        ],
+        "success": [
+          "all pages and truncation were reported",
+          "authored state was not presented as runtime or debugger state"
+        ]
+      }
+    },
+    {
+      "id": "edit-variables",
+      "title": "Edit Blueprint member variables",
+      "description": "Add, remove, rename, or retype member variables with structural readback and collision rejection.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "blueprint",
+          "type": "string",
+          "required": true,
+          "description": "Exact Blueprint asset path or name."
+        },
+        {
+          "name": "variableName",
+          "type": "string",
+          "required": true,
+          "description": "Current member variable name for rename/remove/retype."
+        },
+        {
+          "name": "newName",
+          "type": "string",
+          "required": false,
+          "description": "New member variable name for rename."
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": false,
+          "description": "Target type for add or retype; consult the live schema."
+        },
+        {
+          "name": "value",
+          "type": "json",
+          "required": false,
+          "description": "Optional default value for add; scalar or object JSON."
+        }
+      ],
+      "steps": [
+        {
+          "id": "variable-baseline",
+          "phase": "discover",
+          "purpose": "Read the current member variables and confirm the target identity.",
+          "operations": [
+            "blueprint.asset.get",
+            "blueprint.property.list"
+          ]
+        },
+        {
+          "id": "approved-variable-change",
+          "phase": "execute",
+          "purpose": "Add, remove, rename, retype, or set metadata on the exact member variable.",
+          "operations": [
+            "blueprint.variable.add",
+            "blueprint.variable.remove",
+            "blueprint.variable.rename",
+            "blueprint.variable.type.set",
+            "blueprint.variable.metadata.set"
+          ]
+        },
+        {
+          "id": "variable-readback",
+          "phase": "verify",
+          "purpose": "Re-read the member variables and confirm the exact change and reference update.",
+          "operations": [
+            "blueprint.asset.get",
+            "blueprint.property.list"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "One approved member-variable change with structural and reference evidence.",
+        "evidence": [
+          "member variable identity before and after",
+          "graph reference update outcome",
+          "post-change variable readback"
+        ],
+        "success": [
+          "only the intended member variable changed",
+          "references were updated or a collision/invalid name was rejected"
+        ]
+      }
+    },
+    {
+      "id": "edit-components",
+      "title": "Edit local SCS components",
+      "description": "Add, remove, reparent, or set a property on local SCS components with hierarchy readback and cycle rejection.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "blueprint",
+          "type": "string",
+          "required": true,
+          "description": "Exact Blueprint asset path or name."
+        },
+        {
+          "name": "componentName",
+          "type": "string",
+          "required": false,
+          "description": "Local SCS component variable name."
+        },
+        {
+          "name": "componentNodeId",
+          "type": "string",
+          "required": false,
+          "description": "Local SCS VariableGuid; alternate to componentName."
+        },
+        {
+          "name": "newParentName",
+          "type": "string",
+          "required": false,
+          "description": "New local SCS parent variable name for reparent; omit to move to root."
+        },
+        {
+          "name": "property",
+          "type": "string",
+          "required": false,
+          "description": "Editable persistent property name for property.set."
+        },
+        {
+          "name": "value",
+          "type": "json",
+          "required": false,
+          "description": "Property value for property.set; scalar or object JSON."
+        }
+      ],
+      "steps": [
+        {
+          "id": "component-baseline",
+          "phase": "discover",
+          "purpose": "Read the current local SCS component hierarchy and resolve the target identity.",
+          "operations": [
+            "blueprint.component.list"
+          ]
+        },
+        {
+          "id": "approved-component-change",
+          "phase": "execute",
+          "purpose": "Add, remove, reparent, or set a property on the exact local SCS component.",
+          "operations": [
+            "blueprint.component.add",
+            "blueprint.component.remove",
+            "blueprint.component.reparent",
+            "blueprint.component.property.set"
+          ]
+        },
+        {
+          "id": "component-readback",
+          "phase": "verify",
+          "purpose": "Re-read the component hierarchy and confirm the exact change and child preservation.",
+          "operations": [
+            "blueprint.component.list",
+            "blueprint.component.get"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "One approved local SCS component change with hierarchy readback evidence.",
+        "evidence": [
+          "component identity and parent before and after",
+          "child and property preservation",
+          "post-change hierarchy readback"
+        ],
+        "success": [
+          "only the intended local SCS component changed",
+          "self-parenting and descendant cycles were rejected"
+        ]
+      }
+    },
+    {
+      "id": "edit-timelines",
+      "title": "Edit Blueprint Timelines",
+      "description": "Create and inspect Timeline templates, add typed tracks, and replace validated float, vector, color, or event keyframes.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "blueprint", "type": "string", "required": true, "description": "Exact Blueprint asset path or name." },
+        { "name": "timelineName", "type": "string", "required": false, "description": "Timeline template name." },
+        { "name": "trackName", "type": "string", "required": false, "description": "Track name for track or key operations." },
+        { "name": "trackType", "type": "string", "required": false, "description": "float, vector, color, or event." },
+        { "name": "keys", "type": "json", "required": false, "description": "Up to 4096 validated key objects; use value for float, x/y/z for vector, r/g/b/a for color, and time for event." }
+      ],
+      "steps": [
+        { "id": "timeline-baseline", "phase": "discover", "purpose": "Read current Timeline templates and typed track data.", "operations": ["blueprint.timeline.get"] },
+        { "id": "timeline-change", "phase": "execute", "purpose": "Create a Timeline, add a typed track, or replace a track's complete key set.", "operations": ["blueprint.timeline.add", "blueprint.timeline.track.add", "blueprint.timeline.keys.set"] },
+        { "id": "timeline-readback", "phase": "verify", "purpose": "Re-read all typed tracks and keyframes after the authored edit.", "operations": ["blueprint.timeline.get"] }
+      ],
+      "result": {
+        "summary": "Bounded authored Timeline change with typed curve readback; compile/save and runtime behavior remain separate evidence.",
+        "evidence": ["Timeline/template identity", "typed track and keyframe data", "saved flag and readback"],
+        "success": ["invalid or duplicate key input was rejected before mutation", "all four track types are readable after write"]
+      }
+    },
+    {
+      "id": "inspect-cdo-properties",
+      "title": "Inspect Blueprint CDO properties",
+      "description": "Read bounded, typed nested CDO or UObject asset properties with inherited-property filtering.",
+      "risk": "readOnly",
+      "inputs": [
+        { "name": "asset", "type": "string", "required": true, "description": "Blueprint or UObject asset path." },
+        { "name": "category", "type": "string", "required": false, "description": "Optional category substring." },
+        { "name": "includeParentDefaults", "type": "boolean", "required": false, "description": "Include inherited properties; default true." },
+        { "name": "maxProperties", "type": "integer", "required": false, "description": "Bound output to 1..4096 properties; default 1024." }
+      ],
+      "steps": [
+        { "id": "cdo-baseline", "phase": "discover", "purpose": "Resolve the asset and establish the authored CDO identity before serialization.", "operations": ["blueprint.cdo.properties.get"] },
+        { "id": "cdo-read", "phase": "execute", "purpose": "Serialize scalar, reference, struct, array, set, and map property values within output bounds.", "operations": ["blueprint.cdo.properties.get"] },
+        { "id": "cdo-readback", "phase": "verify", "purpose": "Report the property bound, inheritance filter, and authored-only output boundary.", "operations": ["blueprint.cdo.properties.get"] }
+      ],
+      "result": {
+        "summary": "Typed authored CDO property inventory with explicit pagination bound and inherited-property policy.",
+        "evidence": ["property type, owner, category, value, replicated/edit-const flags"],
+        "success": ["nested JSON values are bounded and no runtime state is inferred"]
+      }
+    },
+    {
+      "id": "set-cdo-property",
+      "title": "Set a Blueprint CDO property",
+      "description": "Change one writable generated-class default from JSON, with a transaction, optional compile/save, and explicit old/new readback.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "asset", "type": "string", "required": true, "description": "Blueprint or UObject asset path." },
+        { "name": "property", "type": "string", "required": true, "description": "Exact reflected property name; case-insensitive fallback is supported." },
+        { "name": "value", "type": "json", "required": true, "description": "Scalar, object, or array JSON value accepted by the reflected property." },
+        { "name": "saveOnSuccess", "type": "boolean", "required": false, "description": "Request compile and save after the in-memory change; defaults to the workflow save policy." }
+      ],
+      "steps": [
+        { "id": "cdo-write-baseline", "phase": "discover", "purpose": "Read the current CDO properties and resolve the exact writable property before mutation.", "operations": ["blueprint.cdo.properties.get"] },
+        { "id": "cdo-write", "phase": "execute", "purpose": "Apply one JSON property value inside the native editor transaction; transient, deprecated, edit-const, and disabled-on-instance properties are rejected.", "operations": ["blueprint.cdo.property.set"] },
+        { "id": "cdo-write-readback", "phase": "verify", "purpose": "Read the CDO again and compare the property identity and serialized value; report saved state separately from in-memory authoring.", "operations": ["blueprint.cdo.properties.get"] }
+      ],
+      "result": {
+        "summary": "One authored Blueprint CDO default change with explicit old/new values and persistence boundary.",
+        "evidence": ["asset and generated-class identity", "property name and old/new exported values", "transaction result and saved flag"],
+        "success": ["invalid property or JSON value was rejected before a committed change", "the readback matches the requested authored value", "save failure is reported separately from an in-memory mutation"]
+      }
+    },
+    {
+      "id": "manage-blueprint-graph",
+      "title": "Duplicate a Blueprint graph or copy its nodes",
+      "description": "Export the structural graph with stable GUIDs, then duplicate a graph or copy nodes between graphs and read back the compiled node counts.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "blueprint", "type": "string", "required": true, "description": "Exact Blueprint asset package or object path." },
+        { "name": "graph", "type": "string", "required": false, "description": "Optional source graph name or object path for export/duplicate; defaults to the primary event graph." },
+        { "name": "newName", "type": "string", "required": false, "description": "Optional display name for the duplicated graph; defaults to <source>_Copy." },
+        { "name": "sourceGraph", "type": "string", "required": false, "description": "Source graph name or object path to copy nodes from." },
+        { "name": "targetGraph", "type": "string", "required": false, "description": "Target graph name or object path to copy nodes into." }
+      ],
+      "steps": [
+        { "id": "graph-baseline", "phase": "discover", "purpose": "Export the full structural graph with stable node/pin GUIDs to resolve source and target identities.", "operations": ["blueprint.graph.export"] },
+        { "id": "graph-change", "phase": "execute", "purpose": "Duplicate one graph or copy all nodes between graphs once; both compile and read back node counts.", "operations": ["blueprint.graph.duplicate", "blueprint.graph.copy_nodes"] },
+        { "id": "graph-readback", "phase": "verify", "purpose": "Re-export the target graph and confirm the node count and re-wired internal links.", "operations": ["blueprint.graph.export"] }
+      ],
+      "result": {
+        "summary": "One authored graph duplicate or node copy with structural and compile readback evidence.",
+        "evidence": ["source and target graph identities", "compiled node counts before and after", "re-wired internal link readback"],
+        "success": ["only a non-transient /Game/ Blueprint was written", "the duplicated graph or copied node set was read back", "export queries never compiled or saved"]
+      }
+    },
+    {
+      "id": "create-data-asset",
+      "title": "Create a typed DataAsset or raw UObject asset",
+      "description": "Create one native or plugin UObject instance under /Game, register it with the Asset Registry, and verify the authored class identity and save result.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "savePath", "type": "string", "required": true, "description": "New /Game package path without an object suffix." },
+        { "name": "className", "type": "string", "required": true, "description": "Loaded native or plugin UObject class name or full /Script path." },
+        { "name": "asset", "type": "string", "required": true, "description": "Bind this to the object_path returned by blueprint.data_asset.create before the verify step, for example /Game/Data/DA_Example.DA_Example." },
+        { "name": "skipSave", "type": "boolean", "required": false, "description": "Keep the package dirty in memory instead of saving it." }
+      ],
+      "steps": [
+        { "id": "asset-class-baseline", "phase": "discover", "purpose": "Discover the loaded native or plugin class catalog before the write; className selects the intended class and the create operation rejects Blueprint, Actor, abstract, deprecated, and superseded classes before mutation.", "operations": ["blueprint.class.list"] },
+        { "id": "asset-create", "phase": "execute", "purpose": "Create and register exactly one raw UObject/DataAsset at the requested /Game package path, optionally saving it.", "operations": ["blueprint.data_asset.create"] },
+        { "id": "asset-readback", "phase": "verify", "purpose": "Bind asset to execute.object_path, then read the new object's reflected properties and compare class identity, package path, Asset Registry registration, dirty/save state, and explicit authored-only scope.", "operations": ["blueprint.cdo.properties.get"] }
+      ],
+      "result": {
+        "summary": "One registered native or plugin UObject/DataAsset with explicit class and persistence evidence.",
+        "evidence": ["asset package and object path", "requested and actual class paths", "Asset Registry registration", "saved or intentionally dirty result"],
+        "success": ["the requested package did not already exist", "unsupported class categories were rejected before mutation", "the created object can be resolved by blueprint.cdo.properties.get"]
+      }
+    },
+    {
+      "id": "batch-spawn-blueprint-actors",
+      "title": "Batch spawn Blueprint actors",
+      "description": "Spawn a bounded set of Blueprint actors in a grid or linear layout with one undo transaction and per-actor readback.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "blueprint", "type": "string", "required": true, "description": "Blueprint asset or generated class path." },
+        { "name": "count", "type": "integer", "required": true, "description": "Number of actors from 1 through 1000." },
+        { "name": "pattern", "type": "string", "required": false, "description": "grid or linear; defaults to grid." },
+        { "name": "origin", "type": "json", "required": false, "description": "Origin vector as [x,y,z] or {x,y,z}." },
+        { "name": "spacing", "type": "number", "required": false, "description": "Positive grid or linear spacing in Unreal units." },
+        { "name": "columns", "type": "integer", "required": false, "description": "Grid columns, from 1 through 1000." },
+        { "name": "direction", "type": "json", "required": false, "description": "Linear direction vector." },
+        { "name": "rotation", "type": "json", "required": false, "description": "Shared rotation vector." },
+        { "name": "scale", "type": "json", "required": false, "description": "Shared scale vector." },
+        { "name": "labelPrefix", "type": "string", "required": false, "description": "Optional label prefix; entries use prefix_0, prefix_1, and so on." },
+        { "name": "folder", "type": "string", "required": false, "description": "Optional Outliner folder." },
+        { "name": "properties", "type": "json", "required": false, "description": "Optional scalar actor properties." },
+        { "name": "tags", "type": "json", "required": false, "description": "Optional string tags applied to every actor." },
+        { "name": "sublevel", "type": "string", "required": false, "description": "Optional loaded streaming level name." },
+        { "name": "mobility", "type": "string", "required": false, "description": "static, stationary, or movable root component mobility." },
+        { "name": "select", "type": "boolean", "required": false, "description": "Select actors after spawn; defaults to false." }
+      ],
+      "steps": [
+        { "id": "spawn-baseline", "phase": "discover", "purpose": "Resolve the current Blueprint package or generated class path from the recipe's blueprint input and establish its authored package state before spawning.", "operations": ["blueprint.asset.dirty.get"] },
+        { "id": "spawn-batch", "phase": "execute", "purpose": "Spawn the requested bounded grid or linear batch in one transaction and apply shared metadata.", "operations": ["blueprint.actor.batch_spawn"] },
+        { "id": "spawn-readback", "phase": "verify", "purpose": "Use the returned actor identities, locations, counts, and failure list as authored world readback.", "operations": ["scene.actor.list"] }
+      ],
+      "result": {
+        "summary": "Bounded Blueprint actor batch with explicit partial-failure and world-state readback.",
+        "evidence": ["resolved class", "requested/spawned/failed counts", "per-actor names and locations", "property failure details"],
+        "success": ["count and layout inputs were bounded", "all successful actors are reported", "partial failures remain visible and do not invalidate the whole transaction"]
+      }
+    }
+  ],
+  "resources": []
+}

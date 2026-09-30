@@ -954,10 +954,12 @@
     "content.material.expression.add": {
       "admission": "editStep",
       "scopeKinds": [
-        "material"
+        "material",
+        "materialFunction"
       ],
       "scopeParameters": [
-        "material"
+        "material",
+        "materialFunction"
       ],
       "transactionDomain": "asset",
       "deferCompile": true,
@@ -989,13 +991,52 @@
         }
       }
     },
+    "content.material.expression.delete": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "material",
+        "materialFunction"
+      ],
+      "scopeParameters": [
+        "material",
+        "materialFunction"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "confirmWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "material": {
+            "type": "string"
+          },
+          "deletedNode": {
+            "type": "string"
+          },
+          "deletedNodeTitle": {
+            "type": "string"
+          },
+          "deletedExpressionClass": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
     "content.material.expression.move": {
       "admission": "editStep",
       "scopeKinds": [
-        "material"
+        "material",
+        "materialFunction"
       ],
       "scopeParameters": [
-        "material"
+        "material",
+        "materialFunction"
       ],
       "transactionDomain": "asset",
       "deferCompile": true,
@@ -1027,10 +1068,12 @@
     "content.material.expression.value.set": {
       "admission": "editStep",
       "scopeKinds": [
-        "material"
+        "material",
+        "materialFunction"
       ],
       "scopeParameters": [
-        "material"
+        "material",
+        "materialFunction"
       ],
       "transactionDomain": "asset",
       "deferCompile": true,
@@ -1060,10 +1103,12 @@
     "content.material.pin.connect": {
       "admission": "editStep",
       "scopeKinds": [
-        "material"
+        "material",
+        "materialFunction"
       ],
       "scopeParameters": [
-        "material"
+        "material",
+        "materialFunction"
       ],
       "transactionDomain": "asset",
       "deferCompile": true,
@@ -1085,6 +1130,43 @@
           },
           "error": {
             "type": "string"
+          }
+        }
+      }
+    },
+    "content.material.pin.disconnect": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "material",
+        "materialFunction"
+      ],
+      "scopeParameters": [
+        "material",
+        "materialFunction"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "confirmWrite",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "material": {
+            "type": "string"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "pinName": {
+            "type": "string"
+          },
+          "brokenLinkCount": {
+            "type": "number"
+          },
+          "saved": {
+            "type": "boolean"
           }
         }
       }
@@ -1146,6 +1228,166 @@
       "transactionDomain": "asset",
       "deferCompile": false,
       "risk": "readOnly"
+    },
+    "content.material.function.create": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "materialFunction"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "scopeParameters": [
+        "name",
+        "packagePath"
+      ]
+    },
+    "content.material.function.interface.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "materialFunction"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "scopeParameters": [
+        "materialFunction"
+      ]
+    },
+    "content.material.function.validate": {
+      "admission": "finalizer",
+      "scopeKinds": [
+        "materialFunction"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": false,
+      "risk": "readOnly",
+      "scopeParameters": [
+        "materialFunction"
+      ]
+    },
+    "content.material.function.get": {
+      "admission": "observeOnly",
+      "scopeKinds": [
+        "materialFunction"
+      ],
+      "scopeParameters": [
+        "name"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": false,
+      "risk": "readOnly"
+    },
+    "content.material.custom.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "material",
+        "materialFunction"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "scopeParameters": [
+        "material",
+        "materialFunction"
+      ],
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "stateHash": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    "content.material.parameter.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "material",
+        "materialFunction"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "scopeParameters": [
+        "material",
+        "materialFunction"
+      ],
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "stateHash": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    "content.material.function.call.set": {
+      "admission": "editStep",
+      "scopeKinds": [
+        "material",
+        "materialFunction"
+      ],
+      "transactionDomain": "asset",
+      "deferCompile": true,
+      "risk": "safeWrite",
+      "scopeParameters": [
+        "material",
+        "materialFunction"
+      ],
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "stateHash": {
+            "type": "string"
+          },
+          "function": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
     }
   },
   "scopeKinds": {
@@ -1239,6 +1481,29 @@
         },
         "properties": {
           "operationType": "content.material.graph.get"
+        }
+      }
+    },
+    "materialFunction": {
+      "initializer": {
+        "operationType": "content.material.function.create",
+        "params": {}
+      },
+      "forbiddenParameters": [
+        "material"
+      ],
+      "defaultReadBack": [
+        "graph"
+      ],
+      "compile": {
+        "operationType": "content.material.function.validate"
+      },
+      "readBack": {
+        "graph": {
+          "operationType": "content.material.function.get"
+        },
+        "interface": {
+          "operationType": "content.material.function.get"
         }
       }
     }

@@ -49,427 +49,427 @@ DEFINE_LOG_CATEGORY_STATIC(LogUEAIIntegrationServer, Log, All);
 
 namespace
 {
-FString CurrentProcessStartTimeUtc()
-{
+	FString CurrentProcessStartTimeUtc()
+	{
 #if PLATFORM_WINDOWS
-	FILETIME CreationTime{};
-	FILETIME ExitTime{};
-	FILETIME KernelTime{};
-	FILETIME UserTime{};
-	if (::GetProcessTimes(
+		FILETIME CreationTime{};
+		FILETIME ExitTime{};
+		FILETIME KernelTime{};
+		FILETIME UserTime{};
+		if (::GetProcessTimes(
 			::GetCurrentProcess(),
 			&CreationTime,
 			&ExitTime,
 			&KernelTime,
 			&UserTime))
-	{
-		SYSTEMTIME SystemTime{};
-		if (::FileTimeToSystemTime(&CreationTime, &SystemTime))
 		{
-			return FDateTime(
-				SystemTime.wYear,
-				SystemTime.wMonth,
-				SystemTime.wDay,
-				SystemTime.wHour,
-				SystemTime.wMinute,
-				SystemTime.wSecond,
-				SystemTime.wMilliseconds).ToIso8601();
-		}
-	}
-#endif
-	return FDateTime::UtcNow().ToIso8601();
-}
-
-FString CapabilityCatalogDigest(const FMCPToolRegistry& Registry)
-{
-	TArray<TSharedPtr<FJsonObject>> Descriptors =
-		Registry.GetCapabilityDescriptors();
-	Descriptors.Sort([](
-		const TSharedPtr<FJsonObject>& Left,
-		const TSharedPtr<FJsonObject>& Right)
-	{
-		FString LeftId;
-		FString RightId;
-		if (Left.IsValid())
-		{
-			Left->TryGetStringField(TEXT("id"), LeftId);
-		}
-		if (Right.IsValid())
-		{
-			Right->TryGetStringField(TEXT("id"), RightId);
-		}
-		return LeftId < RightId;
-	});
-	TArray<TSharedPtr<FJsonValue>> Values;
-	Values.Reserve(Descriptors.Num());
-	for (const TSharedPtr<FJsonObject>& Descriptor : Descriptors)
-	{
-		if (Descriptor.IsValid())
-		{
-			Values.Add(MakeShared<FJsonValueObject>(Descriptor));
-		}
-	}
-	TSharedPtr<FJsonObject> Identity = MakeShared<FJsonObject>();
-	Identity->SetArrayField(TEXT("capabilities"), Values);
-	const FString Digest =
-		UEAIIntegration::Infrastructure::DigestJson(Identity);
-	return Digest.IsEmpty() ? FString() : TEXT("sha256:") + Digest;
-}
-
-FString LoadedPluginModuleDigest()
-{
-	const FString ModulePath = FModuleManager::Get().GetModuleFilename(
-		TEXT("UE_AI_integration"));
-	TArray<uint8> Bytes;
-	FString Digest;
-	return !ModulePath.IsEmpty()
-		&& FFileHelper::LoadFileToArray(Bytes, *ModulePath)
-		&& UEAIIntegration::Infrastructure::TrySha256Hex(Bytes, Digest)
-		? TEXT("sha256:") + Digest
-		: FString();
-}
-
-bool TryParseQueryBool(const TMap<FString, FString>& QueryParams, const FString& Name,
-                       TOptional<bool>& OutValue, FString& OutError)
-{
-	const FString* RawValue = QueryParams.Find(Name);
-	if (!RawValue)
-	{
-		return true;
-	}
-	if (*RawValue == TEXT("true"))
-	{
-		OutValue = true;
-		return true;
-	}
-	if (*RawValue == TEXT("false"))
-	{
-		OutValue = false;
-		return true;
-	}
-	OutError = FString::Printf(TEXT("Query parameter '%s' must be true or false."), *Name);
-	return false;
-}
-
-bool TryParseQueryInteger(const TMap<FString, FString>& QueryParams, const FString& Name,
-                          int32 DefaultValue, int32 MinValue, int32 MaxValue, int32& OutValue,
-                          FString& OutError)
-{
-	OutValue = DefaultValue;
-	const FString* RawValue = QueryParams.Find(Name);
-	if (!RawValue)
-	{
-		return true;
-	}
-	if (!RawValue->IsNumeric())
-	{
-		OutError = FString::Printf(TEXT("Query parameter '%s' must be an integer."), *Name);
-		return false;
-	}
-	const int64 Parsed = FCString::Atoi64(**RawValue);
-	if (Parsed < MinValue || Parsed > MaxValue)
-	{
-		OutError = FString::Printf(TEXT("Query parameter '%s' must be between %d and %d."), *Name,
-		                           MinValue, MaxValue);
-		return false;
-	}
-	OutValue = static_cast<int32>(Parsed);
-	return true;
-}
-
-bool DescriptorMatchesTrait(const TSharedPtr<FJsonObject>& Descriptor, const FString& TraitName,
-                            const TOptional<bool>& Expected)
-{
-	if (!Expected.IsSet())
-	{
-		return true;
-	}
-	const TSharedPtr<FJsonObject>* Traits = nullptr;
-	bool Actual = false;
-	return Descriptor.IsValid() && Descriptor->TryGetObjectField(TEXT("traits"), Traits) &&
-	       Traits && Traits->IsValid() && (*Traits)->TryGetBoolField(TraitName, Actual) &&
-	       Actual == Expected.GetValue();
-}
-
-TSharedPtr<FJsonObject> DecorateCapabilityAvailability(
-	const TSharedPtr<FJsonObject>& Descriptor)
-{
-	TSharedPtr<FJsonObject> Decorated = MakeShared<FJsonObject>();
-	if (Descriptor.IsValid())
-	{
-		Decorated->Values = Descriptor->Values;
-	}
-
-	TArray<TSharedPtr<FJsonValue>> Reasons;
-	for (const FString& Reason :
-		UEAIIntegration::Infrastructure::GetCapabilityUnavailableReasons(
-			Descriptor))
-	{
-		Reasons.Add(MakeShared<FJsonValueString>(Reason));
-	}
-
-	Decorated->SetBoolField(TEXT("available"), Reasons.IsEmpty());
-	Decorated->SetArrayField(TEXT("availabilityReasons"), Reasons);
-	return Decorated;
-}
-
-TSharedPtr<FJsonObject> MakeCapabilitySummary(const TSharedPtr<FJsonObject>& Descriptor)
-{
-	TSharedPtr<FJsonObject> Summary = MakeShared<FJsonObject>();
-	static const TArray<FString> SummaryFields = {
-	    TEXT("id"),          TEXT("domain"), TEXT("kind"),
-	    TEXT("description"), TEXT("traits"), TEXT("effects"), TEXT("lifecycle"),
-	    TEXT("output"), TEXT("requires"),
-	    TEXT("available"), TEXT("availabilityReasons"), TEXT("match"),
-	};
-	for (const FString& FieldName : SummaryFields)
-	{
-		if (const TSharedPtr<FJsonValue>* Value = Descriptor->Values.Find(FieldName))
-		{
-			Summary->SetField(FieldName, *Value);
-		}
-	}
-	const TSharedPtr<FJsonObject>* Dsl = nullptr;
-	FString Risk;
-	if (Descriptor->TryGetObjectField(TEXT("dsl"), Dsl)
-		&& Dsl
-		&& Dsl->IsValid()
-		&& (*Dsl)->TryGetStringField(TEXT("risk"), Risk))
-	{
-		Summary->SetStringField(TEXT("risk"), Risk);
-	}
-	return Summary;
-}
-
-std::string ToUtf8String(const FString& Value)
-{
-	const FTCHARToUTF8 Converted(*Value);
-	return std::string(Converted.Get(), Converted.Length());
-}
-
-ue::workflow::CapabilitySearchDocument MakeCapabilitySearchDocument(
-	const TSharedPtr<FJsonObject>& Descriptor)
-{
-	ue::workflow::CapabilitySearchDocument Document;
-	if (!Descriptor.IsValid())
-	{
-		return Document;
-	}
-	FString Value;
-	if (Descriptor->TryGetStringField(TEXT("id"), Value))
-	{
-		Document.id = ToUtf8String(Value);
-	}
-	if (Descriptor->TryGetStringField(TEXT("description"), Value))
-	{
-		Document.description = ToUtf8String(Value);
-	}
-
-	const TSharedPtr<FJsonObject>* Search = nullptr;
-	if (!Descriptor->TryGetObjectField(TEXT("search"), Search)
-		|| !Search
-		|| !Search->IsValid())
-	{
-		return Document;
-	}
-	if ((*Search)->TryGetStringField(TEXT("title"), Value))
-	{
-		Document.title = ToUtf8String(Value);
-	}
-	const auto ReadArray =
-		[Search](const TCHAR* FieldName)
-	{
-		std::vector<std::string> Values;
-		if (!(*Search)->HasTypedField<EJson::Array>(FieldName))
-		{
-			return Values;
-		}
-		for (const TSharedPtr<FJsonValue>& Item :
-			(*Search)->GetArrayField(FieldName))
-		{
-			if (Item.IsValid() && Item->Type == EJson::String)
+			SYSTEMTIME SystemTime{};
+			if (::FileTimeToSystemTime(&CreationTime, &SystemTime))
 			{
-				Values.push_back(ToUtf8String(Item->AsString()));
+				return FDateTime(
+					SystemTime.wYear,
+					SystemTime.wMonth,
+					SystemTime.wDay,
+					SystemTime.wHour,
+					SystemTime.wMinute,
+					SystemTime.wSecond,
+					SystemTime.wMilliseconds).ToIso8601();
 			}
 		}
-		return Values;
-	};
-	Document.keywords = ReadArray(TEXT("keywords"));
-	Document.aliases = ReadArray(TEXT("aliases"));
-	return Document;
-}
-
-TSharedPtr<FJsonObject> MakeCapabilitySearchMatch(
-	const ue::workflow::CapabilitySearchMatch& Match)
-{
-	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-	Result->SetNumberField(TEXT("score"), Match.score);
-	TArray<TSharedPtr<FJsonValue>> MatchedFields;
-	for (const std::string& Field : Match.matched_fields)
-	{
-		MatchedFields.Add(MakeShared<FJsonValueString>(
-			UTF8_TO_TCHAR(Field.c_str())));
+#endif
+		return FDateTime::UtcNow().ToIso8601();
 	}
-	TArray<TSharedPtr<FJsonValue>> MatchedTokens;
-	for (const std::string& Token : Match.matched_tokens)
-	{
-		MatchedTokens.Add(MakeShared<FJsonValueString>(
-			UTF8_TO_TCHAR(Token.c_str())));
-	}
-	Result->SetArrayField(TEXT("matchedFields"), MatchedFields);
-	Result->SetArrayField(TEXT("matchedTokens"), MatchedTokens);
-	return Result;
-}
 
-bool IsBlueprintDebugCapability(const FString& Capability)
-{
-	static const TSet<FString> Capabilities = {
-		TEXT("blueprint.debug.session.get"),
-		TEXT("blueprint.debug.trace.get"),
-		TEXT("blueprint.debug.breakpoint.list"),
-		TEXT("blueprint.debug.breakpoint.set"),
-		TEXT("blueprint.debug.breakpoint.remove"),
-		TEXT("blueprint.debug.watch.list"),
-		TEXT("blueprint.debug.watch.set"),
-		TEXT("blueprint.debug.watch.remove"),
-		TEXT("blueprint.debug.watch.value.get"),
-		TEXT("blueprint.debug.control"),
-	};
-	return Capabilities.Contains(Capability);
-}
-
-FString RequestBodyToString(const FHttpServerRequest& Request)
-{
-	if (Request.Body.IsEmpty())
+	FString CapabilityCatalogDigest(const FMCPToolRegistry& Registry)
 	{
-		return FString();
-	}
-	const FUTF8ToTCHAR Converter(
-		reinterpret_cast<const ANSICHAR*>(Request.Body.GetData()),
-		Request.Body.Num());
-	return FString(Converter.Length(), Converter.Get());
-}
-
-FString FindHeaderValue(
-	const FHttpServerRequest& Request,
-	const FString& HeaderName)
-{
-	for (const TPair<FString, TArray<FString>>& Pair : Request.Headers)
-	{
-		if (Pair.Key.Equals(HeaderName, ESearchCase::IgnoreCase)
-			&& !Pair.Value.IsEmpty())
+		TArray<TSharedPtr<FJsonObject>> Descriptors =
+			Registry.GetCapabilityDescriptors();
+		Descriptors.Sort([](
+			const TSharedPtr<FJsonObject>& Left,
+			const TSharedPtr<FJsonObject>& Right)
+			{
+				FString LeftId;
+				FString RightId;
+				if (Left.IsValid())
+				{
+					Left->TryGetStringField(TEXT("id"), LeftId);
+				}
+				if (Right.IsValid())
+				{
+					Right->TryGetStringField(TEXT("id"), RightId);
+				}
+				return LeftId < RightId;
+			});
+		TArray<TSharedPtr<FJsonValue>> Values;
+		Values.Reserve(Descriptors.Num());
+		for (const TSharedPtr<FJsonObject>& Descriptor : Descriptors)
 		{
-			return Pair.Value[0].TrimStartAndEnd();
+			if (Descriptor.IsValid())
+			{
+				Values.Add(MakeShared<FJsonValueObject>(Descriptor));
+			}
 		}
+		TSharedPtr<FJsonObject> Identity = MakeShared<FJsonObject>();
+		Identity->SetArrayField(TEXT("capabilities"), Values);
+		const FString Digest =
+			UEAIIntegration::Infrastructure::DigestJson(Identity);
+		return Digest.IsEmpty() ? FString() : TEXT("sha256:") + Digest;
 	}
-	return FString();
-}
 
-uint32 ParseProcessId(const FString& Value)
-{
-	if (Value.IsEmpty() || !Value.IsNumeric())
+	FString LoadedPluginModuleDigest()
 	{
-		return 0;
+		const FString ModulePath = FModuleManager::Get().GetModuleFilename(
+			TEXT("UE_AI_integration"));
+		TArray<uint8> Bytes;
+		FString Digest;
+		return !ModulePath.IsEmpty()
+		       && FFileHelper::LoadFileToArray(Bytes, *ModulePath)
+		       && UEAIIntegration::Infrastructure::TrySha256Hex(Bytes, Digest)
+			       ? TEXT("sha256:") + Digest
+			       : FString();
 	}
-	const uint64 Parsed = FCString::Strtoui64(*Value, nullptr, 10);
-	return Parsed <= MAX_uint32 ? static_cast<uint32>(Parsed) : 0;
-}
 
-UEAIIntegration::Infrastructure::FCallerContext ParseCallerContext(
-	const FHttpServerRequest& Request)
-{
-	using UEAIIntegration::Infrastructure::FCallerContext;
-	FCallerContext Caller;
-	const FString CallerType =
-		FindHeaderValue(Request, TEXT("X-UEAI-Caller-Type"));
-	if (!CallerType.IsEmpty())
+	bool TryParseQueryBool(const TMap<FString, FString>& QueryParams, const FString& Name,
+	                       TOptional<bool>& OutValue, FString& OutError)
 	{
-		Caller.ClientKind = CallerType;
-	}
-	const FString CallerName =
-		FindHeaderValue(Request, TEXT("X-UEAI-Caller"));
-	if (!CallerName.IsEmpty())
-	{
-		Caller.Name = CallerName;
-	}
-	Caller.Version =
-		FindHeaderValue(Request, TEXT("X-UEAI-Caller-Version"));
-	Caller.InstanceId =
-		FindHeaderValue(Request, TEXT("X-UEAI-Instance-Id"));
-	Caller.InvocationId =
-		FindHeaderValue(Request, TEXT("X-UEAI-Invocation-Id"));
-	Caller.SessionId =
-		FindHeaderValue(Request, TEXT("X-UEAI-Session-Id"));
-	const FString Transport =
-		FindHeaderValue(Request, TEXT("X-UEAI-Transport"));
-	if (!Transport.IsEmpty())
-	{
-		Caller.Transport = Transport;
-	}
-	Caller.Command = FindHeaderValue(Request, TEXT("X-UEAI-Command"));
-	Caller.Pid = ParseProcessId(
-		FindHeaderValue(Request, TEXT("X-UEAI-Process-Id")));
-	return Caller;
-}
-
-FString FindCapabilityRisk(
-	const FMCPToolRegistry& Registry,
-	const FString& Capability)
-{
-	for (const TSharedPtr<FJsonObject>& Descriptor :
-		Registry.GetCapabilityDescriptors())
-	{
-		FString Id;
-		if (!Descriptor.IsValid()
-			|| !Descriptor->TryGetStringField(TEXT("id"), Id)
-			|| Id != Capability)
+		const FString* RawValue = QueryParams.Find(Name);
+		if (!RawValue)
 		{
-			continue;
+			return true;
+		}
+		if (*RawValue == TEXT("true"))
+		{
+			OutValue = true;
+			return true;
+		}
+		if (*RawValue == TEXT("false"))
+		{
+			OutValue = false;
+			return true;
+		}
+		OutError = FString::Printf(TEXT("Query parameter '%s' must be true or false."), *Name);
+		return false;
+	}
+
+	bool TryParseQueryInteger(const TMap<FString, FString>& QueryParams, const FString& Name,
+	                          int32 DefaultValue, int32 MinValue, int32 MaxValue, int32& OutValue,
+	                          FString& OutError)
+	{
+		OutValue = DefaultValue;
+		const FString* RawValue = QueryParams.Find(Name);
+		if (!RawValue)
+		{
+			return true;
+		}
+		if (!RawValue->IsNumeric())
+		{
+			OutError = FString::Printf(TEXT("Query parameter '%s' must be an integer."), *Name);
+			return false;
+		}
+		const int64 Parsed = FCString::Atoi64(**RawValue);
+		if (Parsed < MinValue || Parsed > MaxValue)
+		{
+			OutError = FString::Printf(TEXT("Query parameter '%s' must be between %d and %d."), *Name,
+			                           MinValue, MaxValue);
+			return false;
+		}
+		OutValue = static_cast<int32>(Parsed);
+		return true;
+	}
+
+	bool DescriptorMatchesTrait(const TSharedPtr<FJsonObject>& Descriptor, const FString& TraitName,
+	                            const TOptional<bool>& Expected)
+	{
+		if (!Expected.IsSet())
+		{
+			return true;
+		}
+		const TSharedPtr<FJsonObject>* Traits = nullptr;
+		bool Actual = false;
+		return Descriptor.IsValid() && Descriptor->TryGetObjectField(TEXT("traits"), Traits) &&
+			Traits && Traits->IsValid() && (*Traits)->TryGetBoolField(TraitName, Actual) &&
+			Actual == Expected.GetValue();
+	}
+
+	TSharedPtr<FJsonObject> DecorateCapabilityAvailability(
+		const TSharedPtr<FJsonObject>& Descriptor)
+	{
+		TSharedPtr<FJsonObject> Decorated = MakeShared<FJsonObject>();
+		if (Descriptor.IsValid())
+		{
+			Decorated->Values = Descriptor->Values;
+		}
+
+		TArray<TSharedPtr<FJsonValue>> Reasons;
+		for (const FString& Reason :
+		     UEAIIntegration::Infrastructure::GetCapabilityUnavailableReasons(
+			     Descriptor))
+		{
+			Reasons.Add(MakeShared<FJsonValueString>(Reason));
+		}
+
+		Decorated->SetBoolField(TEXT("available"), Reasons.IsEmpty());
+		Decorated->SetArrayField(TEXT("availabilityReasons"), Reasons);
+		return Decorated;
+	}
+
+	TSharedPtr<FJsonObject> MakeCapabilitySummary(const TSharedPtr<FJsonObject>& Descriptor)
+	{
+		TSharedPtr<FJsonObject> Summary = MakeShared<FJsonObject>();
+		static const TArray<FString> SummaryFields = {
+			TEXT("id"), TEXT("domain"), TEXT("kind"),
+			TEXT("description"), TEXT("traits"), TEXT("effects"), TEXT("lifecycle"),
+			TEXT("output"), TEXT("requires"),
+			TEXT("available"), TEXT("availabilityReasons"), TEXT("match"),
+		};
+		for (const FString& FieldName : SummaryFields)
+		{
+			if (const TSharedPtr<FJsonValue>* Value = Descriptor->Values.Find(FieldName))
+			{
+				Summary->SetField(FieldName, *Value);
+			}
 		}
 		const TSharedPtr<FJsonObject>* Dsl = nullptr;
 		FString Risk;
 		if (Descriptor->TryGetObjectField(TEXT("dsl"), Dsl)
-			&& Dsl && Dsl->IsValid())
+			&& Dsl
+			&& Dsl->IsValid()
+			&& (*Dsl)->TryGetStringField(TEXT("risk"), Risk))
 		{
-			(*Dsl)->TryGetStringField(TEXT("risk"), Risk);
+			Summary->SetStringField(TEXT("risk"), Risk);
 		}
-		return Risk;
+		return Summary;
 	}
-	return FString();
-}
 
-bool DeserializeRequestObject(
-	const FHttpServerRequest& Request,
-	TSharedPtr<FJsonObject>& OutObject)
-{
-	const FString Body = RequestBodyToString(Request);
-	if (Body.IsEmpty())
+	std::string ToUtf8String(const FString& Value)
 	{
-		return false;
+		const FTCHARToUTF8 Converted(*Value);
+		return std::string(Converted.Get(), Converted.Length());
 	}
-	const TSharedRef<TJsonReader<>> Reader =
-		TJsonReaderFactory<>::Create(Body);
-	return FJsonSerializer::Deserialize(Reader, OutObject)
-		&& OutObject.IsValid();
-}
+
+	ue::workflow::CapabilitySearchDocument MakeCapabilitySearchDocument(
+		const TSharedPtr<FJsonObject>& Descriptor)
+	{
+		ue::workflow::CapabilitySearchDocument Document;
+		if (!Descriptor.IsValid())
+		{
+			return Document;
+		}
+		FString Value;
+		if (Descriptor->TryGetStringField(TEXT("id"), Value))
+		{
+			Document.id = ToUtf8String(Value);
+		}
+		if (Descriptor->TryGetStringField(TEXT("description"), Value))
+		{
+			Document.description = ToUtf8String(Value);
+		}
+
+		const TSharedPtr<FJsonObject>* Search = nullptr;
+		if (!Descriptor->TryGetObjectField(TEXT("search"), Search)
+			|| !Search
+			|| !Search->IsValid())
+		{
+			return Document;
+		}
+		if ((*Search)->TryGetStringField(TEXT("title"), Value))
+		{
+			Document.title = ToUtf8String(Value);
+		}
+		const auto ReadArray =
+			[Search](const TCHAR* FieldName)
+		{
+			std::vector<std::string> Values;
+			if (!(*Search)->HasTypedField<EJson::Array>(FieldName))
+			{
+				return Values;
+			}
+			for (const TSharedPtr<FJsonValue>& Item :
+			     (*Search)->GetArrayField(FieldName))
+			{
+				if (Item.IsValid() && Item->Type == EJson::String)
+				{
+					Values.push_back(ToUtf8String(Item->AsString()));
+				}
+			}
+			return Values;
+		};
+		Document.keywords = ReadArray(TEXT("keywords"));
+		Document.aliases = ReadArray(TEXT("aliases"));
+		return Document;
+	}
+
+	TSharedPtr<FJsonObject> MakeCapabilitySearchMatch(
+		const ue::workflow::CapabilitySearchMatch& Match)
+	{
+		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetNumberField(TEXT("score"), Match.score);
+		TArray<TSharedPtr<FJsonValue>> MatchedFields;
+		for (const std::string& Field : Match.matched_fields)
+		{
+			MatchedFields.Add(MakeShared<FJsonValueString>(
+				UTF8_TO_TCHAR(Field.c_str())));
+		}
+		TArray<TSharedPtr<FJsonValue>> MatchedTokens;
+		for (const std::string& Token : Match.matched_tokens)
+		{
+			MatchedTokens.Add(MakeShared<FJsonValueString>(
+				UTF8_TO_TCHAR(Token.c_str())));
+		}
+		Result->SetArrayField(TEXT("matchedFields"), MatchedFields);
+		Result->SetArrayField(TEXT("matchedTokens"), MatchedTokens);
+		return Result;
+	}
+
+	bool IsBlueprintDebugCapability(const FString& Capability)
+	{
+		static const TSet<FString> Capabilities = {
+			TEXT("blueprint.debug.session.get"),
+			TEXT("blueprint.debug.trace.get"),
+			TEXT("blueprint.debug.breakpoint.list"),
+			TEXT("blueprint.debug.breakpoint.set"),
+			TEXT("blueprint.debug.breakpoint.remove"),
+			TEXT("blueprint.debug.watch.list"),
+			TEXT("blueprint.debug.watch.set"),
+			TEXT("blueprint.debug.watch.remove"),
+			TEXT("blueprint.debug.watch.value.get"),
+			TEXT("blueprint.debug.control"),
+		};
+		return Capabilities.Contains(Capability);
+	}
+
+	FString RequestBodyToString(const FHttpServerRequest& Request)
+	{
+		if (Request.Body.IsEmpty())
+		{
+			return FString();
+		}
+		const FUTF8ToTCHAR Converter(
+			reinterpret_cast<const ANSICHAR*>(Request.Body.GetData()),
+			Request.Body.Num());
+		return FString(Converter.Length(), Converter.Get());
+	}
+
+	FString FindHeaderValue(
+		const FHttpServerRequest& Request,
+		const FString& HeaderName)
+	{
+		for (const TPair<FString, TArray<FString>>& Pair : Request.Headers)
+		{
+			if (Pair.Key.Equals(HeaderName, ESearchCase::IgnoreCase)
+				&& !Pair.Value.IsEmpty())
+			{
+				return Pair.Value[0].TrimStartAndEnd();
+			}
+		}
+		return FString();
+	}
+
+	uint32 ParseProcessId(const FString& Value)
+	{
+		if (Value.IsEmpty() || !Value.IsNumeric())
+		{
+			return 0;
+		}
+		const uint64 Parsed = FCString::Strtoui64(*Value, nullptr, 10);
+		return Parsed <= MAX_uint32 ? static_cast<uint32>(Parsed) : 0;
+	}
+
+	UEAIIntegration::Infrastructure::FCallerContext ParseCallerContext(
+		const FHttpServerRequest& Request)
+	{
+		using UEAIIntegration::Infrastructure::FCallerContext;
+		FCallerContext Caller;
+		const FString CallerType =
+			FindHeaderValue(Request, TEXT("X-UEAI-Caller-Type"));
+		if (!CallerType.IsEmpty())
+		{
+			Caller.ClientKind = CallerType;
+		}
+		const FString CallerName =
+			FindHeaderValue(Request, TEXT("X-UEAI-Caller"));
+		if (!CallerName.IsEmpty())
+		{
+			Caller.Name = CallerName;
+		}
+		Caller.Version =
+			FindHeaderValue(Request, TEXT("X-UEAI-Caller-Version"));
+		Caller.InstanceId =
+			FindHeaderValue(Request, TEXT("X-UEAI-Instance-Id"));
+		Caller.InvocationId =
+			FindHeaderValue(Request, TEXT("X-UEAI-Invocation-Id"));
+		Caller.SessionId =
+			FindHeaderValue(Request, TEXT("X-UEAI-Session-Id"));
+		const FString Transport =
+			FindHeaderValue(Request, TEXT("X-UEAI-Transport"));
+		if (!Transport.IsEmpty())
+		{
+			Caller.Transport = Transport;
+		}
+		Caller.Command = FindHeaderValue(Request, TEXT("X-UEAI-Command"));
+		Caller.Pid = ParseProcessId(
+			FindHeaderValue(Request, TEXT("X-UEAI-Process-Id")));
+		return Caller;
+	}
+
+	FString FindCapabilityRisk(
+		const FMCPToolRegistry& Registry,
+		const FString& Capability)
+	{
+		for (const TSharedPtr<FJsonObject>& Descriptor :
+		     Registry.GetCapabilityDescriptors())
+		{
+			FString Id;
+			if (!Descriptor.IsValid()
+				|| !Descriptor->TryGetStringField(TEXT("id"), Id)
+				|| Id != Capability)
+			{
+				continue;
+			}
+			const TSharedPtr<FJsonObject>* Dsl = nullptr;
+			FString Risk;
+			if (Descriptor->TryGetObjectField(TEXT("dsl"), Dsl)
+				&& Dsl && Dsl->IsValid())
+			{
+				(*Dsl)->TryGetStringField(TEXT("risk"), Risk);
+			}
+			return Risk;
+		}
+		return FString();
+	}
+
+	bool DeserializeRequestObject(
+		const FHttpServerRequest& Request,
+		TSharedPtr<FJsonObject>& OutObject)
+	{
+		const FString Body = RequestBodyToString(Request);
+		if (Body.IsEmpty())
+		{
+			return false;
+		}
+		const TSharedRef<TJsonReader<>> Reader =
+			TJsonReaderFactory<>::Create(Body);
+		return FJsonSerializer::Deserialize(Reader, OutObject)
+			&& OutObject.IsValid();
+	}
 } // namespace
 
 FUEAIIntegrationServer::FUEAIIntegrationServer(
 	FMCPToolRegistry& InRegistry,
 	FMCPExecutor& InExecutor,
 	UEAIIntegration::Infrastructure::FClientActivityService&
-		InClientActivityService,
+	InClientActivityService,
 	UEAIIntegration::Infrastructure::FBlueprintDebugService*
-		InBlueprintDebugService)
+	InBlueprintDebugService)
 	: Registry(InRegistry)
-	, Executor(InExecutor)
-	, ClientActivityService(InClientActivityService)
-	, BlueprintDebugService(InBlueprintDebugService)
-	, WorkflowRuntime(
-		MakeUnique<UEAIIntegration::Workflow::FWorkflowRuntime>(InRegistry))
-	, ServerInstanceId(
-		FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower))
-	, ProcessStartTimeUtc(CurrentProcessStartTimeUtc())
+	  , Executor(InExecutor)
+	  , ClientActivityService(InClientActivityService)
+	  , BlueprintDebugService(InBlueprintDebugService)
+	  , WorkflowRuntime(
+		  MakeUnique<UEAIIntegration::Workflow::FWorkflowRuntime>(InRegistry))
+	  , ServerInstanceId(
+		  FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower))
+	  , ProcessStartTimeUtc(CurrentProcessStartTimeUtc())
 {
 	ClientActivityService.SetServerInstanceId(ServerInstanceId);
 }
@@ -493,6 +493,35 @@ FMCPResult FUEAIIntegrationServer::PlanWorkflowDefinition(
 	Request->SetStringField(TEXT("action"), TEXT("plan"));
 	Request->SetStringField(TEXT("detailLevel"), TEXT("standard"));
 	Request->SetObjectField(TEXT("workflow"), Workflow);
+	return WorkflowRuntime->HandleRequest(Request);
+}
+
+FMCPResult FUEAIIntegrationServer::ExecuteWorkflowDefinition(
+	const TSharedPtr<FJsonObject>& Workflow,
+	const FString& ApprovedPlanDigest,
+	const bool bSaveOnSuccess,
+	const bool bConfirmWrite,
+	const FString& RequestId) const
+{
+	if (!WorkflowRuntime.IsValid() || !Workflow.IsValid()
+		|| ApprovedPlanDigest.IsEmpty())
+	{
+		return FMCPResult::Fail(
+			TEXT("workflow_runtime_unavailable"),
+			TEXT("The Editor Workflow executor or approved plan digest is unavailable."),
+			503);
+	}
+	TSharedRef<FJsonObject> Request = MakeShared<FJsonObject>();
+	Request->SetStringField(TEXT("action"), TEXT("execute"));
+	Request->SetStringField(TEXT("detailLevel"), TEXT("standard"));
+	Request->SetObjectField(TEXT("workflow"), Workflow);
+	Request->SetStringField(TEXT("approvePlanDigest"), ApprovedPlanDigest);
+	Request->SetBoolField(TEXT("saveOnSuccess"), bSaveOnSuccess);
+	Request->SetBoolField(TEXT("confirmWrite"), bConfirmWrite);
+	if (!RequestId.IsEmpty())
+	{
+		Request->SetStringField(TEXT("requestId"), RequestId);
+	}
 	return WorkflowRuntime->HandleRequest(Request);
 }
 
@@ -540,15 +569,15 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 		FHttpPath(TEXT("/api/health")),
 		EHttpServerRequestVerbs::VERB_GET,
 		UEAI_HTTP_ROUTE_HANDLER([this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
-		{
+			{
 			return HandleCallerObserved(
 				Request,
 				OnComplete,
 				[this, &Request](const FHttpResultCallback& ObservedComplete)
 				{
-					return HandleHealth(Request, ObservedComplete);
+				return HandleHealth(Request, ObservedComplete);
 				});
-		}));
+			}));
 	if (!HealthRoute.IsValid())
 	{
 		UE_LOG(LogUEAIIntegrationServer, Error, TEXT("Failed to bind /api/health."));
@@ -561,15 +590,15 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 		FHttpPath(TEXT("/api/capabilities")),
 		EHttpServerRequestVerbs::VERB_GET,
 		UEAI_HTTP_ROUTE_HANDLER([this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
-		{
+			{
 			return HandleCallerObserved(
 				Request,
 				OnComplete,
 				[this, &Request](const FHttpResultCallback& ObservedComplete)
 				{
-					return HandleCapabilities(Request, ObservedComplete);
+				return HandleCapabilities(Request, ObservedComplete);
 				});
-		}));
+			}));
 	if (!CapabilitiesRoute.IsValid())
 	{
 		UE_LOG(LogUEAIIntegrationServer, Error, TEXT("Failed to bind /api/capabilities."));
@@ -583,9 +612,9 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 		FHttpPath(TEXT("/api/execute")),
 		EHttpServerRequestVerbs::VERB_POST,
 		UEAI_HTTP_ROUTE_HANDLER([this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
-		{
+			{
 			return HandleExecute(Request, OnComplete);
-		}));
+			}));
 	if (!ExecuteRoute.IsValid())
 	{
 		UE_LOG(LogUEAIIntegrationServer, Error, TEXT("Failed to bind /api/execute."));
@@ -599,11 +628,11 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 		FHttpPath(TEXT("/api/execute/cancel")),
 		EHttpServerRequestVerbs::VERB_POST,
 		UEAI_HTTP_ROUTE_HANDLER([this](
-			const FHttpServerRequest& Request,
-			const FHttpResultCallback& OnComplete)
-		{
+				const FHttpServerRequest& Request,
+				const FHttpResultCallback& OnComplete)
+			{
 			return HandleExecuteCancel(Request, OnComplete);
-		}));
+			}));
 	if (!CancelExecuteRoute.IsValid())
 	{
 		UE_LOG(
@@ -620,9 +649,9 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 		FHttpPath(TEXT("/api/v1/workflow/handshake")),
 		EHttpServerRequestVerbs::VERB_GET,
 		UEAI_HTTP_ROUTE_HANDLER([this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
-		{
+			{
 			return HandleWorkflowHandshake(Request, OnComplete);
-		}));
+			}));
 	if (!WorkflowHandshakeRoute.IsValid())
 	{
 		UE_LOG(
@@ -639,9 +668,9 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 		FHttpPath(TEXT("/api/v1/workflow")),
 		EHttpServerRequestVerbs::VERB_POST,
 		UEAI_HTTP_ROUTE_HANDLER([this](const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
-		{
+			{
 			return HandleWorkflow(Request, OnComplete);
-		}));
+			}));
 	if (!WorkflowRoute.IsValid())
 	{
 		UE_LOG(
@@ -658,11 +687,11 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 		FHttpPath(TEXT("/api/v1/clients/register")),
 		EHttpServerRequestVerbs::VERB_POST,
 		UEAI_HTTP_ROUTE_HANDLER([this](
-			const FHttpServerRequest& Request,
-			const FHttpResultCallback& OnComplete)
-		{
+				const FHttpServerRequest& Request,
+				const FHttpResultCallback& OnComplete)
+			{
 			return HandleClientRegister(Request, OnComplete);
-		}));
+			}));
 	if (!RegisterClientRoute.IsValid())
 	{
 		UE_LOG(
@@ -679,11 +708,11 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 		FHttpPath(TEXT("/api/v1/clients/heartbeat")),
 		EHttpServerRequestVerbs::VERB_POST,
 		UEAI_HTTP_ROUTE_HANDLER([this](
-			const FHttpServerRequest& Request,
-			const FHttpResultCallback& OnComplete)
-		{
+				const FHttpServerRequest& Request,
+				const FHttpResultCallback& OnComplete)
+			{
 			return HandleClientHeartbeat(Request, OnComplete);
-		}));
+			}));
 	if (!HeartbeatClientRoute.IsValid())
 	{
 		UE_LOG(
@@ -700,11 +729,11 @@ bool FUEAIIntegrationServer::Start(int32 Port)
 		FHttpPath(TEXT("/api/v1/clients/unregister")),
 		EHttpServerRequestVerbs::VERB_POST,
 		UEAI_HTTP_ROUTE_HANDLER([this](
-			const FHttpServerRequest& Request,
-			const FHttpResultCallback& OnComplete)
-		{
+				const FHttpServerRequest& Request,
+				const FHttpResultCallback& OnComplete)
+			{
 			return HandleClientUnregister(Request, OnComplete);
-		}));
+			}));
 	if (!UnregisterClientRoute.IsValid())
 	{
 		UE_LOG(
@@ -835,7 +864,7 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 	if (Pending->Kind == EUEAIIntegrationRequestKind::CancelExecute)
 	{
 		for (const TPair<FString, TSharedPtr<FJsonValue>>& Field :
-			RequestObject->Values)
+		     RequestObject->Values)
 		{
 			if (Field.Key != TEXT("requestId")
 				&& Field.Key != TEXT("reason"))
@@ -1004,9 +1033,9 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 		RequestId,
 		FindCapabilityRisk(Registry, CapabilityId));
 	const FString MarkerRequestId = RequestId.IsEmpty()
-		? TEXT("execute-") + FGuid::NewGuid().ToString(
-			EGuidFormats::DigitsWithHyphensLower)
-		: RequestId;
+		                                ? TEXT("execute-") + FGuid::NewGuid().ToString(
+			                                EGuidFormats::DigitsWithHyphensLower)
+		                                : RequestId;
 	WriteRequestMarker(
 		MarkerRequestId,
 		CapabilityId,
@@ -1018,14 +1047,14 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 	Context.Params = Params;
 	Context.RequestId = RequestId;
 	Context.CallerSessionId = Pending->Caller.IsValid()
-		? Pending->Caller->SessionId
-		: FString();
+		                          ? Pending->Caller->SessionId
+		                          : FString();
 	FMCPResult Result;
 	const FHttpResultCallback Completion = Pending->OnComplete;
 	const bool bDeferred = Executor.BeginExecuteAsync(
 		Context,
 		[this, Completion, MarkerRequestId, CapabilityId](
-			FMCPResult&& AsyncResult) mutable
+		FMCPResult&& AsyncResult) mutable
 		{
 			check(IsInGameThread());
 			if (!AsyncResult.bOk)
@@ -1122,8 +1151,9 @@ bool FUEAIIntegrationServer::HandleHealth(
 	if (WorkflowHandshake.bOk && WorkflowHandshake.Data.IsValid())
 	{
 		for (const TCHAR* Field : {
-			TEXT("contractSetDigest"),
-			TEXT("contractSetDigestV2")})
+			     TEXT("contractSetDigest"),
+			     TEXT("contractSetDigestV2")
+		     })
 		{
 			FString Value;
 			if (WorkflowHandshake.Data->TryGetStringField(Field, Value))
@@ -1133,7 +1163,7 @@ bool FUEAIIntegrationServer::HandleHealth(
 		}
 		const TSharedPtr<FJsonObject>* Digests = nullptr;
 		if (WorkflowHandshake.Data->TryGetObjectField(
-			TEXT("contractSetDigests"), Digests)
+				TEXT("contractSetDigests"), Digests)
 			&& Digests && Digests->IsValid())
 		{
 			Data->SetObjectField(TEXT("contractSetDigests"), *Digests);
@@ -1150,10 +1180,10 @@ bool FUEAIIntegrationServer::HandleHealth(
 	Data->SetNumberField(TEXT("capabilityCount"), Registry.GetCapabilityCount());
 	int32 AvailableCapabilityCount = 0;
 	for (const TSharedPtr<FJsonObject>& Descriptor :
-		Registry.GetCapabilityDescriptors())
+	     Registry.GetCapabilityDescriptors())
 	{
 		if (UEAIIntegration::Infrastructure::GetCapabilityUnavailableReasons(
-				Descriptor).IsEmpty())
+			Descriptor).IsEmpty())
 		{
 			++AvailableCapabilityCount;
 		}
@@ -1199,19 +1229,19 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 	const FHttpResultCallback& OnComplete)
 {
 	static const TSet<FString> SupportedQueryParams = {
-	    TEXT("query"),    TEXT("domain"),      TEXT("operation"), TEXT("kind"),
-	    TEXT("effect"), TEXT("lifecycle"), TEXT("canonicalOnly"),
-	    TEXT("destructive"), TEXT("expensive"), TEXT("outputKind"),
-	    TEXT("risk"),     TEXT("availableOnly"),
-	    TEXT("offset"),   TEXT("limit"),       TEXT("detail"),
+		TEXT("query"), TEXT("domain"), TEXT("operation"), TEXT("kind"),
+		TEXT("effect"), TEXT("lifecycle"), TEXT("canonicalOnly"),
+		TEXT("destructive"), TEXT("expensive"), TEXT("outputKind"),
+		TEXT("risk"), TEXT("availableOnly"),
+		TEXT("offset"), TEXT("limit"), TEXT("detail"),
 	};
 	for (const TPair<FString, FString>& QueryParam : Request.QueryParams)
 	{
 		if (!SupportedQueryParams.Contains(QueryParam.Key))
 		{
 			SendError(
-			    OnComplete, 422, TEXT("invalid_params"),
-			    FString::Printf(TEXT("Unknown capability query parameter '%s'."), *QueryParam.Key));
+				OnComplete, 422, TEXT("invalid_params"),
+				FString::Printf(TEXT("Unknown capability query parameter '%s'."), *QueryParam.Key));
 			return true;
 		}
 	}
@@ -1236,7 +1266,7 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 	{
 		KindFilter = *KindValue;
 		if (KindFilter != TEXT("query") && KindFilter != TEXT("command") &&
-		    KindFilter != TEXT("validation"))
+			KindFilter != TEXT("validation"))
 		{
 			SendError(OnComplete, 422, TEXT("invalid_params"),
 			          TEXT("Query parameter 'kind' must be query, command, or validation."));
@@ -1286,7 +1316,7 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 				&& EffectAccess != TEXT("write")))
 		{
 			SendError(OnComplete, 422, TEXT("invalid_params"),
-				TEXT("Query parameter 'effect' must be asset|world|editorSession|external:none|read|write."));
+			          TEXT("Query parameter 'effect' must be asset|world|editorSession|external:none|read|write."));
 			return true;
 		}
 	}
@@ -1296,7 +1326,7 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		&& LifecycleFilter != TEXT("deprecated"))
 	{
 		SendError(OnComplete, 422, TEXT("invalid_params"),
-			TEXT("Query parameter 'lifecycle' must be active or deprecated."));
+		          TEXT("Query parameter 'lifecycle' must be active or deprecated."));
 		return true;
 	}
 
@@ -1306,11 +1336,11 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 	TOptional<bool> AvailableOnlyFilter;
 	FString ParseError;
 	if (!TryParseQueryBool(Request.QueryParams, TEXT("canonicalOnly"), CanonicalOnlyFilter, ParseError) ||
-	    !TryParseQueryBool(Request.QueryParams, TEXT("destructive"), DestructiveFilter,
-	                       ParseError) ||
-	    !TryParseQueryBool(Request.QueryParams, TEXT("expensive"), ExpensiveFilter, ParseError) ||
-	    !TryParseQueryBool(
-		    Request.QueryParams, TEXT("availableOnly"), AvailableOnlyFilter, ParseError))
+		!TryParseQueryBool(Request.QueryParams, TEXT("destructive"), DestructiveFilter,
+		                   ParseError) ||
+		!TryParseQueryBool(Request.QueryParams, TEXT("expensive"), ExpensiveFilter, ParseError) ||
+		!TryParseQueryBool(
+			Request.QueryParams, TEXT("availableOnly"), AvailableOnlyFilter, ParseError))
 	{
 		SendError(OnComplete, 422, TEXT("invalid_params"), ParseError);
 		return true;
@@ -1320,7 +1350,7 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 	int32 Limit = 25;
 	if (!TryParseQueryInteger(Request.QueryParams, TEXT("offset"), 0, 0, MAX_int32, Offset,
 	                          ParseError) ||
-	    !TryParseQueryInteger(Request.QueryParams, TEXT("limit"), 25, 1, 100, Limit, ParseError))
+		!TryParseQueryInteger(Request.QueryParams, TEXT("limit"), 25, 1, 100, Limit, ParseError))
 	{
 		SendError(OnComplete, 422, TEXT("invalid_params"), ParseError);
 		return true;
@@ -1394,18 +1424,18 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		bool bAvailable = true;
 		DecoratedDescriptor->TryGetBoolField(TEXT("available"), bAvailable);
 		if ((!ExactOperation.IsEmpty() && Id != ExactOperation) ||
-		    (!DomainFilter.IsEmpty() && Domain != DomainFilter) ||
-		    (!KindFilter.IsEmpty() && Kind != KindFilter) ||
-		    (!LifecycleFilter.IsEmpty() && LifecycleStatus != LifecycleFilter) ||
-		    (ExactOperation.IsEmpty() && LifecycleFilter.IsEmpty() && CanonicalId != Id) ||
-		    (CanonicalOnlyFilter.Get(false) && CanonicalId != Id) ||
-		    (!EffectField.IsEmpty() && ActualEffect != EffectAccess) ||
-		    (!RiskFilter.IsEmpty() && DescriptorRisk != RiskFilter) ||
-		    (AvailableOnlyFilter.Get(false) && !bAvailable) ||
-		    !DescriptorMatchesTrait(
-			    DecoratedDescriptor, TEXT("destructive"), DestructiveFilter) ||
-		    !DescriptorMatchesTrait(
-			    DecoratedDescriptor, TEXT("expensive"), ExpensiveFilter))
+			(!DomainFilter.IsEmpty() && Domain != DomainFilter) ||
+			(!KindFilter.IsEmpty() && Kind != KindFilter) ||
+			(!LifecycleFilter.IsEmpty() && LifecycleStatus != LifecycleFilter) ||
+			(ExactOperation.IsEmpty() && LifecycleFilter.IsEmpty() && CanonicalId != Id) ||
+			(CanonicalOnlyFilter.Get(false) && CanonicalId != Id) ||
+			(!EffectField.IsEmpty() && ActualEffect != EffectAccess) ||
+			(!RiskFilter.IsEmpty() && DescriptorRisk != RiskFilter) ||
+			(AvailableOnlyFilter.Get(false) && !bAvailable) ||
+			!DescriptorMatchesTrait(
+				DecoratedDescriptor, TEXT("destructive"), DestructiveFilter) ||
+			!DescriptorMatchesTrait(
+				DecoratedDescriptor, TEXT("expensive"), ExpensiveFilter))
 		{
 			continue;
 		}
@@ -1413,7 +1443,7 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		{
 			const TSharedPtr<FJsonObject>* Output = nullptr;
 			if (!DecoratedDescriptor->TryGetObjectField(TEXT("output"), Output) || !Output ||
-			    !Output->IsValid() || (*Output)->GetStringField(TEXT("kind")) != OutputKindFilter)
+				!Output->IsValid() || (*Output)->GetStringField(TEXT("kind")) != OutputKindFilter)
 			{
 				continue;
 			}
@@ -1440,20 +1470,20 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		});
 	}
 	FilteredDescriptors.Sort(
-	    [&SearchQuery](
-		    const FRankedCapability& Left,
-		    const FRankedCapability& Right)
-	    {
-		    if (!SearchQuery.IsEmpty()
-			    && Left.Match.GetValue().score
-				    != Right.Match.GetValue().score)
-		    {
-			    return Left.Match.GetValue().score
-				    > Right.Match.GetValue().score;
-		    }
-		    return Left.Descriptor->GetStringField(TEXT("id"))
-			    < Right.Descriptor->GetStringField(TEXT("id"));
-	    });
+		[&SearchQuery](
+		const FRankedCapability& Left,
+		const FRankedCapability& Right)
+		{
+			if (!SearchQuery.IsEmpty()
+				&& Left.Match.GetValue().score
+				!= Right.Match.GetValue().score)
+			{
+				return Left.Match.GetValue().score
+					> Right.Match.GetValue().score;
+			}
+			return Left.Descriptor->GetStringField(TEXT("id"))
+				< Right.Descriptor->GetStringField(TEXT("id"));
+		});
 
 	if (!ExactOperation.IsEmpty() && FilteredDescriptors.IsEmpty())
 	{
@@ -1491,7 +1521,7 @@ bool FUEAIIntegrationServer::HandleCapabilities(
 		const TSharedPtr<FJsonObject> Descriptor =
 			FilteredDescriptors[Index].Descriptor;
 		CapabilityValues.Add(MakeShared<FJsonValueObject>(
-		    Detail == TEXT("full") ? Descriptor : MakeCapabilitySummary(Descriptor)));
+			Detail == TEXT("full") ? Descriptor : MakeCapabilitySummary(Descriptor)));
 	}
 
 	TSharedPtr<FJsonObject> Data = MakeShared<FJsonObject>();
@@ -1521,8 +1551,8 @@ bool FUEAIIntegrationServer::HandleExecute(
 			ParseCallerContext(Request);
 		FString CallerError;
 		if (!ClientActivityService.BeginRequest(
-				Caller,
-				CallerError))
+			Caller,
+			CallerError))
 		{
 			SendError(
 				OnComplete,
@@ -1538,18 +1568,18 @@ bool FUEAIIntegrationServer::HandleExecute(
 		const FHttpResultCallback Original = OnComplete;
 		const FHttpResultCallback EffectiveOnComplete =
 			[this, ActivityId, Caller, Original](
-				TUniquePtr<FHttpServerResponse>&& Response) mutable
+			TUniquePtr<FHttpServerResponse>&& Response) mutable
+		{
+			if (Response.IsValid())
 			{
-				if (Response.IsValid())
-				{
-					ClientActivityService.CompleteActivityFromHttp(
-						ActivityId,
-						static_cast<int32>(Response->Code),
-						Response->Body);
-				}
-				ClientActivityService.EndRequest(Caller);
-				Original(MoveTemp(Response));
-			};
+				ClientActivityService.CompleteActivityFromHttp(
+					ActivityId,
+					static_cast<int32>(Response->Code),
+					Response->Body);
+			}
+			ClientActivityService.EndRequest(Caller);
+			Original(MoveTemp(Response));
+		};
 		FString Body;
 		if (Request.Body.Num() > 0)
 		{
@@ -1592,7 +1622,7 @@ bool FUEAIIntegrationServer::HandleExecute(
 				return true;
 			}
 			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field :
-				RequestObject->Values)
+			     RequestObject->Values)
 			{
 				if (Field.Key != TEXT("capability")
 					&& Field.Key != TEXT("params")
@@ -1657,10 +1687,10 @@ bool FUEAIIntegrationServer::HandleExecute(
 
 			UEAIIntegration::Infrastructure::FBlueprintDebugResult Result;
 			if (BlueprintDebugService->TryHandlePausedRequest(
-					Capability,
-					Params,
-					RequestId,
-					Result))
+				Capability,
+				Params,
+				RequestId,
+				Result))
 			{
 				if (Result.bSuccess)
 				{
@@ -1772,18 +1802,18 @@ bool FUEAIIntegrationServer::HandleWorkflow(
 		const FHttpResultCallback Original = OnComplete;
 		const FHttpResultCallback ObservedComplete =
 			[this, ActivityId, Caller, Original](
-				TUniquePtr<FHttpServerResponse>&& Response) mutable
+			TUniquePtr<FHttpServerResponse>&& Response) mutable
+		{
+			if (Response.IsValid())
 			{
-				if (Response.IsValid())
-				{
-					ClientActivityService.CompleteActivityFromHttp(
-						ActivityId,
-						static_cast<int32>(Response->Code),
-						Response->Body);
-				}
-				ClientActivityService.EndRequest(Caller);
-				Original(MoveTemp(Response));
-			};
+				ClientActivityService.CompleteActivityFromHttp(
+					ActivityId,
+					static_cast<int32>(Response->Code),
+					Response->Body);
+			}
+			ClientActivityService.EndRequest(Caller);
+			Original(MoveTemp(Response));
+		};
 		SendError(
 			ObservedComplete,
 			423,
@@ -1881,9 +1911,9 @@ bool FUEAIIntegrationServer::HandleClientRegister(
 	FString SessionId;
 	FString Error;
 	if (!ClientActivityService.RegisterClient(
-			Registration,
-			SessionId,
-			Error))
+		Registration,
+		SessionId,
+		Error))
 	{
 		SendError(
 			OnComplete,
@@ -1898,11 +1928,11 @@ bool FUEAIIntegrationServer::HandleClientRegister(
 	Data->SetNumberField(
 		TEXT("heartbeatIntervalMs"),
 		UEAIIntegration::Infrastructure::FClientActivityService::
-			HeartbeatIntervalMs);
+		HeartbeatIntervalMs);
 	Data->SetNumberField(
 		TEXT("expiresAfterMs"),
 		UEAIIntegration::Infrastructure::FClientActivityService::
-			ExpiresAfterMs);
+		ExpiresAfterMs);
 	SendSuccess(OnComplete, Data);
 	return true;
 }
@@ -1997,11 +2027,11 @@ bool FUEAIIntegrationServer::HandleCallerObserved(
 	const FHttpResultCallback Original = OnComplete;
 	const FHttpResultCallback ObservedComplete =
 		[this, Caller, Original](
-			TUniquePtr<FHttpServerResponse>&& Response) mutable
-		{
-			ClientActivityService.EndRequest(*Caller);
-			Original(MoveTemp(Response));
-		};
+		TUniquePtr<FHttpServerResponse>&& Response) mutable
+	{
+		ClientActivityService.EndRequest(*Caller);
+		Original(MoveTemp(Response));
+	};
 	const bool bHandled = Handler(ObservedComplete);
 	if (!bHandled)
 	{
@@ -2023,8 +2053,8 @@ bool FUEAIIntegrationServer::QueueRequest(
 			ParseCallerContext(Request));
 	FString CallerError;
 	if (!ClientActivityService.BeginRequest(
-			*Pending->Caller,
-			CallerError))
+		*Pending->Caller,
+		CallerError))
 	{
 		SendError(
 			OnComplete,
@@ -2050,11 +2080,11 @@ bool FUEAIIntegrationServer::QueueRequest(
 		const FString ActivityId = Pending->ActivityId;
 		const TSharedPtr<
 			UEAIIntegration::Infrastructure::FCallerContext> Caller =
-				Pending->Caller;
+			Pending->Caller;
 		const FHttpResultCallback Original = OnComplete;
 		Pending->OnComplete =
 			[this, ActivityId, Caller, Original](
-				TUniquePtr<FHttpServerResponse>&& Response) mutable
+			TUniquePtr<FHttpServerResponse>&& Response) mutable
 			{
 				if (Response.IsValid())
 				{
@@ -2071,10 +2101,10 @@ bool FUEAIIntegrationServer::QueueRequest(
 	{
 		const TSharedPtr<
 			UEAIIntegration::Infrastructure::FCallerContext> Caller =
-				Pending->Caller;
+			Pending->Caller;
 		Pending->OnComplete =
 			[this, Caller, OnComplete](
-				TUniquePtr<FHttpServerResponse>&& Response) mutable
+			TUniquePtr<FHttpServerResponse>&& Response) mutable
 			{
 				ClientActivityService.EndRequest(*Caller);
 				OnComplete(MoveTemp(Response));
@@ -2228,19 +2258,19 @@ void FUEAIIntegrationServer::WriteInstanceRecord()
 	}
 	const FString Temporary = Path + TEXT(".tmp-") + ServerInstanceId;
 	if (!FFileHelper::SaveStringToFile(
-			Json,
-			*Temporary,
-			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+		Json,
+		*Temporary,
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
 	{
 		return;
 	}
 	if (!IFileManager::Get().Move(
-			*Path,
-			*Temporary,
-			true,
-			true,
-			false,
-			true))
+		*Path,
+		*Temporary,
+		true,
+		true,
+		false,
+		true))
 	{
 		IFileManager::Get().Delete(*Temporary, false, true);
 	}

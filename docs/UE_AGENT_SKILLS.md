@@ -7,13 +7,14 @@ UE Agent Skill 层把领域知识、调用顺序、风险边界和验收证据�
 它实现四段闭环：
 
 ```text
-ue_skills / ue-cli skills
+ue-cli skills (MCP fallback: ue_skills)
         │ Load Skills
         ▼
-ue_context / ue-cli help
+ue-cli help (MCP fallback: ue_context)
         │ Discover exact API
         ▼
-ue_<domain> / ue_workflow / ue-cli <capability>
+ue-cli <capability> / ue-workflow-cli
+  (MCP fallback: ue_<domain> / ue_workflow)
         │ Execute through existing safety gates
         ▼
 structured result + recipe verify operations
@@ -23,18 +24,27 @@ structured result + recipe verify operations
 Skill 不是新的任意执行器。`ue_skills` 不连接 Editor，也没有 `run` action；
 Skill 内嵌的指导 recipe 只负责路由。独立 Recipe v2 Runner 只接受有界 poll、
 受限条件、审批、补偿和显式数据绑定，不接受任意脚本或无限循环。精确参数始终
-来自 `ue_context` 或 `ue-cli help`，资产写入仍经过 Workflow 的 plan digest、
-事务、readback 和 rollback。
+优先来自 `ue-cli help`（MCP 回退使用 `ue_context`）。连续 authored 资产编辑经过 Workflow 的
+plan digest、事务、readback 和 rollback；材质编辑器预览和实例覆盖使用其专用 batch
+契约，不能伪装成未支持的 Workflow scope。
 
 ## 客户端入口 Skill
 
-`skills/ue-ai/` 是安装到 Codex 或 Claude Code 的入口 Skill。它先检查
-`ue_status` / `ue_cli`，再通过 `ue_skills` 加载最匹配的领域 Skill，并用
-`ue_context` 发现精确 schema。入口 Skill 自身不执行 UE operation，也不复制
-领域 recipe。
+`skills/ue-ai/` 是安装到 Codex 或 Claude Code 的入口 Skill。默认优先使用
+`ue-cli` / `ue-workflow-cli` 完成发现、执行和验证：先定位可执行文件并检查版本，
+用 `ue-cli skills` 查找领域配方，读取其正文，再用 `ue-cli help` 获取精确 schema。
+需要 Editor 时检查 `ue-cli status` 和 live schema。入口 Skill 自身不执行
+UE operation，也不复制领域 recipe。
+
+CLI 缺失、不可用、版本不兼容、不支持所需操作或用户明确要求 MCP 时，使用
+`ue_status`、`ue_skills`、`ue_context`、领域工具和 `ue_workflow` 回退。
+领域 Skill 中已有的 MCP 示例可映射到相同 capability 的 CLI 调用；参数、
+审批、requestId、恢复与验收要求保持一致。操作失败或写入结果不明时，不能
+通过切换传输直接重发。
 
 它故意不提供 `skill.json`，因此不会出现在 `ue_skills` 的领域 Skill 计数中，
-也不会形成入口 Skill 递归加载自身。发布包安装 MCP 时可显式安装它：
+也不会形成入口 Skill 递归加载自身。完成
+[CLI 构建和验收](UE_SHORT_CLI.md#构建与分发) 后可显式安装它：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
@@ -45,7 +55,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
 bash ./scripts/install_entry_skill.sh --client claude
 ```
 
-重复安装相同版本是幂等的；不同内容默认拒绝覆盖，显式升级会先保留时间戳备份。
+重复安装相同版本是幂等的；不同内容默认拒绝覆盖。先检查并合并本地定制，
+显式替换时保留时间戳备份。重新加载客户端技能或开启新会话后读取更新内容。
 
 ## 发布 Skill
 
@@ -55,9 +66,10 @@ bash ./scripts/install_entry_skill.sh --client claude
 | `ue-blueprint-buildgraph` | 声明式 Blueprint Graph 构建 | definition → validate/plan → approved Workflow → managed-node/diff/layout evidence |
 | `ue-blueprint-graph-organize` | Blueprint Graph 原子排版 | exact geometry → dry-run/digest → Workflow → structural/layout/image evidence |
 | `ue-performance-regression` | Before/After 性能门禁 | context → durable runs → poll/result → fingerprint compare → optional Trace |
-| `ue-render-debug-capture` | Editor/PIE 渲染调试视图 | live availability → exact Viewport PNG → restore → bounded analysis/compatible diff |
+| `ue-render-debug-capture` | 渲染调试视图、Niagara SimCache、离线渲染故障 | Viewport capture/restore/diff；SimCache capture → inspect/read → JSON export → release；保留日志证据分析 |
 | `ue-trace-insights` | Trace 录制与离线分析 | target/channels → bounded capture or import → provider discovery → semantic query/export |
 | `ue-umg-authoring` | Widget Blueprint 连续编辑 | hierarchy baseline → short op/Workflow → hierarchy/binding/compile/dirty readback |
+| `ue-material-editing` | 材质/函数/Custom HLSL、实例覆盖与大图查询 | 选择资产/预览上下文 → batch/Workflow → 当前诊断、读回与保存证据 |
 | `ue-asset-migration` | 资产移动与重构 | dependency audit → plan → exact digest execute → graph/diff readback → optional rollback |
 | `ue-world-partition-validate` | 大世界只读验证 | applicability → cells/sources/audit → Data Layer/HLOD/PCG evidence |
 | `ue-landscape-authoring` | Landscape/Water 确定性变更 | applicability → export/snapshot → change plan → execute → validate/diff → rollback |
@@ -76,8 +88,8 @@ skills/<skill-id>/
 - `SKILL.md`：触发条件、决策边界和精简流程；默认按需加载。
 - `skill.json`：`ue.agent-skill.v1` 机器索引、recipe phases、capability 引用和
   结果合同。
-- `references/`：较长的参数边界、风险解释和验收规则；通过 `ue_skills read`
-  单独加载。
+- `references/`：较长的参数边界、风险解释和验收规则；按需从本地目录读取，
+  MCP 回退时通过 `ue_skills read` 单独加载。
 - `agents/openai.yaml`：Agent UI 元数据，不参与执行。
 
 ## MCP 用法
@@ -148,7 +160,7 @@ manifest 明确标记为 `sessionSafe` 的能力，plan digest 绑定 materializ
 能力目录、Editor instance 和 PIE 状态；Runner 自己取得 PIE lease、启动并拥有
 generation，拒绝旧 objectRef、迟到回调和跨 Editor 恢复。
 
-## CLI 用法
+## CLI 用法（默认优先）
 
 短 CLI 从本地包加载机器 recipe，不连接 Editor：
 
@@ -156,6 +168,11 @@ generation，拒绝旧 objectRef、迟到回调和跨 Editor 恢复。
 ue-cli skills --query blueprint
 ue-cli skills --name ue-blueprint-diagnose --recipe scan-and-verify --detail full --json
 ```
+
+`--detail full` 返回机器 manifest，`--recipe` 用于筛选匹配的 Skill；它不返回
+`SKILL.md` 正文，也不会执行 recipe。按返回的 `data.skillRoot`，读取
+`<skillRoot>/<skill-id>/SKILL.md` 及 manifest 声明的必要 resources，再执行选中的
+recipe。无法访问本地文件时，使用 MCP `ue_skills` 的 get/read 加载正文。
 
 再用本地 capability manifest 发现参数：
 

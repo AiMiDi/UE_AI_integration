@@ -14,6 +14,9 @@
 #include "TraceWorkerFixture.h"
 #include "TraceWorkerCommandLine.h"
 
+#include "HAL/FileManager.h"
+#include "HAL/PlatformProcess.h"
+#include "Misc/Paths.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -32,6 +35,48 @@ IMPLEMENT_APPLICATION(UEAITraceWorker, "UEAITraceWorker");
 namespace
 {
 constexpr SIZE_T MaximumRequestBytes = 4 * 1024 * 1024;
+
+//++[SilverPalace] Begin add by Codex 2026/09/28
+FString FindInstalledProjectFile()
+{
+	FString Directory = FPaths::GetPath(FPlatformProcess::ExecutablePath());
+	for (int32 Depth = 0; Depth < 12 && !Directory.IsEmpty(); ++Depth)
+	{
+		TArray<FString> ProjectNames;
+		IFileManager::Get().FindFiles(
+			ProjectNames, *FPaths::Combine(Directory, TEXT("*.uproject")), true, false);
+		if (ProjectNames.Num() > 1)
+		{
+			return FString();
+		}
+		if (ProjectNames.Num() == 1)
+		{
+			return FPaths::Combine(Directory, ProjectNames[0]);
+		}
+		const FString Parent = FPaths::GetPath(Directory);
+		if (Parent == Directory)
+		{
+			break;
+		}
+		Directory = Parent;
+	}
+	return FString();
+}
+
+bool HasExplicitProjectFile(const int32 ArgC, TCHAR* ArgV[])
+{
+	for (int32 Index = 1; Index < ArgC; ++Index)
+	{
+		const FString Argument(ArgV[Index]);
+		if (Argument.StartsWith(TEXT("-Project="), ESearchCase::IgnoreCase)
+			|| Argument.EndsWith(TEXT(".uproject"), ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+//--[SilverPalace] End add by Codex
 
 class FScopedPreInitStdoutSilencer
 {
@@ -213,13 +258,24 @@ INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 	// The stdio transport is a JSON protocol. Suppress engine log routing so a
 	// caller never has to strip localization or platform warnings from stdout.
 	FScopedPreInitStdoutSilencer PreInitStdout;
+	//++[SilverPalace] Begin add by Codex 2026/09/28
+	FString AdditionalCommandline = TEXT("-Unattended -NoLog -NoDefaultLog -SaveToUserDir");
+	if (!HasExplicitProjectFile(ArgC, ArgV))
+	{
+		const FString ProjectFile = FindInstalledProjectFile();
+		if (!ProjectFile.IsEmpty())
+		{
+			AdditionalCommandline += FString::Printf(TEXT(" -Project=\"%s\""), *ProjectFile);
+		}
+	}
+	//--[SilverPalace] End add by Codex
 	const int32 InitResult = GEngineLoop.PreInit(
 		ArgC,
 		ArgV,
 		// UE 5.3 still installs the default file output device for -NoLog.
 		// -NoDefaultLog is the Core switch that prevents a relocated Worker
 		// from writing Saved/Logs beside the packaged executable.
-		TEXT("-Unattended -NoLog -NoDefaultLog -SaveToUserDir"));
+		*AdditionalCommandline);
 	PreInitStdout.Restore();
 	if (InitResult != 0)
 	{

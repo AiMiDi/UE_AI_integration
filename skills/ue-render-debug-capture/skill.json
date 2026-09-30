@@ -2,11 +2,14 @@
   "schema": "ue.agent-skill.v1",
   "schemaVersion": 1,
   "id": "ue-render-debug-capture",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "title": "UE Render Debug Capture",
-  "description": "Capture rendering debug views, collect Niagara AsyncGpuTrace runtime evidence, and analyze retained DRED/render failure logs offline with explicit evidence boundaries.",
-  "domains": ["scene", "content"],
-  "risk": "readOnly",
+  "description": "Capture render debug views, observe Niagara particle attributes through public SimCache APIs, inspect loaded runtime objects, and analyze retained rendering failure logs offline.",
+  "domains": [
+    "scene",
+    "content"
+  ],
+  "risk": "mixed",
   "triggers": [
     "render debug view",
     "buffer visualization",
@@ -16,11 +19,13 @@
     "viewport screenshot compare",
     "渲染调试视图",
     "缓冲区可视化",
-    "Niagara runtime evidence",
-    "Niagara 运行时证据",
+    "Niagara runtime inspection",
+    "Niagara 运行时检查",
     "DRED",
     "GPU crash",
-    "渲染故障诊断"
+    "渲染故障诊断",
+    "Niagara SimCache",
+    "粒子属性观察"
   ],
   "entrypoint": "SKILL.md",
   "requirements": {
@@ -35,8 +40,12 @@
     ],
     "optionalCapabilities": [
       "content.niagara.runtime.inspect",
-      "content.niagara.runtime.capture",
-      "scene.render.failure.analyze"
+      "scene.render.failure.analyze",
+      "content.niagara.simcache.capture",
+      "content.niagara.simcache.inspect",
+      "content.niagara.simcache.read",
+      "content.niagara.simcache.export",
+      "content.niagara.simcache.release"
     ]
   },
   "recipes": [
@@ -46,38 +55,217 @@
       "description": "Read explicit finalized log and CrashContext paths locally, retaining bounded source evidence without requiring an Editor connection.",
       "risk": "readOnly",
       "inputs": [
-        {"name": "projectRoot", "type": "string", "required": true, "description": "Absolute directory containing the retained diagnostic files."},
-        {"name": "files", "type": "array", "required": true, "description": "One to eight explicit paths relative to projectRoot."}
+        {
+          "name": "projectRoot",
+          "type": "string",
+          "required": true,
+          "description": "Absolute directory containing the retained diagnostic files."
+        },
+        {
+          "name": "files",
+          "type": "array",
+          "required": true,
+          "description": "One to eight explicit paths relative to projectRoot."
+        }
       ],
       "steps": [
-        {"id": "discover-input-contract", "phase": "discover", "purpose": "Load the local operation schema and select finalized artifacts with explicit bounds.", "operations": ["scene.render.failure.analyze"]},
-        {"id": "analyze-files", "phase": "execute", "purpose": "Execute once through localProject; no Editor connection is needed.", "operations": ["scene.render.failure.analyze"]},
-        {"id": "verify-source-evidence", "phase": "verify", "purpose": "Inspect the returned ranges, hashes and truncation flags. Keep each source independent and the root cause unproven; do not re-execute just to verify the response.", "operations": ["scene.render.failure.analyze"]}
+        {
+          "id": "discover-input-contract",
+          "phase": "discover",
+          "purpose": "Load the local operation schema and select finalized artifacts with explicit bounds.",
+          "operations": [
+            "scene.render.failure.analyze"
+          ]
+        },
+        {
+          "id": "analyze-files",
+          "phase": "execute",
+          "purpose": "Execute once through localProject; no Editor connection is needed.",
+          "operations": [
+            "scene.render.failure.analyze"
+          ]
+        },
+        {
+          "id": "verify-source-evidence",
+          "phase": "verify",
+          "purpose": "Inspect the returned ranges, hashes and truncation flags. Keep each source independent and the root cause unproven; do not re-execute just to verify the response.",
+          "operations": [
+            "scene.render.failure.analyze"
+          ]
+        }
       ],
       "result": {
         "summary": "Bounded DRED, device-removal, resource and queue evidence with exact source ranges.",
-        "evidence": ["source ranges and hashes", "queue and operation context", "allocation lifetime context", "CrashContext whitelist", "truncation and unsupported formats"],
-        "success": ["analyzed sources are identified", "metadata-only dumps are not described as decoded", "active breadcrumbs and nearby resources are not treated as root causes"]
+        "evidence": [
+          "source ranges and hashes",
+          "queue and operation context",
+          "allocation lifetime context",
+          "CrashContext whitelist",
+          "truncation and unsupported formats"
+        ],
+        "success": [
+          "analyzed sources are identified",
+          "metadata-only dumps are not described as decoded",
+          "active breadcrumbs and nearby resources are not treated as root causes"
+        ]
       }
     },
     {
-      "id": "niagara-runtime-evidence",
-      "title": "Observe a Niagara AsyncGpuTrace dispatch",
-      "description": "Select a loaded world and Data Interface, then capture one bounded GPU readback with provider and frame context.",
+      "id": "niagara-runtime-inspect",
+      "title": "Inspect loaded Niagara runtime objects",
+      "description": "Read bounded world, component and AsyncGpuTrace Data Interface inventory through existing Niagara APIs, without an engine patch or GPU readback.",
       "risk": "readOnly",
       "inputs": [
-        {"name": "world", "type": "string", "required": true, "description": "Exact loaded Editor or PIE world path."},
-        {"name": "dataInterface", "type": "string", "required": true, "description": "Exact loaded AsyncGpuTrace Data Interface path."}
+        {
+          "name": "world",
+          "type": "string",
+          "required": false,
+          "description": "Optional exact loaded Editor or PIE world path; omit to discover worlds."
+        },
+        {
+          "name": "offset",
+          "type": "integer",
+          "required": false,
+          "description": "Zero-based offset for each independently paged object array."
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "required": false,
+          "description": "Maximum rows per object array, from 1 to 128."
+        }
       ],
       "steps": [
-        {"id": "inspect-targets", "phase": "discover", "purpose": "Discover loaded objects and bridge version; obtain current sessionId and generation from scene.pie.status when targeting PIE.", "operations": ["content.niagara.runtime.inspect"]},
-        {"id": "capture-dispatch", "phase": "execute", "purpose": "Capture one matching dispatch using an explicit world, DI, timeout and result limit.", "operations": ["content.niagara.runtime.capture"]},
-        {"id": "verify-capture", "phase": "verify", "purpose": "Inspect the returned state and sample semantics. Only complete proves readback; do not re-execute just to verify the response.", "operations": ["content.niagara.runtime.capture"]}
+        {
+          "id": "discover-inventory",
+          "phase": "discover",
+          "purpose": "Load the inventory schema and select an optional exact world; no GPU capture or PIE restart is required.",
+          "operations": [
+            "content.niagara.runtime.inspect"
+          ]
+        },
+        {
+          "id": "inspect-objects",
+          "phase": "execute",
+          "purpose": "Read the loaded worlds, components and Data Interfaces with explicit pagination.",
+          "operations": [
+            "content.niagara.runtime.inspect"
+          ]
+        },
+        {
+          "id": "verify-inventory",
+          "phase": "verify",
+          "purpose": "Check returned world identities, pagination and loaded-object scope; configured values do not establish GPU execution. Do not re-execute solely to verify the response.",
+          "operations": [
+            "content.niagara.runtime.inspect"
+          ]
+        }
       ],
       "result": {
-        "summary": "One observed DI dispatch aggregated across instances, with bounded result slots and provider setup context.",
-        "evidence": ["world and DI identity", "session generation", "provider selection and availability", "render/setup/previous-allocation frames", "bounded GPU result slots"],
-        "success": ["state is complete before counts are used", "missing evidence remains unavailable or null", "query high-water mark is not called an issued-ray count", "TLAS reference presence is not claimed as lifetime proof"]
+        "summary": "Bounded loaded-object inventory and configured provider values without engine modifications.",
+        "evidence": [
+          "world and component identity",
+          "system asset path",
+          "active and paused flags",
+          "Data Interface path and configured provider enum",
+          "pagination and loaded-object scope"
+        ],
+        "success": [
+          "requested world is not silently substituted",
+          "component and DI arrays respect their page bounds",
+          "loaded objects and configured values are not described as GPU dispatch or collision evidence"
+        ]
+      }
+    },
+    {
+      "id": "niagara-simcache-observe",
+      "title": "Observe bounded Niagara SimCache attributes",
+      "description": "Capture explicit attributes without engine changes; inspect frame layouts, page values, export evidence and release transient storage.",
+      "risk": "safeWrite",
+      "inputs": [
+        {
+          "name": "world",
+          "type": "string",
+          "required": true,
+          "description": "Exact loaded Editor or PIE world from inventory."
+        },
+        {
+          "name": "component",
+          "type": "string",
+          "required": true,
+          "description": "Exact active component from inventory."
+        },
+        {
+          "name": "attributes",
+          "type": "array",
+          "required": true,
+          "description": "1-32 qualified compiled attributes, e.g. the discovered emitter prefix plus Position."
+        }
+      ],
+      "steps": [
+        {
+          "id": "discover-target",
+          "phase": "discover",
+          "purpose": "Read live schemas and inventory; select the exact component and qualified attributes. GPU capture can stall.",
+          "operations": [
+            "content.niagara.runtime.inspect",
+            "content.niagara.simcache.capture",
+            "content.niagara.simcache.inspect",
+            "content.niagara.simcache.read",
+            "content.niagara.simcache.export",
+            "content.niagara.simcache.release"
+          ]
+        },
+        {
+          "id": "capture-real-frames",
+          "phase": "execute",
+          "purpose": "Capture once with explicit frames/rate/timeout. No automatic simulation advance, activation or PIE restart.",
+          "operations": [
+            "content.niagara.simcache.capture"
+          ]
+        },
+        {
+          "id": "verify-recording",
+          "phase": "verify",
+          "purpose": "Require retained=true and inspect complete/partial/failed, reason, frame count and captured layouts. Read exact frames and attributes; preserve pagination and raw-coordinate semantics.",
+          "operations": [
+            "content.niagara.simcache.inspect",
+            "content.niagara.simcache.read"
+          ]
+        },
+        {
+          "id": "export-page",
+          "phase": "verify",
+          "purpose": "Export selected pages with source metadata and SHA-256 when persistent evidence is needed; this is not a full replay asset.",
+          "operations": [
+            "content.niagara.simcache.export"
+          ],
+          "optional": true
+        },
+        {
+          "id": "release-recording",
+          "phase": "verify",
+          "optional": true,
+          "purpose": "Release transient storage after inspection/export; four recordings may be retained per Editor instance.",
+          "operations": [
+            "content.niagara.simcache.release"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Recorded particle/system attribute evidence with explicit completion, shape and paging limits.",
+        "evidence": [
+          "capture identity and reason",
+          "recorded emitter layouts and per-frame counts",
+          "bounded float/half/int values",
+          "exported page path and SHA-256"
+        ],
+        "success": [
+          "required frames are complete or explicitly partial",
+          "attribute names come from the recorded layout",
+          "no private GPU Trace evidence is inferred",
+          "transient recording released after use"
+        ]
       }
     },
     {
@@ -163,7 +351,7 @@
   "resources": [
     {
       "path": "references/runtime-and-failure-evidence.md",
-      "description": "Niagara runtime capture and offline render failure contracts, optional engine bridge installation and verification limits."
+      "description": "Niagara loaded-object inspection and offline render failure contracts, existing engine APIs and verification limits."
     },
     {
       "path": "references/render-debug-evidence.md",
@@ -171,4 +359,3 @@
     }
   ]
 }
-

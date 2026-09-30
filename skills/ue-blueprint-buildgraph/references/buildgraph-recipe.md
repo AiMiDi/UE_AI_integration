@@ -18,13 +18,25 @@ be supported by the current `blueprint.node.add` schema.
 v2 operations. Retain the returned graph hash, managed-ref mapping, Workflow,
 and Workflow plan digest. Do not alter the Workflow after approval.
 
+Resolve nodes and pins by stable GUID/ref identities from the current graph
+read. Pin display names can change after reconstruction and must not be the
+only read-back identity. The planned connection endpoints and the post-run
+graph must agree on node GUID, pin GUID, direction, and type.
+
+Component-template edits are outside the BuildGraph ownership model. Do not
+append `blueprint.component.property.set` or equivalent direct component
+mutations to the generated Workflow. Plan them as a separate authorized asset
+edit if the user requests them.
+
 ## Execution and recovery
 
-Execute only through `ue_workflow`. BuildGraph deliberately has no separate
-execute, rollback, transaction, or journal system. The Workflow owns the
-single transaction, deferred compile, read-back, durable checkpoints, resume,
-and rollback. After a process interruption, continue by the original `runId`;
-do not re-plan against unknown partial state.
+Execute through `blueprint.graph.build.execute` with the exact definition that
+was reviewed. The command re-plans against the current graph, requires
+explicit `confirmWrite`, and delegates the single transaction, deferred
+compile, read-back, durable checkpoints, resume, and rollback to the Editor
+Workflow runtime. A stale or missing runtime returns an explicit error. After a
+process interruption, continue by the original `runId` when the runtime
+provides one; do not re-plan against unknown partial state.
 
 ## Verification
 
@@ -33,6 +45,11 @@ After execution:
 - compile validate the Blueprint;
 - compare Graph snapshots and hashes;
 - verify that every declared ref resolves to the intended GUID;
+- verify that every declared connection resolves to the intended stable pin
+  GUIDs and that the read-back directions and types match;
+- for a declared event or function root, use `blueprint.graph.describe` with
+  its exact name or managed node GUID and verify the paged execution-edge
+  tuples; an incomplete entry scan is not negative reachability evidence;
 - verify unmanaged nodes were preserved;
 - run layout validation;
 - capture and compare the Graph only when a rendered Graph Editor is present.

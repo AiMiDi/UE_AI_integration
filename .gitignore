@@ -11,6 +11,10 @@ staging/
 build/
 build-*/
 cmake-build-*/
+CLI/bin/
+CLI/lib/
+CLI/share/
+CLI/include/UEWorkflowCore/
 .pytest_cache/
 __pycache__/
 *.py[cod]
@@ -22,6 +26,11 @@ Config/*
 
 # Packaged release artifacts (publish to GitHub Releases, not the repo tree)
 *.zip
+
+# Trace Worker binaries are generated during release staging.
+Tools/Trace/**/*.exe
+Tools/Trace/**/*.dll
+Tools/Trace/**/*.pdb
 
 # Understand Anything runtime-only files; analysis data under .ua is tracked.
 .ua/intermediate/

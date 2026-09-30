@@ -38,7 +38,8 @@
           "enum": [
             "blueprint",
             "widgetBlueprint",
-            "material"
+            "material",
+            "materialFunction"
           ]
         },
         "asset": {

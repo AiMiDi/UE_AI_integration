@@ -6,6 +6,7 @@ param(
     [string]$FaultPoint = 'afterCheckpoint',
     [switch]$RunAllFaultPoints,
     [switch]$VerifyConflict,
+    [switch]$ConfirmWrite,
     [int]$Port = 19847,
     [int]$StartupTimeoutSeconds = 180
 )
@@ -157,6 +158,7 @@ function Invoke-FaultRecovery(
                 workflow = $Workflow
                 approvePlanDigest = $digest
                 saveOnSuccess = $true
+                confirmWrite = $ConfirmWrite.IsPresent
                 detailLevel = 'summary'
             } | Out-Null
         } catch {
@@ -236,6 +238,7 @@ try {
             $execution = Invoke-Workflow $baseUrl @{
                 action = 'execute'; workflow = $workflow; approvePlanDigest = $digest
                 saveOnSuccess = $true; detailLevel = 'summary'
+                confirmWrite = $ConfirmWrite.IsPresent
             }
             $variableName = 'ExternalConflict_' + [guid]::NewGuid().ToString('N').Substring(0, 12)
             Invoke-Capability $baseUrl 'blueprint.variable.add' @{

@@ -1,7 +1,11 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string] $WorkerPath
+    [string] $WorkerPath,
+
+    [string] $ProjectPath = '',
+
+    [string] $EngineDirectory = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,6 +18,25 @@ $WorkerPath = [System.IO.Path]::GetFullPath(
     (Resolve-Path -LiteralPath $WorkerPath -ErrorAction Stop).Path)
 if (-not (Test-Path -LiteralPath $WorkerPath -PathType Leaf)) {
     throw "Trace Worker executable does not exist: $WorkerPath"
+}
+$ProjectArgument = ''
+if (-not [string]::IsNullOrWhiteSpace($ProjectPath)) {
+    $ProjectPath = [System.IO.Path]::GetFullPath(
+        (Resolve-Path -LiteralPath $ProjectPath -ErrorAction Stop).Path)
+    if (-not (Test-Path -LiteralPath $ProjectPath -PathType Leaf) -or
+        -not $ProjectPath.EndsWith('.uproject', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Trace Worker test project is not a .uproject file: $ProjectPath"
+    }
+    $ProjectArgument = "-Project=`"$ProjectPath`""
+}
+$EngineDirectoryArgument = ''
+if (-not [string]::IsNullOrWhiteSpace($EngineDirectory)) {
+    $EngineDirectory = [System.IO.Path]::GetFullPath(
+        (Resolve-Path -LiteralPath $EngineDirectory -ErrorAction Stop).Path)
+    if (-not (Test-Path -LiteralPath $EngineDirectory -PathType Container)) {
+        throw "Trace Worker test Engine directory does not exist: $EngineDirectory"
+    }
+    $EngineDirectoryArgument = "-EngineDir=`"$EngineDirectory`""
 }
 
 function Assert-True([bool] $Condition, [string] $Message) {
@@ -29,7 +52,7 @@ function Invoke-WorkerRequest(
     $StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $StartInfo.FileName = $WorkerPath
     $StartInfo.WorkingDirectory = [System.IO.Path]::GetDirectoryName($WorkerPath)
-    $StartInfo.Arguments = "--stdio $AdditionalArguments".Trim()
+    $StartInfo.Arguments = "--stdio $ProjectArgument $EngineDirectoryArgument $AdditionalArguments".Trim()
     $StartInfo.UseShellExecute = $false
     $StartInfo.CreateNoWindow = $true
     $StartInfo.RedirectStandardInput = $true
@@ -98,6 +121,7 @@ function New-DiagnosticTraceFixture(
     if (-not [string]::IsNullOrEmpty($EngineMarker)) {
         $StartInfo.Arguments += " --fixtureEngineMarker=$EngineMarker"
     }
+    $StartInfo.Arguments += " $ProjectArgument $EngineDirectoryArgument"
     $StartInfo.UseShellExecute = $false
     $StartInfo.CreateNoWindow = $true
     $StartInfo.RedirectStandardOutput = $true
@@ -459,6 +483,42 @@ try {
         'UEAI_TRACE_ENGINE_VERSION='.Length)
     $MarkerParts = $MarkerVersion.Split('.')
     $CrossMinorMarker = $MarkerParts[0] + '.' + ([int]$MarkerParts[1] + 1)
+    $NoMarkerAssumption = @{
+        traceSha256 = $NoMarkerImport.Json.data.sha256
+        assumedEngineVersion = $MarkerVersion
+    }
+    $WrongHashQuery = Invoke-WorkerRequest -Environment $Environment -Request @{
+        schema = 'ue.trace-worker-request.v1'
+        action = 'execute'
+        requestId = [guid]::NewGuid().ToString('N')
+        capability = 'production.trace.provider.list'
+        params = @{
+            traceId = $NoMarkerImport.Json.data.traceId
+            unknownEngineVersionOverride = @{
+                traceSha256 = '0' * 64
+                assumedEngineVersion = $MarkerVersion
+            }
+        }
+    }
+    Assert-True (-not $WrongHashQuery.Json.ok -and
+        $WrongHashQuery.Json.error.code -eq 'trace_engine_version_assumption_invalid') `
+        'The explicit assumption must match the registered trace SHA-256.'
+    $WrongVersionQuery = Invoke-WorkerRequest -Environment $Environment -Request @{
+        schema = 'ue.trace-worker-request.v1'
+        action = 'execute'
+        requestId = [guid]::NewGuid().ToString('N')
+        capability = 'production.trace.provider.list'
+        params = @{
+            traceId = $NoMarkerImport.Json.data.traceId
+            unknownEngineVersionOverride = @{
+                traceSha256 = $NoMarkerImport.Json.data.sha256
+                assumedEngineVersion = $CrossMinorMarker
+            }
+        }
+    }
+    Assert-True (-not $WrongVersionQuery.Json.ok -and
+        $WrongVersionQuery.Json.error.code -eq 'trace_engine_version_assumption_invalid') `
+        'The explicit assumption must match the Worker major.minor version.'
     $CrossMinorFixture = Join-Path $AllowedRoot 'cross-minor-marker.utrace'
     New-DiagnosticTraceFixture $CrossMinorFixture $CrossMinorMarker | Out-Null
     $CrossMinorImport = Invoke-Import $CrossMinorFixture 'reference' $Environment
@@ -474,6 +534,22 @@ try {
     Assert-True (-not $CrossMinorQuery.Json.ok -and
         $CrossMinorQuery.Json.error.code -eq 'trace_engine_version_mismatch') `
         'A managed marker from another Engine minor must be rejected.'
+    $CrossMinorAssumedQuery = Invoke-WorkerRequest -Environment $Environment -Request @{
+        schema = 'ue.trace-worker-request.v1'
+        action = 'execute'
+        requestId = [guid]::NewGuid().ToString('N')
+        capability = 'production.trace.provider.list'
+        params = @{
+            traceId = $CrossMinorImport.Json.data.traceId
+            unknownEngineVersionOverride = @{
+                traceSha256 = $CrossMinorImport.Json.data.sha256
+                assumedEngineVersion = $MarkerVersion
+            }
+        }
+    }
+    Assert-True (-not $CrossMinorAssumedQuery.Json.ok -and
+        $CrossMinorAssumedQuery.Json.error.code -eq 'trace_engine_version_mismatch') `
+        'An explicit assumption must not override a conflicting managed marker.'
 
     $PipeName = 'UEAITraceSecurity-' + [guid]::NewGuid().ToString('N')
     $Endpoint = '\\.\pipe\' + $PipeName
@@ -482,6 +558,8 @@ try {
     $StartInfo.WorkingDirectory = [System.IO.Path]::GetDirectoryName($WorkerPath)
     $StartInfo.Arguments = @(
         '--serve',
+        $ProjectArgument,
+        $EngineDirectoryArgument,
         "--endpoint=$Endpoint",
         '--idleSeconds=30',
         '--connectionIoTimeoutSeconds=1',
@@ -535,6 +613,35 @@ try {
         'Resident analysis cache must use the declared SHA-256 LRU policy.'
     Assert-True ($Handshake.data.maximumConcurrentAnalyses -eq 1) `
         'Resident TraceServices analysis must remain serialized.'
+
+    $AssumptionClient = [System.IO.Pipes.NamedPipeClientStream]::new(
+        '.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut,
+        [System.IO.Pipes.PipeOptions]::None)
+    $AssumptionClient.Connect(5000)
+    $PipeClients += $AssumptionClient
+    $AssumedProviders = Send-PipeRequest -Pipe $AssumptionClient -Request @{
+        schema = 'ue.trace-worker-request.v1'
+        action = 'execute'
+        requestId = [guid]::NewGuid().ToString('N')
+        capability = 'production.trace.provider.list'
+        params = @{
+            traceId = $NoMarkerImport.Json.data.traceId
+            unknownEngineVersionOverride = $NoMarkerAssumption
+        }
+    }
+    Assert-True ($AssumedProviders.ok -and
+        $AssumedProviders.data.engineVersionStatus -eq 'unknownExplicitAssumption') `
+        'An exact diagnostic assumption must identify the unmarked trace as an assumption.'
+    $UnassumedProviders = Send-PipeRequest -Pipe $AssumptionClient -Request @{
+        schema = 'ue.trace-worker-request.v1'
+        action = 'execute'
+        requestId = [guid]::NewGuid().ToString('N')
+        capability = 'production.trace.provider.list'
+        params = @{ traceId = $NoMarkerImport.Json.data.traceId }
+    }
+    Assert-True (-not $UnassumedProviders.ok -and
+        $UnassumedProviders.error.code -eq 'trace_engine_version_unknown') `
+        'An analysis cache entry opened by assumption must not authorize later default queries.'
 
     $ImportClient = [System.IO.Pipes.NamedPipeClientStream]::new(
         '.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut,

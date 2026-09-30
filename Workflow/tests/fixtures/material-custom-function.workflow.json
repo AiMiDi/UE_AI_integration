@@ -1,0 +1,135 @@
+{
+  "dsl": "ue.workflow",
+  "dslVersion": "1.0",
+  "workflowKind": "assetEdit",
+  "workflowId": "material-custom-function-batch",
+  "scope": {
+    "kind": "materialFunction",
+    "asset": "/Game/Automation/MF_CustomWorkflow",
+    "createIfMissing": true
+  },
+  "persistence": "dirtyOnly",
+  "operations": [
+    {
+      "id": "gain",
+      "type": "content.material.expression.add",
+      "params": {
+        "expressionClass": "ScalarParameter",
+        "posX": -600
+      }
+    },
+    {
+      "id": "gainSettings",
+      "type": "content.material.parameter.set",
+      "params": {
+        "name": "Gain",
+        "defaultValue": 0.5,
+        "group": "Custom Controls",
+        "sliderMin": 0,
+        "sliderMax": 2
+      },
+      "bindings": {
+        "/nodeId": {
+          "from": "gain",
+          "path": "/nodeId"
+        }
+      }
+    },
+    {
+      "id": "custom",
+      "type": "content.material.expression.add",
+      "params": {
+        "expressionClass": "Custom",
+        "posX": -300
+      }
+    },
+    {
+      "id": "customSettings",
+      "type": "content.material.custom.set",
+      "params": {
+        "code": "Mask = saturate(Gain); return Mask * GAIN_MULTIPLIER;",
+        "outputType": "Float1",
+        "inputs": [
+          {
+            "name": "Gain"
+          }
+        ],
+        "additionalOutputs": [
+          {
+            "name": "Mask",
+            "type": "Float1"
+          }
+        ],
+        "defines": [
+          {
+            "name": "GAIN_MULTIPLIER",
+            "value": "2.0"
+          }
+        ],
+        "includePaths": []
+      },
+      "bindings": {
+        "/nodeId": {
+          "from": "custom",
+          "path": "/nodeId"
+        }
+      }
+    },
+    {
+      "id": "output",
+      "type": "content.material.expression.add",
+      "params": {
+        "expressionClass": "FunctionOutput"
+      }
+    },
+    {
+      "id": "outputSettings",
+      "type": "content.material.function.interface.set",
+      "params": {
+        "name": "Result"
+      },
+      "bindings": {
+        "/nodeId": {
+          "from": "output",
+          "path": "/nodeId"
+        }
+      }
+    },
+    {
+      "id": "gainToCustom",
+      "type": "content.material.pin.connect",
+      "params": {
+        "sourcePinName": "Output",
+        "targetPinName": "Gain"
+      },
+      "bindings": {
+        "/sourceNodeId": {
+          "from": "gain",
+          "path": "/nodeId"
+        },
+        "/targetNodeId": {
+          "from": "custom",
+          "path": "/nodeId"
+        }
+      }
+    },
+    {
+      "id": "customToOutput",
+      "type": "content.material.pin.connect",
+      "params": {
+        "sourcePinName": "Output",
+        "targetPinName": "Input"
+      },
+      "bindings": {
+        "/sourceNodeId": {
+          "from": "custom",
+          "path": "/nodeId"
+        },
+        "/targetNodeId": {
+          "from": "output",
+          "path": "/nodeId"
+        }
+      }
+    }
+  ]
+}

@@ -57,6 +57,7 @@ struct FCachedAnalysisSession
 {
 	FString Sha256;
 	FString TracePath;
+	EUnknownEngineVersionPolicy UnknownVersionPolicy = EUnknownEngineVersionPolicy::Reject;
 	TSharedPtr<FTraceAnalysisSession> Session;
 	uint64 LastUse = 0;
 };
@@ -123,18 +124,58 @@ bool IsVerifiedDiagnosticFixture(
 			Receipt, TEXT("traceSizeBytes"), -1.0)) == Record.SizeBytes;
 }
 
+bool ResolveUnknownVersionPolicy(
+	const FTraceRecord& Record,
+	const TSharedPtr<FJsonObject>& Params,
+	const FString& CommandLine,
+	EUnknownEngineVersionPolicy& OutPolicy,
+	FString& OutErrorCode,
+	FString& OutErrorMessage)
+{
+	OutPolicy = IsVerifiedDiagnosticFixture(Record, CommandLine)
+		? EUnknownEngineVersionPolicy::VerifiedTestFixture
+		: EUnknownEngineVersionPolicy::Reject;
+	if (!Params.IsValid() || !Params->HasField(TEXT("unknownEngineVersionOverride")))
+	{
+		return true;
+	}
+
+	const TSharedPtr<FJsonObject>* Override = nullptr;
+	const FString ExpectedEngineVersion = FString::Printf(
+		TEXT("%d.%d"), FEngineVersion::Current().GetMajor(), FEngineVersion::Current().GetMinor());
+	if (!Params->TryGetObjectField(TEXT("unknownEngineVersionOverride"), Override)
+		|| !Override || !Override->IsValid()
+		|| !GetString(*Override, TEXT("traceSha256")).Equals(Record.Sha256, ESearchCase::IgnoreCase)
+		|| GetString(*Override, TEXT("assumedEngineVersion")) != ExpectedEngineVersion)
+	{
+		OutErrorCode = TEXT("trace_engine_version_assumption_invalid");
+		OutErrorMessage = TEXT("The diagnostic Engine-version assumption must name this trace's exact SHA-256 and the worker's major.minor version.");
+		return false;
+	}
+	OutPolicy = EUnknownEngineVersionPolicy::ExplicitDiagnosticAssumption;
+	return true;
+}
+
 TSharedPtr<FTraceAnalysisSession> AcquireAnalysisSession(
 	const FTraceRecord& Record,
+	const TSharedPtr<FJsonObject>& Params,
 	const FString& CommandLine,
 	const double TimeoutSeconds,
 	FString& OutErrorCode,
 	FString& OutErrorMessage)
 {
+	EUnknownEngineVersionPolicy UnknownVersionPolicy;
+	if (!ResolveUnknownVersionPolicy(
+			Record, Params, CommandLine, UnknownVersionPolicy, OutErrorCode, OutErrorMessage))
+	{
+		return nullptr;
+	}
 	FScopeLock Lock(&AnalysisSessionCacheMutex);
 	++AnalysisSessionCacheClock;
 	for (FCachedAnalysisSession& Cached : AnalysisSessionCache)
 	{
 		if (Cached.Sha256 == Record.Sha256
+			&& Cached.UnknownVersionPolicy == UnknownVersionPolicy
 			&& Cached.Session.IsValid()
 			&& Cached.Session->IsOpen())
 		{
@@ -149,7 +190,7 @@ TSharedPtr<FTraceAnalysisSession> AcquireAnalysisSession(
 			TimeoutSeconds,
 			OutErrorCode,
 			OutErrorMessage,
-			IsVerifiedDiagnosticFixture(Record, CommandLine)))
+			UnknownVersionPolicy))
 	{
 		return nullptr;
 	}
@@ -169,6 +210,7 @@ TSharedPtr<FTraceAnalysisSession> AcquireAnalysisSession(
 	FCachedAnalysisSession& Cached = AnalysisSessionCache.AddDefaulted_GetRef();
 	Cached.Sha256 = Record.Sha256;
 	Cached.TracePath = Record.TracePath;
+	Cached.UnknownVersionPolicy = UnknownVersionPolicy;
 	Cached.Session = Session;
 	Cached.LastUse = AnalysisSessionCacheClock;
 	return Session;
@@ -1514,6 +1556,7 @@ TSharedPtr<FJsonObject> FProtocol::HandleExecute(
 	const TSharedPtr<FTraceAnalysisSession> CachedSession =
 		AcquireAnalysisSession(
 			Record,
+			Params,
 			CommandLine,
 			GetNumber(Params, TEXT("timeoutSeconds"), 120.0),
 			ErrorCode,

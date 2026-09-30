@@ -63,6 +63,7 @@ public class UE_AI_integration : ModuleRules
 
 			// Materials
 			"MaterialEditor",
+			"EditorFramework",
 			"RHI",
 			"RenderCore",
 
@@ -227,18 +228,12 @@ public class UE_AI_integration : ModuleRules
 			return true;
 		}
 
-		if (Target.ProjectFile != null)
-		{
-			ProjectDescriptor Project = ProjectDescriptor.FromFile(Target.ProjectFile);
-			PluginReferenceDescriptor Reference = Project.Plugins == null
-				? null
-				: Project.Plugins.LastOrDefault(
-					Plugin => Plugin.Name.Equals(
-						FeatureName,
-						StringComparison.OrdinalIgnoreCase));
-			return Reference != null && Reference.bEnabled;
-		}
-
-		return false;
+		// Match UBT's default and project-reference rules. Engine plugins such as
+		// Niagara can be enabled without an explicit entry in the .uproject.
+		ProjectDescriptor Project = Target.ProjectFile == null
+			? null : ProjectDescriptor.FromFile(Target.ProjectFile);
+		PluginInfo FeaturePlugin = Plugins.GetPlugin(FeatureName);
+		return FeaturePlugin != null && Plugins.IsPluginEnabledForTarget(
+			FeaturePlugin, Project, Target.Platform, Target.Configuration, Target.Type);
 	}
 }

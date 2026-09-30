@@ -4337,7 +4337,7 @@ bool FTraceAnalysisSession::Open(
 	const double TimeoutSeconds,
 	FString& OutErrorCode,
 	FString& OutErrorMessage,
-	const bool bAllowUnknownEngineVersionForTestFixture)
+	const EUnknownEngineVersionPolicy UnknownVersionPolicy)
 {
 	Close();
 	OutErrorCode.Reset();
@@ -4392,7 +4392,7 @@ bool FTraceAnalysisSession::Open(
 	}
 	return InitializeCompletedSession(
 		FullPath,
-		bAllowUnknownEngineVersionForTestFixture,
+		UnknownVersionPolicy,
 		OutErrorCode,
 		OutErrorMessage);
 }
@@ -4417,14 +4417,14 @@ bool FTraceAnalysisSession::AttachCompletedSession(
 	Session = MoveTemp(CompletedSession);
 	return InitializeCompletedSession(
 		FPaths::ConvertRelativePathToFull(TracePath),
-		false,
+		EUnknownEngineVersionPolicy::Reject,
 		OutErrorCode,
 		OutErrorMessage);
 }
 
 bool FTraceAnalysisSession::InitializeCompletedSession(
 	const FString& TracePath,
-	const bool bAllowUnknownEngineVersionForTestFixture,
+	const EUnknownEngineVersionPolicy UnknownVersionPolicy,
 	FString& OutErrorCode,
 	FString& OutErrorMessage)
 {
@@ -4518,7 +4518,9 @@ bool FTraceAnalysisSession::InitializeCompletedSession(
 		{
 			EngineVersionStatus = TEXT("matchedManagedMarker");
 		}
-		else if (!bAllowUnknownEngineVersionForTestFixture)
+		else if (UnknownVersionPolicy == EUnknownEngineVersionPolicy::Reject
+			|| (UnknownVersionPolicy == EUnknownEngineVersionPolicy::ExplicitDiagnosticAssumption
+				&& RecordedBuildVersion != TEXT("UE5-CL-0")))
 		{
 			EngineVersionStatus = TEXT("unknown");
 			Session.Reset();
@@ -4533,7 +4535,9 @@ bool FTraceAnalysisSession::InitializeCompletedSession(
 		}
 		else
 		{
-			EngineVersionStatus = TEXT("unknownTestFixture");
+			EngineVersionStatus = UnknownVersionPolicy == EUnknownEngineVersionPolicy::VerifiedTestFixture
+				? TEXT("unknownTestFixture")
+				: TEXT("unknownExplicitAssumption");
 		}
 	}
 	else

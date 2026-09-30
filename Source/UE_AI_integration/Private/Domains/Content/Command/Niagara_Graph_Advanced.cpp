@@ -1226,7 +1226,9 @@ FAsyncTraceCompileSummary RequestAndSummarizeCompile(UNiagaraSystem* System)
 	{
 		return Summary;
 	}
-	System->RequestCompile(false);
+	// Trace DI properties do not change the script hash. Rebuild the compiled
+	// data-interface copies so running components receive the edited settings.
+	System->RequestCompile(true);
 	System->WaitForCompilationComplete(true, false);
 
 	TArray<UNiagaraScript*> Scripts;

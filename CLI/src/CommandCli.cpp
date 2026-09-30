@@ -2323,7 +2323,7 @@ ParsedEnvelope ExportPayload(
     }
     (*data)["artifactExport"] = {
         { "path",
-            std::filesystem::absolute(output_path).generic_string() },
+            PathToUtf8(std::filesystem::absolute(output_path)) },
         { "bytes", total_bytes },
         { "chunks", chunks },
         { "sha256", *digest },

@@ -3,6 +3,7 @@
 #include "Tools/MCPToolRegistry.h"
 #include "Domains/Content/Command/WidgetEventBindingSupport.h"
 #include "Infrastructure/MCPToolHelpers.h"
+#include "Workflow/UEWorkflowExecutionContext.h"
 
 #include "Dom/JsonValue.h"
 #include "Engine/Blueprint.h"
@@ -126,6 +127,11 @@ public:
 
 		FCompilerResultsLog CompileLog;
 		CompileLog.bSilentMode = true;
+		if (UEAIIntegration::Workflow::IsApprovedWorkflowExecution(Params))
+		{
+			// Flush the batch's deferred asset/editor notification before compiling.
+			FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+		}
 		FKismetEditorUtilities::CompileBlueprint(
 			Blueprint,
 			EBlueprintCompileOptions::SkipSave,

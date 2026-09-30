@@ -1,8 +1,16 @@
+#include "Infrastructure/MaterialEditingTarget.h"
 // Material Mutation Tools — create, modify, connect, snapshot/diff/restore materials
 #include "Tools/MCPToolBase.h"
 #include "Tools/MCPToolRegistry.h"
 #include "Infrastructure/MaterialAssetHelpers.h"
+#include "Infrastructure/MaterialGraphIdentity.h"
+#include "Infrastructure/MaterialFunctionMutation.h"
+#include "Infrastructure/MaterialCustomEditing.h"
+#include "Infrastructure/MaterialFunctionDependencies.h"
+#include "MaterialEditingLibrary.h"
+#include "Infrastructure/DeferredGraphMutation.h"
 #include "Infrastructure/MCPToolHelpers.h"
+#include "Infrastructure/Sha256.h"
 #include "Workflow/UEWorkflowExecutionContext.h"
 #include "MaterialDomain.h"
 #include "Materials/Material.h"
@@ -19,6 +27,8 @@
 #include "Materials/MaterialExpressionTextureSample.h"
 #include "Materials/MaterialExpressionTextureCoordinate.h"
 #include "Materials/MaterialExpressionComponentMask.h"
+#include "Materials/MaterialExpressionComposite.h"
+#include "Materials/MaterialExpressionPinBase.h"
 #include "Materials/MaterialExpressionCustom.h"
 #include "Materials/MaterialExpressionFunctionInput.h"
 #include "Materials/MaterialExpressionFunctionOutput.h"
@@ -26,6 +36,7 @@
 #include "MaterialGraph/MaterialGraph.h"
 #include "MaterialGraph/MaterialGraphNode.h"
 #include "MaterialGraph/MaterialGraphSchema.h"
+#include "MaterialEditorUtilities.h"
 #include "Factories/MaterialFactoryNew.h"
 #include "Factories/MaterialFunctionFactoryNew.h"
 #include "AssetToolsModule.h"
@@ -38,6 +49,7 @@
 #include "UObject/UObjectIterator.h"
 #include "Misc/PackageName.h"
 #include "RHIFeatureLevel.h"
+#include "ScopedTransaction.h"
 
 // SEH wrapper for material expression creation
 #if PLATFORM_WINDOWS
@@ -71,6 +83,7 @@ static void FinalizeMaterialMutation(
 	{
 		return;
 	}
+	UEAIIntegration::MaterialEditing::NotifyMaterialSourceEdited(Asset);
 	if (UEAIIntegration::Workflow::ShouldDeferCompile(Params))
 	{
 		Asset->MarkPackageDirty();
@@ -78,6 +91,8 @@ static void FinalizeMaterialMutation(
 	else
 	{
 		Asset->PostEditChange();
+		if (UMaterialFunction* Function = Cast<UMaterialFunction>(Asset))
+			UMaterialEditingLibrary::UpdateMaterialFunction(Function, nullptr);
 	}
 }
 
@@ -315,6 +330,11 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
+        if (UEAIIntegration::MaterialEditing::RoutesToPreview(Params))
+            return UEAIIntegration::MaterialEditing::MutatePreviewGraph(GetCapabilityId(), Params);
+
+		if (Params->HasField(TEXT("materialFunction")))
+			return MutateMaterialFunction(GetCapabilityId(), Params);
 		FString MaterialName = Params->GetStringField(TEXT("material"));
 		FString MaterialFunctionName;
 		Params->TryGetStringField(TEXT("materialFunction"), MaterialFunctionName);
@@ -435,11 +455,20 @@ public:
 			}
 		}
 
+		// Native expression creation without an open Material Editor may only
+		// update the authored collection. Keep the existing graph usable for the
+		// next tool call without rebuilding every node in the material.
+		if (Material && Material->MaterialGraph && NewExpr && !NewExpr->GraphNode)
+		{
+			Material->MaterialGraph->Modify();
+			NewGraphNode = Material->MaterialGraph->AddExpression(NewExpr, false);
+			if (NewGraphNode) NewGraphNode->SetFlags(RF_Transactional);
+		}
 		const bool bSaved = SaveMaterialForExecution(
 			Material ? static_cast<UObject*>(Material) : static_cast<UObject*>(MatFunc),
 			Params);
 
-		FString NodeGuid;
+		FString NodeGuid = MCPMaterialInfrastructure::ExpressionNodeId(NewExpr);
 		if (NewGraphNode)
 		{
 			NodeGuid = NewGraphNode->NodeGuid.ToString();
@@ -482,6 +511,11 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
+        if (UEAIIntegration::MaterialEditing::RoutesToPreview(Params))
+            return UEAIIntegration::MaterialEditing::MutatePreviewGraph(GetCapabilityId(), Params);
+
+		if (Params->HasField(TEXT("materialFunction")))
+			return MutateMaterialFunction(GetCapabilityId(), Params);
 		FString MaterialName = Params->GetStringField(TEXT("material"));
 		FString MaterialFunctionName;
 		Params->TryGetStringField(TEXT("materialFunction"), MaterialFunctionName);
@@ -515,7 +549,7 @@ public:
 		UMaterialGraphNode* TargetMatNode = nullptr;
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
-			if (Node && Node->NodeGuid.ToString() == NodeId)
+			if (MatchesMaterialNode(Node, NodeId))
 			{
 				TargetMatNode = Cast<UMaterialGraphNode>(Node);
 				break;
@@ -523,22 +557,65 @@ public:
 		}
 		if (!TargetMatNode) return FMCPToolResult::Error(FString::Printf(TEXT("Node '%s' not found"), *NodeId));
 		if (!TargetMatNode->MaterialExpression) return FMCPToolResult::Error(TEXT("Node has no material expression"));
+		if (!TargetMatNode->CanUserDeleteNode()
+			|| TargetMatNode->MaterialExpression->IsA<UMaterialExpressionComposite>()
+			|| TargetMatNode->MaterialExpression->IsA<UMaterialExpressionPinBase>())
+		{
+			return FMCPToolResult::Error(TEXT("This node requires material subgraph deletion and cannot be deleted as a single expression."));
+		}
 
 		FString DeletedNodeTitle = TargetMatNode->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
 		FString DeletedExprClass = TargetMatNode->MaterialExpression->GetClass()->GetName();
 
 		UMaterialExpression* ExprToRemove = TargetMatNode->MaterialExpression;
-		if (Material) Material->GetExpressionCollection().RemoveExpression(ExprToRemove);
-		else MatFunc->GetExpressionCollection().RemoveExpression(ExprToRemove);
-		ExprToRemove->MarkAsGarbage();
-
-		Graph->NotifyGraphChanged();
 		UObject* Asset = Material ? (UObject*)Material : (UObject*)MatFunc;
-		Asset->PreEditChange(nullptr);
-		Asset->PostEditChange();
-		Asset->MarkPackageDirty();
+		BeginMaterialMutation(Asset, Params);
+		Graph->Modify();
+		TargetMatNode->Modify();
+		ExprToRemove->Modify();
+		TargetMatNode->BreakAllNodeLinks();
 
-		bool bSaved = SaveMaterialPackage(Asset);
+		// Clear durable references as well as graph pins. A checkpoint or save
+		// must never retain a removed expression through another node/root input.
+		const auto Expressions = Material ? Material->GetExpressions() : MatFunc->GetExpressions();
+		for (UMaterialExpression* Expression : Expressions)
+		{
+			if (!Expression || Expression == ExprToRemove) continue;
+			for (FExpressionInput* Input : Expression->GetInputsView())
+			{
+				if (Input && Input->Expression == ExprToRemove)
+				{
+					Expression->Modify();
+					Input->Expression = nullptr;
+				}
+			}
+		}
+		if (Material)
+		{
+			for (int32 InputIndex = 0; InputIndex < MP_MAX; ++InputIndex)
+			{
+				FExpressionInput* Input = Material->GetExpressionInputForProperty(
+					static_cast<EMaterialProperty>(InputIndex));
+				if (Input && Input->Expression == ExprToRemove) Input->Expression = nullptr;
+			}
+			Material->RemoveExpressionParameter(ExprToRemove);
+			Material->GetExpressionCollection().RemoveExpression(ExprToRemove);
+		}
+		else
+		{
+			MatFunc->GetExpressionCollection().RemoveExpression(ExprToRemove);
+		}
+		Graph->RemoveNode(TargetMatNode, false);
+		if (!UEAIIntegration::Workflow::ShouldDeferCompile(Params))
+		{
+			CastChecked<UMaterialGraph>(Graph)->LinkMaterialExpressionsFromGraph();
+			ExprToRemove->MarkAsGarbage();
+		}
+		// Workflow snapshots keep removed objects valid for same-session undo
+		// and memory restoration; normal GC can reclaim them after that boundary.
+		FinalizeMaterialMutation(Asset, Params);
+
+		const bool bSaved = SaveMaterialForExecution(Asset, Params);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
@@ -564,6 +641,11 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
+        if (UEAIIntegration::MaterialEditing::RoutesToPreview(Params))
+            return UEAIIntegration::MaterialEditing::MutatePreviewGraph(GetCapabilityId(), Params);
+
+		if (Params->HasField(TEXT("materialFunction")))
+			return MutateMaterialFunction(GetCapabilityId(), Params);
 		FString MaterialName = Params->GetStringField(TEXT("material"));
 		FString MaterialFunctionName;
 		Params->TryGetStringField(TEXT("materialFunction"), MaterialFunctionName);
@@ -603,8 +685,8 @@ public:
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
 			if (!Node) continue;
-			if (Node->NodeGuid.ToString() == SourceNodeId) SourceNode = Node;
-			if (Node->NodeGuid.ToString() == TargetNodeId) TargetNode = Node;
+			if (MatchesMaterialNode(Node, SourceNodeId)) SourceNode = Node;
+			if (MatchesMaterialNode(Node, TargetNodeId)) TargetNode = Node;
 			if (SourceNode && TargetNode) break;
 		}
 		if (!SourceNode) return FMCPToolResult::Error(FString::Printf(TEXT("Source node '%s' not found"), *SourceNodeId));
@@ -623,7 +705,9 @@ public:
 		Graph->Modify();
 		SourceNode->Modify();
 		TargetNode->Modify();
-		bool bConnected = Schema->TryCreateConnection(SourcePin, TargetPin);
+		bool bConnected = UEAIIntegration::Infrastructure::TryCreateConnection(
+			Schema, SourcePin, TargetPin,
+			UEAIIntegration::Workflow::ShouldDeferCompile(Params));
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), bConnected);
@@ -658,6 +742,13 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
+        if (UEAIIntegration::MaterialEditing::RoutesToPreview(Params))
+            return UEAIIntegration::MaterialEditing::MutatePreviewGraph(GetCapabilityId(), Params);
+		if (Params->HasField(TEXT("direction")))
+			return FMCPToolResult::Error(TEXT("direction requires targetContext=editorPreview."), TEXT("invalid_preview_edit"), 400);
+
+		if (Params->HasField(TEXT("materialFunction")))
+			return MutateMaterialFunction(GetCapabilityId(), Params);
 		FString MaterialName = Params->GetStringField(TEXT("material"));
 		FString MaterialFunctionName;
 		Params->TryGetStringField(TEXT("materialFunction"), MaterialFunctionName);
@@ -692,7 +783,7 @@ public:
 		UEdGraphNode* TargetNode = nullptr;
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
-			if (Node && Node->NodeGuid.ToString() == NodeId) { TargetNode = Node; break; }
+			if (MatchesMaterialNode(Node, NodeId)) { TargetNode = Node; break; }
 		}
 		if (!TargetNode) return FMCPToolResult::Error(FString::Printf(TEXT("Node '%s' not found"), *NodeId));
 
@@ -713,6 +804,11 @@ public:
 		}
 		const int32 BrokenCount = Pin->LinkedTo.Num();
 		Pin->BreakAllPinLinks();
+		if (!UEAIIntegration::Workflow::ShouldDeferCompile(Params))
+		{
+			CastChecked<UMaterialGraph>(Graph)->LinkMaterialExpressionsFromGraph();
+			Graph->NotifyGraphChanged();
+		}
 		FinalizeMaterialMutation(Asset, Params);
 		const bool bSaved = SaveMaterialForExecution(Asset, Params);
 
@@ -740,9 +836,14 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		FString MaterialName = Params->GetStringField(TEXT("material"));
+        if (UEAIIntegration::MaterialEditing::RoutesToPreview(Params))
+            return UEAIIntegration::MaterialEditing::MutatePreviewGraph(GetCapabilityId(), Params);
+
+		FString MaterialName;
+		Params->TryGetStringField(TEXT("material"), MaterialName);
 		FString MaterialFunctionName;
 		Params->TryGetStringField(TEXT("materialFunction"), MaterialFunctionName);
+		if (!MaterialName.IsEmpty() && !MaterialFunctionName.IsEmpty()) return FMCPToolResult::Error(TEXT("Specify only one material target."));
 		FString NodeId = Params->GetStringField(TEXT("nodeId"));
 
 		if (MaterialName.IsEmpty() && MaterialFunctionName.IsEmpty())
@@ -768,22 +869,22 @@ public:
 
 		if (Material) EnsureMaterialGraph(Material);
 		UEdGraph* Graph = Material ? (UEdGraph*)Material->MaterialGraph : (MatFunc ? MatFunc->MaterialGraph : nullptr);
-		if (!Graph) return FMCPToolResult::Error(FString::Printf(TEXT("'%s' has no material graph"), *AssetDisplayName));
+		if (!Graph && !MatFunc) return FMCPToolResult::Error(FString::Printf(TEXT("'%s' has no material graph"), *AssetDisplayName));
 
 		UMaterialGraphNode* TargetMatNode = nullptr;
-		for (UEdGraphNode* Node : Graph->Nodes)
+		if (Graph) for (UEdGraphNode* Node : Graph->Nodes)
 		{
-			if (Node && Node->NodeGuid.ToString() == NodeId) { TargetMatNode = Cast<UMaterialGraphNode>(Node); break; }
+			if (MatchesMaterialNode(Node, NodeId)) { TargetMatNode = Cast<UMaterialGraphNode>(Node); break; }
 		}
-		if (!TargetMatNode) return FMCPToolResult::Error(FString::Printf(TEXT("Node '%s' not found"), *NodeId));
+		if (!TargetMatNode && !MatFunc) return FMCPToolResult::Error(FString::Printf(TEXT("Node '%s' not found"), *NodeId));
 
-		UMaterialExpression* Expr = TargetMatNode->MaterialExpression;
+		UMaterialExpression* Expr = MatFunc ? FindFunctionExpression(MatFunc, NodeId) : TargetMatNode->MaterialExpression.Get();
 		if (!Expr) return FMCPToolResult::Error(TEXT("Node has no material expression"));
 
 		UObject* Asset = Material ? (UObject*)Material : (UObject*)MatFunc;
 		BeginMaterialMutation(Asset, Params);
-		Graph->Modify();
-		TargetMatNode->Modify();
+		if (Graph) Graph->Modify();
+		if (TargetMatNode) TargetMatNode->Modify();
 		Expr->Modify();
 
 		FString ExprType, NewValueStr;
@@ -909,6 +1010,11 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
+        if (UEAIIntegration::MaterialEditing::RoutesToPreview(Params))
+            return UEAIIntegration::MaterialEditing::MutatePreviewGraph(GetCapabilityId(), Params);
+
+		if (Params->HasField(TEXT("materialFunction")))
+			return MutateMaterialFunction(GetCapabilityId(), Params);
 		FString MaterialName = Params->GetStringField(TEXT("material"));
 		FString MaterialFunctionName;
 		Params->TryGetStringField(TEXT("materialFunction"), MaterialFunctionName);
@@ -945,7 +1051,7 @@ public:
 		UMaterialGraphNode* TargetMatNode = nullptr;
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
-			if (Node && Node->NodeGuid.ToString() == NodeId) { TargetMatNode = Cast<UMaterialGraphNode>(Node); break; }
+			if (MatchesMaterialNode(Node, NodeId)) { TargetMatNode = Cast<UMaterialGraphNode>(Node); break; }
 		}
 		if (!TargetMatNode) return FMCPToolResult::Error(FString::Printf(TEXT("Node '%s' not found"), *NodeId));
 
@@ -996,8 +1102,15 @@ public:
 			return FMCPToolResult::Error(TEXT("Missing: name, packagePath, parent"));
 
 		FString LoadError;
-		UMaterial* Parent = LoadMaterialByName(ParentName, LoadError);
+		UMaterialInterface* Parent = LoadMaterialInterfaceByName(ParentName, LoadError);
 		if (!Parent) return FMCPToolResult::Error(LoadError);
+		if (!PackagePath.StartsWith(TEXT("/Game/"))
+			|| !FPackageName::IsValidLongPackageName(PackagePath)
+			|| Name.Contains(TEXT("/")) || Name.Contains(TEXT("."))
+			|| !FPackageName::IsValidLongPackageName(PackagePath / Name))
+		{
+			return FMCPToolResult::Error(TEXT("Use a valid asset name and /Game/ package directory."), TEXT("invalid_request"), 400);
+		}
 
 		FString FullPath = PackagePath / Name;
 		// Crash-safety: bail gracefully if the asset already exists instead of letting
@@ -1013,6 +1126,10 @@ public:
 		if (!MI) return FMCPToolResult::Error(TEXT("Failed to create MaterialInstanceConstant"));
 
 		MI->SetParentEditorOnly(Parent);
+		if (MI->Parent != Parent)
+		{
+			return FMCPToolResult::Error(TEXT("Material instance parent was not applied."), TEXT("parent_assignment_failed"), 500);
+		}
 		MI->MarkPackageDirty();
 		bool bSaved = SaveMaterialPackage(MI);
 
@@ -1020,8 +1137,17 @@ public:
 		Result->SetBoolField(TEXT("success"), true);
 		Result->SetStringField(TEXT("name"), Name);
 		Result->SetStringField(TEXT("path"), MI->GetPathName());
-		Result->SetStringField(TEXT("parent"), Parent->GetName());
+		Result->SetStringField(TEXT("parent"), Parent->GetPathName());
 		Result->SetBoolField(TEXT("saved"), bSaved);
+		Result->SetBoolField(TEXT("parentVerified"), MI->Parent == Parent);
+		if (!bSaved)
+		{
+			FMCPToolResult Failure = FMCPToolResult::Error(
+				TEXT("Material instance was created and parent verified, but package save failed."),
+				TEXT("material_instance_save_failed"), 500);
+			Failure.Data = Result;
+			return Failure;
+		}
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -1029,65 +1155,184 @@ public:
 // ============================================================
 // set_material_instance_parameter
 // ============================================================
+namespace UEAIIntegrationTools { FMCPToolResult SetMaterialInstanceParameter(const TSharedPtr<FJsonObject>& Params); }
 class FTool_SetMaterialInstanceParameter : public FMCPToolBase
 {
 public:
-	FString GetCapabilityId() const override
-	{
-		return TEXT("content.material.instance.parameter.set");
-	}
-
+	FString GetCapabilityId() const override { return TEXT("content.material.instance.parameter.set"); }
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		FString InstanceName = Params->GetStringField(TEXT("instance"));
-		FString ParamName = Params->GetStringField(TEXT("parameterName"));
-		if (InstanceName.IsEmpty() || ParamName.IsEmpty())
-			return FMCPToolResult::Error(TEXT("Missing: instance, parameterName"));
-		if (!Params->HasField(TEXT("value")))
-			return FMCPToolResult::Error(TEXT("Missing: value"));
-
-		FString LoadError;
-		UMaterialInstanceConstant* MI = LoadMaterialInstanceByName(InstanceName, LoadError);
-		if (!MI) return FMCPToolResult::Error(LoadError);
-
-		FString SetType;
-
-		// Try as scalar
-		double ScalarVal = 0;
-		if (Params->TryGetNumberField(TEXT("value"), ScalarVal))
-		{
-			MI->SetScalarParameterValueEditorOnly(FName(*ParamName), (float)ScalarVal);
-			SetType = TEXT("Scalar");
-		}
-		else
-		{
-			const TSharedPtr<FJsonObject>* VO = nullptr;
-			if (Params->TryGetObjectField(TEXT("value"), VO) && VO)
-			{
-				double R = 0, G = 0, B = 0, A = 1;
-				(*VO)->TryGetNumberField(TEXT("r"), R); (*VO)->TryGetNumberField(TEXT("g"), G);
-				(*VO)->TryGetNumberField(TEXT("b"), B); (*VO)->TryGetNumberField(TEXT("a"), A);
-				MI->SetVectorParameterValueEditorOnly(FName(*ParamName), FLinearColor((float)R, (float)G, (float)B, (float)A));
-				SetType = TEXT("Vector");
-			}
-			else
-			{
-				return FMCPToolResult::Error(TEXT("value must be a number (scalar) or object {r,g,b,a} (vector)"));
-			}
-		}
-
-		MI->MarkPackageDirty();
-		bool bSaved = SaveMaterialPackage(MI);
-
-		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetBoolField(TEXT("success"), true);
-		Result->SetStringField(TEXT("instance"), MI->GetName());
-		Result->SetStringField(TEXT("parameterName"), ParamName);
-		Result->SetStringField(TEXT("parameterType"), SetType);
-		Result->SetBoolField(TEXT("saved"), bSaved);
-		return FMCPToolResult::Ok(Result);
+		return UEAIIntegrationTools::SetMaterialInstanceParameter(Params);
 	}
 };
+
+namespace
+{
+constexpr const TCHAR* MaterialRestoreProjection =
+	TEXT("legacyMaterialGraph.connectionTopology.v1");
+
+void AppendMaterialGraphDigestField(FString& Canonical, const FString& Value)
+{
+	Canonical += FString::Printf(TEXT("%d:"), Value.Len());
+	Canonical += Value;
+	Canonical += TEXT("|");
+}
+
+FString MakeMaterialConnectionKey(const FPinConnectionRecord& Connection)
+{
+	FString Key;
+	Key.Reserve(
+		Connection.SourceNodeGuid.Len()
+		+ Connection.SourcePinName.Len()
+		+ Connection.TargetNodeGuid.Len()
+		+ Connection.TargetPinName.Len()
+		+ 64);
+	AppendMaterialGraphDigestField(Key, Connection.SourceNodeGuid);
+	AppendMaterialGraphDigestField(Key, Connection.SourcePinName);
+	AppendMaterialGraphDigestField(Key, Connection.TargetNodeGuid);
+	AppendMaterialGraphDigestField(Key, Connection.TargetPinName);
+	return Key;
+}
+
+bool ComputeMaterialConnectionStateDigest(
+	const FString& AssetPath,
+	const FGraphSnapshotData& Data,
+	FString& OutDigest)
+{
+	TArray<FString> NodeRecords;
+	NodeRecords.Reserve(Data.Nodes.Num());
+	for (const FNodeRecord& Node : Data.Nodes)
+	{
+		FString Record;
+		AppendMaterialGraphDigestField(Record, Node.NodeGuid);
+		AppendMaterialGraphDigestField(Record, Node.NodeClass);
+		AppendMaterialGraphDigestField(Record, Node.NodeTitle);
+		AppendMaterialGraphDigestField(Record, Node.StructType);
+		NodeRecords.Add(MoveTemp(Record));
+	}
+	NodeRecords.Sort();
+
+	TArray<FString> ConnectionRecords;
+	ConnectionRecords.Reserve(Data.Connections.Num());
+	for (const FPinConnectionRecord& Connection : Data.Connections)
+	{
+		ConnectionRecords.Add(MakeMaterialConnectionKey(Connection));
+	}
+	ConnectionRecords.Sort();
+
+	FString Canonical(TEXT("ue.material.connection-state/1|"));
+	AppendMaterialGraphDigestField(Canonical, AssetPath);
+	AppendMaterialGraphDigestField(Canonical, MaterialRestoreProjection);
+	Canonical += FString::Printf(
+		TEXT("nodes:%d|connections:%d|"),
+		NodeRecords.Num(),
+		ConnectionRecords.Num());
+	for (const FString& Record : NodeRecords)
+	{
+		AppendMaterialGraphDigestField(Canonical, Record);
+	}
+	for (const FString& Record : ConnectionRecords)
+	{
+		AppendMaterialGraphDigestField(Canonical, Record);
+	}
+
+	FTCHARToUTF8 Utf8(*Canonical);
+	FString Hex;
+	if (!UEAIIntegration::Infrastructure::TrySha256Hex(
+			Utf8.Get(),
+			static_cast<uint64>(Utf8.Length()),
+			Hex))
+	{
+		OutDigest.Reset();
+		return false;
+	}
+	OutDigest = TEXT("sha256:") + Hex;
+	return true;
+}
+
+bool IsMaterialConnectionStateDigest(const FString& Digest)
+{
+	if (!Digest.StartsWith(TEXT("sha256:")) || Digest.Len() != 71)
+	{
+		return false;
+	}
+	for (int32 Index = 7; Index < Digest.Len(); ++Index)
+	{
+		if (!FChar::IsHexDigit(Digest[Index]))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+UEdGraphPin* FindUniqueMaterialRestorePin(
+	UEdGraphNode* Node,
+	const FString& PinName,
+	const EEdGraphPinDirection ExpectedDirection)
+{
+	if (!Node)
+	{
+		return nullptr;
+	}
+	UEdGraphPin* Match = nullptr;
+	int32 MatchCount = 0;
+	for (UEdGraphPin* Pin : Node->Pins)
+	{
+		if (Pin && Pin->PinName.ToString() == PinName)
+		{
+			++MatchCount;
+			Match = Pin;
+		}
+	}
+	return MatchCount == 1
+		&& Match
+		&& Match->Direction == ExpectedDirection
+		&& Match->GetOwningNode() == Node
+		? Match
+		: nullptr;
+}
+
+struct FMaterialRestoreConnection
+{
+	FString Key;
+	UEdGraphNode* SourceNode = nullptr;
+	UEdGraphPin* SourcePin = nullptr;
+	UEdGraphNode* TargetNode = nullptr;
+	UEdGraphPin* TargetPin = nullptr;
+};
+
+struct FMaterialRestoreRollbackStatus
+{
+	bool bSemanticRollbackVerified = false;
+	bool bDirtyRestored = false;
+
+	bool IsVerified() const
+	{
+		return bSemanticRollbackVerified && bDirtyRestored;
+	}
+};
+
+bool ContainsAllSnapshotConnections(
+	const FGraphSnapshotData& SnapshotData,
+	const FGraphSnapshotData& CurrentData)
+{
+	TSet<FString> CurrentConnections;
+	CurrentConnections.Reserve(CurrentData.Connections.Num());
+	for (const FPinConnectionRecord& Connection : CurrentData.Connections)
+	{
+		CurrentConnections.Add(MakeMaterialConnectionKey(Connection));
+	}
+	for (const FPinConnectionRecord& Connection : SnapshotData.Connections)
+	{
+		if (!CurrentConnections.Contains(MakeMaterialConnectionKey(Connection)))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+}
 
 // ============================================================
 // snapshot_material_graph
@@ -1121,6 +1366,17 @@ public:
 		FGraphSnapshotData GraphData = MCPHelpers::CaptureGraphSnapshot(Material->MaterialGraph);
 		int32 NodeCount = GraphData.Nodes.Num();
 		int32 ConnectionCount = GraphData.Connections.Num();
+		FString StateDigest;
+		if (!ComputeMaterialConnectionStateDigest(
+				Snapshot.BlueprintPath,
+				GraphData,
+				StateDigest))
+		{
+			return FMCPToolResult::Error(
+				TEXT("Could not hash the material graph snapshot."),
+				TEXT("state_digest_unavailable"),
+				500);
+		}
 		Snapshot.Graphs.Add(TEXT("MaterialGraph"), MoveTemp(GraphData));
 
 		MCPHelpers::GetMaterialSnapshots().Add(Snapshot.SnapshotId, Snapshot);
@@ -1128,6 +1384,13 @@ public:
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("snapshotId"), Snapshot.SnapshotId);
 		Result->SetStringField(TEXT("material"), Material->GetName());
+		Result->SetStringField(TEXT("assetPath"), Snapshot.BlueprintPath);
+		Result->SetStringField(TEXT("stateDigest"), StateDigest);
+		Result->SetStringField(
+			TEXT("projectionIdentity"), MaterialRestoreProjection);
+		Result->SetStringField(
+			TEXT("restoreSemantics"), TEXT("missingConnectionsOnly"));
+		Result->SetBoolField(TEXT("fullGraphRestore"), false);
 		Result->SetNumberField(TEXT("nodeCount"), NodeCount);
 		Result->SetNumberField(TEXT("connectionCount"), ConnectionCount);
 		return FMCPToolResult::Ok(Result);
@@ -1158,6 +1421,13 @@ public:
 		FString LoadError;
 		UMaterial* Material = LoadMaterialByName(MaterialName, LoadError);
 		if (!Material) return FMCPToolResult::Error(LoadError);
+		if (SnapshotPtr->BlueprintPath != Material->GetPathName())
+		{
+			return FMCPToolResult::Error(
+				TEXT("The snapshot belongs to a different material asset."),
+				TEXT("snapshot_asset_mismatch"),
+				409);
+		}
 
 		EnsureMaterialGraph(Material);
 		if (!Material->MaterialGraph) return FMCPToolResult::Error(TEXT("Material has no graph"));
@@ -1166,11 +1436,9 @@ public:
 		const FGraphSnapshotData* SnapData = SnapshotPtr->Graphs.Find(TEXT("MaterialGraph"));
 		if (!SnapData) return FMCPToolResult::Error(TEXT("Snapshot has no MaterialGraph"));
 
-		auto MakeConnKey = [](const FString& SG, const FString& SP, const FString& TG, const FString& TP) { return FString::Printf(TEXT("%s|%s|%s|%s"), *SG, *SP, *TG, *TP); };
-
 		TSet<FString> SnapConnSet, CurConnSet;
-		for (const FPinConnectionRecord& C : SnapData->Connections) SnapConnSet.Add(MakeConnKey(C.SourceNodeGuid, C.SourcePinName, C.TargetNodeGuid, C.TargetPinName));
-		for (const FPinConnectionRecord& C : CurrentData.Connections) CurConnSet.Add(MakeConnKey(C.SourceNodeGuid, C.SourcePinName, C.TargetNodeGuid, C.TargetPinName));
+		for (const FPinConnectionRecord& C : SnapData->Connections) SnapConnSet.Add(MakeMaterialConnectionKey(C));
+		for (const FPinConnectionRecord& C : CurrentData.Connections) CurConnSet.Add(MakeMaterialConnectionKey(C));
 
 		TMap<FString, const FNodeRecord*> CurNodeLookup;
 		for (const FNodeRecord& NR : CurrentData.Nodes) CurNodeLookup.Add(NR.NodeGuid, &NR);
@@ -1179,7 +1447,7 @@ public:
 
 		for (const FPinConnectionRecord& C : SnapData->Connections)
 		{
-			if (!CurConnSet.Contains(MakeConnKey(C.SourceNodeGuid, C.SourcePinName, C.TargetNodeGuid, C.TargetPinName)))
+			if (!CurConnSet.Contains(MakeMaterialConnectionKey(C)))
 			{
 				TSharedRef<FJsonObject> SJ = MakeShared<FJsonObject>();
 				SJ->SetStringField(TEXT("sourceNodeGuid"), C.SourceNodeGuid);
@@ -1191,7 +1459,7 @@ public:
 		}
 		for (const FPinConnectionRecord& C : CurrentData.Connections)
 		{
-			if (!SnapConnSet.Contains(MakeConnKey(C.SourceNodeGuid, C.SourcePinName, C.TargetNodeGuid, C.TargetPinName)))
+			if (!SnapConnSet.Contains(MakeMaterialConnectionKey(C)))
 			{
 				TSharedRef<FJsonObject> NJ = MakeShared<FJsonObject>();
 				NJ->SetStringField(TEXT("sourceNodeGuid"), C.SourceNodeGuid);
@@ -1215,7 +1483,31 @@ public:
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("material"), Material->GetName());
+		Result->SetStringField(TEXT("assetPath"), Material->GetPathName());
 		Result->SetStringField(TEXT("snapshotId"), SnapshotId);
+		FString SnapshotStateDigest;
+		FString CurrentStateDigest;
+		if (!ComputeMaterialConnectionStateDigest(
+				Material->GetPathName(),
+				*SnapData,
+				SnapshotStateDigest)
+			|| !ComputeMaterialConnectionStateDigest(
+					Material->GetPathName(),
+					CurrentData,
+					CurrentStateDigest))
+		{
+			return FMCPToolResult::Error(
+				TEXT("Could not hash the material graph comparison."),
+				TEXT("state_digest_unavailable"),
+				500);
+		}
+		Result->SetStringField(TEXT("snapshotStateDigest"), SnapshotStateDigest);
+		Result->SetStringField(TEXT("currentStateDigest"), CurrentStateDigest);
+		Result->SetStringField(
+			TEXT("projectionIdentity"), MaterialRestoreProjection);
+		Result->SetStringField(
+			TEXT("restoreSemantics"), TEXT("missingConnectionsOnly"));
+		Result->SetBoolField(TEXT("fullGraphRestore"), false);
 		Result->SetArrayField(TEXT("severedConnections"), SeveredArr);
 		Result->SetArrayField(TEXT("newConnections"), NewConnsArr);
 		Result->SetArrayField(TEXT("missingNodes"), MissingNodesArr);
@@ -1242,77 +1534,455 @@ public:
 
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
-		FString MaterialName = Params->GetStringField(TEXT("material"));
-		FString SnapshotId = Params->GetStringField(TEXT("snapshotId"));
-		if (MaterialName.IsEmpty() || SnapshotId.IsEmpty())
-			return FMCPToolResult::Error(TEXT("Missing: material, snapshotId"));
+		FString MaterialName;
+		FString SnapshotId;
+		FString ExpectedCurrentDigest;
+		if (!Params.IsValid()
+			|| !Params->TryGetStringField(TEXT("material"), MaterialName)
+			|| !Params->TryGetStringField(TEXT("snapshotId"), SnapshotId)
+			|| !Params->TryGetStringField(
+				TEXT("expectedCurrentDigest"), ExpectedCurrentDigest)
+			|| MaterialName.IsEmpty()
+			|| SnapshotId.IsEmpty()
+			|| !IsMaterialConnectionStateDigest(ExpectedCurrentDigest))
+		{
+			return FMCPToolResult::Error(
+				TEXT("material, snapshotId and a sha256 expectedCurrentDigest are required."),
+				TEXT("invalid_restore_request"),
+				422);
+		}
 
 		bool bDryRun = false;
-		Params->TryGetBoolField(TEXT("dryRun"), bDryRun);
+		bool bSave = false;
+		if ((Params->HasField(TEXT("dryRun"))
+				&& !Params->TryGetBoolField(TEXT("dryRun"), bDryRun))
+			|| (Params->HasField(TEXT("save"))
+				&& !Params->TryGetBoolField(TEXT("save"), bSave)))
+		{
+			return FMCPToolResult::Error(
+				TEXT("dryRun and save must be booleans."),
+				TEXT("invalid_restore_request"),
+				422);
+		}
+		if (bSave)
+		{
+			return FMCPToolResult::Error(
+				TEXT("This limited restore is dirty-only. Persist through an approved Workflow with a durable checkpoint."),
+				TEXT("restore_save_not_supported"),
+				409);
+		}
 
-		FGraphSnapshot* SnapshotPtr = MCPHelpers::GetMaterialSnapshots().Find(SnapshotId);
-		if (!SnapshotPtr) return FMCPToolResult::Error(FString::Printf(TEXT("Snapshot '%s' not found"), *SnapshotId));
+		FGraphSnapshot* SnapshotPtr =
+			MCPHelpers::GetMaterialSnapshots().Find(SnapshotId);
+		if (!SnapshotPtr)
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Snapshot '%s' is unavailable in this Editor instance."),
+					*SnapshotId),
+				TEXT("snapshot_not_found"),
+				410);
+		}
 
 		FString LoadError;
 		UMaterial* Material = LoadMaterialByName(MaterialName, LoadError);
-		if (!Material) return FMCPToolResult::Error(LoadError);
+		if (!Material)
+		{
+			return FMCPToolResult::Error(
+				LoadError,
+				TEXT("material_not_found"),
+				404);
+		}
+		const FString AssetPath = Material->GetPathName();
+		if (SnapshotPtr->BlueprintPath != AssetPath)
+		{
+			return FMCPToolResult::Error(
+				TEXT("The snapshot belongs to a different material asset."),
+				TEXT("snapshot_asset_mismatch"),
+				409);
+		}
 
 		EnsureMaterialGraph(Material);
-		if (!Material->MaterialGraph) return FMCPToolResult::Error(TEXT("Material has no graph"));
+		UMaterialGraph* Graph = Material->MaterialGraph;
+		if (!Graph)
+		{
+			return FMCPToolResult::Error(
+				TEXT("Material has no graph."),
+				TEXT("material_graph_unavailable"),
+				409);
+		}
+		const FGraphSnapshotData* SnapshotData =
+			SnapshotPtr->Graphs.Find(TEXT("MaterialGraph"));
+		if (!SnapshotData)
+		{
+			return FMCPToolResult::Error(
+				TEXT("Snapshot has no MaterialGraph projection."),
+				TEXT("snapshot_projection_mismatch"),
+				409);
+		}
 
-		FGraphSnapshotData CurrentData = MCPHelpers::CaptureGraphSnapshot(Material->MaterialGraph);
-		const FGraphSnapshotData* SnapData = SnapshotPtr->Graphs.Find(TEXT("MaterialGraph"));
-		if (!SnapData) return FMCPToolResult::Error(TEXT("Snapshot has no MaterialGraph"));
+		const FGraphSnapshotData BeforeData =
+			MCPHelpers::CaptureGraphSnapshot(Graph);
+		FString BeforeDigest;
+		FString SnapshotDigest;
+		if (!ComputeMaterialConnectionStateDigest(
+				AssetPath,
+				BeforeData,
+				BeforeDigest)
+			|| !ComputeMaterialConnectionStateDigest(
+					AssetPath,
+					*SnapshotData,
+					SnapshotDigest))
+		{
+			return FMCPToolResult::Error(
+				TEXT("Could not hash the material graph restore state."),
+				TEXT("state_digest_unavailable"),
+				500);
+		}
+		if (ExpectedCurrentDigest != BeforeDigest)
+		{
+			return FMCPToolResult::Error(
+				TEXT("The material graph changed after its current state was read."),
+				TEXT("material_graph_state_conflict"),
+				409);
+		}
 
-		auto MakeConnKey = [](const FString& SG, const FString& SP, const FString& TG, const FString& TP) { return FString::Printf(TEXT("%s|%s|%s|%s"), *SG, *SP, *TG, *TP); };
-
-		TSet<FString> CurConnSet;
-		for (const FPinConnectionRecord& C : CurrentData.Connections)
-			CurConnSet.Add(MakeConnKey(C.SourceNodeGuid, C.SourcePinName, C.TargetNodeGuid, C.TargetPinName));
+		TSet<FString> CurrentConnections;
+		CurrentConnections.Reserve(BeforeData.Connections.Num());
+		for (const FPinConnectionRecord& Connection : BeforeData.Connections)
+		{
+			CurrentConnections.Add(MakeMaterialConnectionKey(Connection));
+		}
 
 		TMap<FString, UEdGraphNode*> NodeLookup;
-		for (UEdGraphNode* Node : Material->MaterialGraph->Nodes)
+		for (UEdGraphNode* Node : Graph->Nodes)
 		{
-			if (Node) NodeLookup.Add(Node->NodeGuid.ToString(), Node);
+			if (!Node || Node->GetGraph() != Graph)
+			{
+				continue;
+			}
+			const FString NodeGuid = Node->NodeGuid.ToString();
+			if (NodeLookup.Contains(NodeGuid))
+			{
+				return FMCPToolResult::Error(
+					TEXT("The live material graph has duplicate node GUIDs; no connection was changed."),
+					TEXT("restore_preflight_failed"),
+					409);
+			}
+			NodeLookup.Add(NodeGuid, Node);
 		}
 
-		int32 Reconnected = 0, Failed = 0;
-
-		for (const FPinConnectionRecord& Conn : SnapData->Connections)
+		const UEdGraphSchema* Schema = Graph->GetSchema();
+		if (!Schema)
 		{
-			FString Key = MakeConnKey(Conn.SourceNodeGuid, Conn.SourcePinName, Conn.TargetNodeGuid, Conn.TargetPinName);
-			if (CurConnSet.Contains(Key)) continue;
-
-			UEdGraphNode** SrcPtr = NodeLookup.Find(Conn.SourceNodeGuid);
-			UEdGraphNode** TgtPtr = NodeLookup.Find(Conn.TargetNodeGuid);
-			if (!SrcPtr || !*SrcPtr || !TgtPtr || !*TgtPtr) { Failed++; continue; }
-
-			UEdGraphPin* SrcPin = (*SrcPtr)->FindPin(FName(*Conn.SourcePinName));
-			UEdGraphPin* TgtPin = (*TgtPtr)->FindPin(FName(*Conn.TargetPinName));
-			if (!SrcPin || !TgtPin) { Failed++; continue; }
-
-			if (bDryRun) { Reconnected++; continue; }
-
-			const UEdGraphSchema* Schema = Material->MaterialGraph->GetSchema();
-			if (Schema && Schema->TryCreateConnection(SrcPin, TgtPin)) Reconnected++;
-			else Failed++;
+			return FMCPToolResult::Error(
+				TEXT("The material graph schema is unavailable; no connection was changed."),
+				TEXT("restore_preflight_failed"),
+				409);
 		}
 
-		bool bSaved = false;
-		if (!bDryRun && Reconnected > 0)
+		TArray<FMaterialRestoreConnection> Plan;
+		TSet<FString> PlannedKeys;
+		for (const FPinConnectionRecord& Connection : SnapshotData->Connections)
 		{
-			Material->PreEditChange(nullptr);
-			Material->PostEditChange();
-			bSaved = SaveMaterialPackage(Material);
+			const FString Key = MakeMaterialConnectionKey(Connection);
+			if (CurrentConnections.Contains(Key) || PlannedKeys.Contains(Key))
+			{
+				continue;
+			}
+			UEdGraphNode* const* SourceNodePtr =
+				NodeLookup.Find(Connection.SourceNodeGuid);
+			UEdGraphNode* const* TargetNodePtr =
+				NodeLookup.Find(Connection.TargetNodeGuid);
+			if (!SourceNodePtr || !TargetNodePtr
+				|| !*SourceNodePtr || !*TargetNodePtr
+				|| (*SourceNodePtr)->GetGraph() != Graph
+				|| (*TargetNodePtr)->GetGraph() != Graph)
+			{
+				return FMCPToolResult::Error(
+					FString::Printf(
+						TEXT("Snapshot connection '%s' references a missing or foreign node; no connection was changed."),
+						*Key),
+					TEXT("restore_preflight_failed"),
+					409);
+			}
+			UEdGraphPin* SourcePin = FindUniqueMaterialRestorePin(
+				*SourceNodePtr,
+				Connection.SourcePinName,
+				EGPD_Output);
+			UEdGraphPin* TargetPin = FindUniqueMaterialRestorePin(
+				*TargetNodePtr,
+				Connection.TargetPinName,
+				EGPD_Input);
+			if (!SourcePin || !TargetPin
+				|| SourcePin->GetOwningNode()->GetGraph() != Graph
+				|| TargetPin->GetOwningNode()->GetGraph() != Graph)
+			{
+				return FMCPToolResult::Error(
+					FString::Printf(
+						TEXT("Snapshot connection '%s' does not resolve to unique output/input pins in this graph; no connection was changed."),
+						*Key),
+					TEXT("restore_preflight_failed"),
+					409);
+			}
+			const FPinConnectionResponse Response =
+				Schema->CanCreateConnection(SourcePin, TargetPin);
+			if (Response.Response != CONNECT_RESPONSE_MAKE)
+			{
+				return FMCPToolResult::Error(
+					FString::Printf(
+						TEXT("Snapshot connection '%s' is not a pure additive connection (%s); no connection was changed."),
+						*Key,
+						*Response.Message.ToString()),
+					TEXT("restore_would_break_existing_connection"),
+					409);
+			}
+			FMaterialRestoreConnection& Planned = Plan.AddDefaulted_GetRef();
+			Planned.Key = Key;
+			Planned.SourceNode = *SourceNodePtr;
+			Planned.SourcePin = SourcePin;
+			Planned.TargetNode = *TargetNodePtr;
+			Planned.TargetPin = TargetPin;
+			PlannedKeys.Add(Key);
+		}
+		Plan.Sort([](
+			const FMaterialRestoreConnection& Left,
+			const FMaterialRestoreConnection& Right)
+		{
+			return Left.Key < Right.Key;
+		});
+
+		FGraphSnapshotData ExpectedAfterData = BeforeData;
+		for (const FPinConnectionRecord& Connection : SnapshotData->Connections)
+		{
+			const FString Key = MakeMaterialConnectionKey(Connection);
+			if (!CurrentConnections.Contains(Key))
+			{
+				ExpectedAfterData.Connections.Add(Connection);
+				CurrentConnections.Add(Key);
+			}
+		}
+		FString ExpectedAfterDigest;
+		if (!ComputeMaterialConnectionStateDigest(
+				AssetPath,
+				ExpectedAfterData,
+				ExpectedAfterDigest))
+		{
+			return FMCPToolResult::Error(
+				TEXT("Could not hash the expected post-restore state."),
+				TEXT("state_digest_unavailable"),
+				500);
 		}
 
-		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetStringField(TEXT("material"), Material->GetName());
-		Result->SetStringField(TEXT("snapshotId"), SnapshotId);
-		Result->SetNumberField(TEXT("reconnected"), Reconnected);
-		Result->SetNumberField(TEXT("failed"), Failed);
-		Result->SetBoolField(TEXT("saved"), bSaved);
-		Result->SetBoolField(TEXT("dryRun"), bDryRun);
+		auto MakeResult = [&]()
+		{
+			TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+			Result->SetStringField(TEXT("material"), Material->GetName());
+			Result->SetStringField(TEXT("assetPath"), AssetPath);
+			Result->SetStringField(TEXT("snapshotId"), SnapshotId);
+			Result->SetStringField(TEXT("snapshotStateDigest"), SnapshotDigest);
+			Result->SetStringField(TEXT("beforeStateDigest"), BeforeDigest);
+			Result->SetStringField(
+				TEXT("expectedAfterStateDigest"), ExpectedAfterDigest);
+			Result->SetStringField(
+				TEXT("projectionIdentity"), MaterialRestoreProjection);
+			Result->SetStringField(
+				TEXT("restoreSemantics"), TEXT("missingConnectionsOnly"));
+			Result->SetBoolField(TEXT("fullGraphRestore"), false);
+			Result->SetBoolField(TEXT("preflightVerified"), true);
+			Result->SetNumberField(
+				TEXT("missingConnectionCount"), Plan.Num());
+			Result->SetBoolField(TEXT("dryRun"), bDryRun);
+			Result->SetBoolField(TEXT("saveRequested"), bSave);
+			Result->SetBoolField(TEXT("saveSupported"), false);
+			Result->SetStringField(TEXT("persistence"), TEXT("dirtyOnly"));
+			Result->SetBoolField(
+				TEXT("compileDeferred"),
+				UEAIIntegration::Workflow::ShouldDeferCompile(Params));
+			Result->SetBoolField(TEXT("compileVerified"), false);
+			return Result;
+		};
+
+		if (bDryRun)
+		{
+			TSharedRef<FJsonObject> Result = MakeResult();
+			Result->SetNumberField(TEXT("appliedConnectionCount"), 0);
+			Result->SetBoolField(TEXT("postconditionChecked"), false);
+			Result->SetBoolField(TEXT("postconditionVerified"), false);
+			Result->SetBoolField(TEXT("rollbackAttempted"), false);
+			Result->SetBoolField(TEXT("rollbackVerified"), false);
+			Result->SetBoolField(TEXT("compileRequested"), false);
+			Result->SetBoolField(TEXT("saved"), false);
+			return FMCPToolResult::Ok(Result);
+		}
+
+		if (Plan.IsEmpty())
+		{
+			TSharedRef<FJsonObject> Result = MakeResult();
+			Result->SetNumberField(TEXT("appliedConnectionCount"), 0);
+			Result->SetStringField(TEXT("afterStateDigest"), BeforeDigest);
+			Result->SetBoolField(TEXT("postconditionChecked"), true);
+			Result->SetBoolField(TEXT("postconditionVerified"), true);
+			Result->SetBoolField(TEXT("rollbackAttempted"), false);
+			Result->SetBoolField(TEXT("rollbackVerified"), false);
+			Result->SetBoolField(TEXT("compileRequested"), false);
+			Result->SetBoolField(TEXT("saved"), false);
+			return FMCPToolResult::Ok(Result);
+		}
+
+		const bool bDirtyBefore = Material->GetOutermost()->IsDirty();
+		FScopedTransaction Transaction(
+			FText::FromString(TEXT("UE AI Restore Material Graph Connections")));
+		BeginMaterialMutation(Material, Params);
+		Graph->Modify();
+		TSet<UEdGraphNode*> ModifiedNodes;
+		for (const FMaterialRestoreConnection& Connection : Plan)
+		{
+			UEdGraphNode* NodesToModify[] = {
+				Connection.SourceNode,
+				Connection.TargetNode};
+			for (UEdGraphNode* Node : NodesToModify)
+			{
+				if (Node && !ModifiedNodes.Contains(Node))
+				{
+					Node->Modify();
+					if (UMaterialGraphNode* MaterialNode =
+						Cast<UMaterialGraphNode>(Node))
+					{
+						if (MaterialNode->MaterialExpression)
+						{
+							MaterialNode->MaterialExpression->Modify();
+						}
+					}
+					ModifiedNodes.Add(Node);
+				}
+			}
+		}
+
+		TArray<int32> AppliedIndexes;
+		AppliedIndexes.Reserve(Plan.Num());
+		bool bMutationFinalized = false;
+		auto RollBackOwnedConnections = [&]()
+		{
+			FMaterialRestoreRollbackStatus Status;
+			if (bMutationFinalized
+				&& !UEAIIntegration::Workflow::ShouldDeferCompile(Params))
+			{
+				Material->PreEditChange(nullptr);
+			}
+			for (int32 Index = AppliedIndexes.Num() - 1; Index >= 0; --Index)
+			{
+				const FMaterialRestoreConnection& Connection =
+					Plan[AppliedIndexes[Index]];
+				if (Connection.SourcePin && Connection.TargetPin
+					&& (Connection.SourcePin->LinkedTo.Contains(Connection.TargetPin)
+						|| Connection.TargetPin->LinkedTo.Contains(Connection.SourcePin)))
+				{
+					Connection.SourcePin->BreakLinkTo(Connection.TargetPin);
+					if (Connection.TargetPin->LinkedTo.Contains(Connection.SourcePin))
+					{
+						Connection.TargetPin->BreakLinkTo(Connection.SourcePin);
+					}
+				}
+			}
+			Graph->LinkMaterialExpressionsFromGraph();
+			FinalizeMaterialMutation(Material, Params);
+			bMutationFinalized = true;
+			const FGraphSnapshotData RestoredData =
+				MCPHelpers::CaptureGraphSnapshot(Graph);
+			FString RestoredDigest;
+			Status.bSemanticRollbackVerified =
+				ComputeMaterialConnectionStateDigest(
+					AssetPath,
+					RestoredData,
+					RestoredDigest)
+				&& RestoredDigest == BeforeDigest;
+			if (Status.bSemanticRollbackVerified)
+			{
+				Material->GetOutermost()->SetDirtyFlag(bDirtyBefore);
+			}
+			Status.bDirtyRestored =
+				Material->GetOutermost()->IsDirty() == bDirtyBefore;
+			if (Status.IsVerified())
+			{
+				Transaction.Cancel();
+			}
+			return Status;
+		};
+
+		for (int32 Index = 0; Index < Plan.Num(); ++Index)
+		{
+			const FMaterialRestoreConnection& Connection = Plan[Index];
+			const bool bCreated = Schema->TryCreateConnection(
+				Connection.SourcePin,
+				Connection.TargetPin);
+			const bool bSourceLinked =
+				Connection.SourcePin->LinkedTo.Contains(Connection.TargetPin);
+			const bool bTargetLinked =
+				Connection.TargetPin->LinkedTo.Contains(Connection.SourcePin);
+			const bool bConnected = bSourceLinked && bTargetLinked;
+			if (bSourceLinked || bTargetLinked)
+			{
+				AppliedIndexes.Add(Index);
+			}
+			if (!bCreated || !bConnected)
+			{
+				const FMaterialRestoreRollbackStatus Rollback =
+					RollBackOwnedConnections();
+				return FMCPToolResult::Error(
+					FString::Printf(
+						TEXT("Connection restore failed after %d additions; semanticRollbackVerified=%s, dirtyRestored=%s, diskRollbackRequired=false."),
+						AppliedIndexes.Num(),
+						Rollback.bSemanticRollbackVerified ? TEXT("true") : TEXT("false"),
+						Rollback.bDirtyRestored ? TEXT("true") : TEXT("false")),
+					Rollback.IsVerified()
+						? TEXT("restore_apply_failed")
+						: TEXT("restore_rollback_failed"),
+					500);
+			}
+		}
+
+		Graph->LinkMaterialExpressionsFromGraph();
+		FinalizeMaterialMutation(Material, Params);
+		bMutationFinalized = true;
+		const FGraphSnapshotData AfterData =
+			MCPHelpers::CaptureGraphSnapshot(Graph);
+		FString AfterDigest;
+		const bool bPostconditionVerified =
+			ComputeMaterialConnectionStateDigest(
+				AssetPath,
+				AfterData,
+				AfterDigest)
+			&& AfterDigest == ExpectedAfterDigest
+			&& ContainsAllSnapshotConnections(*SnapshotData, AfterData)
+			&& ContainsAllSnapshotConnections(BeforeData, AfterData);
+		if (!bPostconditionVerified)
+		{
+			const FMaterialRestoreRollbackStatus Rollback =
+				RollBackOwnedConnections();
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Material graph restore postcondition failed; semanticRollbackVerified=%s, dirtyRestored=%s, diskRollbackRequired=false."),
+					Rollback.bSemanticRollbackVerified ? TEXT("true") : TEXT("false"),
+					Rollback.bDirtyRestored ? TEXT("true") : TEXT("false")),
+				Rollback.IsVerified()
+					? TEXT("restore_postcondition_failed")
+					: TEXT("restore_rollback_failed"),
+				500);
+		}
+
+		TSharedRef<FJsonObject> Result = MakeResult();
+		Result->SetNumberField(
+			TEXT("appliedConnectionCount"), AppliedIndexes.Num());
+		Result->SetStringField(TEXT("afterStateDigest"), AfterDigest);
+		Result->SetBoolField(TEXT("postconditionChecked"), true);
+		Result->SetBoolField(TEXT("postconditionVerified"), true);
+		Result->SetBoolField(TEXT("rollbackAttempted"), false);
+		Result->SetBoolField(TEXT("rollbackVerified"), false);
+		Result->SetBoolField(
+			TEXT("compileRequested"),
+			!UEAIIntegration::Workflow::ShouldDeferCompile(Params));
+		Result->SetBoolField(TEXT("saved"), false);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -1340,22 +2010,32 @@ public:
 #if WITH_DEV_AUTOMATION_TESTS
 		UEAIIntegration::Workflow::NotifyMaterialCompileFinalizerForTests();
 #endif
+		const bool bWorkflowFinalizer =
+			UEAIIntegration::Workflow::IsApprovedWorkflowExecution(Params);
+		TArray<UMaterialFunctionInterface*> Dependencies;
+		if (!UEAIIntegration::MaterialEditing::CollectFunctionDependencies(Material, Dependencies, LoadError))
+			return FMCPToolResult::Error(LoadError, TEXT("invalid_function_dependencies"), 400);
+		if (bWorkflowFinalizer && Material->MaterialGraph)
+		{
+			// Deferred connections only edit graph pins. Persist the expression
+			// inputs before compilation/save, including when no editor is open.
+			Material->MaterialGraph->LinkMaterialExpressionsFromGraph();
+		}
+		const bool bShaderCacheRefreshed = UEAIIntegration::MaterialEditing::PrepareMaterialSourceValidation(Material);
 		Material->PreEditChange(nullptr);
 		Material->PostEditChange();
-
-		TArray<TSharedPtr<FJsonValue>> ErrorArray;
-		bool bValid = true;
-
-		FMaterialResource* Resource = Material->GetMaterialResource(GMaxRHIFeatureLevel);
-		if (Resource)
+		if (bWorkflowFinalizer && Material->MaterialGraph)
 		{
-			const TArray<FString>& CompileErrors = Resource->GetCompileErrors();
-			for (const FString& Err : CompileErrors)
-			{
-				bValid = false;
-				ErrorArray.Add(MakeShared<FJsonValueString>(Err));
-			}
+			Material->MaterialGraph->NotifyGraphChanged();
+			FMaterialEditorUtilities::UpdateMaterialAfterGraphChange(Material->MaterialGraph);
 		}
+
+		bool bWait = bWorkflowFinalizer;
+		if (!bWorkflowFinalizer) Params->TryGetBoolField(TEXT("waitForCompilation"), bWait);
+		auto Result = UEAIIntegration::MaterialEditing::CompleteMaterialValidation(Material, bWait);
+		Result->SetBoolField(TEXT("shaderFileCacheRefreshed"), bShaderCacheRefreshed);
+		TArray<TSharedPtr<FJsonValue>> ErrorArray;
+		for (const auto& Entry : Result->GetArrayField(TEXT("diagnostics"))) ErrorArray.Add(MakeShared<FJsonValueString>(Entry->AsObject()->GetStringField(TEXT("message"))));
 
 		auto Expressions = Material->GetExpressions();
 		int32 ConnectionCount = 0;
@@ -1371,8 +2051,20 @@ public:
 			}
 		}
 
-		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetBoolField(TEXT("valid"), bValid);
+		// Custom HLSL must have an actual compiler verdict before a Workflow can
+		// commit/save it. NullRHI or absent resources are not successful validation.
+		if (bWorkflowFinalizer && !Result->GetBoolField(TEXT("shaderValidationPerformed")))
+		{
+			bool bHasCustom = false;
+			for (UMaterialExpression* Expression : Expressions) if (Expression && Expression->IsA<UMaterialExpressionCustom>()) bHasCustom = true;
+			for (auto* Function : Dependencies) for (UMaterialExpression* Expression : Function->GetExpressions())
+				if (Expression && Expression->IsA<UMaterialExpressionCustom>()) bHasCustom = true;
+			if (bHasCustom)
+			{
+				Result->SetBoolField(TEXT("valid"), false);
+				ErrorArray.Add(MakeShared<FJsonValueString>(TEXT("Custom HLSL requires completed shader validation in a rendering Editor.")));
+			}
+		}
 		Result->SetStringField(TEXT("material"), Material->GetName());
 		Result->SetStringField(TEXT("materialPath"), Material->GetPathName());
 		Result->SetNumberField(TEXT("expressionCount"), Expressions.Num());

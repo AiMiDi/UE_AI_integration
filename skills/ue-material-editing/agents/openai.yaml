@@ -1,0 +1,6 @@
+interface:
+  display_name: "UE Material Editing"
+  short_description: "Batch material edits and verify Custom HLSL errors."
+  default_prompt: "Use $ue-material-editing to edit materials with batched updates and verified shader diagnostics."
+policy:
+  allow_implicit_invocation: true

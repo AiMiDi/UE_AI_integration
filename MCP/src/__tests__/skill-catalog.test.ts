@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 
-import { capabilityIsReadOnly, loadCapabilityCatalog } from "../capability-catalog.js";
+import { capabilityIsReadOnly as catalogCapabilityIsReadOnly, loadCapabilityCatalog } from "../capability-catalog.js";
 import { runDomainOperation } from "../domain-router.js";
 import {
   handleContext,
@@ -24,6 +24,25 @@ import {
 } from "../skill-catalog.js";
 import { handleAgentSkills } from "../skill-router.js";
 
+function capabilityIsReadOnlyForContract(
+  capability: ReturnType<ReturnType<typeof loadCapabilityCatalog>["get"]>,
+): boolean {
+  return capability !== undefined
+    && catalogCapabilityIsReadOnly(capability)
+    && capability.effects.editorSession !== "write";
+}
+
+function capabilityHasWriteEffect(
+  capability: ReturnType<ReturnType<typeof loadCapabilityCatalog>["get"]>,
+): boolean {
+  return capability !== undefined && (
+    capability.effects.asset === "write"
+    || capability.effects.world === "write"
+    || capability.effects.editorSession === "write"
+    || capability.effects.external === "write"
+  );
+}
+
 function textPayload(response: ReturnType<typeof handleAgentSkills>) {
   assert.equal(response.content[0]?.type, "text");
   if (response.content[0]?.type !== "text") {
@@ -32,7 +51,7 @@ function textPayload(response: ReturnType<typeof handleAgentSkills>) {
   return JSON.parse(response.content[0].text);
 }
 
-test("loads eleven validated skill packages with complete recipe phases", () => {
+test("loads fourteen validated skill packages with complete recipe phases", () => {
   const capabilities = loadCapabilityCatalog();
   const skills = loadAgentSkillCatalog(capabilities);
 
@@ -40,13 +59,16 @@ test("loads eleven validated skill packages with complete recipe phases", () => 
     skills.skills.map((skill) => skill.id),
     [
       "ue-asset-migration",
+      "ue-blueprint-authoring",
       "ue-blueprint-buildgraph",
       "ue-blueprint-diagnose",
       "ue-blueprint-graph-organize",
       "ue-landscape-authoring",
-    "ue-performance-regression",
-    "ue-recovery-operator",
-    "ue-render-debug-capture",
+      "ue-material-editing",
+      "ue-niagara-authoring",
+      "ue-performance-regression",
+      "ue-recovery-operator",
+      "ue-render-debug-capture",
       "ue-trace-insights",
       "ue-umg-authoring",
       "ue-world-partition-validate",
@@ -74,6 +96,229 @@ test("loads eleven validated skill packages with complete recipe phases", () => 
   }
 });
 
+test("routes Niagara graph and authored-parameter work through the authoring skill", () => {
+  const manifestPath = join(
+    DEFAULT_SKILL_DIR,
+    "ue-niagara-authoring",
+    "skill.json",
+  );
+  const instructionsPath = join(
+    DEFAULT_SKILL_DIR,
+    "ue-niagara-authoring",
+    "SKILL.md",
+  );
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+    id: string;
+    domains: string[];
+    risk: string;
+    requirements: { capabilities: string[] };
+    recipes: Array<{
+      id: string;
+      risk: string;
+      inputs: Array<{ name: string; type: string }>;
+      steps: Array<{
+        phase: string;
+        optional?: boolean;
+        operations: string[];
+      }>;
+    }>;
+  };
+  assert.equal(manifest.id, "ue-niagara-authoring");
+  assert.deepEqual(manifest.domains, ["content"]);
+  assert.equal(manifest.risk, "mixed");
+
+  const requiredOperationGroups = [
+    ["content.niagara.graph.operations.list", "content.niagara.graph.inspect"],
+    [
+      "content.niagara.graph.edit.plan",
+      "content.niagara.graph.edit.apply",
+      "content.niagara.graph.edit.rollback",
+    ],
+    [
+      "content.niagara.graph.module.add.plan",
+      "content.niagara.graph.module.add.apply",
+      "content.niagara.graph.module.add.rollback",
+    ],
+    [
+      "content.niagara.graph.node.set_enabled.plan",
+      "content.niagara.graph.node.set_enabled.apply",
+      "content.niagara.graph.node.set_enabled.rollback",
+    ],
+    [
+      "content.niagara.graph.pin.set_default.plan",
+      "content.niagara.graph.pin.set_default.apply",
+      "content.niagara.graph.pin.set_default.rollback",
+    ],
+    [
+      "content.niagara.renderer.material.plan",
+      "content.niagara.renderer.material.apply",
+      "content.niagara.renderer.material.rollback",
+      "content.niagara.renderer.material.receipt.release",
+    ],
+    [
+      "content.niagara.system.parameter.get",
+      "content.niagara.system.parameter.plan",
+      "content.niagara.system.parameter.apply",
+      "content.niagara.system.parameter.rollback",
+      "content.niagara.system.parameter.receipt.release",
+    ],
+  ];
+  for (const group of requiredOperationGroups) {
+    for (const operation of group) {
+      assert.ok(
+        manifest.requirements.capabilities.includes(operation),
+        `ue-niagara-authoring requirements omit ${operation}`,
+      );
+    }
+    const routedOperations = manifest.recipes.flatMap((recipe) =>
+      recipe.steps.flatMap((step) => step.operations),
+    );
+    for (const operation of group) {
+      assert.ok(
+        routedOperations.includes(operation),
+        `ue-niagara-authoring recipes do not route ${operation}`,
+      );
+    }
+  }
+
+  for (const recipe of manifest.recipes) {
+    assert.deepEqual(
+      [...new Set(recipe.steps.map((step) => step.phase))].sort(),
+      ["discover", "execute", "verify"],
+      `${recipe.id} must close discover/execute/verify`,
+    );
+    for (const step of recipe.steps) {
+      const containsWrite = step.operations.some((operation) =>
+        /\.(?:apply|rollback|release)$/.test(operation),
+      );
+      if (step.phase === "verify" && containsWrite) {
+        assert.equal(
+          step.optional,
+          true,
+          `${recipe.id} write-capable verify step must be optional`,
+        );
+      }
+    }
+  }
+  const parameterRecipe = manifest.recipes.find(
+    (recipe) => recipe.id === "edit-user-parameter",
+  );
+  assert.ok(parameterRecipe);
+  assert.equal(parameterRecipe.risk, "confirmWrite");
+  assert.equal(
+    parameterRecipe.inputs.find((input) => input.name === "value")?.type,
+    "json",
+    "typed Niagara values need a scalar-or-object JSON input contract",
+  );
+
+  const serializedManifest = JSON.stringify(manifest);
+  const instructions = readFileSync(instructionsPath, "utf8");
+  assert.doesNotMatch(serializedManifest, /renderer\.material\.set/);
+  assert.doesNotMatch(instructions, /renderer\.material\.set/);
+  assert.match(instructions, /dirtyOnly/);
+  assert.match(instructions, /does not mean compilation completed/i);
+  assert.match(instructions, /component overrides.*outside/i);
+});
+
+test("validates Niagara authoring operation domains and risk boundaries", () => {
+  const capabilities = loadCapabilityCatalog();
+  const skills = loadAgentSkillCatalog(capabilities);
+  const niagara = skills.skills.find(
+    (skill) => skill.id === "ue-niagara-authoring",
+  );
+  assert.ok(niagara);
+
+  for (const operation of niagara.requirements.capabilities) {
+    const capability = capabilities.get(operation);
+    assert.ok(capability, `missing ${operation}`);
+    assert.equal(capability.domain, "content", operation);
+  }
+  for (const recipe of niagara.recipes) {
+    const operations = recipe.steps.flatMap((step) => step.operations);
+    if (recipe.risk === "readOnly") {
+      for (const operation of operations) {
+        assert.equal(
+          capabilityIsReadOnlyForContract(capabilities.get(operation)),
+          true,
+          `${recipe.id}:${operation}`,
+        );
+      }
+    } else if (recipe.risk === "safeWrite") {
+      // Direct non-destructive writes (save, add) carry no plan/apply chain.
+      const writeOperations = operations.filter(
+        (operation) =>
+          !capabilityIsReadOnlyForContract(capabilities.get(operation)),
+      );
+      for (const operation of writeOperations) {
+        const capability = capabilities.get(operation);
+        assert.ok(capability, operation);
+        assert.equal(capabilityHasWriteEffect(capability), true, `${recipe.id}:${operation}`);
+        assert.notEqual(capability.traits.destructive, true, `${recipe.id}:${operation}`);
+      }
+    } else {
+      assert.equal(recipe.risk, "confirmWrite", recipe.id);
+      const writeOperations = operations.filter(
+        (operation) =>
+          !capabilityIsReadOnlyForContract(capabilities.get(operation)),
+      );
+      assert.ok(
+        writeOperations.length > 0,
+        `${recipe.id} has no write operation`,
+      );
+      const isGuarded = (operation: string) => {
+        const capability = capabilities.get(operation);
+        return (
+          capability?.traits.destructive === true ||
+          capability?.dsl?.risk === "confirmWrite"
+        );
+      };
+      assert.ok(
+        writeOperations.some(isGuarded),
+        `${recipe.id} has no destructive/confirmWrite operation`,
+      );
+      for (const operation of writeOperations) {
+        const capability = capabilities.get(operation);
+        assert.ok(capability, operation);
+        assert.equal(capabilityHasWriteEffect(capability), true, `${recipe.id}:${operation}`);
+      }
+    }
+  }
+});
+
+test("selects Niagara authoring instead of read-only render diagnostics for writes", () => {
+  const capabilities = loadCapabilityCatalog();
+  const skills = loadAgentSkillCatalog(capabilities);
+  for (const operation of [
+    "content.niagara.graph.edit.apply",
+    "content.niagara.graph.module.add.apply",
+    "content.niagara.graph.node.set_enabled.apply",
+    "content.niagara.graph.pin.set_default.apply",
+    "content.niagara.renderer.material.apply",
+    "content.niagara.system.parameter.apply",
+  ]) {
+    const result = textPayload(
+      handleAgentSkills(skills, {
+        action: "list",
+        operation,
+        risk: "confirmWrite",
+      }),
+    );
+    assert.ok(
+      result.skills.some(
+        (skill: { id: string }) => skill.id === "ue-niagara-authoring",
+      ),
+      operation,
+    );
+    assert.equal(
+      result.skills.some(
+        (skill: { id: string }) => skill.id === "ue-render-debug-capture",
+      ),
+      false,
+      operation,
+    );
+  }
+});
+
 test("projects only read-only operations into See Results", () => {
   const capabilities = loadCapabilityCatalog();
   const skills = loadAgentSkillCatalog(capabilities);
@@ -89,7 +334,7 @@ test("projects only read-only operations into See Results", () => {
         for (const operation of step.operations) {
           const capability = capabilities.get(operation.operation);
           assert.equal(
-            capability ? capabilityIsReadOnly(capability) : false,
+            capabilityIsReadOnlyForContract(capability),
             true,
             `${skill.id}:${operation.operation}`,
           );

@@ -224,29 +224,106 @@ stderr，并带第一条 validation error。
 
 ## 构建与分发
 
+源码安装需要单独构建并安装 `ue-cli` 和 `ue-workflow-cli`。UBT 编译 UE 插件
+模块不会生成这两个程序。正常执行 `scripts/build_plugin.bat` / `.sh` 的发布包
+已包含它们；确认宿主平台、版本/revision 和目录验收匹配后可直接复用。
+
+构建需要 CMake 3.24+ 和 C++20 编译器。Windows 可使用 VS 2022 Build Tools，
+或当前 CMake generator 支持的更新工具链；Linux/macOS 使用支持 C++20 的
+GCC/Clang。若使用 Ninja，须先进入已配置编译器环境的终端。
+
+把下列占位符替换为绝对路径；`<BuildDir>` 使用工程规定的构建/临时目录，
+位于插件目录及安装目标之外。各步骤成功后再继续下一步。Windows PowerShell：
+
 ```powershell
-cmake -S . -B build-workflow -DUE_WORKFLOW_BUILD_TESTS=ON
-cmake --build build-workflow --config Release
-cmake --install build-workflow --config Release --prefix C:\Tools\ue-cli
+$uePluginRoot = '<PluginRoot>'
+$ueCliBuild = '<BuildDir>'
+cmake -S $uePluginRoot -B $ueCliBuild -DUE_WORKFLOW_BUILD_CLI=ON -DUE_WORKFLOW_BUILD_TESTS=OFF
+cmake --build $ueCliBuild --config Release --target ue ue-workflow
+cmake --install $ueCliBuild --config Release --prefix "$uePluginRoot/CLI"
 ```
 
-Linux/macOS 使用同一 CMake 工程构建本机程序：
+Linux/macOS 使用同一 CMake 工程构建本机程序，单配置 generator 显式指定 Release：
 
 ```bash
-cmake -S . -B build-workflow -DCMAKE_BUILD_TYPE=Release -DUE_WORKFLOW_BUILD_TESTS=ON
-cmake --build build-workflow
-cmake --install build-workflow --prefix "$HOME/.local"
+ue_plugin_root='<PluginRoot>'
+ue_cli_build='<BuildDir>'
+cmake -S "$ue_plugin_root" -B "$ue_cli_build" -DCMAKE_BUILD_TYPE=Release -DUE_WORKFLOW_BUILD_CLI=ON -DUE_WORKFLOW_BUILD_TESTS=OFF
+cmake --build "$ue_cli_build" --config Release --target ue ue-workflow
+cmake --install "$ue_cli_build" --config Release --prefix "$ue_plugin_root/CLI"
 ```
 
-安装和插件包均包含：
+CMake target 名为 `ue` / `ue-workflow`，输出文件名为 `ue-cli` /
+`ue-workflow-cli`。`cmake --install` 同时安装程序及本地目录，不能只复制 exe：
 
 ```text
 CLI/bin/ue-cli(.exe)
 CLI/bin/ue-workflow-cli(.exe)
-Resources/Capabilities/*.json
-skills/*/SKILL.md
-skills/*/skill.json
+CLI/share/ue-workflow-cli/Capabilities/
+CLI/share/ue-workflow-cli/Contracts/
+CLI/share/ue-workflow-cli/Skills/
+CLI/share/ue-workflow-cli/Recipes/
 ```
+
+完整插件还保留根目录下的 `Resources/`、`skills/`、`Recipes/` 等原始文件。
+CLI 的部分本地 backend 使用 Node 实现，因此仍须保留可运行的 `MCP/dist`
+及生产依赖。源码安装在 `MCP/` 执行 `npm ci`、`npm run build`；已有最新 dist
+的发布包只需在生产依赖缺失时执行 `npm ci --omit=dev`。
+
+### 安装后验收与 CLI 优先路由
+
+无需全局修改 PATH。Windows 可为当前终端设置两个绝对路径：
+
+```powershell
+$env:UE_CLI = "$uePluginRoot/CLI/bin/ue-cli.exe"
+$env:UE_WORKFLOW_CLI = "$uePluginRoot/CLI/bin/ue-workflow-cli.exe"
+& $env:UE_CLI --version --json
+& $env:UE_WORKFLOW_CLI --version --json
+& $env:UE_CLI capabilities --limit 1 --json
+& $env:UE_CLI skills --query blueprint --json
+& $env:UE_CLI skills --name ue-blueprint-diagnose --recipe scan-and-verify --detail full --json
+& $env:UE_CLI help blueprint.scan --json
+& $env:UE_WORKFLOW_CLI doctor --json
+```
+
+Linux/macOS 对应设置：
+
+```bash
+export UE_CLI="$ue_plugin_root/CLI/bin/ue-cli"
+export UE_WORKFLOW_CLI="$ue_plugin_root/CLI/bin/ue-workflow-cli"
+"$UE_CLI" --version --json
+"$UE_WORKFLOW_CLI" --version --json
+"$UE_CLI" capabilities --limit 1 --json
+"$UE_CLI" skills --query blueprint --json
+"$UE_CLI" skills --name ue-blueprint-diagnose --recipe scan-and-verify --detail full --json
+"$UE_CLI" help blueprint.scan --json
+"$UE_WORKFLOW_CLI" doctor --json
+```
+
+以上验收不要求 Editor 运行。检查退出码、JSON envelope、版本及实际使用的
+catalog 路径；仅存在两个可执行文件不代表安装完整。使用返回的能力总数，
+不要把旧版本的固定数量当作成功条件。
+
+Editor 可用时，再检查目标实例和完整安装：
+
+```powershell
+& $env:UE_CLI status --json
+& $env:UE_CLI doctor --full --no-clean-stale-instances --json
+& $env:UE_CLI help blueprint.scan --live-schema --json
+```
+
+按目标实例设置 `UE_PORT` 或 `--endpoint`；Linux/macOS 用 `"$UE_CLI"` 调用
+相同参数。完整 Doctor 会检查 Editor 模块、bundle、Worker 等依赖，应分别报告
+CLI/catalog、Editor、Trace Worker 的就绪状态。Editor 未运行或 Worker 缺失时，
+保留已通过的离线检查，说明尚未完成的在线验收。
+
+安装 [ue-ai 入口 Skill](UE_AGENT_SKILLS.md#客户端入口-skill) 后，默认通过
+`ue-cli skills` 发现配方，读取其 Markdown 和引用，以 `ue-cli help` 发现参数，
+再用短 CLI 或 Workflow CLI 执行和验证。MCP 用于 CLI 缺失、不可用、版本不兼容、
+不支持所需操作或用户明确要求 MCP 的情况。审批失败和写入结果不明须遵守原有
+恢复合同，不能直接换传输重发。
+
+### Trace Worker 与完整插件包
 
 完整插件 staging 还包含与 Engine 次版本匹配的
 `Tools/Trace/<platform>/<engineVersion>/UEAITraceWorker(.exe)`、Trace 协议

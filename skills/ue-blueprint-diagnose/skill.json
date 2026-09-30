@@ -25,10 +25,12 @@
       "blueprint.scan",
       "blueprint.call_graph.get",
       "blueprint.graph.get",
+      "blueprint.graph.describe",
       "blueprint.asset.references",
       "blueprint.asset.validate"
     ],
     "optionalCapabilities": [
+      "blueprint.asset.search_by_type",
       "blueprint.findings.correlate"
     ]
   },
@@ -51,6 +53,18 @@
           "type": "string",
           "required": false,
           "description": "Graph name selected from a finding location."
+        },
+        {
+          "name": "entryPoint",
+          "type": "string",
+          "required": false,
+          "description": "Exact event/custom-event or function entry name used to bound an execution-flow claim."
+        },
+        {
+          "name": "entryNodeId",
+          "type": "string",
+          "required": false,
+          "description": "Stable execution-node GUID used when an entry name is ambiguous."
         },
         {
           "name": "runtimeRunId",
@@ -80,12 +94,22 @@
         {
           "id": "location-evidence",
           "phase": "execute",
-          "purpose": "Inspect the strongest finding at its exact graph location before following cross-asset calls and references.",
+          "purpose": "Inspect the strongest finding at its exact graph location and follow one exact, paged execution subflow before cross-asset calls and references.",
           "operations": [
             "blueprint.graph.get",
+            "blueprint.graph.describe",
             "blueprint.call_graph.get",
             "blueprint.asset.references"
           ]
+        },
+        {
+          "id": "type-impact",
+          "phase": "execute",
+          "purpose": "Search bounded variable, parameter, and connected-pin type usage only when cross-asset type impact is requested.",
+          "operations": [
+            "blueprint.asset.search_by_type"
+          ],
+          "optional": true
         },
         {
           "id": "compile-check",
@@ -117,7 +141,7 @@
         "success": [
           "the scan was explicitly scoped to one asset or /Game prefix",
           "high-value findings were inspected at their exact graph locations",
-          "Tick reachability was claimed only after tracing execution pins from Event Tick to the candidate node or observing matching runtime evidence",
+          "Tick reachability was claimed only after tracing stable execution node/pin/edge identities from the exact Event Tick subflow to the candidate node or observing matching runtime evidence",
           "compile validation completed",
           "unmeasured runtime reachability was not presented as fact"
         ]

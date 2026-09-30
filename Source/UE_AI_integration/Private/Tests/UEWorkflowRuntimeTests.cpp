@@ -10,6 +10,10 @@
 #include "Engine/World.h"
 #include "FileHelpers.h"
 #include "Infrastructure/EngineeringContractUtils.h"
+#include "Infrastructure/DeferredGraphMutation.h"
+#include "Infrastructure/MaterialAssetHelpers.h"
+#include "MaterialGraph/MaterialGraphNode.h"
+#include "K2Node_Knot.h"
 #include "Infrastructure/Sha256.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/AutomationTest.h"
@@ -19,6 +23,19 @@
 #include "Misc/Paths.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialExpression.h"
+#include "Materials/MaterialExpressionAdd.h"
+#include "Materials/MaterialExpressionConstant.h"
+#include "Materials/MaterialExpressionCustom.h"
+#include "Materials/MaterialExpressionScalarParameter.h"
+#include "Materials/MaterialExpressionFunctionInput.h"
+#include "Materials/MaterialExpressionFunctionOutput.h"
+#include "Materials/MaterialFunction.h"
+#include "MaterialEditingLibrary.h"
+#include "Infrastructure/MaterialGraphIdentity.h"
+#include "Infrastructure/MaterialCustomEditing.h"
+#include "Materials/MaterialExpressionMaterialFunctionCall.h"
+#include "Misc/App.h"
+#include "RHI.h"
 #include "ObjectTools.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -27,6 +44,7 @@
 #include "UObject/Package.h"
 #include "UObject/GarbageCollection.h"
 #include "UObject/UObjectGlobals.h"
+#include "UObject/ObjectSaveContext.h"
 #include "Workflow/UEWorkflowExecutionContext.h"
 #include "Workflow/UEWorkflowRuntime.h"
 
@@ -129,13 +147,17 @@ FMCPResult PlanWorkflow(
 FMCPResult ExecuteWorkflow(UEAIIntegration::Workflow::FWorkflowRuntime& Runtime,
                            const TSharedPtr<FJsonObject>& Workflow, const FString& PlanDigest,
                            bool bSaveOnSuccess = false, const FString& DetailLevel = TEXT("full"),
-                           const FString& RequestId = FString())
+                           const FString& RequestId = FString(), bool bConfirmWrite = false)
 {
 	TSharedPtr<FJsonObject> Request = MakeShared<FJsonObject>();
 	Request->SetStringField(TEXT("action"), TEXT("execute"));
 	Request->SetObjectField(TEXT("workflow"), Workflow);
 	Request->SetStringField(TEXT("approvePlanDigest"), PlanDigest);
 	Request->SetStringField(TEXT("detailLevel"), DetailLevel);
+	if (bConfirmWrite)
+	{
+		Request->SetBoolField(TEXT("confirmWrite"), true);
+	}
 	if (!RequestId.IsEmpty())
 	{
 		Request->SetStringField(TEXT("requestId"), RequestId);
@@ -654,6 +676,49 @@ bool HashMapPackage(
 			OutHash);
 }
 
+// Observe engine events, not just the plugin's finalizer entry points. Package
+// saves include recovery checkpoints even when the public result says saved=false.
+class FScopedAssetUpdateCounter
+{
+public:
+	explicit FScopedAssetUpdateCounter(const FString& InAssetPath)
+		: AssetPath(InAssetPath.Contains(TEXT("."))
+			? InAssetPath
+			: InAssetPath + TEXT(".") + FPackageName::GetShortName(InAssetPath))
+		, PackageName(FPackageName::ObjectPathToPackageName(InAssetPath))
+	{
+		PropertyHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddLambda(
+			[this](UObject* Object, FPropertyChangedEvent&)
+			{
+				if (Object && Object->GetPathName() == AssetPath)
+				{
+					++PropertyChanges;
+				}
+			});
+		SaveHandle = UPackage::PackageSavedWithContextEvent.AddLambda(
+			[this](const FString&, UPackage* Package, FObjectPostSaveContext)
+			{
+				if (Package && Package->GetName() == PackageName)
+				{
+					++PackageSaves;
+				}
+			});
+	}
+	~FScopedAssetUpdateCounter()
+	{
+		FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(PropertyHandle);
+		UPackage::PackageSavedWithContextEvent.Remove(SaveHandle);
+	}
+	int32 PropertyChanges = 0;
+	int32 PackageSaves = 0;
+
+private:
+	FString AssetPath;
+	FString PackageName;
+	FDelegateHandle PropertyHandle;
+	FDelegateHandle SaveHandle;
+};
+
 class FScopedBlueprintCompileCounter
 {
 public:
@@ -690,6 +755,65 @@ private:
 	FDelegateHandle Handle;
 	int32 Count = 0;
 };
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUEWorkflowDeferredConnectionTest,
+	"UE_AI_integration.Workflow.DeferredConnectionsPreserveSchemaRules",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FUEWorkflowDeferredConnectionTest::RunTest(const FString& Parameters)
+{
+	UBlueprint* Blueprint = NewObject<UBlueprint>(GetTransientPackage());
+	UEdGraph* Graph = FBlueprintEditorUtils::CreateNewGraph(
+		Blueprint, TEXT("DeferredConnections"), UEdGraph::StaticClass(),
+		UEdGraphSchema_K2::StaticClass());
+	Blueprint->UbergraphPages.Add(Graph);
+	auto AddKnot = [&]()
+	{
+		UK2Node_Knot* Node = NewObject<UK2Node_Knot>(Graph);
+		Graph->AddNode(Node, false, false);
+		Node->CreateNewGuid();
+		Node->AllocateDefaultPins();
+		return Node;
+	};
+	UK2Node_Knot* Source = AddKnot();
+	UK2Node_Knot* Replacement = AddKnot();
+	UK2Node_Knot* Target = AddKnot();
+	const UEdGraphSchema* Schema = Graph->GetSchema();
+	TSharedPtr<FJsonObject> Params = MakeShared<FJsonObject>();
+	TSharedPtr<FJsonObject> Context = MakeShared<FJsonObject>();
+	Context->SetBoolField(TEXT("deferCompile"), true);
+	Params->SetObjectField(TEXT("__ueWorkflow"), Context);
+	FScopedAssetUpdateCounter Counter(Blueprint->GetPathName());
+	TestTrue(TEXT("Deferred schema creates a connection"),
+		UEAIIntegration::Infrastructure::TryCreateConnection(
+			Schema, Source->GetOutputPin(), Target->GetInputPin(), true));
+	UEAIIntegration::Workflow::MarkBlueprintChanged(Blueprint, Params, false);
+	TestTrue(TEXT("Deferred schema replaces the previous input connection"),
+		UEAIIntegration::Infrastructure::TryCreateConnection(
+			Schema, Replacement->GetOutputPin(), Target->GetInputPin(), true));
+	UEAIIntegration::Workflow::MarkBlueprintChanged(Blueprint, Params, false);
+	TestTrue(TEXT("Replacement removes both ends of the old link"),
+		Source->GetOutputPin()->LinkedTo.IsEmpty()
+			&& Target->GetInputPin()->LinkedTo.Num() == 1
+			&& Target->GetInputPin()->LinkedTo[0] == Replacement->GetOutputPin());
+	TestFalse(TEXT("Deferred schema still rejects incompatible directions"),
+		UEAIIntegration::Infrastructure::TryCreateConnection(
+			Schema, Source->GetOutputPin(), Replacement->GetOutputPin(), true));
+	// UK2Node's required pin callback resets input defaults and notifies once
+	// per connection. The schema wrapper and MarkBlueprintChanged must not add
+	// two more asset notifications per operation.
+	TestEqual(TEXT("Deferred connections only send required pin-default notifications"),
+		Counter.PropertyChanges, 2);
+	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+	TestEqual(TEXT("Batch notification is delivered at finalization"),
+		Counter.PropertyChanges, 3);
+	TestTrue(TEXT("Independent connection retains the normal schema notification"),
+		UEAIIntegration::Infrastructure::TryCreateConnection(
+			Schema, Source->GetOutputPin(), Target->GetInputPin(), false));
+	TestEqual(TEXT("Independent connection retains both immediate notifications"), Counter.PropertyChanges, 5);
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -1040,6 +1164,7 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 		*FGuid::NewGuid().ToString(EGuidFormats::Digits));
 	{
 		FScopedBlueprintCompileCounter CompileCounter(BlueprintPath);
+		FScopedAssetUpdateCounter UpdateCounter(BlueprintPath);
 		BlueprintResult =
 			ExecuteWorkflow(
 				Runtime,
@@ -1049,6 +1174,12 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 				TEXT("full"),
 				BlueprintRequestId);
 		BlueprintCompileCount = CompileCounter.GetCount();
+		TestEqual(TEXT("Blueprint batch sends one asset property notification"),
+			UpdateCounter.PropertyChanges, 1);
+		TestTrue(TEXT("Blueprint checkpoints reuse unchanged images"),
+			UpdateCounter.PackageSaves <= 5);
+		AddInfo(FString::Printf(TEXT("Blueprint batch: notifications=%d, package saves including checkpoints=%d"),
+			UpdateCounter.PropertyChanges, UpdateCounter.PackageSaves));
 	}
 	TestTrue(TEXT("Blueprint workflow executes"), BlueprintResult.bOk);
 	TestEqual(
@@ -1451,6 +1582,12 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 		TEXT("/targetNodeId"),
 		TargetNodeBinding);
 	ConnectOperation->SetObjectField(TEXT("bindings"), ConnectBindings);
+	TSharedPtr<FJsonObject> ConnectBParams = MakeShared<FJsonObject>();
+	ConnectBParams->SetStringField(TEXT("sourcePinName"), TEXT("Output"));
+	ConnectBParams->SetStringField(TEXT("targetPinName"), TEXT("B"));
+	TSharedPtr<FJsonObject> ConnectBOperation = MakeOperation(
+		TEXT("connectSecondInput"), TEXT("content.material.pin.connect"), ConnectBParams);
+	ConnectBOperation->SetObjectField(TEXT("bindings"), ConnectBindings);
 	const TSharedPtr<FJsonObject> MaterialWorkflow = MakeWorkflow(
 		TEXT("material-e2e"),
 		MakeScope(TEXT("material"), MaterialPath, false),
@@ -1476,6 +1613,7 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 					TEXT("content.material.expression.add"),
 					AddParams)),
 			MakeShared<FJsonValueObject>(ConnectOperation),
+			MakeShared<FJsonValueObject>(ConnectBOperation),
 		});
 	const FMCPResult MaterialPlan = PlanWorkflow(Runtime, MaterialWorkflow);
 	FString MaterialDigest;
@@ -1487,8 +1625,17 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 		CountFinalizersByKind(MaterialPlan.Data, TEXT("compile")),
 		1);
 	UEAIIntegration::Workflow::ResetMaterialCompileFinalizerCountForTests();
-	const FMCPResult MaterialResult =
-		ExecuteWorkflow(Runtime, MaterialWorkflow, MaterialDigest);
+	FMCPResult MaterialResult;
+	{
+		FScopedAssetUpdateCounter UpdateCounter(MaterialPath);
+		MaterialResult = ExecuteWorkflow(Runtime, MaterialWorkflow, MaterialDigest);
+		TestEqual(TEXT("Material batch sends one asset property notification"),
+			UpdateCounter.PropertyChanges, 1);
+		TestTrue(TEXT("Material checkpoints reuse unchanged images"),
+			UpdateCounter.PackageSaves <= 8);
+		AddInfo(FString::Printf(TEXT("Material batch: notifications=%d, package saves including checkpoints=%d"),
+			UpdateCounter.PropertyChanges, UpdateCounter.PackageSaves));
+	}
 	TestTrue(TEXT("Material workflow executes"), MaterialResult.bOk);
 	TestEqual(
 		TEXT("Material workflow compiles exactly once"),
@@ -1496,6 +1643,27 @@ bool FUEWorkflowAssetEditE2ETest::RunTest(const FString& Parameters)
 		1);
 	if (MaterialResult.bOk)
 	{
+		UMaterial* EditedMaterial = Cast<UMaterial>(UEditorAssetLibrary::LoadAsset(MaterialPath));
+		UMaterialExpressionAdd* AddExpression = nullptr;
+		UMaterialExpressionConstant* ConstantExpression = nullptr;
+		if (EditedMaterial)
+		{
+			for (UMaterialExpression* Expression : EditedMaterial->GetExpressions())
+			{
+				if (UMaterialExpressionAdd* Add = Cast<UMaterialExpressionAdd>(Expression))
+				{
+					AddExpression = Add;
+				}
+				if (UMaterialExpressionConstant* Constant = Cast<UMaterialExpressionConstant>(Expression))
+				{
+					ConstantExpression = Constant;
+				}
+			}
+		}
+		TestTrue(TEXT("Finalization persists both graph links into material expression inputs"),
+			AddExpression && ConstantExpression
+				&& AddExpression->A.Expression == ConstantExpression
+				&& AddExpression->B.Expression == ConstantExpression);
 		TestEqual(
 			TEXT("Receipt schema"),
 			MaterialResult.Data->GetStringField(TEXT("schema")),
@@ -1739,6 +1907,459 @@ bool FUEWorkflowFailureRollbackTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("Successful createIfMissing fixture is removed"),
 		CleanupAsset(SuccessfulAssetPath));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUEWorkflowMaterialDestructiveBatchTest,
+	"UE_AI_integration.Workflow.MaterialDestructiveBatch",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FUEWorkflowMaterialDestructiveBatchTest::RunTest(const FString& Parameters)
+{
+	UUEAIIntegrationSubsystem* Subsystem = GEditor
+		? GEditor->GetEditorSubsystem<UUEAIIntegrationSubsystem>() : nullptr;
+	if (!Subsystem || !Subsystem->GetRegistry()) return false;
+	FMCPToolRegistry& Registry = *Subsystem->GetRegistry();
+
+	for (const bool bV2 : {false, true})
+	{
+		const FString MaterialPath = UniqueAssetPath(TEXT("M_DestructiveBatch"));
+		if (!CreateFixtureAsset(Registry, TEXT("content.material.create"), MaterialPath))
+		{
+			AddError(TEXT("Could not create material fixture."));
+			return false;
+		}
+		UMaterial* Material = CastChecked<UMaterial>(UEditorAssetLibrary::LoadAsset(MaterialPath));
+		UMaterialExpressionConstant* Old = NewObject<UMaterialExpressionConstant>(Material, NAME_None, RF_Transactional);
+		UMaterialExpressionAdd* Sum = NewObject<UMaterialExpressionAdd>(Material, NAME_None, RF_Transactional);
+		Old->R = 0.25f;
+		Old->MaterialExpressionEditorX = -400;
+		Material->GetExpressionCollection().AddExpression(Old);
+		Material->GetExpressionCollection().AddExpression(Sum);
+		Sum->A.Connect(0, Old);
+		Sum->B.Connect(0, Old);
+		Material->GetExpressionInputForProperty(MP_EmissiveColor)->Connect(0, Old);
+		MCPMaterialInfrastructure::EnsureMaterialGraph(Material);
+		Material->MaterialGraph->RebuildGraph();
+		Material->PostEditChange();
+		TestTrue(TEXT("Baseline material saves"), UEditorAssetLibrary::SaveLoadedAsset(Material, false));
+		FString OldId = Old->GraphNode->NodeGuid.ToString();
+		FString SumId = Sum->GraphNode->NodeGuid.ToString();
+		const FString BaselineHash = UEAIIntegration::Workflow::FWorkflowRuntime::ComputeAssetStructureHash(Material);
+		FString BaselineFileHash;
+		TestTrue(TEXT("Baseline package hash available"), HashAssetPackage(MaterialPath, BaselineFileHash));
+		UEAIIntegration::Workflow::FWorkflowRuntime Runtime(Registry);
+
+		auto MakeBatch = [&](bool bFail)
+		{
+			TArray<TSharedPtr<FJsonValue>> Operations;
+			auto AddOperation = [&](const FString& Id, const FString& Type, const TSharedPtr<FJsonObject>& Params)
+			{
+				TSharedPtr<FJsonObject> Operation = MakeOperation(Id, Type, Params);
+				if (bV2) Operation->SetStringField(TEXT("scope"), TEXT("material"));
+				Operations.Add(MakeShared<FJsonValueObject>(Operation));
+				return Operation;
+			};
+			TSharedPtr<FJsonObject> Disconnect = MakeShared<FJsonObject>();
+			Disconnect->SetStringField(TEXT("nodeId"), SumId);
+			Disconnect->SetStringField(TEXT("pinName"), TEXT("A"));
+			AddOperation(TEXT("disconnect"), TEXT("content.material.pin.disconnect"), Disconnect);
+			TSharedPtr<FJsonObject> Delete = MakeShared<FJsonObject>();
+			Delete->SetStringField(TEXT("nodeId"), OldId);
+			AddOperation(TEXT("delete"), TEXT("content.material.expression.delete"), Delete);
+			if (bFail)
+			{
+				TSharedPtr<FJsonObject> Missing = MakeShared<FJsonObject>();
+				Missing->SetStringField(TEXT("nodeId"), FGuid::NewGuid().ToString());
+				Missing->SetStringField(TEXT("pinName"), TEXT("A"));
+				AddOperation(TEXT("fail"), TEXT("content.material.pin.disconnect"), Missing);
+			}
+			else
+			{
+				TSharedPtr<FJsonObject> Add = MakeShared<FJsonObject>();
+				Add->SetStringField(TEXT("expressionClass"), TEXT("Constant"));
+				AddOperation(TEXT("replacement"), TEXT("content.material.expression.add"), Add);
+				TSharedPtr<FJsonObject> Connect = MakeShared<FJsonObject>();
+				Connect->SetStringField(TEXT("sourcePinName"), TEXT("Output"));
+				Connect->SetStringField(TEXT("targetNodeId"), SumId);
+				Connect->SetStringField(TEXT("targetPinName"), TEXT("A"));
+				TSharedPtr<FJsonObject> Operation = AddOperation(TEXT("reconnect"), TEXT("content.material.pin.connect"), Connect);
+				TSharedPtr<FJsonObject> Binding = MakeShared<FJsonObject>();
+				Binding->SetStringField(TEXT("from"), TEXT("replacement"));
+				Binding->SetStringField(TEXT("path"), TEXT("/nodeId"));
+				TSharedPtr<FJsonObject> Bindings = MakeShared<FJsonObject>();
+				Bindings->SetObjectField(TEXT("/sourceNodeId"), Binding);
+				Operation->SetObjectField(TEXT("bindings"), Bindings);
+			}
+			return bV2
+				? MakeWorkflowV2(TEXT("material-destructive-v2"), {{TEXT("material"), MakeScope(TEXT("material"), MaterialPath, false)}}, Operations)
+				: MakeWorkflow(TEXT("material-destructive-v1"), MakeScope(TEXT("material"), MaterialPath, false), Operations);
+		};
+
+		auto CheckBaseline = [&]()
+		{
+			Material = CastChecked<UMaterial>(UEditorAssetLibrary::LoadAsset(MaterialPath));
+			TestEqual(TEXT("Rollback restores material structure"),
+				UEAIIntegration::Workflow::FWorkflowRuntime::ComputeAssetStructureHash(Material), BaselineHash);
+			TestEqual(TEXT("Rollback restores both expressions"), Material->GetExpressions().Num(), 2);
+			UMaterialExpressionAdd* RestoredSum = nullptr;
+			for (UMaterialExpression* Expression : Material->GetExpressions())
+				if (UMaterialExpressionAdd* Add = Cast<UMaterialExpressionAdd>(Expression)) RestoredSum = Add;
+			FExpressionInput* Root = Material->GetExpressionInputForProperty(MP_EmissiveColor);
+			TestTrue(TEXT("Rollback restores both consumers and root output"),
+				RestoredSum && Root->Expression && IsValid(Root->Expression)
+				&& RestoredSum->A.Expression == Root->Expression
+				&& RestoredSum->B.Expression == Root->Expression);
+			FString FileHash;
+			TestTrue(TEXT("Rollback preserves the original disk package"),
+				HashAssetPackage(MaterialPath, FileHash) && FileHash == BaselineFileHash);
+			// Package rollback can recreate the transient graph. Re-read its
+			// handles before planning the next independent edit.
+			MCPMaterialInfrastructure::EnsureMaterialGraph(Material);
+			TestFalse(TEXT("Reading the restored graph preserves the clean package"), Material->GetOutermost()->IsDirty());
+			if (RestoredSum && Root->Expression)
+			{
+				SumId = RestoredSum->GraphNode->NodeGuid.ToString();
+				OldId = Root->Expression->GraphNode->NodeGuid.ToString();
+			}
+		};
+
+		const TSharedPtr<FJsonObject> FailureWorkflow = MakeBatch(true);
+		FString FailureDigest;
+		if (!GetPlanDigest(PlanWorkflow(Runtime, FailureWorkflow), FailureDigest))
+		{
+			AddError(TEXT("Destructive material workflow did not plan."));
+			CleanupAsset(MaterialPath);
+			return false;
+		}
+		const FMCPResult Unconfirmed = ExecuteWorkflow(Runtime, FailureWorkflow, FailureDigest);
+		TestFalse(TEXT("Plan digest alone cannot authorize destructive steps"), Unconfirmed.bOk);
+		CheckBaseline();
+		const FMCPResult Failure = ExecuteWorkflow(Runtime, FailureWorkflow, FailureDigest, false, TEXT("full"), FString(), true);
+		TestFalse(TEXT("Injected missing node fails after deletion"), Failure.bOk);
+		TestTrue(TEXT("Failed destructive batch reports verified rollback"),
+			Failure.Error.Details.IsValid() && Failure.Error.Details->GetBoolField(TEXT("rollbackVerified")));
+		CheckBaseline();
+
+		const TSharedPtr<FJsonObject> Workflow = MakeBatch(false);
+		FString Digest;
+		const FMCPResult RewirePlan = PlanWorkflow(Runtime, Workflow);
+		if (!GetPlanDigest(RewirePlan, Digest))
+		{
+			AddError(TEXT("Material rewire did not plan after rollback: ") + RewirePlan.Error.Code + TEXT(": ") + RewirePlan.Error.Message);
+			if (RewirePlan.Error.Details.IsValid()) AddError(SerializeJsonObject(RewirePlan.Error.Details));
+			CleanupAsset(MaterialPath);
+			return false;
+		}
+		UEAIIntegration::Workflow::ResetMaterialCompileFinalizerCountForTests();
+		FMCPResult Result;
+		{
+			FScopedAssetUpdateCounter Counter(MaterialPath);
+			Result = ExecuteWorkflow(Runtime, Workflow, Digest, bV2, TEXT("full"), FString(), true);
+			TestEqual(TEXT("Destructive material batch emits one asset notification"), Counter.PropertyChanges, 1);
+			AddInfo(FString::Printf(TEXT("Material rewire v%d: notifications=%d, saves including checkpoints=%d"), bV2 ? 2 : 1, Counter.PropertyChanges, Counter.PackageSaves));
+		}
+		TestTrue(TEXT("Disconnect-delete-add-connect batch succeeds"), Result.bOk);
+		if (!Result.bOk) AddError(Result.Error.Code + TEXT(": ") + Result.Error.Message);
+		TestEqual(TEXT("Material rewire compiles once"), UEAIIntegration::Workflow::GetMaterialCompileFinalizerCountForTests(), 1);
+		if (Result.bOk)
+		{
+			TestTrue(TEXT("Every material edit is deferred and unsaved"), AllSucceededStepsReportDeferredAndUnsaved(Result.Data));
+			Material = CastChecked<UMaterial>(UEditorAssetLibrary::LoadAsset(MaterialPath));
+			TestEqual(TEXT("Exactly the replacement and consumer remain"), Material->GetExpressions().Num(), 2);
+			UMaterialExpressionAdd* EditedSum = nullptr;
+			for (UMaterialExpression* Expression : Material->GetExpressions())
+				if (UMaterialExpressionAdd* Add = Cast<UMaterialExpressionAdd>(Expression)) EditedSum = Add;
+			TestTrue(TEXT("A is reconnected while B stays disconnected"), EditedSum && EditedSum->A.Expression && !EditedSum->B.Expression);
+			TestNull(TEXT("Deleted expression is cleared from root output"), Material->GetExpressionInputForProperty(MP_EmissiveColor)->Expression);
+			bool bOldNodeRemains = false;
+			for (UEdGraphNode* Node : Material->MaterialGraph->Nodes)
+				bOldNodeRemains |= Node && Node->NodeGuid.ToString() == OldId;
+			TestFalse(TEXT("Deleted graph node is removed"), bOldNodeRemains);
+			TestEqual(TEXT("Final persistence policy is respected"), Material->GetOutermost()->IsDirty(), !bV2);
+			FString AfterFileHash;
+			TestTrue(TEXT("Package hash after batch available"), HashAssetPackage(MaterialPath, AfterFileHash));
+			TestEqual(TEXT("Only saveOnSuccess updates final disk package"), AfterFileHash == BaselineFileHash, !bV2);
+			TSharedPtr<FJsonObject> Rollback = MakeShared<FJsonObject>();
+			Rollback->SetStringField(TEXT("action"), TEXT("rollback"));
+			Rollback->SetStringField(TEXT("runId"), Result.Data->GetStringField(TEXT("runId")));
+			Rollback->SetStringField(TEXT("approvePlanDigest"), Digest);
+			TestTrue(TEXT("Successful destructive batch can roll back"), Runtime.HandleRequest(Rollback).bOk);
+			CheckBaseline();
+
+			// Standalone edits must persist graph changes without requiring an
+			// open material editor to synchronize expression inputs for them.
+			TSharedPtr<FJsonObject> DirectDisconnect = MakeShared<FJsonObject>();
+			DirectDisconnect->SetStringField(TEXT("material"), MaterialPath);
+			DirectDisconnect->SetStringField(TEXT("nodeId"), SumId);
+			DirectDisconnect->SetStringField(TEXT("pinName"), TEXT("A"));
+			const FMCPToolResult Disconnected = Registry.ExecuteTool(TEXT("content.material.pin.disconnect"), DirectDisconnect);
+			TestTrue(TEXT("Standalone disconnect succeeds"), Disconnected.bSuccess);
+			UMaterialExpressionAdd* DirectSum = nullptr;
+			for (UMaterialExpression* Expression : Material->GetExpressions())
+				if (UMaterialExpressionAdd* Add = Cast<UMaterialExpressionAdd>(Expression)) DirectSum = Add;
+			TestTrue(TEXT("Standalone disconnect clears the durable input only"), DirectSum && !DirectSum->A.Expression && DirectSum->B.Expression);
+			TSharedPtr<FJsonObject> DirectDelete = MakeShared<FJsonObject>();
+			DirectDelete->SetStringField(TEXT("material"), MaterialPath);
+			DirectDelete->SetStringField(TEXT("nodeId"), OldId);
+			const FMCPToolResult Deleted = Registry.ExecuteTool(TEXT("content.material.expression.delete"), DirectDelete);
+			TestTrue(TEXT("Standalone delete succeeds"), Deleted.bSuccess);
+			TestEqual(TEXT("Standalone delete removes the expression"), Material->GetExpressions().Num(), 1);
+			TestTrue(TEXT("Standalone delete clears consumer and root inputs"), DirectSum && !DirectSum->B.Expression && !Material->GetExpressionInputForProperty(MP_EmissiveColor)->Expression);
+			TestFalse(TEXT("Standalone delete saves the asset"), Material->GetOutermost()->IsDirty());
+		}
+		CleanupAsset(MaterialPath);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUEWorkflowMaterialFunctionBatchTest,
+	"UE_AI_integration.Workflow.MaterialFunctionBatch",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FUEWorkflowMaterialFunctionBatchTest::RunTest(const FString& Parameters)
+{
+	using namespace UEAIIntegration::Workflow;
+	using namespace MCPMaterialInfrastructure;
+	auto* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UUEAIIntegrationSubsystem>() : nullptr;
+	if (!Subsystem || !Subsystem->GetRegistry()) return false;
+	auto& Registry = *Subsystem->GetRegistry();
+	for (bool bV2 : {false, true})
+	{
+		const FString Path = UniqueAssetPath(TEXT("MF_Batch"));
+		if (!CreateFixtureAsset(Registry, TEXT("content.material.function.create"), Path)) return false;
+		auto* Function = CastChecked<UMaterialFunction>(UEditorAssetLibrary::LoadAsset(Path));
+		UMaterialEditingLibrary::DeleteAllMaterialExpressionsInFunction(Function);
+		auto* Constant = CastChecked<UMaterialExpressionConstant>(UMaterialEditingLibrary::CreateMaterialExpressionInFunction(Function, UMaterialExpressionConstant::StaticClass()));
+		auto* Output = CastChecked<UMaterialExpressionFunctionOutput>(UMaterialEditingLibrary::CreateMaterialExpressionInFunction(Function, UMaterialExpressionFunctionOutput::StaticClass()));
+		Constant->R = 0.25f; Output->A.Connect(0, Constant);
+		Function->PostEditChange();
+		TestTrue(TEXT("Function fixture saved"), UEditorAssetLibrary::SaveLoadedAsset(Function, false));
+		const FString ConstantId = ExpressionNodeId(Constant), OutputId = ExpressionNodeId(Output);
+		const FString Baseline = FWorkflowRuntime::ComputeAssetStructureHash(Function);
+		Constant->R = 1;
+		TestNotEqual(TEXT("Value-only edit changes structural hash"), FWorkflowRuntime::ComputeAssetStructureHash(Function), Baseline);
+		Constant->R = 0.25f;
+		FString BaselineFileHash;
+		HashAssetPackage(Path, BaselineFileHash);
+		FWorkflowRuntime Runtime(Registry);
+		auto MakeBatch = [&](bool bFail)
+		{
+			TArray<TSharedPtr<FJsonValue>> Ops;
+			auto Add = [&](const FString& Id, const FString& Type, TSharedPtr<FJsonObject> Params)
+			{
+				auto Op = MakeOperation(Id, Type, Params);
+				if (bV2) Op->SetStringField(TEXT("scope"), TEXT("function"));
+				Ops.Add(MakeShared<FJsonValueObject>(Op)); return Op;
+			};
+			auto Bind = [](const TSharedPtr<FJsonObject>& Op, const FString& Destination)
+			{
+				auto Binding = MakeShared<FJsonObject>(); Binding->SetStringField(TEXT("from"), TEXT("replacement")); Binding->SetStringField(TEXT("path"), TEXT("/nodeId"));
+				auto Bindings = MakeShared<FJsonObject>(); Bindings->SetObjectField(Destination, Binding); Op->SetObjectField(TEXT("bindings"), Bindings);
+			};
+			auto Rename = MakeShared<FJsonObject>(); Rename->SetStringField(TEXT("nodeId"), OutputId); Rename->SetStringField(TEXT("name"), TEXT("Result"));
+			Add(TEXT("rename"), TEXT("content.material.function.interface.set"), Rename);
+			auto Value = MakeShared<FJsonObject>(); Value->SetStringField(TEXT("nodeId"), ConstantId); Value->SetNumberField(TEXT("value"), 0.5);
+			Add(TEXT("value"), TEXT("content.material.expression.value.set"), Value);
+			auto Disconnect = MakeShared<FJsonObject>(); Disconnect->SetStringField(TEXT("nodeId"), OutputId); Disconnect->SetStringField(TEXT("pinName"), TEXT("Input"));
+			Add(TEXT("disconnect"), TEXT("content.material.pin.disconnect"), Disconnect);
+			auto Delete = MakeShared<FJsonObject>(); Delete->SetStringField(TEXT("nodeId"), ConstantId);
+			Add(TEXT("delete"), TEXT("content.material.expression.delete"), Delete);
+			auto New = MakeShared<FJsonObject>(); New->SetStringField(TEXT("expressionClass"), TEXT("Constant"));
+			Add(TEXT("replacement"), TEXT("content.material.expression.add"), New);
+			auto NewValue = MakeShared<FJsonObject>(); NewValue->SetNumberField(TEXT("value"), 0.75);
+			Bind(Add(TEXT("newValue"), TEXT("content.material.expression.value.set"), NewValue), TEXT("/nodeId"));
+			auto Connect = MakeShared<FJsonObject>(); Connect->SetStringField(TEXT("sourcePinName"), TEXT("Output")); Connect->SetStringField(TEXT("targetNodeId"), bFail ? TEXT("expr:missing") : OutputId); Connect->SetStringField(TEXT("targetPinName"), TEXT("Input"));
+			Bind(Add(TEXT("connect"), TEXT("content.material.pin.connect"), Connect), TEXT("/sourceNodeId"));
+			auto Move = MakeShared<FJsonObject>(); Move->SetNumberField(TEXT("posX"), -320); Move->SetNumberField(TEXT("posY"), 80);
+			Bind(Add(TEXT("move"), TEXT("content.material.expression.move"), Move), TEXT("/nodeId"));
+			return bV2 ? MakeWorkflowV2(TEXT("function-batch-v2"), {{TEXT("function"), MakeScope(TEXT("materialFunction"), Path, false)}}, Ops)
+				: MakeWorkflow(TEXT("function-batch-v1"), MakeScope(TEXT("materialFunction"), Path, false), Ops);
+		};
+		auto CheckBaseline = [&]()
+		{
+			Function = CastChecked<UMaterialFunction>(UEditorAssetLibrary::LoadAsset(Path));
+			TestEqual(TEXT("Function rollback restores values and topology"), FWorkflowRuntime::ComputeAssetStructureHash(Function), Baseline);
+			FString CurrentHash; TestTrue(TEXT("Function rollback restores exact disk package"), HashAssetPackage(Path, CurrentHash) && CurrentHash == BaselineFileHash);
+			TestFalse(TEXT("Function rollback is clean"), Function->GetOutermost()->IsDirty());
+		};
+		for (bool bFail : {true, false})
+		{
+			const auto Workflow = MakeBatch(bFail);
+			const auto Plan = PlanWorkflow(Runtime, Workflow);
+			FString Digest;
+			if (!GetPlanDigest(Plan, Digest)) { AddError(Plan.Error.Code + TEXT(": ") + Plan.Error.Message); if (Plan.Error.Details) AddError(SerializeJsonObject(Plan.Error.Details)); CleanupAsset(Path); return false; }
+			ResetMaterialCompileFinalizerCountForTests();
+			const auto Result = ExecuteWorkflow(Runtime, Workflow, Digest, bV2, TEXT("full"), FString(), true);
+			if (bFail)
+			{
+				TestFalse(TEXT("Function missing-node edit fails"), Result.bOk);
+				TestTrue(TEXT("Function failure rollback verified"), Result.Error.Details && Result.Error.Details->GetBoolField(TEXT("rollbackVerified")));
+			}
+			else
+			{
+				TestTrue(TEXT("Function batch succeeds"), Result.bOk);
+				if (!Result.bOk) { AddError(Result.Error.Code + TEXT(": ") + Result.Error.Message); if (Result.Error.Details) AddError(SerializeJsonObject(Result.Error.Details)); }
+				TestEqual(TEXT("Function batch updates once"), GetMaterialCompileFinalizerCountForTests(), 1);
+				if (Result.bOk)
+				{
+					TestTrue(TEXT("Function steps defer compile and save"), AllSucceededStepsReportDeferredAndUnsaved(Result.Data));
+					Function = CastChecked<UMaterialFunction>(UEditorAssetLibrary::LoadAsset(Path));
+					TestNull(TEXT("Function batch does not need editor graph"), Function->MaterialGraph);
+					TestEqual(TEXT("Function final persistence policy"), Function->GetOutermost()->IsDirty(), !bV2);
+					TestEqual(TEXT("Function has output and replacement only"), Function->GetExpressions().Num(), 2);
+					for (UMaterialExpression* Expr : Function->GetExpressions()) if (auto* Out = Cast<UMaterialExpressionFunctionOutput>(Expr))
+					{
+						auto* Source = Cast<UMaterialExpressionConstant>(Out->A.Expression);
+						TestTrue(TEXT("Function output uses new scalar and interface"), Source && Source->R == 0.75f && Out->OutputName == TEXT("Result") && Source->MaterialExpressionEditorX == -320);
+					}
+					auto Rollback = MakeShared<FJsonObject>(); Rollback->SetStringField(TEXT("action"), TEXT("rollback")); Rollback->SetStringField(TEXT("runId"), Result.Data->GetStringField(TEXT("runId"))); Rollback->SetStringField(TEXT("approvePlanDigest"), Digest);
+					TestTrue(TEXT("Successful function batch rollback"), Runtime.HandleRequest(Rollback).bOk);
+				}
+			}
+			CheckBaseline();
+		}
+		CleanupAsset(Path);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUEWorkflowCustomBatchTest,
+	"UE_AI_integration.Workflow.CustomConfigurationRollback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FUEWorkflowCustomBatchTest::RunTest(const FString& Parameters)
+{
+	using namespace UEAIIntegration::Workflow;
+	using namespace MCPMaterialInfrastructure;
+	auto* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UUEAIIntegrationSubsystem>() : nullptr;
+	if (!Subsystem || !Subsystem->GetRegistry()) return false;
+	auto& Registry = *Subsystem->GetRegistry();
+	for (bool bV2 : {false, true})
+	{
+		const FString Path = UniqueAssetPath(TEXT("MF_Custom"));
+		if (!CreateFixtureAsset(Registry, TEXT("content.material.function.create"), Path)) return false;
+		auto* Function = CastChecked<UMaterialFunction>(UEditorAssetLibrary::LoadAsset(Path));
+		UMaterialEditingLibrary::DeleteAllMaterialExpressionsInFunction(Function);
+		auto* Custom = CastChecked<UMaterialExpressionCustom>(UMaterialEditingLibrary::CreateMaterialExpressionInFunction(Function, UMaterialExpressionCustom::StaticClass()));
+		auto* Scalar = CastChecked<UMaterialExpressionScalarParameter>(UMaterialEditingLibrary::CreateMaterialExpressionInFunction(Function, UMaterialExpressionScalarParameter::StaticClass()));
+		auto* Output = CastChecked<UMaterialExpressionFunctionOutput>(UMaterialEditingLibrary::CreateMaterialExpressionInFunction(Function, UMaterialExpressionFunctionOutput::StaticClass()));
+		Custom->Inputs.Reset(); FCustomInput Input; Input.InputName = TEXT("Gain"); Input.Input.Connect(0, Scalar); Custom->Inputs.Add(Input);
+		Custom->Code = TEXT("return Gain;"); Scalar->ParameterName = TEXT("Gain"); Scalar->DefaultValue = 0.25f; Output->A.Connect(0, Custom);
+		Function->PostEditChange(); TestTrue(TEXT("Save Custom fixture baseline"), UEditorAssetLibrary::SaveLoadedAsset(Function, false));
+		const FString CustomId = ExpressionNodeId(Custom), ScalarId = ExpressionNodeId(Scalar);
+		const FString Baseline = FWorkflowRuntime::ComputeAssetStructureHash(Function);
+		Custom->Code = TEXT("return Gain * 2;");
+		TestNotEqual(TEXT("Custom code participates in precondition hash"), FWorkflowRuntime::ComputeAssetStructureHash(Function), Baseline);
+		Custom->Code = TEXT("return Gain;");
+		FString BaselineFileHash; HashAssetPackage(Path, BaselineFileHash);
+		FWorkflowRuntime Runtime(Registry);
+		for (bool bFail : {true, false})
+		{
+			auto Config = MakeShared<FJsonObject>(); Config->SetStringField(TEXT("nodeId"), CustomId); Config->SetStringField(TEXT("code"), TEXT("Mask = Strength; return Strength * FACTOR;"));
+			auto Pin = MakeShared<FJsonObject>(); Pin->SetStringField(TEXT("name"), TEXT("Strength")); Pin->SetStringField(TEXT("previousName"), TEXT("Gain"));
+			Config->SetArrayField(TEXT("inputs"), {MakeShared<FJsonValueObject>(Pin)});
+			auto Extra = MakeShared<FJsonObject>(); Extra->SetStringField(TEXT("name"), TEXT("Mask")); Extra->SetStringField(TEXT("type"), TEXT("Float1"));
+			Config->SetArrayField(TEXT("additionalOutputs"), {MakeShared<FJsonValueObject>(Extra)});
+			auto Define = MakeShared<FJsonObject>(); Define->SetStringField(TEXT("name"), TEXT("FACTOR")); Define->SetStringField(TEXT("value"), TEXT("2"));
+			Config->SetArrayField(TEXT("defines"), {MakeShared<FJsonValueObject>(Define)});
+			auto Value = MakeShared<FJsonObject>(); Value->SetStringField(TEXT("nodeId"), ScalarId); Value->SetNumberField(TEXT("defaultValue"), 0.75); Value->SetStringField(TEXT("group"), TEXT("Custom"));
+			auto Last = MakeShared<FJsonObject>(); Last->SetStringField(TEXT("nodeId"), bFail ? TEXT("expr:missing") : CustomId); Last->SetNumberField(TEXT("posX"), 10); Last->SetNumberField(TEXT("posY"), 20);
+			TArray<TSharedPtr<FJsonValue>> Ops;
+			for (auto Op : {MakeOperation(TEXT("custom"), TEXT("content.material.custom.set"), Config), MakeOperation(TEXT("parameter"), TEXT("content.material.parameter.set"), Value), MakeOperation(TEXT("move"), TEXT("content.material.expression.move"), Last)})
+			{
+				if (bV2) Op->SetStringField(TEXT("scope"), TEXT("function")); Ops.Add(MakeShared<FJsonValueObject>(Op));
+			}
+			auto Workflow = bV2 ? MakeWorkflowV2(TEXT("custom-batch-v2"), {{TEXT("function"), MakeScope(TEXT("materialFunction"), Path, false)}}, Ops)
+				: MakeWorkflow(TEXT("custom-batch-v1"), MakeScope(TEXT("materialFunction"), Path, false), Ops);
+			const auto Plan = PlanWorkflow(Runtime, Workflow); FString Digest;
+			if (!GetPlanDigest(Plan, Digest)) { AddError(Plan.Error.Code + TEXT(": ") + Plan.Error.Message); CleanupAsset(Path); return false; }
+			ResetMaterialCompileFinalizerCountForTests();
+			const auto Result = ExecuteWorkflow(Runtime, Workflow, Digest, bV2, TEXT("full"), FString(), true);
+			if (bFail)
+			{
+				TestFalse(TEXT("Custom batch failure reported"), Result.bOk);
+				TestTrue(TEXT("Custom batch failure rollback verified"), Result.Error.Details && Result.Error.Details->GetBoolField(TEXT("rollbackVerified")));
+			}
+			else
+			{
+				TestTrue(TEXT("Custom batch succeeds"), Result.bOk);
+				if (!Result.bOk) { AddError(Result.Error.Code + TEXT(": ") + Result.Error.Message); if (Result.Error.Details) AddError(SerializeJsonObject(Result.Error.Details)); }
+				TestEqual(TEXT("One function final update for Custom batch"), GetMaterialCompileFinalizerCountForTests(), 1);
+				if (Result.bOk)
+				{
+					auto Rollback = MakeShared<FJsonObject>(); Rollback->SetStringField(TEXT("action"), TEXT("rollback")); Rollback->SetStringField(TEXT("runId"), Result.Data->GetStringField(TEXT("runId"))); Rollback->SetStringField(TEXT("approvePlanDigest"), Digest);
+					TestTrue(TEXT("Explicit Custom rollback succeeds"), Runtime.HandleRequest(Rollback).bOk);
+				}
+			}
+			Function = CastChecked<UMaterialFunction>(UEditorAssetLibrary::LoadAsset(Path));
+			TestEqual(TEXT("Custom code/interface/default rollback exact"), FWorkflowRuntime::ComputeAssetStructureHash(Function), Baseline);
+			FString Hash; TestTrue(TEXT("Custom package rollback exact"), HashAssetPackage(Path, Hash) && Hash == BaselineFileHash);
+		}
+		CleanupAsset(Path);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUEWorkflowFunctionHostTest,
+	"UE_AI_integration.Workflow.FunctionHostShaderRollback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FUEWorkflowFunctionHostTest::RunTest(const FString&)
+{
+	using namespace UEAIIntegration::Workflow;
+	using namespace MCPMaterialInfrastructure;
+	auto* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UUEAIIntegrationSubsystem>() : nullptr;
+	if (!Subsystem || !Subsystem->GetRegistry()) return false;
+	auto& Registry = *Subsystem->GetRegistry();
+	const FString HostPath = UniqueAssetPath(TEXT("A_FunctionHost")), FunctionPath = UniqueAssetPath(TEXT("Z_HostFunction"));
+	if (!CreateFixtureAsset(Registry, TEXT("content.material.function.create"), FunctionPath) || !CreateFixtureAsset(Registry, TEXT("content.material.create"), HostPath)) return false;
+	auto* Function = CastChecked<UMaterialFunction>(UEditorAssetLibrary::LoadAsset(FunctionPath));
+	auto* Material = CastChecked<UMaterial>(UEditorAssetLibrary::LoadAsset(HostPath));
+	UMaterialEditingLibrary::DeleteAllMaterialExpressionsInFunction(Function);
+	auto* Custom = CastChecked<UMaterialExpressionCustom>(UMaterialEditingLibrary::CreateMaterialExpressionInFunction(Function, UMaterialExpressionCustom::StaticClass()));
+	auto* Output = CastChecked<UMaterialExpressionFunctionOutput>(UMaterialEditingLibrary::CreateMaterialExpressionInFunction(Function, UMaterialExpressionFunctionOutput::StaticClass()));
+	Custom->Inputs.Reset(); Custom->Code = TEXT("return 0.25;"); Output->A.Connect(0, Custom);
+	auto* Call = CastChecked<UMaterialExpressionMaterialFunctionCall>(UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionMaterialFunctionCall::StaticClass()));
+	Call->SetMaterialFunction(Function); Material->SetShadingModel(MSM_Unlit); Material->GetExpressionInputForProperty(MP_EmissiveColor)->Connect(0, Call);
+	if (Material->MaterialGraph) Material->MaterialGraph->LinkGraphNodesFromMaterial();
+	Function->PostEditChange(); Material->PostEditChange();
+	TestTrue(TEXT("Function host baseline saved"), UEditorAssetLibrary::SaveLoadedAsset(Function, false) && UEditorAssetLibrary::SaveLoadedAsset(Material, false));
+	const FString BaselineFunction = FWorkflowRuntime::ComputeAssetStructureHash(Function), BaselineHost = FWorkflowRuntime::ComputeAssetStructureHash(Material);
+	const FString CustomId = ExpressionNodeId(Custom), CallId = ExpressionNodeId(Call);
+	const bool Rendering = FApp::CanEverRender() && !GUsingNullRHI;
+	if (Rendering) AddExpectedError(TEXT("UEAI_WORKFLOW_FUNCTION_ERROR"), EAutomationExpectedErrorFlags::Contains, 0);
+	for (bool BadCode : {true, false})
+	{
+		FWorkflowRuntime Runtime(Registry);
+		auto Edit = MakeShared<FJsonObject>(); Edit->SetStringField(TEXT("nodeId"), CustomId); Edit->SetStringField(TEXT("code"), BadCode ? TEXT("return UEAI_WORKFLOW_FUNCTION_ERROR;") : TEXT("return 0.75;"));
+		auto Refresh = MakeShared<FJsonObject>(); Refresh->SetStringField(TEXT("nodeId"), CallId); Refresh->SetStringField(TEXT("function"), FunctionPath);
+		auto Workflow = MakeWorkflowV2(TEXT("function-host-shader-rollback"), {{TEXT("host"), MakeScope(TEXT("material"), HostPath, false)}, {TEXT("function"), MakeScope(TEXT("materialFunction"), FunctionPath, false)}},
+			{MakeShared<FJsonValueObject>(MakeScopedOperation(TEXT("editFunction"), TEXT("content.material.custom.set"), TEXT("function"), Edit)),
+			 MakeShared<FJsonValueObject>(MakeScopedOperation(TEXT("refreshCall"), TEXT("content.material.function.call.set"), TEXT("host"), Refresh))});
+		const auto Plan = PlanWorkflow(Runtime, Workflow); FString Digest;
+		if (!GetPlanDigest(Plan, Digest)) { AddError(Plan.Error.Message); CleanupAsset(HostPath); CleanupAsset(FunctionPath); return false; }
+		const auto Result = ExecuteWorkflow(Runtime, Workflow, Digest, false, TEXT("full"), FString(), true);
+		if (BadCode || !Rendering)
+		{
+			TestFalse(TEXT("Invalid or unavailable host shader verdict blocks commit"), Result.bOk);
+			TestTrue(TEXT("Function and host failure rollback verified"), Result.Error.Details && Result.Error.Details->GetBoolField(TEXT("rollbackVerified")));
+		}
+		else
+		{
+			TestTrue(TEXT("Valid function host Workflow succeeds"), Result.bOk);
+			if (!Result.bOk) { AddError(Result.Error.Message); if (Result.Error.Details) AddError(SerializeJsonObject(Result.Error.Details)); }
+			else
+			{
+				TestTrue(TEXT("Host compiler verdict remains current after all function updates"), UEAIIntegration::MaterialEditing::ReadDiagnostics(CastChecked<UMaterial>(UEditorAssetLibrary::LoadAsset(HostPath)))->GetBoolField(TEXT("shaderValidationPerformed")));
+				auto Undo = MakeShared<FJsonObject>(); Undo->SetStringField(TEXT("action"), TEXT("rollback")); Undo->SetStringField(TEXT("runId"), Result.Data->GetStringField(TEXT("runId"))); Undo->SetStringField(TEXT("approvePlanDigest"), Digest);
+				TestTrue(TEXT("Successful function host run rolls back"), Runtime.HandleRequest(Undo).bOk);
+			}
+		}
+		TestEqual(TEXT("Function rollback restores source"), FWorkflowRuntime::ComputeAssetStructureHash(UEditorAssetLibrary::LoadAsset(FunctionPath)), BaselineFunction);
+		TestEqual(TEXT("Host rollback restores call and root wiring"), FWorkflowRuntime::ComputeAssetStructureHash(UEditorAssetLibrary::LoadAsset(HostPath)), BaselineHost);
+	}
+	CleanupAsset(HostPath); CleanupAsset(FunctionPath);
 	return true;
 }
 

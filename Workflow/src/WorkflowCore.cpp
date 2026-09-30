@@ -2679,14 +2679,14 @@ public:
             scope_kind != "levelBlueprint" &&
             scope_kind != "widgetBlueprint" &&
             scope_kind != "widget" &&
-            scope_kind != "material")
+            scope_kind != "material" && scope_kind != "materialFunction")
         {
             add_diagnostic(
                 diagnostics,
                 "help",
                 "scope_unknown",
                 "/scope",
-                "Unknown composable scope. Use blueprint, levelBlueprint, widget, or material.");
+                "Unknown composable scope. Use blueprint, levelBlueprint, widget, material, or materialFunction.");
         }
         return make_result({
             { "schema", "ue.workflow-help.v1" },
@@ -4365,6 +4365,37 @@ private:
                 { "plannerVersion", kPlannerVersionV2 },
                 { "contractSetDigest", v2_contract_set_digest_ },
             }, std::move(validation.diagnostics), 2);
+        }
+
+        // Native function updates can invalidate their consuming materials.
+        // Preserve asset lock order, but finish all function updates before any
+        // material compile, and defer read-back/diff until every compile ends.
+        std::vector<std::string> function_compiles;
+        std::vector<std::string> all_compiles;
+        for (const auto& finalizer : finalizers)
+        {
+            if (finalizer.value("kind", std::string{}) != "compile") continue;
+            const auto id = finalizer.value("id", std::string{});
+            all_compiles.push_back(id);
+            if (finalizer.value("operationType", std::string{}) == "content.material.function.validate")
+                function_compiles.push_back(id);
+        }
+        if (!function_compiles.empty())
+        {
+            auto rank = [](const json& finalizer) {
+                if (finalizer.value("kind", std::string{}) != "compile") return 2;
+                return finalizer.value("operationType", std::string{}) == "content.material.function.validate" ? 0 : 1;
+            };
+            std::stable_sort(finalizers.begin(), finalizers.end(), [&](const json& a, const json& b) { return rank(a) < rank(b); });
+            for (auto& finalizer : finalizers)
+            {
+                const auto priority = rank(finalizer);
+                if (priority == 0) continue;
+                const auto& barriers = priority == 1 ? function_compiles : all_compiles;
+                auto& dependencies = finalizer["dependsOn"];
+                for (const auto& id : barriers)
+                    if (std::find(dependencies.begin(), dependencies.end(), json(id)) == dependencies.end()) dependencies.push_back(id);
+            }
         }
 
         json digest_input = {

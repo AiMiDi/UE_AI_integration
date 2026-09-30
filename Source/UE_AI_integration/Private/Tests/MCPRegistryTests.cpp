@@ -89,6 +89,7 @@ bool FMCPRegistryCatalogTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("PIE start is declared"), Registry.FindTool(TEXT("scene.pie.start")));
 	TestNotNull(TEXT("PIE stop is declared"), Registry.FindTool(TEXT("scene.pie.stop")));
 	TestNotNull(TEXT("PIE restart is declared"), Registry.FindTool(TEXT("scene.pie.restart")));
+	TestNotNull(TEXT("Current level save is declared"), Registry.FindTool(TEXT("scene.level.save")));
 	TestNotNull(
 		TEXT("Widget slot layout is declared"),
 		Registry.FindTool(TEXT("content.widget.slot.layout.set")));

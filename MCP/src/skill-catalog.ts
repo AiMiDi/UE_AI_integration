@@ -41,7 +41,7 @@ export interface AgentSkillRequirement {
 
 export interface AgentSkillInput {
   name: string;
-  type: "string" | "integer" | "number" | "boolean" | "object" | "array";
+  type: "string" | "integer" | "number" | "boolean" | "object" | "array" | "json";
   required: boolean;
   description: string;
   example?: unknown;
@@ -269,10 +269,10 @@ function parseRequirements(
 
 function parseInput(value: unknown, location: string): AgentSkillInput {
   const input = requireRecord(value, location);
-  const types = ["string", "integer", "number", "boolean", "object", "array"];
+  const types = ["string", "integer", "number", "boolean", "object", "array", "json"];
   if (typeof input.type !== "string" || !types.includes(input.type)) {
     throw new AgentSkillCatalogError(
-      `${location}.type must be string, integer, number, boolean, object, or array`,
+      `${location}.type must be string, integer, number, boolean, object, array, or json`,
     );
   }
   if (typeof input.required !== "boolean") {

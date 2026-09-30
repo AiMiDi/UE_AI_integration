@@ -1,0 +1,1153 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-niagara-authoring",
+  "version": "1.0.0",
+  "title": "UE Niagara Authoring",
+  "description": "Inspect and safely edit authored Niagara Systems, computation graphs, stack modules, node state, pin defaults, renderer materials, and typed inline User parameter defaults.",
+  "domains": [
+    "content"
+  ],
+  "risk": "mixed",
+  "triggers": [
+    "Niagara System",
+    "Niagara emitter inventory",
+    "Niagara graph authoring",
+    "Niagara module insertion",
+    "Niagara node enabled state",
+    "Niagara pin default",
+    "Niagara renderer material",
+    "Niagara authored user parameter",
+    "NS editing",
+    "NS 编辑",
+    "Niagara 图编辑",
+    "Niagara 材质",
+    "Niagara 用户参数"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.3"
+    },
+    "capabilities": [
+      "content.niagara.graph.inspect",
+      "content.niagara.graph.operations.list",
+      "content.niagara.graph.edit.plan",
+      "content.niagara.graph.edit.apply",
+      "content.niagara.graph.edit.rollback",
+      "content.niagara.graph.module.add.plan",
+      "content.niagara.graph.module.add.apply",
+      "content.niagara.graph.module.add.rollback",
+      "content.niagara.graph.node.set_enabled.plan",
+      "content.niagara.graph.node.set_enabled.apply",
+      "content.niagara.graph.node.set_enabled.rollback",
+      "content.niagara.graph.pin.set_default.plan",
+      "content.niagara.graph.pin.set_default.apply",
+      "content.niagara.graph.pin.set_default.rollback",
+      "content.niagara.system.inspect",
+      "content.niagara.renderer.list",
+      "content.niagara.renderer.materials.get",
+      "content.niagara.renderer.material.plan",
+      "content.niagara.renderer.material.apply",
+      "content.niagara.renderer.material.rollback",
+      "content.niagara.renderer.material.receipt.release",
+      "content.niagara.system.parameter.get",
+      "content.niagara.system.parameter.plan",
+      "content.niagara.system.parameter.apply",
+      "content.niagara.system.parameter.rollback",
+      "content.niagara.system.parameter.receipt.release",
+      "content.niagara.system.parameter.add",
+      "content.niagara.system.save",
+      "content.niagara.emitter.remove",
+      "content.niagara.emitter.set_enabled",
+      "content.niagara.emitter.duplicate",
+      "content.niagara.system.list",
+      "content.niagara.system.compile.request",
+      "content.niagara.system.diagnostics.get",
+      "content.niagara.emitter.gpu_hlsl.get",
+      "content.niagara.graph.module.list",
+      "content.niagara.graph.module.remove.plan",
+      "content.niagara.graph.module.remove.apply",
+      "content.niagara.graph.module.remove.rollback",
+      "content.niagara.graph.module.move.plan",
+      "content.niagara.graph.module.move.apply",
+      "content.niagara.graph.module.move.rollback",
+      "content.niagara.renderer.add",
+      "content.niagara.renderer.remove",
+      "content.niagara.renderer.property.set",
+      "content.niagara.renderer.bindings.get",
+      "content.niagara.renderer.bindings.set",
+      "content.niagara.graph.module.inputs.list",
+      "content.niagara.graph.module.dynamic_inputs.list",
+      "content.niagara.graph.module.dynamic_inputs.tree",
+      "content.niagara.graph.dynamic_input.inputs.get",
+      "content.niagara.graph.module.dynamic_input.value.get",
+      "content.niagara.graph.module.input.value.plan",
+      "content.niagara.graph.module.input.value.apply",
+      "content.niagara.graph.module.input.value.rollback",
+      "content.niagara.system.duplicate",
+      "content.niagara.emitter.modules.clear",
+      "content.niagara.graph.module.input.binding.set",
+      "content.niagara.graph.module.input.di.set",
+      "content.niagara.graph.module.dynamic_input.add.plan",
+      "content.niagara.graph.module.dynamic_input.add.apply",
+      "content.niagara.graph.module.dynamic_input.add.rollback",
+      "content.niagara.system.spec.export",
+      "content.niagara.event_handler.add.plan",
+      "content.niagara.event_handler.add.apply",
+      "content.niagara.event_handler.add.rollback",
+      "content.niagara.simulation_stage.add.plan",
+      "content.niagara.simulation_stage.add.apply",
+      "content.niagara.simulation_stage.add.rollback"
+    ],
+    "optionalCapabilities": [
+      "content.niagara.graph.collision.audit",
+      "content.niagara.graph.collision.policy.plan",
+      "content.niagara.graph.collision.policy.apply",
+      "content.niagara.graph.collision.policy.rollback",
+      "content.niagara.graph.async_trace.configure.plan",
+      "content.niagara.graph.async_trace.configure.apply",
+      "content.niagara.graph.async_trace.configure.rollback"
+    ]
+  },
+  "recipes": [
+    {
+      "id": "inspect-system",
+      "title": "Inspect authored Niagara System state",
+      "description": "Page deterministic emitter, renderer, and typed authored User parameter state without claiming component or runtime coverage.",
+      "risk": "readOnly",
+      "inputs": [
+        {
+          "name": "system",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara System package or object path."
+        },
+        {
+          "name": "emitter",
+          "type": "string",
+          "required": false,
+          "description": "Exact emitter handle ID or unambiguous display name for renderer detail."
+        },
+        {
+          "name": "rendererPath",
+          "type": "string",
+          "required": false,
+          "description": "Exact current renderer object path for material detail."
+        },
+        {
+          "name": "parameter",
+          "type": "string",
+          "required": false,
+          "description": "Exact existing User parameter name for typed detail."
+        }
+      ],
+      "steps": [
+        {
+          "id": "system-baseline",
+          "phase": "discover",
+          "purpose": "Read authored System settings, deterministic emitter and parameter pages, and outstanding compile state.",
+          "operations": [
+            "content.niagara.system.inspect"
+          ]
+        },
+        {
+          "id": "target-detail",
+          "phase": "execute",
+          "purpose": "Read the renderer inventory, then exact renderer slots or an existing typed User parameter when requested.",
+          "operations": [
+            "content.niagara.renderer.list",
+            "content.niagara.renderer.materials.get",
+            "content.niagara.system.parameter.get"
+          ]
+        },
+        {
+          "id": "bounded-readback",
+          "phase": "verify",
+          "purpose": "Re-read the System inventory and report pagination, truncation, compile, authored-only, and runtime-unverified boundaries.",
+          "operations": [
+            "content.niagara.system.inspect"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Bounded authored Niagara state with explicit non-runtime scope.",
+        "evidence": [
+          "System and emitter identities",
+          "renderer and typed User parameter pages",
+          "compile outstanding and pagination state"
+        ],
+        "success": [
+          "all pages and truncation were reported",
+          "authored state was not presented as component or runtime state"
+        ]
+      }
+    },
+    {
+      "id": "inspect-graph",
+      "title": "Inspect an authored Niagara graph",
+      "description": "Read one current Niagara graph and page native computation operations without claiming runtime execution.",
+      "risk": "readOnly",
+      "inputs": [
+        {
+          "name": "system",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara System package or object path."
+        },
+        {
+          "name": "emitter",
+          "type": "string",
+          "required": false,
+          "description": "Exact emitter selector when inspecting an emitter graph."
+        },
+        {
+          "name": "graph",
+          "type": "string",
+          "required": true,
+          "description": "Exact current graph selector accepted by the live schema."
+        }
+      ],
+      "steps": [
+        {
+          "id": "graph-baseline",
+          "phase": "discover",
+          "purpose": "Resolve the current System, emitter, graph, node paths, GUIDs, enabled states, and graph identity.",
+          "operations": [
+            "content.niagara.system.inspect",
+            "content.niagara.graph.inspect"
+          ]
+        },
+        {
+          "id": "operation-inventory",
+          "phase": "execute",
+          "purpose": "Page the graph's supported native computation operations and exact pin definitions.",
+          "operations": [
+            "content.niagara.graph.operations.list"
+          ]
+        },
+        {
+          "id": "graph-readback",
+          "phase": "verify",
+          "purpose": "Re-read the graph and report bounded, authored-only, compile, and runtime-unverified evidence.",
+          "operations": [
+            "content.niagara.graph.inspect"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "A bounded authored graph and operation catalog with stable current identities.",
+        "evidence": [
+          "System, emitter, graph, node, and pin identities",
+          "paged native operation definitions",
+          "disabled-state and inventory truncation boundaries"
+        ],
+        "success": [
+          "the exact graph was resolved in the current Editor",
+          "pagination and authored-only scope were explicit",
+          "inventory was not presented as runtime execution proof"
+        ]
+      }
+    },
+    {
+      "id": "edit-computation-graph",
+      "title": "Add computation nodes and connections",
+      "description": "Plan and atomically add supported native computation nodes and additive connections, then read back or roll back the owned additions.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "system",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara System package or object path."
+        },
+        {
+          "name": "graph",
+          "type": "string",
+          "required": true,
+          "description": "Exact owned graph selector."
+        },
+        {
+          "name": "nodes",
+          "type": "array",
+          "required": true,
+          "description": "Bounded node additions using operations returned by operations.list."
+        },
+        {
+          "name": "connections",
+          "type": "array",
+          "required": true,
+          "description": "Bounded additive pin connections between current or planned nodes."
+        }
+      ],
+      "steps": [
+        {
+          "id": "computation-baseline",
+          "phase": "discover",
+          "purpose": "Read the exact graph and supported operation and pin definitions before constructing additions.",
+          "operations": [
+            "content.niagara.graph.inspect",
+            "content.niagara.graph.operations.list"
+          ]
+        },
+        {
+          "id": "approved-additions",
+          "phase": "execute",
+          "purpose": "Validate on a transient copy, approve the current digest, and apply the additions once.",
+          "operations": [
+            "content.niagara.graph.edit.plan",
+            "content.niagara.graph.edit.apply"
+          ]
+        },
+        {
+          "id": "computation-readback",
+          "phase": "verify",
+          "purpose": "Read back the added structure and compilation state after the approved apply.",
+          "operations": [
+            "content.niagara.graph.inspect"
+          ]
+        },
+        {
+          "id": "computation-rollback",
+          "phase": "verify",
+          "optional": true,
+          "purpose": "Remove only receipt-owned additions when rollback is requested and no graph drift exists.",
+          "operations": [
+            "content.niagara.graph.edit.rollback"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Approved additive computation-graph changes with structural, compile, and recovery evidence.",
+        "evidence": [
+          "operation and pin definitions",
+          "approved plan and request identities",
+          "added node and connection readback",
+          "compile and rollback outcome"
+        ],
+        "success": [
+          "only supported additive operations were requested",
+          "the current plan was applied once",
+          "structure and compilation were verified or the owned additions were restored"
+        ]
+      }
+    },
+    {
+      "id": "add-stack-module",
+      "title": "Insert one Niagara stack Module",
+      "description": "Plan and insert one Module script into an emitter stack, then verify or roll back the exact insertion.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "system",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara System package or object path."
+        },
+        {
+          "name": "emitter",
+          "type": "string",
+          "required": true,
+          "description": "Exact emitter handle ID or unambiguous display name."
+        },
+        {
+          "name": "moduleScript",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara Module script asset path."
+        }
+      ],
+      "steps": [
+        {
+          "id": "stack-baseline",
+          "phase": "discover",
+          "purpose": "Read the emitter graph, current stack location, and exact insertion target.",
+          "operations": [
+            "content.niagara.graph.inspect"
+          ]
+        },
+        {
+          "id": "approved-module-insertion",
+          "phase": "execute",
+          "purpose": "Approve the current module-add plan and insert once with a stable request identity.",
+          "operations": [
+            "content.niagara.graph.module.add.plan",
+            "content.niagara.graph.module.add.apply"
+          ]
+        },
+        {
+          "id": "module-readback",
+          "phase": "verify",
+          "purpose": "Verify the exact function-call node and compilation after the approved insertion.",
+          "operations": [
+            "content.niagara.graph.inspect"
+          ]
+        },
+        {
+          "id": "module-rollback",
+          "phase": "verify",
+          "optional": true,
+          "purpose": "Roll back the receipt-owned insertion in the same Editor without crossing later graph drift.",
+          "operations": [
+            "content.niagara.graph.module.add.rollback"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "One approved emitter-stack Module insertion with readback and same-Editor recovery evidence.",
+        "evidence": [
+          "emitter, graph, module script, and insertion identities",
+          "approved plan and request identities",
+          "inserted node and compilation readback",
+          "rollback outcome when requested"
+        ],
+        "success": [
+          "the module was inserted at the exact planned stack location",
+          "the graph and compile result were read back",
+          "rollback did not overwrite later graph drift"
+        ]
+      }
+    },
+    {
+      "id": "set-node-enabled",
+      "title": "Set a Niagara function-call node enabled state",
+      "description": "Plan and change one current function-call node's enabled state against the graph ChangeID.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "system",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara System package or object path."
+        },
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "required": true,
+          "description": "Desired enabled state."
+        },
+        {
+          "name": "nodePath",
+          "type": "string",
+          "required": false,
+          "description": "Exact current node path; use the live schema's alternate nodeGuid selector when appropriate."
+        }
+      ],
+      "steps": [
+        {
+          "id": "node-baseline",
+          "phase": "discover",
+          "purpose": "Resolve the exact graph, function-call node path/GUID, current enabled state, and ChangeID.",
+          "operations": [
+            "content.niagara.graph.inspect"
+          ]
+        },
+        {
+          "id": "approved-enabled-state",
+          "phase": "execute",
+          "purpose": "Approve the current enabled-state plan and apply once with a stable request identity.",
+          "operations": [
+            "content.niagara.graph.node.set_enabled.plan",
+            "content.niagara.graph.node.set_enabled.apply"
+          ]
+        },
+        {
+          "id": "enabled-state-readback",
+          "phase": "verify",
+          "purpose": "Read back the exact node and compilation after the approved change.",
+          "operations": [
+            "content.niagara.graph.inspect"
+          ]
+        },
+        {
+          "id": "enabled-state-rollback",
+          "phase": "verify",
+          "optional": true,
+          "purpose": "Roll back the receipt-owned enabled-state change without crossing later graph drift.",
+          "operations": [
+            "content.niagara.graph.node.set_enabled.rollback"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "One approved node enabled-state change with graph and recovery evidence.",
+        "evidence": [
+          "node path, GUID, graph ChangeID, and before/after state",
+          "approved plan and request identities",
+          "compile and rollback outcome"
+        ],
+        "success": [
+          "the current exact function-call node was targeted",
+          "the enabled state was read back",
+          "later graph drift was not overwritten"
+        ]
+      }
+    },
+    {
+      "id": "set-pin-default",
+      "title": "Set a Niagara input-pin default",
+      "description": "Plan and change one current unlinked input pin default against the graph ChangeID.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "system",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara System package or object path."
+        },
+        {
+          "name": "pinName",
+          "type": "string",
+          "required": true,
+          "description": "Exact current input pin name."
+        },
+        {
+          "name": "value",
+          "type": "string",
+          "required": true,
+          "description": "Default-value text accepted by the current Niagara pin schema."
+        },
+        {
+          "name": "nodePath",
+          "type": "string",
+          "required": false,
+          "description": "Exact current node path; use the live schema's alternate nodeGuid selector when appropriate."
+        }
+      ],
+      "steps": [
+        {
+          "id": "pin-baseline",
+          "phase": "discover",
+          "purpose": "Resolve the exact graph, node, unlinked input pin, current default, and ChangeID.",
+          "operations": [
+            "content.niagara.graph.inspect"
+          ]
+        },
+        {
+          "id": "approved-pin-default",
+          "phase": "execute",
+          "purpose": "Approve the current pin-default plan and apply once with a stable request identity.",
+          "operations": [
+            "content.niagara.graph.pin.set_default.plan",
+            "content.niagara.graph.pin.set_default.apply"
+          ]
+        },
+        {
+          "id": "pin-default-readback",
+          "phase": "verify",
+          "purpose": "Read back the exact pin and compilation after the approved change.",
+          "operations": [
+            "content.niagara.graph.inspect"
+          ]
+        },
+        {
+          "id": "pin-default-rollback",
+          "phase": "verify",
+          "optional": true,
+          "purpose": "Roll back the receipt-owned pin-default change without crossing later graph drift.",
+          "operations": [
+            "content.niagara.graph.pin.set_default.rollback"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "One approved input-pin default change with graph and recovery evidence.",
+        "evidence": [
+          "node and pin identity, graph ChangeID, and before/after value",
+          "approved plan and request identities",
+          "compile and rollback outcome"
+        ],
+        "success": [
+          "the pin was current, unlinked, and schema-compatible",
+          "the default was read back",
+          "later graph drift was not overwritten"
+        ]
+      }
+    },
+    {
+      "id": "edit-renderer-material",
+      "title": "Edit an authored renderer material",
+      "description": "Plan, apply, read back, optionally roll back, and release a same-Editor renderer material receipt.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "system",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara System package or object path."
+        },
+        {
+          "name": "emitter",
+          "type": "string",
+          "required": true,
+          "description": "Exact emitter handle ID or unambiguous authored display name."
+        },
+        {
+          "name": "rendererPath",
+          "type": "string",
+          "required": true,
+          "description": "Exact renderer object path from the current inventory."
+        }
+      ],
+      "steps": [
+        {
+          "id": "baseline",
+          "phase": "discover",
+          "purpose": "Resolve current renderer identity, material slots, binding, state digest, and package dirtiness.",
+          "operations": [
+            "content.niagara.renderer.list",
+            "content.niagara.renderer.materials.get"
+          ]
+        },
+        {
+          "id": "planned-write",
+          "phase": "execute",
+          "purpose": "Approve the current plan digest and apply once with a stable request identity.",
+          "operations": [
+            "content.niagara.renderer.material.plan",
+            "content.niagara.renderer.material.apply"
+          ]
+        },
+        {
+          "id": "readback",
+          "phase": "verify",
+          "purpose": "Verify the exact slot and distinguish async compile request from completion.",
+          "operations": [
+            "content.niagara.renderer.materials.get",
+            "content.niagara.system.inspect"
+          ]
+        },
+        {
+          "id": "rollback-and-close",
+          "phase": "verify",
+          "optional": true,
+          "purpose": "Roll back if requested, then release the retained boundary when safe.",
+          "operations": [
+            "content.niagara.renderer.material.rollback",
+            "content.niagara.renderer.material.receipt.release"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Authored renderer material readback with bounded same-Editor recovery evidence.",
+        "evidence": [
+          "approved plan and request identities",
+          "slot and binding readback",
+          "semantic rollback and package dirty outcome",
+          "compile request and receipt retention state"
+        ],
+        "success": [
+          "only the intended renderer slot changed",
+          "dirty-only and compile-completion boundaries were explicit",
+          "rollback ownership was released only with the required confirmation"
+        ]
+      }
+    },
+    {
+      "id": "edit-user-parameter",
+      "title": "Edit an authored Niagara User parameter default",
+      "description": "Plan, apply, read back, optionally roll back, and release one supported inline Value default.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "system",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara System package or object path."
+        },
+        {
+          "name": "parameter",
+          "type": "string",
+          "required": true,
+          "description": "Existing authored User parameter name."
+        },
+        {
+          "name": "value",
+          "type": "json",
+          "required": true,
+          "description": "Type-directed default value for float, int, bool, vec2, vec3, position, vec4, quat or color; scalar or object JSON."
+        }
+      ],
+      "steps": [
+        {
+          "id": "baseline",
+          "phase": "discover",
+          "purpose": "Read current type, inline default mode, exposed-store value, authored script value, state digest, and package dirtiness.",
+          "operations": [
+            "content.niagara.system.parameter.get"
+          ]
+        },
+        {
+          "id": "planned-write",
+          "phase": "execute",
+          "purpose": "Approve the current typed plan and synchronize the exposed store and authored script default once.",
+          "operations": [
+            "content.niagara.system.parameter.plan",
+            "content.niagara.system.parameter.apply"
+          ]
+        },
+        {
+          "id": "readback",
+          "phase": "verify",
+          "purpose": "Verify both authored representations and distinguish async compile request from completion.",
+          "operations": [
+            "content.niagara.system.parameter.get",
+            "content.niagara.system.inspect"
+          ]
+        },
+        {
+          "id": "rollback-and-close",
+          "phase": "verify",
+          "optional": true,
+          "purpose": "Roll back if requested, then release the retained boundary when safe.",
+          "operations": [
+            "content.niagara.system.parameter.rollback",
+            "content.niagara.system.parameter.receipt.release"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Typed authored User parameter readback with bounded same-Editor recovery evidence.",
+        "evidence": [
+          "parameter identity, type, and inline Value mode",
+          "exposed-store and script-default readback",
+          "semantic rollback and package dirty outcome",
+          "compile request and receipt retention state"
+        ],
+        "success": [
+          "only a supported existing User parameter was changed",
+          "component overrides and unsupported Niagara types were untouched",
+          "dirty-only, compile, rollback, and retention boundaries were explicit"
+        ]
+      }
+    },
+    {
+      "id": "persist-system",
+      "title": "Persist a Niagara System package",
+      "description": "Save an authored Niagara System package to disk without requesting a compile.",
+      "risk": "safeWrite",
+      "inputs": [
+        {
+          "name": "system",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara System package or object path."
+        }
+      ],
+      "steps": [
+        {
+          "id": "system-baseline",
+          "phase": "discover",
+          "purpose": "Resolve the current System identity and dirty state before saving.",
+          "operations": [
+            "content.niagara.system.inspect"
+          ]
+        },
+        {
+          "id": "persist",
+          "phase": "execute",
+          "purpose": "Save the System package to disk once without requesting compilation.",
+          "operations": [
+            "content.niagara.system.save"
+          ]
+        },
+        {
+          "id": "saved-readback",
+          "phase": "verify",
+          "purpose": "Re-read the System and confirm the package is no longer dirty.",
+          "operations": [
+            "content.niagara.system.inspect"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "A persisted authored System with file/digest and post-save dirty-state evidence.",
+        "evidence": [
+          "System identity and pre-save dirty state",
+          "saved file path, package, and sha256 digest",
+          "post-save dirty-state readback"
+        ],
+        "success": [
+          "the System package was saved to disk",
+          "no compile was requested by this operation"
+        ]
+      }
+    },
+    {
+      "id": "manage-emitters",
+      "title": "Remove, duplicate, or toggle a Niagara emitter",
+      "description": "Change the authored emitter inventory by handle id: remove, duplicate, or set enabled.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "system",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara System package or object path."
+        },
+        {
+          "name": "emitterHandleId",
+          "type": "string",
+          "required": true,
+          "description": "Emitter handle GUID from content.niagara.system.inspect."
+        },
+        {
+          "name": "enabled",
+          "type": "boolean",
+          "required": false,
+          "description": "Desired enabled state; used only with set_enabled."
+        }
+      ],
+      "steps": [
+        {
+          "id": "inventory-baseline",
+          "phase": "discover",
+          "purpose": "Read the current emitter inventory and handle identities.",
+          "operations": [
+            "content.niagara.system.inspect"
+          ]
+        },
+        {
+          "id": "apply-emitter-change",
+          "phase": "execute",
+          "purpose": "Remove, duplicate, or set the enabled state of the exact emitter handle once.",
+          "operations": [
+            "content.niagara.emitter.remove",
+            "content.niagara.emitter.duplicate",
+            "content.niagara.emitter.set_enabled"
+          ]
+        },
+        {
+          "id": "inventory-readback",
+          "phase": "verify",
+          "purpose": "Re-read the emitter inventory and confirm the exact change landed.",
+          "operations": [
+            "content.niagara.system.inspect"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "One authored emitter inventory change with before/after evidence.",
+        "evidence": [
+          "emitter handle identity",
+          "updated emitter count or enabled state",
+          "post-change inventory readback"
+        ],
+        "success": [
+          "only the exact emitter handle was changed",
+          "the change was read back against the current inventory"
+        ]
+      }
+    },
+    {
+      "id": "add-user-parameter",
+      "title": "Add an authored Niagara User parameter",
+      "description": "Add a new typed User parameter default to an authored System.",
+      "risk": "safeWrite",
+      "inputs": [
+        {
+          "name": "system",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara System package or object path."
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "New User parameter name."
+        },
+        {
+          "name": "type",
+          "type": "string",
+          "required": true,
+          "description": "Niagara type name: float, int, bool, vec2, vec3, position, vec4, quat, or color."
+        },
+        {
+          "name": "value",
+          "type": "json",
+          "required": true,
+          "description": "Type-directed default value; scalar or object JSON."
+        }
+      ],
+      "steps": [
+        {
+          "id": "parameter-baseline",
+          "phase": "discover",
+          "purpose": "Read the current authored User parameters to confirm the new name is not already present.",
+          "operations": [
+            "content.niagara.system.parameter.get"
+          ]
+        },
+        {
+          "id": "add-parameter",
+          "phase": "execute",
+          "purpose": "Add the new typed User parameter and synchronize both authored representations.",
+          "operations": [
+            "content.niagara.system.parameter.add"
+          ]
+        },
+        {
+          "id": "parameter-readback",
+          "phase": "verify",
+          "purpose": "Re-read the authored User parameters and confirm the new parameter exists with the intended default.",
+          "operations": [
+            "content.niagara.system.parameter.get",
+            "content.niagara.system.inspect"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "One new typed authored User parameter with readback evidence.",
+        "evidence": [
+          "parameter name and type",
+          "new parameter readback",
+          "post-add inventory state"
+        ],
+        "success": [
+          "the new parameter exists in both authored representations",
+          "no duplicate or unsupported type was added"
+        ]
+      }
+    },
+    {
+      "id": "inspect-and-compile",
+      "title": "Inspect and compile a Niagara System",
+      "description": "Page deterministic System inventory, request compilation explicitly when needed, and read bounded diagnostics or exact GPU HLSL.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "system",
+          "type": "string",
+          "required": true,
+          "description": "Exact Niagara System package or object path."
+        },
+        {
+          "name": "emitter",
+          "type": "string",
+          "required": false,
+          "description": "Exact GPU emitter name, unique instance name, or GUID for HLSL output."
+        },
+        {
+          "name": "waitForCompletion",
+          "type": "boolean",
+          "required": false,
+          "description": "Wait for bounded compiler completion; defaults to true."
+        },
+        {
+          "name": "maxCharacters",
+          "type": "integer",
+          "required": false,
+          "description": "Bound generated HLSL output to 1..4194304 characters."
+        }
+      ],
+      "steps": [
+        {
+          "id": "compile-baseline",
+          "phase": "discover",
+          "purpose": "Read the filtered System inventory and current authored diagnostics before deciding whether fresh compilation is required.",
+          "operations": [
+            "content.niagara.system.list",
+            "content.niagara.system.diagnostics.get"
+          ]
+        },
+        {
+          "id": "compile-request",
+          "phase": "execute",
+          "purpose": "Use the sole explicit compile request when fresh VM/GPU evidence is required, then query exact GPU HLSL if requested.",
+          "operations": [
+            "content.niagara.system.compile.request",
+            "content.niagara.emitter.gpu_hlsl.get"
+          ]
+        },
+        {
+          "id": "compile-readback",
+          "phase": "verify",
+          "purpose": "Read final bounded diagnostics and generated source with stale, truncation, renderer feedback, and emitter identity boundaries.",
+          "operations": [
+            "content.niagara.system.diagnostics.get",
+            "content.niagara.emitter.gpu_hlsl.get"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Niagara authored compile and source evidence with explicit read-only query boundaries.",
+        "evidence": [
+          "deterministic System inventory and diagnostics",
+          "compile request versus VM/GPU completion",
+          "exact emitter HLSL identity and bounded source"
+        ],
+        "success": [
+          "queries did not trigger compilation",
+          "all required compilable scripts were considered before aggregate success",
+          "GPU HLSL truncation and runtime acceptance were reported separately"
+        ]
+      }
+    },
+    {
+      "id": "manage-module-stack",
+      "title": "List, remove, or move a Niagara stack Module",
+      "description": "Page the ordered stack modules, then plan and apply a bounded remove or index move against the graph ChangeID with readback and same-Editor rollback.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "system", "type": "string", "required": true, "description": "Exact Niagara System package or object path." },
+        { "name": "emitter", "type": "string", "required": true, "description": "Exact emitter handle id or unambiguous display name." },
+        { "name": "moduleSelector", "type": "string", "required": false, "description": "Function-call node name or object path to remove or move." },
+        { "name": "targetIndex", "type": "integer", "required": false, "description": "Zero-based destination index for move." }
+      ],
+      "steps": [
+        { "id": "stack-baseline", "phase": "discover", "purpose": "Resolve the emitter stack and page its ordered modules.", "operations": ["content.niagara.graph.module.list"] },
+        { "id": "approved-change", "phase": "execute", "purpose": "Approve and apply the remove or move plan once with a stable request identity.", "operations": ["content.niagara.graph.module.remove.plan", "content.niagara.graph.module.remove.apply", "content.niagara.graph.module.move.plan", "content.niagara.graph.module.move.apply"] },
+        { "id": "readback", "phase": "verify", "purpose": "Re-read the ordered stack and compile state after the applied change.", "operations": ["content.niagara.graph.module.list"] },
+        { "id": "rollback", "phase": "verify", "optional": true, "purpose": "Roll back the receipt-owned change without crossing later graph drift.", "operations": ["content.niagara.graph.module.remove.rollback", "content.niagara.graph.module.move.rollback"] }
+      ],
+      "result": {
+        "summary": "One ordered module-stack change with bounded readback and same-Editor recovery evidence.",
+        "evidence": ["ordered module identities before and after", "approved plan and request identities", "compile and rollback outcome"],
+        "success": ["only the exact module was removed or moved", "the change was read back against the current ordered stack", "rollback did not overwrite later graph drift"]
+      }
+    },
+    {
+      "id": "manage-renderer-structure",
+      "title": "Add, remove, or configure a Niagara renderer",
+      "description": "Add or remove a renderer, set a bounded whitelisted property, or read/write attribute bindings on an authored emitter.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "system", "type": "string", "required": true, "description": "Exact Niagara System package or object path." },
+        { "name": "emitter", "type": "string", "required": true, "description": "Exact emitter handle id or unambiguous display name." },
+        { "name": "class", "type": "string", "required": false, "description": "Renderer class: sprite, mesh, ribbon, light, component, decal, or volume." },
+        { "name": "rendererPath", "type": "string", "required": false, "description": "Exact renderer object path for remove, property, or binding operations." }
+      ],
+      "steps": [
+        { "id": "renderer-baseline", "phase": "discover", "purpose": "Read the current renderer inventory and exact renderer identity.", "operations": ["content.niagara.renderer.list"] },
+        { "id": "approved-change", "phase": "execute", "purpose": "Add, remove, set a whitelisted property, or set bindings on the exact renderer.", "operations": ["content.niagara.renderer.add", "content.niagara.renderer.remove", "content.niagara.renderer.property.set", "content.niagara.renderer.bindings.set"] },
+        { "id": "readback", "phase": "verify", "purpose": "Re-read the renderer inventory and attribute bindings.", "operations": ["content.niagara.renderer.list", "content.niagara.renderer.bindings.get"] }
+      ],
+      "result": {
+        "summary": "One authored renderer structure/binding change with inventory and binding readback.",
+        "evidence": ["renderer class and identity", "whitelisted property or binding values", "post-change inventory readback"],
+        "success": ["only a supported renderer class and property were applied", "unknown classes, properties, or bindings were rejected explicitly"]
+      }
+    },
+    {
+      "id": "manage-module-input",
+      "title": "Set a Niagara stack module input value or binding",
+      "description": "List one stack module's authored inputs, then plan/apply an inline value, set a parameter or attribute binding, and read back or roll back the receipt-owned value change.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "system", "type": "string", "required": true, "description": "Exact Niagara System package or object path." },
+        { "name": "emitter", "type": "string", "required": true, "description": "Exact emitter handle name or object path." },
+        { "name": "moduleSelector", "type": "string", "required": true, "description": "Stack module node name (case-insensitive) or module script object path." },
+        { "name": "input", "type": "string", "required": false, "description": "Module input name, with or without the Module. prefix." },
+        { "name": "value", "type": "json", "required": false, "description": "Inline value: a number, boolean, or an {x,y[,z[,w]]} / {r,g,b[,a]} object matching the input type." },
+        { "name": "parameter", "type": "string", "required": false, "description": "Linked parameter name (e.g. User.X) or namespaced attribute (e.g. Particles.Position)." }
+      ],
+      "steps": [
+        { "id": "input-baseline", "phase": "discover", "purpose": "Resolve the stack module and page its authored inputs, current inline values, and bindings.", "operations": ["content.niagara.graph.module.inputs.list"] },
+        { "id": "approved-write", "phase": "execute", "purpose": "Plan and apply one inline value once, or atomically set one parameter/attribute binding.", "operations": ["content.niagara.graph.module.input.value.plan", "content.niagara.graph.module.input.value.apply", "content.niagara.graph.module.input.binding.set"] },
+        { "id": "input-readback", "phase": "verify", "purpose": "Re-read the input and confirm the value or binding and compilation state.", "operations": ["content.niagara.graph.module.inputs.list"] },
+        { "id": "value-rollback", "phase": "verify", "optional": true, "purpose": "Roll back the receipt-owned inline value change without crossing later graph drift.", "operations": ["content.niagara.graph.module.input.value.rollback"] }
+      ],
+      "result": {
+        "summary": "One authored module-input value or binding change with readback and same-Editor recovery evidence.",
+        "evidence": ["module and input identities", "before/after value or linked parameter", "compile and rollback outcome"],
+        "success": ["only the exact current module input was changed", "the value or binding was read back", "rollback did not overwrite later graph drift"]
+      }
+    },
+    {
+      "id": "duplicate-system",
+      "title": "Duplicate a Niagara System asset",
+      "description": "Resolve an authored /Game/ Niagara System and save a shallow duplicate to a new package.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "system", "type": "string", "required": true, "description": "Exact non-transient Niagara System object or package path." },
+        { "name": "newName", "type": "string", "required": false, "description": "Optional new asset name; defaults to <Source>_Copy." },
+        { "name": "targetPath", "type": "string", "required": false, "description": "Optional new package folder under /Game/; defaults to the source folder." }
+      ],
+      "steps": [
+        { "id": "system-baseline", "phase": "discover", "purpose": "Resolve the current System identity and confirm it is a non-transient /Game/ asset.", "operations": ["content.niagara.system.inspect"] },
+        { "id": "duplicate", "phase": "execute", "purpose": "Duplicate the System to the target package and save it to disk once.", "operations": ["content.niagara.system.duplicate"] },
+        { "id": "duplicate-readback", "phase": "verify", "purpose": "Read back the new duplicate package identity and confirm it was saved.", "operations": ["content.niagara.system.inspect"] }
+      ],
+      "result": {
+        "summary": "One shallow System duplicate saved to disk with source and duplicate readback evidence.",
+        "evidence": ["source and duplicate package identities", "saved file path and dirty state", "shared emitter asset references"],
+        "success": ["only a non-transient /Game/ source was duplicated", "the duplicate was saved and read back", "shallow emitter sharing was not presented as a deep copy"]
+      }
+    },
+    {
+      "id": "clear-emitter-modules",
+      "title": "Clear all modules from a Niagara emitter",
+      "description": "Remove every function-call module node from all stacks of one emitter and report the removed count. Destructive; no rollback.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "system", "type": "string", "required": true, "description": "Exact Niagara System package or object path under /Game/." },
+        { "name": "emitter", "type": "string", "required": true, "description": "Exact emitter handle ID (GUID) or unambiguous display name." }
+      ],
+      "steps": [
+        { "id": "module-baseline", "phase": "discover", "purpose": "Page the emitter's ordered stack modules and confirm the exact target before the destructive clear.", "operations": ["content.niagara.graph.module.list"] },
+        { "id": "clear", "phase": "execute", "purpose": "Remove every function-call module node from all stacks of the exact emitter once.", "operations": ["content.niagara.emitter.modules.clear"] },
+        { "id": "clear-readback", "phase": "verify", "purpose": "Re-read the ordered stack modules and confirm the emitter is empty.", "operations": ["content.niagara.graph.module.list"] }
+      ],
+      "result": {
+        "summary": "One destructive all-stack module clear with a removed-count and empty-stack readback.",
+        "evidence": ["emitter handle identity", "removed module count", "post-clear empty-stack readback"],
+        "success": ["only the exact emitter was cleared", "the removed count was read back", "destructive no-rollback scope was explicit"]
+      }
+    },
+    {
+      "id": "add-event-handler",
+      "title": "Add a Niagara Particle Event Handler",
+      "description": "Plan and apply one authored Particle Event Handler with a caller-supplied stable usage ID, bounded event options, graph readback, compilation evidence, and same-Editor rollback.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "system", "type": "string", "required": true, "description": "Exact Niagara System package or object path." },
+        { "name": "emitter", "type": "string", "required": true, "description": "Exact emitter handle GUID or unambiguous display name." },
+        { "name": "usageId", "type": "string", "required": true, "description": "Stable GUID for the new event-handler script usage." },
+        { "name": "sourceEventName", "type": "string", "required": false, "description": "Optional event dataset name." },
+        { "name": "executionMode", "type": "string", "required": false, "description": "EveryParticle, SpawnedParticles, or SingleParticle." },
+        { "name": "spawnNumber", "type": "integer", "required": false, "description": "Spawn count for SpawnedParticles mode." },
+        { "name": "minSpawnNumber", "type": "integer", "required": false, "description": "Minimum randomized spawn count." },
+        { "name": "maxEventsPerFrame", "type": "integer", "required": false, "description": "Maximum consumed event count per frame." }
+      ],
+      "steps": [
+        { "id": "event-baseline", "phase": "discover", "purpose": "Read the current System inspection and confirm the exact emitter, graph, and unused usage ID.", "operations": ["content.niagara.system.inspect"] },
+        { "id": "approved-add", "phase": "execute", "purpose": "Approve and apply one event-handler add plan with exact emitter change preconditions.", "operations": ["content.niagara.event_handler.add.plan", "content.niagara.event_handler.add.apply"] },
+        { "id": "event-readback", "phase": "verify", "purpose": "Re-read the System eventHandlers inventory and compare the new UsageId, options, graph identity, and compile state.", "operations": ["content.niagara.system.inspect"] },
+        { "id": "event-rollback", "phase": "verify", "optional": true, "purpose": "Remove the receipt-owned Event Handler and its ParticleEventScript graph output without crossing emitter drift.", "operations": ["content.niagara.event_handler.add.rollback"] }
+      ],
+      "result": {
+        "summary": "One authored Particle Event Handler with bounded options, graph/output readback, compile evidence, and same-Editor recovery.",
+        "evidence": ["emitter and graph identities", "stable event-handler UsageId and options", "readback and compile status", "rollback receipt and drift refusal"],
+        "success": ["only the exact owned emitter was changed", "the ParticleEventScript output was initialized", "event delivery and runtime behavior remained explicitly unverified"]
+      }
+    },
+    {
+      "id": "add-simulation-stage",
+      "title": "Add a Niagara Simulation Stage",
+      "description": "Plan and apply one authored Simulation Stage with a stable script usage ID, bounded class/name/options, graph output readback, compile evidence, and same-Editor rollback.",
+      "risk": "confirmWrite",
+      "inputs": [
+        { "name": "system", "type": "string", "required": true, "description": "Exact Niagara System package or object path." },
+        { "name": "emitter", "type": "string", "required": true, "description": "Exact emitter handle GUID or unambiguous display name." },
+        { "name": "usageId", "type": "string", "required": true, "description": "Stable GUID for the new ParticleSimulationStageScript usage." },
+        { "name": "stageClass", "type": "string", "required": false, "description": "Non-abstract Niagara simulation-stage class path; defaults to NiagaraSimulationStageGeneric." },
+        { "name": "name", "type": "string", "required": false, "description": "Display name for the stage." },
+        { "name": "enabled", "type": "boolean", "required": false, "description": "Initial authored enabled state." },
+        { "name": "index", "type": "integer", "required": false, "description": "Optional zero-based stack position." }
+      ],
+      "steps": [
+        { "id": "stage-baseline", "phase": "discover", "purpose": "Read the current System simulationStages inventory and confirm the exact emitter, graph, and unused usage ID.", "operations": ["content.niagara.system.inspect"] },
+        { "id": "approved-add", "phase": "execute", "purpose": "Approve and apply one Simulation Stage add plan with exact emitter change preconditions.", "operations": ["content.niagara.simulation_stage.add.plan", "content.niagara.simulation_stage.add.apply"] },
+        { "id": "stage-readback", "phase": "verify", "purpose": "Re-read the System simulationStages inventory and compare the new usage ID, class, name, enabled state, graph identity, and compile state.", "operations": ["content.niagara.system.inspect"] },
+        { "id": "stage-rollback", "phase": "verify", "optional": true, "purpose": "Remove the receipt-owned Simulation Stage and its ParticleSimulationStageScript graph output without crossing emitter drift.", "operations": ["content.niagara.simulation_stage.add.rollback"] }
+      ],
+      "result": {
+        "summary": "One authored Simulation Stage with bounded options, graph/output readback, compile evidence, and same-Editor recovery.",
+        "evidence": ["emitter and graph identities", "stable stage usage ID, class, name, and enabled state", "readback and compile status", "rollback receipt and drift refusal"],
+        "success": ["only the exact owned emitter was changed", "the ParticleSimulationStageScript output was initialized", "GPU scheduling and runtime particle behavior remained explicitly unverified"]
+      }
+    }
+  ],
+  "resources": []
+}
