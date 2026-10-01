@@ -70,8 +70,6 @@ namespace UEAIIntegration::MaterialQuery
 		constexpr int32 DefinitionResponseReserveBytes = 16 * 1024;
 		constexpr int32 MaxDefinitionClassesScanned = 50000;
 		constexpr int32 MaxDefinitionContractsBuilt = 1024;
-		constexpr TCHAR AssetKindMaterial[] = TEXT("material|");
-		constexpr TCHAR AssetKindMaterialFunction[] = TEXT("materialFunction|");
 		// All public entry points execute on the Editor game thread, like domain tools.
 		TArray<TSharedPtr<const FSnapshot>> Snapshots;
 		TArray<TSharedPtr<const FBoundaryProof>> BoundaryProofs;
@@ -364,17 +362,19 @@ namespace UEAIIntegration::MaterialQuery
 
 		FString SnapshotAssetKind(const FSnapshot& Snapshot)
 		{
-			if (Snapshot.AssetClass.StartsWith(AssetKindMaterialFunction)) return TEXT("materialFunction");
-			if (Snapshot.AssetClass.StartsWith(AssetKindMaterial)) return TEXT("material");
-			return FString();
+			switch (Snapshot.AssetKind)
+			{
+			case ESnapshotAssetKind::MaterialFunction:
+				return TEXT("materialFunction");
+			case ESnapshotAssetKind::Material:
+				return TEXT("material");
+			default:
+				return FString();
+			}
 		}
 
 		FString SnapshotAssetClassName(const FSnapshot& Snapshot)
 		{
-			if (Snapshot.AssetClass.StartsWith(AssetKindMaterialFunction))
-				return Snapshot.AssetClass.Mid(UE_ARRAY_COUNT(AssetKindMaterialFunction) - 1);
-			if (Snapshot.AssetClass.StartsWith(AssetKindMaterial))
-				return Snapshot.AssetClass.Mid(UE_ARRAY_COUNT(AssetKindMaterial) - 1);
 			return Snapshot.AssetClass;
 		}
 
@@ -439,6 +439,10 @@ namespace UEAIIntegration::MaterialQuery
 
 		TSharedPtr<FJsonObject> NodeRef(const FSnapshot& Snapshot, const FString& Id)
 		{
+			// Do not publish a typed handle that cannot be bound to an immutable
+			// projection.  Capture rejects this state as well; this guard keeps the
+			// serializer safe if a future caller constructs a partial snapshot.
+			if (!HasTypedIdentity(Snapshot)) return nullptr;
 			auto Result = MakeShared<FJsonObject>();
 			Result->SetStringField(TEXT("kind"), TEXT("materialNode"));
 			Result->SetStringField(TEXT("id"), Id);
@@ -551,11 +555,12 @@ namespace UEAIIntegration::MaterialQuery
 		Snapshot->PreviewId = PreviewId;
 		// Preserve the exact capture-time asset kind in the immutable snapshot so
 		// later pages can publish typed handles without reloading the UObject.
-		Snapshot->AssetClass = Function
-			                         ? FString(AssetKindMaterialFunction) + Asset->GetClass()->GetName()
-			                         : Material
-			                         ? FString(AssetKindMaterial) + Asset->GetClass()->GetName()
-			                         : Asset->GetClass()->GetName();
+		Snapshot->AssetKind = Function
+		                         ? ESnapshotAssetKind::MaterialFunction
+		                         : Material
+		                         ? ESnapshotAssetKind::Material
+		                         : ESnapshotAssetKind::Unknown;
+		Snapshot->AssetClass = Asset->GetClass()->GetName();
 		Snapshot->CapturedAt = FDateTime::UtcNow().ToIso8601();
 		Snapshot->CapturedSeconds = Start;
 		if (Function)
@@ -791,6 +796,11 @@ namespace UEAIIntegration::MaterialQuery
 		});
 		for (int32 I : Snapshot->EdgesByKey) HashInput += Snapshot->Edges[I].Key + TEXT("\n");
 		Snapshot->ProjectionHash = Digest(HashInput);
+		if (Snapshot->Id.IsEmpty() || Snapshot->ProjectionHash.IsEmpty())
+			return FMCPToolResult::Error(
+				TEXT("Snapshot typed identity could not be established; no snapshot published."),
+				TEXT("graph_hash_unavailable"),
+				500);
 		Snapshot->ApproximateBytes += Snapshot->Edges.Num() * 1024ull;
 		if (Snapshot->ApproximateBytes > MaxSnapshotBytes)
 			return FMCPToolResult::Error(
@@ -2277,8 +2287,9 @@ namespace UEAIIntegration::MaterialQuery
 				TEXT("beforeSnapshotId and afterSnapshotId are required."));
 		const auto Before = FindSnapshot(BeforeId), After = FindSnapshot(AfterId);
 		if (!Before || !After) return MissingSnapshot();
-		if (Before->AssetPath != After->AssetPath || Before->AssetClass != After->AssetClass || Before->PreviewId !=
-			After->PreviewId || Before->bIncludeNamedReroutes != After->bIncludeNamedReroutes)
+		if (Before->AssetPath != After->AssetPath || Before->AssetClass != After->AssetClass
+			|| Before->AssetKind != After->AssetKind || Before->PreviewId != After->PreviewId
+			|| Before->bIncludeNamedReroutes != After->bIncludeNamedReroutes)
 			return Invalid(
 				TEXT("Diff requires the same asset, asset/preview session and named-reroute projection mode."));
 		int32 Limit;

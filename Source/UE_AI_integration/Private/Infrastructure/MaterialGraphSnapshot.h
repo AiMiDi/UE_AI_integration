@@ -30,6 +30,16 @@ namespace UEAIIntegration::MaterialQuery
 		FString Key;
 	};
 
+	// Capture-time asset classification is derived from the concrete UObject cast
+	// and retained separately from the display class name.  Keeping these as two
+	// fields prevents typed handle semantics from depending on a string prefix.
+	enum class ESnapshotAssetKind : uint8
+	{
+		Unknown,
+		Material,
+		MaterialFunction
+	};
+
 	// Created completely before publication; cache clients only receive const data.
 	// No UObject references: paging never loads assets or touches a live graph.
 	struct FSnapshot
@@ -37,6 +47,7 @@ namespace UEAIIntegration::MaterialQuery
 		FString Id;
 		FString AssetPath;
 		FString AssetClass;
+		ESnapshotAssetKind AssetKind = ESnapshotAssetKind::Unknown;
 		FString CapturedAt;
 		FString ProjectionHash;
 		FString PreviewId;

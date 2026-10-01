@@ -58,6 +58,10 @@ bool FMaterialGraphQueryPagingTest::RunTest(const FString& Parameters)
 	{
 		const auto AssetRef = CaptureResult.Data->GetObjectField(TEXT("assetRef"));
 		TestEqual(TEXT("Asset reference kind"), AssetRef->GetStringField(TEXT("kind")), FString(TEXT("materialFunction")));
+		TestEqual(
+			TEXT("Asset class is the concrete UObject class"),
+			CaptureResult.Data->GetStringField(TEXT("assetClass")),
+			UMaterialFunction::StaticClass()->GetName());
 		TestEqual(TEXT("Asset reference snapshot binding"), AssetRef->GetStringField(TEXT("snapshotId")), Id);
 		TestEqual(TEXT("Asset reference projection binding"), AssetRef->GetStringField(TEXT("projectionHash")), CaptureResult.Data->GetStringField(TEXT("projectionHash")));
 		TestFalse(TEXT("Typed asset reference never has an empty projection hash"), AssetRef->GetStringField(TEXT("projectionHash")).IsEmpty());
@@ -240,6 +244,10 @@ bool FMaterialGraphQueryIdentityTest::RunTest(const FString& Parameters)
 	const auto Before = Capture(Material.Get());
 	if (!TestTrue(TEXT("Capture material root inputs"), Before.bSuccess)) return false;
 	TestEqual(TEXT("Material asset reference kind"), Before.Data->GetObjectField(TEXT("assetRef"))->GetStringField(TEXT("kind")), FString(TEXT("material")));
+	TestEqual(
+		TEXT("Material class is the concrete UObject class"),
+		Before.Data->GetStringField(TEXT("assetClass")),
+		UMaterial::StaticClass()->GetName());
 	TestNull(TEXT("Read model needs no material graph"), Material->MaterialGraph.Get());
 	TestEqual(TEXT("Root edge included"), Before.Data->GetIntegerField(TEXT("totalEdges")), 1);
 	MCPMaterialInfrastructure::EnsureMaterialGraph(Material.Get());
