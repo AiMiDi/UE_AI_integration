@@ -1,5 +1,6 @@
 #include "Infrastructure/ProductionRuntimeController.h"
 #include "Infrastructure/Sha256.h"
+#include "Core/MCPExecutor.h"
 
 #include "Dom/JsonValue.h"
 #include "HAL/FileManager.h"
@@ -288,6 +289,7 @@ FProductionRuntimeController::FProductionRuntimeController(
 	FPIESessionController& InPIEController)
 	: Registry(InRegistry)
 	, PIEController(InPIEController)
+	, ScenarioExecutor(MakeUnique<FMCPExecutor>(InRegistry))
 	, InitializedAtUtc(FDateTime::UtcNow())
 	, JobRuntime(
 		MakeUnique<FProductionJobRuntime>(
@@ -1413,12 +1415,16 @@ void FProductionRuntimeController::TickScenario()
 	FString ErrorCode;
 	FString ErrorMessage;
 	bool bShouldRetry = false;
+	FString Capability;
+	TSharedPtr<FJsonObject> FailedStepResult;
 	if (!ExecuteScenarioStep(
 			Run,
 			Step,
 			ErrorCode,
 			ErrorMessage,
-			bShouldRetry))
+			bShouldRetry,
+			Capability,
+			FailedStepResult))
 	{
 		const double StepTimeoutMs =
 			Step->HasField(TEXT("timeoutMs"))
@@ -1429,6 +1435,13 @@ void FProductionRuntimeController::TickScenario()
 		{
 			return;
 		}
+		AppendScenarioFailureReceipt(
+			Run,
+			Step,
+			Capability,
+			FailedStepResult,
+			ErrorCode.IsEmpty() ? TEXT("verification_failed") : ErrorCode,
+			ErrorMessage);
 		FinishScenario(
 			Run,
 			TEXT("failed"),
@@ -1652,10 +1665,13 @@ bool FProductionRuntimeController::ExecuteScenarioStep(
 	const TSharedPtr<FJsonObject>& Step,
 	FString& OutErrorCode,
 	FString& OutErrorMessage,
-	bool& bOutShouldRetry)
+	bool& bOutShouldRetry,
+	FString& OutCapability,
+	TSharedPtr<FJsonObject>& OutStepResult)
 {
 	const FString StepId = GetStringFieldOr(Step, TEXT("id"), FString());
 	const FString Action = GetStringFieldOr(Step, TEXT("action"), FString());
+	++Run.StepAttempts.FindOrAdd(StepId);
 	TSharedPtr<FJsonObject> ToolParams = MakeShared<FJsonObject>();
 	if (Step->HasTypedField<EJson::Object>(TEXT("params")))
 	{
@@ -1670,6 +1686,19 @@ bool FProductionRuntimeController::ExecuteScenarioStep(
 			ResolvedParamsValue,
 			OutErrorMessage))
 	{
+		TSharedPtr<FJsonObject> MappingParams =
+			CopyControllerJsonObject(ToolParams);
+		OutCapability = MapScenarioActionToCapability(Action, MappingParams);
+		if (OutCapability.IsEmpty())
+		{
+			OutCapability = FString::Printf(TEXT("scenario.action.%s"), *Action);
+		}
+		FMCPToolResult PreflightResult = FMCPToolResult::Error(
+			OutErrorMessage,
+			TEXT("invalid_params"),
+			422);
+		AnnotateDelegatedResult(OutCapability, false, PreflightResult);
+		OutStepResult = PreflightResult.Data;
 		OutErrorCode = TEXT("invalid_params");
 		return false;
 	}
@@ -1734,10 +1763,20 @@ bool FProductionRuntimeController::ExecuteScenarioStep(
 	}
 	else
 	{
-		const FString Capability =
+		OutCapability =
 			MapScenarioActionToCapability(Action, ToolParams);
-		if (Capability.IsEmpty() || !Registry.FindTool(Capability))
+		if (OutCapability.IsEmpty() || !Registry.FindTool(OutCapability))
 		{
+			if (OutCapability.IsEmpty())
+			{
+				OutCapability = FString::Printf(TEXT("scenario.action.%s"), *Action);
+			}
+			FMCPToolResult PreflightResult = FMCPToolResult::Error(
+				FString::Printf(TEXT("Scenario action '%s' is unavailable."), *Action),
+				TEXT("capability_not_found"),
+				404);
+			AnnotateDelegatedResult(OutCapability, false, PreflightResult);
+			OutStepResult = PreflightResult.Data;
 			OutErrorCode = TEXT("capability_not_found");
 			OutErrorMessage =
 				FString::Printf(TEXT("Scenario action '%s' is unavailable."), *Action);
@@ -1745,19 +1784,28 @@ bool FProductionRuntimeController::ExecuteScenarioStep(
 		}
 
 		TArray<FString> ParamErrors;
-		if (!Registry.ValidateParams(Capability, ToolParams, ParamErrors))
+		if (!Registry.ValidateParams(OutCapability, ToolParams, ParamErrors))
 		{
+			FMCPToolResult PreflightResult = FMCPToolResult::Error(
+				FString::Join(ParamErrors, TEXT(" ")),
+				TEXT("invalid_params"),
+				422);
+			AnnotateDelegatedResult(OutCapability, false, PreflightResult);
+			OutStepResult = PreflightResult.Data;
 			OutErrorCode = TEXT("invalid_params");
 			OutErrorMessage = FString::Join(ParamErrors, TEXT(" "));
 			return false;
 		}
 
 		const FMCPToolResult ToolResult =
-			Registry.ExecuteTool(Capability, ToolParams);
-		if (!ToolResult.bSuccess)
+			Registry.ExecuteTool(OutCapability, ToolParams);
+		FMCPToolResult AnnotatedResult = ToolResult;
+		AnnotateDelegatedResult(OutCapability, true, AnnotatedResult);
+		OutStepResult = AnnotatedResult.Data;
+		if (!AnnotatedResult.bSuccess)
 		{
-			OutErrorCode = ToolResult.ErrorCode;
-			OutErrorMessage = ToolResult.ErrorMessage;
+			OutErrorCode = AnnotatedResult.ErrorCode;
+			OutErrorMessage = AnnotatedResult.ErrorMessage;
 			bOutShouldRetry =
 				OutErrorCode == TEXT("pie_not_running")
 				|| OutErrorCode == TEXT("runtime_object_not_found")
@@ -1765,10 +1813,11 @@ bool FProductionRuntimeController::ExecuteScenarioStep(
 			return false;
 		}
 		StepResult =
-			ToolResult.Data.IsValid()
-				? ToolResult.Data
+			AnnotatedResult.Data.IsValid()
+				? AnnotatedResult.Data
 				: MakeShared<FJsonObject>();
 	}
+	OutStepResult = StepResult;
 
 	if (!EvaluateAssertions(Step, StepResult, OutErrorMessage))
 	{
@@ -1810,6 +1859,10 @@ bool FProductionRuntimeController::ExecuteScenarioStep(
 	TSharedPtr<FJsonObject> Receipt = MakeShared<FJsonObject>();
 	Receipt->SetStringField(TEXT("id"), StepId);
 	Receipt->SetStringField(TEXT("action"), Action);
+	if (!OutCapability.IsEmpty())
+	{
+		Receipt->SetStringField(TEXT("capability"), OutCapability);
+	}
 	Receipt->SetBoolField(TEXT("ok"), true);
 	Receipt->SetNumberField(
 		TEXT("elapsedMs"),
@@ -1818,12 +1871,119 @@ bool FProductionRuntimeController::ExecuteScenarioStep(
 		CopyControllerJsonObject(StepResult);
 	ReceiptData->RemoveField(TEXT("image_base64"));
 	Receipt->SetObjectField(TEXT("data"), ReceiptData);
+	for (const TCHAR* Field : {
+		TEXT("localDeclared"),
+		TEXT("handlerRegistered"),
+		TEXT("liveAvailable"),
+		TEXT("executed"),
+		TEXT("readbackVerified"),
+		TEXT("runtimeVerified"),
+		TEXT("verificationState")})
+	{
+		const TSharedPtr<FJsonValue>* Value = StepResult->Values.Find(Field);
+		if (Value && Value->IsValid())
+		{
+			Receipt->SetField(Field, *Value);
+		}
+	}
 	Run.StepReceipts.Add(MakeShared<FJsonValueObject>(Receipt));
 
 	++Run.StepIndex;
 	Run.StepStartedAtSeconds = 0.0;
 	Run.WaitUntilSeconds = 0.0;
 	return true;
+}
+
+void FProductionRuntimeController::AnnotateDelegatedResult(
+	const FString& Capability,
+	const bool bExecuted,
+	FMCPToolResult& InOutResult) const
+{
+	if (!ScenarioExecutor.IsValid() || Capability.IsEmpty())
+	{
+		return;
+	}
+
+	FMCPExecutionContext Context;
+	Context.Capability = Capability;
+	FMCPResult CoreResult;
+	if (InOutResult.bSuccess)
+	{
+		CoreResult = FMCPResult::Ok(InOutResult.Data);
+	}
+	else
+	{
+		CoreResult = FMCPResult::Fail(
+			InOutResult.ErrorCode,
+			InOutResult.ErrorMessage,
+			InOutResult.HttpStatus);
+	}
+	ScenarioExecutor->AnnotateVerification(Context, CoreResult, bExecuted);
+
+	if (CoreResult.bOk)
+	{
+		InOutResult.Data = CoreResult.Data;
+		return;
+	}
+	InOutResult.ErrorCode = CoreResult.Error.Code;
+	InOutResult.ErrorMessage = CoreResult.Error.Message;
+	InOutResult.HttpStatus = CoreResult.Error.HttpStatus;
+	// A failed delegated call still returns its verification receipt through the
+	// step result. Keep the transport error fields intact while exposing the
+	// six-state object to the scenario result consumer.
+	InOutResult.Data = CoreResult.Error.Details;
+}
+
+void FProductionRuntimeController::AppendScenarioFailureReceipt(
+	FScenarioRun& Run,
+	const TSharedPtr<FJsonObject>& Step,
+	const FString& Capability,
+	const TSharedPtr<FJsonObject>& StepResult,
+	const FString& ErrorCode,
+	const FString& ErrorMessage) const
+{
+	const FString StepId = GetStringFieldOr(Step, TEXT("id"), FString());
+	if (Run.FailureReceiptSteps.Contains(StepId))
+	{
+		return;
+	}
+	Run.FailureReceiptSteps.Add(StepId);
+	TSharedPtr<FJsonObject> Receipt = MakeShared<FJsonObject>();
+	Receipt->SetStringField(
+		TEXT("id"),
+		StepId);
+	Receipt->SetStringField(
+		TEXT("action"),
+		GetStringFieldOr(Step, TEXT("action"), FString()));
+	if (!Capability.IsEmpty())
+	{
+		Receipt->SetStringField(TEXT("capability"), Capability);
+	}
+	Receipt->SetBoolField(TEXT("ok"), false);
+	Receipt->SetStringField(TEXT("errorCode"), ErrorCode);
+	Receipt->SetStringField(TEXT("errorMessage"), ErrorMessage);
+	const int32* Attempts = Run.StepAttempts.Find(GetStringFieldOr(Step, TEXT("id"), FString()));
+	Receipt->SetNumberField(TEXT("attempts"), Attempts ? *Attempts : 1);
+	if (StepResult.IsValid())
+	{
+		for (const TCHAR* Field : {
+			TEXT("localDeclared"),
+			TEXT("handlerRegistered"),
+			TEXT("liveAvailable"),
+			TEXT("executed"),
+			TEXT("readbackVerified"),
+			TEXT("runtimeVerified"),
+			TEXT("verificationState")})
+		{
+			const TSharedPtr<FJsonValue>* Value = StepResult->Values.Find(Field);
+			if (Value && Value->IsValid())
+			{
+				Receipt->SetField(Field, *Value);
+			}
+		}
+		Receipt->SetObjectField(TEXT("data"), CopyControllerJsonObject(StepResult));
+	}
+	Run.StepReceipts.Add(MakeShared<FJsonValueObject>(Receipt));
 }
 
 bool FProductionRuntimeController::EvaluateAssertions(

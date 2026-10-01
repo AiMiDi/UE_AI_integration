@@ -14,6 +14,7 @@ class FPerformanceRegressionService;
 class FPerformanceSuiteService;
 class FRecoveryJournalService;
 class FReflectionInspectService;
+class FMCPExecutor;
 
 /**
  * Owns the asynchronous production jobs exposed by the production domain.
@@ -64,6 +65,8 @@ private:
 		TSharedPtr<FJsonObject> Scenario;
 		TArray<TSharedPtr<FJsonValue>> StepReceipts;
 		TMap<FString, TSharedPtr<FJsonObject>> StepResults;
+		TMap<FString, int32> StepAttempts;
+		TSet<FString> FailureReceiptSteps;
 		TMap<FString, FScenarioArtifact> Artifacts;
 		int32 StepIndex = 0;
 		double StartedAtSeconds = 0.0;
@@ -122,7 +125,20 @@ private:
 		const TSharedPtr<FJsonObject>& Step,
 		FString& OutErrorCode,
 		FString& OutErrorMessage,
-		bool& bOutShouldRetry);
+		bool& bOutShouldRetry,
+		FString& OutCapability,
+		TSharedPtr<FJsonObject>& OutStepResult);
+	void AnnotateDelegatedResult(
+		const FString& Capability,
+		bool bExecuted,
+		FMCPToolResult& InOutResult) const;
+	void AppendScenarioFailureReceipt(
+		FScenarioRun& Run,
+		const TSharedPtr<FJsonObject>& Step,
+		const FString& Capability,
+		const TSharedPtr<FJsonObject>& StepResult,
+		const FString& ErrorCode,
+		const FString& ErrorMessage) const;
 	bool EvaluateAssertions(
 		const TSharedPtr<FJsonObject>& Step,
 		const TSharedPtr<FJsonObject>& StepResult,
@@ -151,6 +167,7 @@ private:
 
 	FMCPToolRegistry& Registry;
 	FPIESessionController& PIEController;
+	TUniquePtr<FMCPExecutor> ScenarioExecutor;
 	TMap<FString, TSharedPtr<FScenarioRun>> ScenarioRuns;
 	FString ActiveScenarioId;
 	TMap<FString, TSharedPtr<FBuildJob>> BuildJobs;

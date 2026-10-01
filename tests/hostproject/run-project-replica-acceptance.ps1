@@ -18,6 +18,7 @@ param(
     [switch] $PrepareOnly
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'build-receipt-helper.ps1')
 
 function Assert-Condition([bool] $Condition, [string] $Message) {
     if (-not $Condition) { throw $Message }
@@ -49,18 +50,6 @@ function Get-FileIdentity([string] $Path) {
         bytes = [int64]$file.Length
         sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
-}
-
-function Get-PackageDigest([string] $Root) {
-    $entries = @(
-        foreach ($file in @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force | Sort-Object FullName)) {
-            $relative = [IO.Path]::GetRelativePath($Root, $file.FullName).Replace('\', '/')
-            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$relative|$($file.Length)|$hash"
-        }
-    )
-    [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
-        [Text.Encoding]::UTF8.GetBytes($entries -join "`n"))).ToLowerInvariant()
 }
 
 function Get-OriginalSeedIdentities {
@@ -260,12 +249,7 @@ $OriginalProjectRoot = Get-FullPath (Resolve-Path -LiteralPath $OriginalProjectR
 $EngineRoot = Get-FullPath (Resolve-Path -LiteralPath $EngineRoot).Path
 $WorkRoot = Get-FullPath $WorkRoot
 Assert-IndependentDirectory $WorkRoot
-$build = Get-Content -LiteralPath $BuildSummaryPath -Raw | ConvertFrom-Json
-Assert-Condition ($build.build.skipped -ne $true -and $build.build.exitCode -eq 0 `
-    -and $build.sourceStableForBuild -eq $true -and $build.packageBinding.verified -eq $true) `
-    'A successful, stable, content-bound native build receipt is required.'
-Assert-Condition ((Get-PackageDigest $PackagedPluginRoot) -eq $build.packageBinding.packageContent.contentSha256) `
-    'The supplied plugin package differs from its successful build receipt.'
+$buildBinding = Get-VerifiedBuildBinding -BuildSummaryPath $BuildSummaryPath -PackagedPluginRoot $PackagedPluginRoot -EngineRoot $EngineRoot
 $engineBuildId = (Get-Content -Raw -LiteralPath (Join-Path $EngineRoot 'Engine\Binaries\Win64\UnrealEditor.modules') | ConvertFrom-Json).BuildId
 foreach ($manifest in @(
     (Join-Path $OriginalProjectRoot 'Binaries\Win64\UnrealEditor.modules'),
@@ -341,8 +325,7 @@ bAutomaticallyCheckoutOnAssetModification=False
 '@ | Set-Content -LiteralPath (Join-Path $replica 'Config\DefaultEditorPerProjectUserSettings.ini') -Encoding utf8NoBOM
 $dll = Get-FileIdentity (Join-Path $pluginCopy 'Binaries\Win64\UnrealEditor-UE_AI_integration.dll')
 $pdb = Get-FileIdentity (Join-Path $pluginCopy 'Binaries\Win64\UnrealEditor-UE_AI_integration.pdb')
-Assert-Condition ($dll.sha256 -eq $build.packageBinding.packageContent.moduleArtifacts.dll.sha256 `
-    -and $pdb.sha256 -eq $build.packageBinding.packageContent.moduleArtifacts.pdb.sha256) 'Copied DLL/PDB differ from the bound build.'
+Assert-Condition ($dll.sha256 -eq $buildBinding.dll.sha256 -and $pdb.sha256 -eq $buildBinding.pdb.sha256) 'Copied DLL/PDB differ from the verified build receipt.'
 $originalBefore = @(Get-OriginalSeedIdentities)
 $summaryPath = Join-Path $evidenceRoot 'summary.json'
 $summary = [ordered]@{
