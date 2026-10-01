@@ -8859,10 +8859,10 @@ namespace UEAINiagaraModulePrivate
 			FString TreeGuid;
 			FString TreeScriptPath;
 			FGuid ParsedTreeGuid;
-			if (!Tree->TryGetStringField(TEXT("guid"), TreeGuid)
+			if (!(*Tree)->TryGetStringField(TEXT("guid"), TreeGuid)
 				|| !FGuid::Parse(TreeGuid, ParsedTreeGuid)
 				|| ParsedTreeGuid != RequestedGuid
-				|| !Tree->TryGetStringField(TEXT("scriptPath"), TreeScriptPath)
+				|| !(*Tree)->TryGetStringField(TEXT("scriptPath"), TreeScriptPath)
 				|| !ScriptObjectPathsEqual(TreeScriptPath, NodeScriptPath(DynamicNode)))
 			{
 				return ErrorResult(

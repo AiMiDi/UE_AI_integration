@@ -297,7 +297,8 @@ bool FNiagaraRendererMaterialSemanticContractTest::RunTest(const FString&)
 	TestEqual(TEXT("Apply creates exactly one mesh slot"),
 		Mesh->OverrideMaterials.Num(), 1);
 	TestEqual(TEXT("Created slot stores explicit material"),
-		Mesh->OverrideMaterials[0].ExplicitMat.Get(), MaterialFixture);
+		Mesh->OverrideMaterials[0].ExplicitMat.Get(),
+		static_cast<UMaterialInterface*>(MaterialFixture));
 	TestTrue(TEXT("Apply enables mesh overrides"), Mesh->bOverrideMaterials != 0);
 	TestTrue(TEXT("Receipt records async compile request"),
 		MeshApplied.Data->GetBoolField(TEXT("compileRequested")));
@@ -454,7 +455,7 @@ bool FNiagaraRendererMaterialSemanticContractTest::RunTest(const FString&)
 		return false;
 	}
 	TestEqual(TEXT("Sprite explicit material read-back"),
-		Sprite->Material.Get(), MaterialFixture);
+		Sprite->Material.Get(), static_cast<UMaterialInterface*>(MaterialFixture));
 	TestTrue(TEXT("Sprite mutation requests compile"),
 		SpriteApplied.Data->GetBoolField(TEXT("compileRequested")));
 	TestTrue(TEXT("Sprite binding is preserved after apply"),
