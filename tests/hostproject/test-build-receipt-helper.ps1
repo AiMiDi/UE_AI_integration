@@ -84,6 +84,10 @@ try {
     Assert-ReceiptRejected $receiptPath $packageRoot $engineRoot 'source-before/after mismatch'
     $sourcePin | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $afterPath -Encoding utf8NoBOM
 
+    [IO.File]::WriteAllText($sourcePath, 'mutated', [Text.Encoding]::UTF8)
+    Assert-ReceiptRejected $receiptPath $packageRoot $engineRoot 'source pin drift'
+    [IO.File]::WriteAllText($sourcePath, 'stable', [Text.Encoding]::UTF8)
+
     $badModulePin = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
     $badModulePin.ModulePins[0].BuildId = 'different-build-id'
     $badModulePin | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $receiptPath -Encoding utf8NoBOM

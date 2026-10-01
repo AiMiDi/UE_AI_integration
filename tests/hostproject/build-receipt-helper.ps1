@@ -139,6 +139,9 @@ function Get-VerifiedBuildBinding {
                 throw 'Whole-project module pins must include Path, BuildId and SHA256.'
             }
             $pinFile = Get-ReceiptFullPath $pinPath
+            if ([IO.Path]::GetFileName($pinFile) -ne 'UnrealEditor.modules') {
+                throw "Whole-project module pin is not an UnrealEditor.modules manifest: $pinFile"
+            }
             if (-not (Test-Path -LiteralPath $pinFile -PathType Leaf)) {
                 throw "Whole-project module pin references a missing manifest: $pinFile"
             }
