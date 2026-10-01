@@ -94,6 +94,12 @@ try {
     Assert-ReceiptRejected $receiptPath $packageRoot $engineRoot 'module BuildId mismatch'
     $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $receiptPath -Encoding utf8NoBOM
 
+    $badModuleHash = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+    $badModuleHash.ModulePins[0].SHA256 = '0' * 64
+    $badModuleHash | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $receiptPath -Encoding utf8NoBOM
+    Assert-ReceiptRejected $receiptPath $packageRoot $engineRoot 'module manifest hash mismatch'
+    $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $receiptPath -Encoding utf8NoBOM
+
     [IO.File]::SetLastWriteTimeUtc($dllPath, $startedUtc.AddHours(-2))
     Assert-ReceiptRejected $receiptPath $packageRoot $engineRoot 'stale DLL artifact'
 } finally {
