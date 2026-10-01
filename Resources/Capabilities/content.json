@@ -12697,6 +12697,34 @@
             "minimum": 1,
             "maximum": 128,
             "default": 32
+          },
+          "eventHandlerOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65536,
+            "default": 0,
+            "description": "Per-emitter offset for the bounded Event Handler page."
+          },
+          "eventHandlerLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 128,
+            "default": 32,
+            "description": "Maximum Event Handlers returned for each emitter."
+          },
+          "simulationStageOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65536,
+            "default": 0,
+            "description": "Per-emitter offset for the bounded Simulation Stage page."
+          },
+          "simulationStageLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 128,
+            "default": 32,
+            "description": "Maximum Simulation Stages returned for each emitter."
           }
         },
         "required": [
@@ -15826,6 +15854,82 @@
         "status": "active",
         "since": "1.1.0",
         "canonicalId": "content.niagara.event_handler.add.rollback"
+      }
+    },
+    {
+      "id": "content.niagara.event_handler.list",
+      "domain": "content",
+      "kind": "query",
+      "description": "List a bounded authored Niagara Particle Event Handler page with stable usage IDs, options, and graph presence without compiling or saving.",
+      "requires": {
+        "features": [
+          "Niagara"
+        ],
+        "plugins": [
+          "Niagara"
+        ],
+        "modules": [
+          "Niagara"
+        ]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "description": "Exact Niagara System package or object path."
+          },
+          "emitter": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "Emitter handle GUID or display name."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65536,
+            "default": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 128,
+            "default": 32
+          }
+        },
+        "required": [
+          "system",
+          "emitter"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "content.niagara.event_handler.list"
       }
     },
     {

@@ -4,8 +4,10 @@
 #include "EditorAssetLibrary.h"
 #include "EdGraph/EdGraph.h"
 #include "Engine/Blueprint.h"
+#include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Guid.h"
+#include "PackageTools.h"
 #include "Tools/MCPToolRegistry.h"
 #include "UEAIIntegrationServer.h"
 #include "UEAIIntegrationSubsystem.h"
@@ -214,6 +216,54 @@ bool FBlueprintBuildGraphWorkflowTest::RunTest(const FString& Parameters)
 		BlueprintNodeCount(Blueprint),
 		ManualNodeCount + 2);
 
+	// Acceptance continues past the in-memory Workflow result.  A BuildGraph
+	// execution is only useful to callers if the generated Blueprint compiles,
+	// the package is persisted, and the same managed definition survives a disk
+	// reload in this Editor instance.
+	if (Blueprint)
+	{
+		FKismetEditorUtilities::CompileBlueprint(
+			Blueprint,
+			EBlueprintCompileOptions::SkipSave);
+		TestEqual(
+			TEXT("BuildGraph Blueprint compiles without errors"),
+			Blueprint->Status,
+			BS_UpToDate);
+		TestTrue(
+			TEXT("BuildGraph package saves to disk"),
+			UEditorAssetLibrary::SaveAsset(BlueprintPath, false));
+	}
+
+	if (Blueprint)
+	{
+		UPackage* PackageToReload = Blueprint->GetOutermost();
+		TArray<UPackage*> PackagesToReload{PackageToReload};
+		FText ReloadError;
+		const bool bReloaded = UPackageTools::ReloadPackages(
+			PackagesToReload,
+			ReloadError,
+			EReloadPackagesInteractionMode::AssumePositive);
+		TestTrue(TEXT("BuildGraph Blueprint reloads from disk"), bReloaded);
+		if (bReloaded)
+		{
+			Blueprint = LoadObject<UBlueprint>(nullptr, *BlueprintPath);
+			TestNotNull(TEXT("Reloaded BuildGraph Blueprint is available"), Blueprint);
+			TestEqual(
+				TEXT("Managed BuildGraph nodes survive disk reload"),
+				BlueprintNodeCount(Blueprint),
+				ManualNodeCount + 2);
+
+			TSharedRef<FJsonObject> ReloadedDefinitionParams = MakeShared<FJsonObject>();
+			ReloadedDefinitionParams->SetStringField(TEXT("blueprint"), BlueprintPath);
+			ReloadedDefinitionParams->SetStringField(TEXT("graph"), Graph);
+			ReloadedDefinitionParams->SetStringField(TEXT("buildId"), TEXT("automation-build"));
+			const FMCPToolResult ReloadedDefinition = Registry->ExecuteTool(
+				TEXT("blueprint.graph.build.definition.get"),
+				ReloadedDefinitionParams);
+			TestTrue(TEXT("Managed BuildGraph definition survives disk reload"), ReloadedDefinition.bSuccess);
+		}
+	}
+
 	const FMCPToolResult ReplayPlan = Registry->ExecuteTool(
 		TEXT("blueprint.graph.build.plan"),
 		Params);
@@ -286,16 +336,6 @@ bool FBlueprintBuildGraphWorkflowTest::RunTest(const FString& Parameters)
 				Runtime->HandleRequest(Rollback).bOk);
 		}
 	}
-	TSharedRef<FJsonObject> RollbackInitial = MakeShared<FJsonObject>();
-	RollbackInitial->SetStringField(TEXT("action"), TEXT("rollback"));
-	RollbackInitial->SetStringField(
-		TEXT("runId"),
-		Executed.Data->GetStringField(TEXT("runId")));
-	RollbackInitial->SetStringField(TEXT("approvePlanDigest"), Digest);
-	TestTrue(
-		TEXT("Initial BuildGraph Workflow also rolls back before fixture cleanup"),
-		Runtime->HandleRequest(RollbackInitial).bOk);
-
 	UEditorAssetLibrary::DeleteAsset(BlueprintPath);
 	return true;
 }

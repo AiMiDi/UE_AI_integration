@@ -1,10 +1,21 @@
 import { UEApiError } from "./ue-bridge.js";
+const GENERIC_TRUNCATION_NEXT_ACTION = "Use the capability's bounded pagination or detail controls; this generic preview has no continuation.";
 function formatTruncatedJson(serialized, maxLength) {
-    const createEnvelope = (previewLength) => JSON.stringify({
-        truncated: true,
-        totalCharacters: serialized.length,
-        preview: serialized.slice(0, previewLength),
-    }, null, 2);
+    const createEnvelope = (previewLength) => {
+        const envelope = {
+            schema: "ue.mcp-output-truncated.v1",
+            truncated: true,
+            totalCharacters: serialized.length,
+            preview: serialized.slice(0, previewLength),
+            continuation: {
+                status: "unavailable",
+                reason: "generic_serialization",
+                safeToInfer: false,
+                nextAction: GENERIC_TRUNCATION_NEXT_ACTION,
+            },
+        };
+        return JSON.stringify(envelope, null, 2);
+    };
     let low = 0;
     let high = Math.min(serialized.length, Math.max(0, maxLength));
     let best = createEnvelope(0);

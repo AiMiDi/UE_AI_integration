@@ -268,6 +268,14 @@ StateTree、Mass、EQS 或运行时 AI Debugger。
 
 - `ue.job.v1`：长任务状态、进度、诊断和 artifact 引用。
 - `ue.artifact.v1`：有界 artifact 元数据和分块内容。
+- `ue.mcp-output-truncated.v1`：MCP 文本序列化超出传输预算时的通用兜底。
+  该结果只包含前缀 `preview`，并通过
+  `continuation.status=unavailable`、`reason=generic_serialization` 和
+  `safeToInfer=false` 明确表示不能从前缀推断完整结果，也不存在可恢复的
+  cursor/token。能够控制查询边界的 capability/domain handler 必须自己返回
+  有界 page 和稳定 continuation；调用方应按该 capability 的合同使用
+  `nextCursor`、`nextOffset` 或结构化 continuation，而不能把通用 preview 当作
+  第一页或成功的完整结果。
 - `ue.finding.v1`：静态/运行时工程发现。
 - `ue.change-plan.v1`：可审批写入计划和稳定 digest。
 - `/api/execute.requestId` 是新增幂等写入/Job 的权威来源；Executor 会要求顶层

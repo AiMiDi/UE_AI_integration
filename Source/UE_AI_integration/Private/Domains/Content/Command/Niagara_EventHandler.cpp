@@ -15,10 +15,12 @@
 
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
+#include "EdGraphSchema_Niagara.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraEmitterHandle.h"
 #include "NiagaraGraph.h"
 #include "NiagaraNode.h"
+#include "NiagaraNodeInput.h"
 #include "NiagaraNodeOutput.h"
 #include "NiagaraScript.h"
 #include "NiagaraScriptSource.h"
@@ -36,6 +38,8 @@ namespace UEAINiagaraEventHandlerPrivate
 	constexpr int32 MaxEmitterSelectorCharacters = 512;
 	constexpr int32 MaxEventNameCharacters = 128;
 	constexpr uint32 MaxSpawnCount = 1000000;
+	constexpr int32 MaxPageOffset = 65536;
+	constexpr int32 MaxPageSize = 128;
 
 	struct FEventHandlerRequest
 	{
@@ -131,6 +135,32 @@ namespace UEAINiagaraEventHandlerPrivate
 			}
 		}
 		return Path;
+	}
+
+	bool ReadPageField(
+		const TSharedPtr<FJsonObject>& Params,
+		const TCHAR* Name,
+		const int32 DefaultValue,
+		const int32 MinimumValue,
+		const int32 MaximumValue,
+		int32& OutValue)
+	{
+		OutValue = DefaultValue;
+		if (!Params->HasField(Name))
+		{
+			return true;
+		}
+		double Number = 0.0;
+		if (!Params->TryGetNumberField(Name, Number)
+			|| !FMath::IsFinite(Number)
+			|| Number < static_cast<double>(MinimumValue)
+			|| Number > static_cast<double>(MaximumValue)
+			|| Number != FMath::FloorToDouble(Number))
+		{
+			return false;
+		}
+		OutValue = static_cast<int32>(Number);
+		return true;
 	}
 
 	bool ReadBoundedUint(
@@ -395,6 +425,67 @@ namespace UEAINiagaraEventHandlerPrivate
 		return Graph->FindEquivalentOutputNode(ENiagaraScriptUsage::ParticleEventScript, UsageId) != nullptr;
 	}
 
+	UEdGraphPin* FindParameterMapPin(UNiagaraNode* Node, EEdGraphPinDirection Direction)
+	{
+		if (!Node)
+		{
+			return nullptr;
+		}
+		for (UEdGraphPin* Pin : Node->GetAllPins())
+		{
+			if (Pin && Pin->Direction == Direction
+				&& UEdGraphSchema_Niagara::PinToTypeDefinition(Pin) == FNiagaraTypeDefinition::GetParameterMapDef())
+			{
+				return Pin;
+			}
+		}
+		return nullptr;
+	}
+
+	UNiagaraNodeOutput* CreateEventGraphOutput(UNiagaraGraph* Graph, const FGuid& UsageId)
+	{
+		if (!Graph)
+		{
+			return nullptr;
+		}
+		if (UNiagaraNodeOutput* Existing = Graph->FindEquivalentOutputNode(
+			ENiagaraScriptUsage::ParticleEventScript, UsageId))
+		{
+			return Existing;
+		}
+
+		Graph->Modify();
+		FGraphNodeCreator<UNiagaraNodeOutput> OutputCreator(*Graph);
+		UNiagaraNodeOutput* Output = OutputCreator.CreateNode();
+		Output->SetUsage(ENiagaraScriptUsage::ParticleEventScript);
+		Output->SetUsageId(UsageId);
+		Output->Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("Out")));
+		OutputCreator.Finalize();
+		UEdGraphPin* OutputInput = FindParameterMapPin(Output, EGPD_Input);
+		if (!OutputInput)
+		{
+			Graph->RemoveNode(Output);
+			return nullptr;
+		}
+
+		FGraphNodeCreator<UNiagaraNodeInput> InputCreator(*Graph);
+		UNiagaraNodeInput* Input = InputCreator.CreateNode();
+		Input->Input = FNiagaraVariable(FNiagaraTypeDefinition::GetParameterMapDef(), TEXT("InputMap"));
+		Input->Usage = ENiagaraInputNodeUsage::Parameter;
+		InputCreator.Finalize();
+		UEdGraphPin* InputOutput = FindParameterMapPin(Input, EGPD_Output);
+		if (!InputOutput)
+		{
+			Graph->RemoveNode(Output);
+			Graph->RemoveNode(Input);
+			return nullptr;
+		}
+
+		OutputInput->MakeLinkTo(InputOutput);
+		Graph->NotifyGraphChanged();
+		return Output;
+	}
+
 	void CollectReachableNodes(UNiagaraNode* Node, TSet<UNiagaraNode*>& OutNodes)
 	{
 		if (!Node || OutNodes.Contains(Node))
@@ -648,6 +739,92 @@ namespace UEAINiagaraEventHandlerPrivate
 		return Result;
 	}
 
+	class FTool_NiagaraEventHandlerList final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.event_handler.list"); }
+
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			if (!Params.IsValid())
+			{
+				return ErrorResult(TEXT("A Niagara event-handler list request is required."), TEXT("invalid_request"));
+			}
+			FEventHandlerRequest Request;
+			if (!Params->TryGetStringField(TEXT("system"), Request.SystemPath)
+				|| Request.SystemPath.TrimStartAndEnd().IsEmpty())
+			{
+				return ErrorResult(TEXT("system is required."), TEXT("system_required"));
+			}
+			if (!Params->TryGetStringField(TEXT("emitter"), Request.EmitterSelector)
+				|| Request.EmitterSelector.TrimStartAndEnd().IsEmpty()
+				|| Request.EmitterSelector.Len() > MaxEmitterSelectorCharacters)
+			{
+				return ErrorResult(
+					TEXT("emitter must be a bounded handle ID or display name."), TEXT("emitter_required"));
+			}
+			int32 Offset = 0;
+			int32 Limit = 32;
+			if (!ReadPageField(Params, TEXT("offset"), 0, 0, MaxPageOffset, Offset)
+				|| !ReadPageField(Params, TEXT("limit"), 32, 1, MaxPageSize, Limit))
+			{
+				return ErrorResult(
+					TEXT("offset must be an integer from 0 to 65536 and limit must be an integer from 1 to 128."),
+					TEXT("page_invalid"));
+			}
+
+			Request.SystemPath = Request.SystemPath.TrimStartAndEnd();
+			Request.EmitterSelector = Request.EmitterSelector.TrimStartAndEnd();
+			FEventHandlerTarget Target;
+			FString ErrorCode;
+			FString Error;
+			if (!ResolveTarget(Request, Target, ErrorCode, Error))
+			{
+				return ErrorResult(Error, ErrorCode, ErrorCode.Contains(TEXT("not_found")) ? 404 : 422);
+			}
+
+			const TArray<FNiagaraEventScriptProperties>& Handlers = Target.Data->EventHandlerScriptProps;
+			const int32 End = FMath::Min(Handlers.Num(), Offset + Limit);
+			TArray<TSharedPtr<FJsonValue>> Rows;
+			Rows.Reserve(FMath::Max(0, End - Offset));
+			for (int32 Index = Offset; Index < End; ++Index)
+			{
+				const FNiagaraEventScriptProperties& Handler = Handlers[Index];
+				auto Row = MakeShared<FJsonObject>();
+				const UNiagaraScript* Script = Handler.Script;
+				const FGuid UsageId = Script ? Script->GetUsageId() : FGuid();
+				Row->SetStringField(TEXT("usageId"), UsageId.ToString(EGuidFormats::DigitsWithHyphensLower));
+				Row->SetStringField(TEXT("script"), Script ? Script->GetPathName() : FString());
+				Row->SetStringField(TEXT("executionMode"), ExecutionModeName(Handler.ExecutionMode));
+				Row->SetNumberField(TEXT("spawnNumber"), Handler.SpawnNumber);
+				Row->SetNumberField(TEXT("minSpawnNumber"), Handler.MinSpawnNumber);
+				Row->SetNumberField(TEXT("maxEventsPerFrame"), Handler.MaxEventsPerFrame);
+				Row->SetBoolField(TEXT("randomSpawnNumber"), Handler.bRandomSpawnNumber);
+				Row->SetBoolField(TEXT("updateAttributeInitialValues"), Handler.UpdateAttributeInitialValues);
+				Row->SetStringField(
+					TEXT("sourceEmitterId"),
+					Handler.SourceEmitterID.ToString(EGuidFormats::DigitsWithHyphensLower));
+				Row->SetStringField(TEXT("sourceEventName"), Handler.SourceEventName.ToString());
+				Row->SetBoolField(TEXT("graphPresent"), UsageId.IsValid() && HasEventGraph(Target.Graph, UsageId));
+				Rows.Add(MakeShared<FJsonValueObject>(Row));
+			}
+
+			auto Result = MakeShared<FJsonObject>();
+			Result->SetStringField(TEXT("schema"), TEXT("ue.niagara.event-handlers.v1"));
+			Result->SetStringField(TEXT("system"), Target.System->GetPathName());
+			Result->SetStringField(TEXT("emitter"), Target.EmitterName);
+			Result->SetStringField(TEXT("emitterPath"), Target.EmitterPath);
+			Result->SetStringField(TEXT("graph"), Target.GraphPath);
+			Result->SetNumberField(TEXT("total"), Handlers.Num());
+			Result->SetNumberField(TEXT("offset"), Offset);
+			Result->SetNumberField(TEXT("limit"), Limit);
+			Result->SetBoolField(TEXT("hasMore"), End < Handlers.Num());
+			Result->SetNumberField(TEXT("nextOffset"), End);
+			Result->SetArrayField(TEXT("eventHandlers"), Rows);
+			return FMCPToolResult::Ok(Result);
+		}
+	};
+
 	class FTool_NiagaraEventHandlerAddPlan final : public FMCPToolBase
 	{
 	public:
@@ -761,11 +938,22 @@ namespace UEAINiagaraEventHandlerPrivate
 			Properties.Script->SetUsageId(Data.Request.UsageId);
 			Properties.Script->SetLatestSource(Data.Target.Source);
 			Data.Target.Emitter->AddEventHandler(Properties, Data.Target.EmitterVersion);
+			// UNiagaraEmitter::AddEventHandler only records the authored script
+			// properties. The editor also creates the matching output node; do
+			// that explicitly so read-back and rollback observe the same graph
+			// shape as a native Niagara edit.
+			UNiagaraNodeOutput* EventOutput = CreateEventGraphOutput(Data.Target.Graph, Data.Request.UsageId);
 			if (!Properties.Script || Properties.Script->GetUsage() != ENiagaraScriptUsage::ParticleEventScript)
 			{
 				return ErrorResult(
 					TEXT("The Niagara editor did not create the event-handler script."),
 					TEXT("event_handler_create_failed"), 500);
+			}
+			if (!EventOutput || !HasEventGraph(Data.Target.Graph, Data.Request.UsageId))
+			{
+				return ErrorResult(
+					TEXT("The Niagara editor did not create the event-handler graph output."),
+					TEXT("event_handler_graph_create_failed"), 500);
 			}
 			FEventHandlerReceipt Receipt;
 			Receipt.ReceiptId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
@@ -921,6 +1109,7 @@ namespace UEAIIntegrationTools
 	{
 #if WITH_UEAI_NIAGARA && WITH_EDITORONLY_DATA
 		using namespace UEAINiagaraEventHandlerPrivate;
+		Registry.Register(MakeShared<FTool_NiagaraEventHandlerList>());
 		Registry.Register(MakeShared<FTool_NiagaraEventHandlerAddPlan>());
 		Registry.Register(MakeShared<FTool_NiagaraEventHandlerAddApply>());
 		Registry.Register(MakeShared<FTool_NiagaraEventHandlerAddRollback>());
@@ -945,6 +1134,8 @@ namespace UEAIIntegrationTools
 		private:
 			FString CapabilityId;
 		};
+		Registry.Register(MakeShared<FUnavailableNiagaraEventHandler>(
+			TEXT("content.niagara.event_handler.list")));
 		Registry.Register(MakeShared<FUnavailableNiagaraEventHandler>(
 			TEXT("content.niagara.event_handler.add.plan")));
 		Registry.Register(MakeShared<FUnavailableNiagaraEventHandler>(

@@ -204,15 +204,24 @@ namespace UEAINiagaraSystemRead
 			int32 ParameterOffset = 0;
 			int32 ParameterLimit = 64;
 			int32 RendererLimit = 32;
+			int32 EventHandlerOffset = 0;
+			int32 EventHandlerLimit = 32;
+			int32 SimulationStageOffset = 0;
+			int32 SimulationStageLimit = 32;
 			if (!ReadIndex(Params, TEXT("emitterOffset"), 0, MaxOffset, EmitterOffset)
 				|| !ReadIndex(Params, TEXT("emitterLimit"), 32, MaxPageSize, EmitterLimit) || EmitterLimit == 0
 				|| !ReadIndex(Params, TEXT("parameterOffset"), 0, MaxOffset, ParameterOffset)
 				|| !ReadIndex(Params, TEXT("parameterLimit"), 64, MaxPageSize, ParameterLimit) || ParameterLimit == 0
-				|| !ReadIndex(Params, TEXT("rendererLimit"), 32, MaxRenderersPerEmitter, RendererLimit) || RendererLimit
-				== 0)
+				|| !ReadIndex(Params, TEXT("rendererLimit"), 32, MaxRenderersPerEmitter, RendererLimit) || RendererLimit == 0
+				|| !ReadIndex(Params, TEXT("eventHandlerOffset"), 0, MaxOffset, EventHandlerOffset)
+				|| !ReadIndex(Params, TEXT("eventHandlerLimit"), 32, MaxExecutionContextsPerEmitter, EventHandlerLimit)
+				|| EventHandlerLimit == 0
+				|| !ReadIndex(Params, TEXT("simulationStageOffset"), 0, MaxOffset, SimulationStageOffset)
+				|| !ReadIndex(Params, TEXT("simulationStageLimit"), 32, MaxExecutionContextsPerEmitter, SimulationStageLimit)
+				|| SimulationStageLimit == 0)
 			{
 				return Error(TEXT(
-					"Offsets must be 0..65536; emitterLimit, parameterLimit and rendererLimit must be 1..128."));
+					"Offsets must be 0..65536; emitterLimit, parameterLimit, rendererLimit, eventHandlerLimit and simulationStageLimit must be 1..128."));
 			}
 
 			auto Json = MakeShared<FJsonObject>();
@@ -280,8 +289,9 @@ namespace UEAINiagaraSystemRead
 					// large emitters cannot produce an unbounded response.
 					const TArray<FNiagaraEventScriptProperties>& EventHandlers = Data->GetEventHandlers();
 					TArray<TSharedPtr<FJsonValue>> EventHandlerRows;
-					const int32 EventHandlerEnd = FMath::Min(EventHandlers.Num(), MaxExecutionContextsPerEmitter);
-					for (int32 EventIndex = 0; EventIndex < EventHandlerEnd; ++EventIndex)
+					const int32 EventHandlerEnd = FMath::Min(
+						EventHandlers.Num(), EventHandlerOffset + EventHandlerLimit);
+					for (int32 EventIndex = EventHandlerOffset; EventIndex < EventHandlerEnd; ++EventIndex)
 					{
 						const FNiagaraEventScriptProperties& EventHandler = EventHandlers[EventIndex];
 						auto EventJson = MakeShared<FJsonObject>();
@@ -316,6 +326,11 @@ namespace UEAINiagaraSystemRead
 					}
 					Emitter->SetArrayField(TEXT("eventHandlers"), EventHandlerRows);
 					Emitter->SetNumberField(TEXT("eventHandlerTotal"), EventHandlers.Num());
+					Emitter->SetNumberField(TEXT("eventHandlerOffset"), EventHandlerOffset);
+					Emitter->SetNumberField(TEXT("eventHandlerLimit"), EventHandlerLimit);
+					Emitter->SetBoolField(
+						TEXT("eventHandlersHasMore"), EventHandlerEnd < EventHandlers.Num());
+					Emitter->SetNumberField(TEXT("eventHandlersNextOffset"), EventHandlerEnd);
 					Emitter->SetBoolField(
 						TEXT("eventHandlersTruncated"),
 						EventHandlerEnd < EventHandlers.Num());
@@ -323,8 +338,8 @@ namespace UEAINiagaraSystemRead
 					const TArray<UNiagaraSimulationStageBase*>& SimulationStages = Data->GetSimulationStages();
 					TArray<TSharedPtr<FJsonValue>> SimulationStageRows;
 					const int32 SimulationStageEnd = FMath::Min(
-						SimulationStages.Num(), MaxExecutionContextsPerEmitter);
-					for (int32 StageIndex = 0; StageIndex < SimulationStageEnd; ++StageIndex)
+						SimulationStages.Num(), SimulationStageOffset + SimulationStageLimit);
+					for (int32 StageIndex = SimulationStageOffset; StageIndex < SimulationStageEnd; ++StageIndex)
 					{
 						const UNiagaraSimulationStageBase* Stage = SimulationStages[StageIndex];
 						auto StageJson = MakeShared<FJsonObject>();
@@ -352,6 +367,11 @@ namespace UEAINiagaraSystemRead
 					}
 					Emitter->SetArrayField(TEXT("simulationStages"), SimulationStageRows);
 					Emitter->SetNumberField(TEXT("simulationStageTotal"), SimulationStages.Num());
+					Emitter->SetNumberField(TEXT("simulationStageOffset"), SimulationStageOffset);
+					Emitter->SetNumberField(TEXT("simulationStageLimit"), SimulationStageLimit);
+					Emitter->SetBoolField(
+						TEXT("simulationStagesHasMore"), SimulationStageEnd < SimulationStages.Num());
+					Emitter->SetNumberField(TEXT("simulationStagesNextOffset"), SimulationStageEnd);
 					Emitter->SetBoolField(
 						TEXT("simulationStagesTruncated"),
 						SimulationStageEnd < SimulationStages.Num());

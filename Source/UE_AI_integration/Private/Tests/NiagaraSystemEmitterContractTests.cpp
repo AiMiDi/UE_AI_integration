@@ -137,6 +137,77 @@ FMCPToolResult ExecuteSystemTool(
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FNiagaraSystemInspectExecutionContextPagingContractTest,
+	"UE_AI_integration.Niagara.SystemEmitter.InspectExecutionContextPaging",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FNiagaraSystemInspectExecutionContextPagingContractTest::RunTest(const FString&)
+{
+	const FNiagaraSystemEmitterFixture Fixture = CreateNiagaraSystemEmitterFixture(1);
+	ON_SCOPE_EXIT
+	{
+		if (Fixture.System)
+		{
+			Fixture.System->WaitForCompilationComplete(false, false);
+		}
+		TestTrue(
+			TEXT("Inspect paging fixture and package are deleted"),
+			DeleteNiagaraSystemEmitterFixture(Fixture.PackageName));
+	};
+	if (!TestNotNull(TEXT("Inspect paging Niagara System fixture"), Fixture.System)
+		|| Fixture.System->GetEmitterHandles().Num() == 0)
+	{
+		AddInfo(TEXT("The Niagara template emitter is unavailable; skipping execution-context paging."));
+		return true;
+	}
+
+	FMCPToolRegistry Registry;
+	Registry.BeginDomainRegistration(TEXT("content"));
+	UEAIIntegrationTools::RegisterNiagaraTools(Registry);
+	Registry.EndDomainRegistration();
+
+	auto Params = MakeSystemParams(Fixture.System);
+	Params->SetNumberField(TEXT("eventHandlerOffset"), 0);
+	Params->SetNumberField(TEXT("eventHandlerLimit"), 1);
+	Params->SetNumberField(TEXT("simulationStageOffset"), 0);
+	Params->SetNumberField(TEXT("simulationStageLimit"), 1);
+	const FMCPToolResult FirstPage = Registry.ExecuteTool(
+		TEXT("content.niagara.system.inspect"), Params);
+	if (!TestTrue(TEXT("System inspect execution-context page succeeds"), FirstPage.bSuccess)
+		|| !TestNotNull(TEXT("System inspect returns data"), FirstPage.Data.Get()))
+	{
+		return false;
+	}
+	const TArray<TSharedPtr<FJsonValue>>* Emitters = nullptr;
+	if (!TestTrue(TEXT("System inspect returns emitter rows"),
+		FirstPage.Data->TryGetArrayField(TEXT("emitters"), Emitters)
+			&& Emitters != nullptr && Emitters->Num() == 1))
+	{
+		return false;
+	}
+	const TSharedPtr<FJsonObject> Emitter = (*Emitters)[0]->AsObject();
+	if (!TestTrue(TEXT("System inspect emitter row is an object"), Emitter.IsValid()))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Event-handler page offset is echoed"),
+		Emitter->GetIntegerField(TEXT("eventHandlerOffset")), 0);
+	TestEqual(TEXT("Event-handler page limit is echoed"),
+		Emitter->GetIntegerField(TEXT("eventHandlerLimit")), 1);
+	TestEqual(TEXT("Simulation-stage page offset is echoed"),
+		Emitter->GetIntegerField(TEXT("simulationStageOffset")), 0);
+	TestEqual(TEXT("Simulation-stage page limit is echoed"),
+		Emitter->GetIntegerField(TEXT("simulationStageLimit")), 1);
+	TestTrue(TEXT("Event-handler pagination reports a continuation state"),
+		Emitter->HasField(TEXT("eventHandlersHasMore"))
+			&& Emitter->HasField(TEXT("eventHandlersNextOffset")));
+	TestTrue(TEXT("Simulation-stage pagination reports a continuation state"),
+		Emitter->HasField(TEXT("simulationStagesHasMore"))
+			&& Emitter->HasField(TEXT("simulationStagesNextOffset")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FNiagaraSystemSaveContractTest,
 	"UE_AI_integration.Niagara.SystemEmitter.SaveContract",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

@@ -19,9 +19,16 @@ test("keeps oversized MCP JSON text valid when truncating", () => {
         })),
     }, 512);
     const payload = JSON.parse(output);
+    assert.equal(payload.schema, "ue.mcp-output-truncated.v1");
     assert.equal(payload.truncated, true);
     assert.ok(payload.totalCharacters > 512);
     assert.equal(typeof payload.preview, "string");
+    assert.deepEqual(payload.continuation, {
+        status: "unavailable",
+        reason: "generic_serialization",
+        safeToInfer: false,
+        nextAction: "Use the capability's bounded pagination or detail controls; this generic preview has no continuation.",
+    });
     assert.ok(output.length <= 512);
 });
 test("registers the stable MCP tools without contacting Unreal Editor", () => {

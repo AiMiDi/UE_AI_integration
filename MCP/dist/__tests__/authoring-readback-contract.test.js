@@ -204,12 +204,19 @@ test("keeps bounded identity and pagination schemas for the three authoring surf
         "emitterLimit",
         "parameterLimit",
         "rendererLimit",
+        "eventHandlerLimit",
+        "simulationStageLimit",
     ]) {
         assert.equal(systemInspect[field].type, "integer", field);
         assert.equal(systemInspect[field].minimum, 1, field);
         assert.equal(systemInspect[field].maximum, 128, field);
     }
-    for (const field of ["emitterOffset", "parameterOffset"]) {
+    for (const field of [
+        "emitterOffset",
+        "parameterOffset",
+        "eventHandlerOffset",
+        "simulationStageOffset",
+    ]) {
         assert.equal(systemInspect[field].type, "integer", field);
         assert.equal(systemInspect[field].minimum, 0, field);
         assert.equal(systemInspect[field].maximum, 65536, field);
