@@ -36,6 +36,7 @@
 #include "NiagaraUserRedirectionParameterStore.h"
 #include "NiagaraParameterStore.h"
 #include "NiagaraRendererProperties.h"
+#include "NiagaraSimulationStageBase.h"
 #include "NiagaraParameterMapHistory.h"
 #include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 #include "AssetRegistry/AssetData.h"

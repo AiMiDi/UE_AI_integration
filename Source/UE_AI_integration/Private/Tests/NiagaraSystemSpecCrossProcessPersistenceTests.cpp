@@ -68,6 +68,8 @@ struct FFixture
 	UNiagaraGraph* ParticleGraph = nullptr;
 	UNiagaraNodeOutput* ParticleUpdateOutput = nullptr;
 	UNiagaraNodeFunctionCall* Module = nullptr;
+	UNiagaraEmitter* Emitter = nullptr;
+	FGuid EmitterVersion;
 	UNiagaraSpriteRendererProperties* Sprite = nullptr;
 	UNiagaraMeshRendererProperties* Mesh = nullptr;
 	UNiagaraRibbonRendererProperties* Ribbon = nullptr;
@@ -181,21 +183,22 @@ bool CreateFixture(FFixture& Out)
 	if (!SystemSource || !ResetGraph(SystemSource->NodeGraph, Spawn, ENiagaraScriptUsage::SystemSpawnScript) ||
 		!ResetGraph(SystemSource->NodeGraph, Update, ENiagaraScriptUsage::SystemUpdateScript)) return false;
 
-	UNiagaraEmitter* Emitter = NewObject<UNiagaraEmitter>(Out.System, TEXT("PersistenceEmitter"), RF_Transactional);
-	if (!Emitter) return false;
-	UNiagaraEmitterFactoryNew::InitializeEmitter(Emitter, false);
-	Out.Sprite = NewObject<UNiagaraSpriteRendererProperties>(Emitter, TEXT("PersistenceSprite"), RF_Transactional);
-	Out.Mesh = NewObject<UNiagaraMeshRendererProperties>(Emitter, TEXT("PersistenceMesh"), RF_Transactional);
-	Out.Ribbon = NewObject<UNiagaraRibbonRendererProperties>(Emitter, TEXT("PersistenceRibbon"), RF_Transactional);
+	Out.Emitter = NewObject<UNiagaraEmitter>(Out.System, TEXT("PersistenceEmitter"), RF_Transactional);
+	if (!Out.Emitter) return false;
+	UNiagaraEmitterFactoryNew::InitializeEmitter(Out.Emitter, false);
+	Out.EmitterVersion = Out.Emitter->GetExposedVersion().VersionGuid;
+	Out.Sprite = NewObject<UNiagaraSpriteRendererProperties>(Out.Emitter, TEXT("PersistenceSprite"), RF_Transactional);
+	Out.Mesh = NewObject<UNiagaraMeshRendererProperties>(Out.Emitter, TEXT("PersistenceMesh"), RF_Transactional);
+	Out.Ribbon = NewObject<UNiagaraRibbonRendererProperties>(Out.Emitter, TEXT("PersistenceRibbon"), RF_Transactional);
 	if (!Out.Sprite || !Out.Mesh || !Out.Ribbon) return false;
 	Out.Sprite->bSubImageBlend = true;
 	Out.Sprite->SubImageSize = FVector2D(4.0, 2.0);
 	Out.Mesh->bSubImageBlend = true;
 	Out.Mesh->SubImageSize = FVector2D(2.0, 2.0);
-	Emitter->AddRenderer(Out.Sprite, Emitter->GetExposedVersion().VersionGuid);
-	Emitter->AddRenderer(Out.Mesh, Emitter->GetExposedVersion().VersionGuid);
-	Emitter->AddRenderer(Out.Ribbon, Emitter->GetExposedVersion().VersionGuid);
-	FNiagaraEmitterHandle Handle(*Emitter, Emitter->GetExposedVersion().VersionGuid);
+	Out.Emitter->AddRenderer(Out.Sprite, Out.EmitterVersion);
+	Out.Emitter->AddRenderer(Out.Mesh, Out.EmitterVersion);
+	Out.Emitter->AddRenderer(Out.Ribbon, Out.EmitterVersion);
+	FNiagaraEmitterHandle Handle(*Out.Emitter, Out.EmitterVersion);
 	Out.System->AddEmitterHandleDirect(Handle);
 	Out.EmitterName = Handle.GetName().ToString();
 	Out.UserFloat = FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("User.SpecRoundTrip"));
