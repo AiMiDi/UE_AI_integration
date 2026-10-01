@@ -32,6 +32,7 @@
 #include "Materials/MaterialFunction.h"
 #include "MaterialEditingLibrary.h"
 #include "Infrastructure/MaterialGraphIdentity.h"
+#include "Infrastructure/MaterialGraphSnapshot.h"
 #include "Infrastructure/MaterialCustomEditing.h"
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Misc/App.h"
@@ -2090,19 +2091,51 @@ bool FUEWorkflowMaterialDestructiveBatchTest::RunTest(const FString& Parameters)
 
 			// Standalone edits must persist graph changes without requiring an
 			// open material editor to synchronize expression inputs for them.
+			auto AttachMaterialBoundary = [&](const TSharedPtr<FJsonObject>& EditParams,
+												 const TArray<FString>& NodeIds)
+			{
+				using namespace UEAIIntegration::MaterialQuery;
+				const FMCPToolResult Captured = Capture(Material);
+				if (!Captured.bSuccess || !Captured.Data.IsValid()) return false;
+				auto BoundaryParams = MakeShared<FJsonObject>();
+				BoundaryParams->SetStringField(TEXT("snapshotId"), Captured.Data->GetStringField(TEXT("snapshotId")));
+				TArray<TSharedPtr<FJsonValue>> NodeValues;
+				for (const FString& NodeId : NodeIds) NodeValues.Add(MakeShared<FJsonValueString>(NodeId));
+				BoundaryParams->SetArrayField(TEXT("nodeIds"), NodeValues);
+				BoundaryParams->SetStringField(TEXT("direction"), TEXT("upstream"));
+				BoundaryParams->SetNumberField(TEXT("depth"), 8);
+				BoundaryParams->SetNumberField(TEXT("maxNodes"), 32);
+				BoundaryParams->SetNumberField(TEXT("maxEdges"), 64);
+				const FMCPToolResult BoundaryResult = Boundary(BoundaryParams);
+				if (!BoundaryResult.bSuccess || !BoundaryResult.Data.IsValid()) return false;
+				EditParams->SetStringField(TEXT("snapshotId"), Captured.Data->GetStringField(TEXT("snapshotId")));
+				EditParams->SetStringField(TEXT("boundaryId"), BoundaryResult.Data->GetStringField(TEXT("boundaryId")));
+				EditParams->SetStringField(TEXT("expectedProjectionHash"), Captured.Data->GetStringField(TEXT("projectionHash")));
+				EditParams->SetBoolField(TEXT("confirmSharedNodeImpact"), true);
+				return true;
+			};
 			TSharedPtr<FJsonObject> DirectDisconnect = MakeShared<FJsonObject>();
 			DirectDisconnect->SetStringField(TEXT("material"), MaterialPath);
 			DirectDisconnect->SetStringField(TEXT("nodeId"), SumId);
 			DirectDisconnect->SetStringField(TEXT("pinName"), TEXT("A"));
-			const FMCPToolResult Disconnected = Registry.ExecuteTool(TEXT("content.material.pin.disconnect"), DirectDisconnect);
-			TestTrue(TEXT("Standalone disconnect succeeds"), Disconnected.bSuccess);
 			UMaterialExpressionAdd* DirectSum = nullptr;
 			for (UMaterialExpression* Expression : Material->GetExpressions())
 				if (UMaterialExpressionAdd* Add = Cast<UMaterialExpressionAdd>(Expression)) DirectSum = Add;
+			UMaterialExpression* DirectOld = nullptr;
+			for (UMaterialExpression* Expression : Material->GetExpressions())
+				if (Expression && Expression != DirectSum) DirectOld = Expression;
+			TestTrue(TEXT("Standalone disconnect boundary is attached"),
+				AttachMaterialBoundary(DirectDisconnect,
+					{MCPMaterialInfrastructure::ExpressionNodeId(DirectSum), DirectOld ? MCPMaterialInfrastructure::ExpressionNodeId(DirectOld) : FString(), TEXT("root")}));
+			const FMCPToolResult Disconnected = Registry.ExecuteTool(TEXT("content.material.pin.disconnect"), DirectDisconnect);
+			TestTrue(TEXT("Standalone disconnect succeeds"), Disconnected.bSuccess);
 			TestTrue(TEXT("Standalone disconnect clears the durable input only"), DirectSum && !DirectSum->A.Expression && DirectSum->B.Expression);
 			TSharedPtr<FJsonObject> DirectDelete = MakeShared<FJsonObject>();
 			DirectDelete->SetStringField(TEXT("material"), MaterialPath);
 			DirectDelete->SetStringField(TEXT("nodeId"), OldId);
+			TestTrue(TEXT("Standalone delete boundary is attached"),
+				AttachMaterialBoundary(DirectDelete,
+					{DirectOld ? MCPMaterialInfrastructure::ExpressionNodeId(DirectOld) : FString(), MCPMaterialInfrastructure::ExpressionNodeId(DirectSum), TEXT("root")}));
 			const FMCPToolResult Deleted = Registry.ExecuteTool(TEXT("content.material.expression.delete"), DirectDelete);
 			TestTrue(TEXT("Standalone delete succeeds"), Deleted.bSuccess);
 			TestEqual(TEXT("Standalone delete removes the expression"), Material->GetExpressions().Num(), 1);

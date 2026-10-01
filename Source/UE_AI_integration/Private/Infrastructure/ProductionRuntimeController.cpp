@@ -5,6 +5,7 @@
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
 #include "HAL/PlatformMisc.h"
+#include "HAL/PlatformProcess.h"
 #include "Infrastructure/PIESessionController.h"
 #include "Infrastructure/PerformanceRegressionService.h"
 #include "Infrastructure/PerformanceSuiteService.h"
@@ -752,6 +753,12 @@ FMCPToolResult FProductionRuntimeController::GetLoadedModule(
 	}
 	Data->SetStringField(TEXT("pluginVersion"), Plugin->GetDescriptor().VersionName);
 	Data->SetStringField(TEXT("pluginBaseDir"), Plugin->GetBaseDir());
+	// The isolated harness uses this value to bind the HTTP response to the
+	// process it started.  A matching DLL path/hash alone could be returned by
+	// another Editor that happened to own the selected port.
+	Data->SetNumberField(
+		TEXT("processId"),
+		static_cast<double>(FPlatformProcess::GetCurrentProcessId()));
 
 	FModuleManager& Modules = FModuleManager::Get();
 	const FName ModuleName(TEXT("UE_AI_integration"));
@@ -779,7 +786,12 @@ FMCPToolResult FProductionRuntimeController::GetLoadedModule(
 	for (const FString& Candidate : CandidateDlls)
 	{
 		const FDateTime Timestamp = IFileManager::Get().GetTimeStamp(*Candidate);
-		if (!bFoundLatest || Timestamp > LatestTimestamp)
+		// FindFilesRecursive does not promise a stable order.  Use the path as
+		// a deterministic tie breaker when two artifacts have the same timestamp
+		// so the reported identity cannot change between identical runs.
+		if (!bFoundLatest || Timestamp > LatestTimestamp
+			|| (Timestamp == LatestTimestamp
+				&& Candidate.Compare(LatestPath, ESearchCase::CaseSensitive) < 0))
 		{
 			bFoundLatest = true;
 			LatestTimestamp = Timestamp;
@@ -787,12 +799,27 @@ FMCPToolResult FProductionRuntimeController::GetLoadedModule(
 		}
 	}
 	Data->SetStringField(TEXT("latestBuildArtifactPath"), LatestPath);
+	Data->SetBoolField(TEXT("latestBuildArtifactExists"), bFoundLatest);
+	Data->SetStringField(
+		TEXT("latestBuildArtifactTimestampUtc"),
+		bFoundLatest ? LatestTimestamp.ToIso8601() : FString());
 	const FString LoadedHash = ComputeFileSha256(ModulePath);
 	const FString LatestHash = ComputeFileSha256(LatestPath);
 	Data->SetStringField(TEXT("latestBuildArtifactSha256"), LatestHash);
+	FString NormalizedModulePath = FPaths::ConvertRelativePathToFull(ModulePath);
+	FString NormalizedLatestPath = FPaths::ConvertRelativePathToFull(LatestPath);
+	FPaths::NormalizeFilename(NormalizedModulePath);
+	FPaths::NormalizeFilename(NormalizedLatestPath);
+	const bool bLatestArtifactPathMatchesLoaded =
+		!NormalizedModulePath.IsEmpty() && !NormalizedLatestPath.IsEmpty()
+		&& NormalizedModulePath.Equals(NormalizedLatestPath, ESearchCase::IgnoreCase);
+	Data->SetBoolField(
+		TEXT("latestBuildArtifactPathMatchesLoaded"),
+		bLatestArtifactPathMatchesLoaded);
 	Data->SetBoolField(
 		TEXT("matchesLatestBuildArtifact"),
-		!LoadedHash.IsEmpty() && LoadedHash == LatestHash);
+		bFoundLatest && bLatestArtifactPathMatchesLoaded
+		&& !LoadedHash.IsEmpty() && LoadedHash == LatestHash);
 
 	TSharedPtr<FJsonObject> LiveCoding = MakeShared<FJsonObject>();
 #if WITH_LIVE_CODING

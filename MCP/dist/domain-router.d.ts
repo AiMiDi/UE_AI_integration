@@ -19,6 +19,8 @@ export declare class BackendRoutingExecutor implements CapabilityExecutor {
     private readonly localAsset?;
     private readonly localSal?;
     private readonly developmentRuntime?;
+    /** Native/local routes return the shared capability verification state. */
+    readonly verificationAware = true;
     constructor(catalog: CapabilityCatalog, editor: CapabilityExecutor, localTrace: CapabilityExecutor, localRecipe?: CapabilityExecutor | undefined, localProject?: CapabilityExecutor | undefined, localAsset?: CapabilityExecutor | undefined, localSal?: CapabilityExecutor | undefined, developmentRuntime?: CapabilityExecutor | undefined);
     execute(id: string, params?: Record<string, unknown>, requestId?: string, context?: CapabilityExecutionContext): Promise<UEExecuteData>;
     private unsupported;

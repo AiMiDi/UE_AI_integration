@@ -80,6 +80,37 @@ def main() -> int:
         first = client.execute(
             "production.module.loaded.get", request_id=request_id
         )
+        assert isinstance(first.get("loaded"), bool), first
+        assert isinstance(first.get("processId"), (int, float)) and first["processId"] > 0, first
+        assert isinstance(first.get("modulePath"), str), first
+        dll = first.get("dll")
+        assert isinstance(dll, dict), first
+        assert isinstance(dll.get("exists"), bool), first
+        if dll.get("exists"):
+            assert isinstance(dll.get("sha256"), str) and len(dll["sha256"]) == 64, first
+        assert isinstance(first.get("matchesLatestBuildArtifact"), bool), first
+        latest_path = first.get("latestBuildArtifactPath")
+        latest_hash = first.get("latestBuildArtifactSha256")
+        assert isinstance(first.get("latestBuildArtifactExists"), bool), first
+        assert isinstance(first.get("latestBuildArtifactTimestampUtc"), str), first
+        assert isinstance(first.get("latestBuildArtifactPathMatchesLoaded"), bool), first
+        assert isinstance(latest_path, str), first
+        assert isinstance(latest_hash, str), first
+        if first["matchesLatestBuildArtifact"]:
+            assert latest_path, first
+            assert len(latest_hash) == 64, first
+        verification = first.get("verificationState")
+        assert isinstance(verification, dict), first
+        for field in (
+            "localDeclared",
+            "handlerRegistered",
+            "liveAvailable",
+            "executed",
+            "readbackVerified",
+            "runtimeVerified",
+        ):
+            assert field in verification, (field, first)
+        assert verification.get("capability") == "production.module.loaded.get", first
         replay = client.execute(
             "production.module.loaded.get", request_id=request_id
         )

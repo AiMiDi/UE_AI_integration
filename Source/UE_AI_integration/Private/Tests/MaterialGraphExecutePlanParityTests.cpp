@@ -11,6 +11,7 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/Guid.h"
 #include "Misc/ScopeExit.h"
+#include "Serialization/JsonSerializer.h"
 #include "Tools/MCPToolRegistry.h"
 #include "UObject/Package.h"
 
@@ -29,6 +30,7 @@ namespace
 		UMaterial* Material = nullptr;
 		UMaterialExpressionConstant* Source = nullptr;
 		UMaterialExpressionAdd* Target = nullptr;
+		UMaterialExpressionAdd* SharedConsumer = nullptr;
 
 		FString AssetPath() const
 		{
@@ -73,13 +75,18 @@ namespace
 			Fixture.Material, TEXT("ExecutePlanSource"));
 		Fixture.Target = AddExpression<UMaterialExpressionAdd>(
 			Fixture.Material, TEXT("ExecutePlanTarget"));
-		if (!Fixture.Source || !Fixture.Target)
+		Fixture.SharedConsumer = AddExpression<UMaterialExpressionAdd>(
+			Fixture.Material, TEXT("ExecutePlanSharedConsumer"));
+		if (!Fixture.Source || !Fixture.Target || !Fixture.SharedConsumer)
 		{
 			return Fixture;
 		}
 
 		Fixture.Source->R = 0.25f;
 		Fixture.Target->A.Connect(0, Fixture.Source);
+		// Source is consumed by both the selected target and an external node.
+		// The upstream boundary therefore has a concrete shared-node impact.
+		Fixture.SharedConsumer->A.Connect(0, Fixture.Source);
 		Fixture.Material->GetExpressionInputForProperty(MP_EmissiveColor)->Connect(
 			0,
 			Fixture.Target);
@@ -136,6 +143,35 @@ namespace
 		Operation->SetArrayField(TEXT("position"), Position);
 		return MakeShared<FJsonValueObject>(Operation);
 	}
+
+	TSharedRef<FJsonValue> DisconnectOperation(
+		const FString& SourceNodeId,
+		const FString& TargetNodeId,
+		const FString& TargetPinName)
+	{
+		TSharedRef<FJsonObject> Operation = MakeShared<FJsonObject>();
+		Operation->SetStringField(TEXT("op"), TEXT("disconnect"));
+		Operation->SetStringField(TEXT("sourceNodeId"), SourceNodeId);
+		Operation->SetStringField(TEXT("targetNodeId"), TargetNodeId);
+		Operation->SetStringField(TEXT("targetPinName"), TargetPinName);
+		return MakeShared<FJsonValueObject>(Operation);
+	}
+
+	TSharedRef<FJsonObject> BoundaryParams(
+		const FString& SnapshotId,
+		const FString& NodeId)
+	{
+		TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+		Params->SetStringField(TEXT("snapshotId"), SnapshotId);
+		Params->SetArrayField(
+			TEXT("nodeIds"),
+			{MakeShared<FJsonValueString>(NodeId)});
+		Params->SetStringField(TEXT("direction"), TEXT("upstream"));
+		Params->SetNumberField(TEXT("depth"), 8);
+		Params->SetNumberField(TEXT("maxNodes"), 16);
+		Params->SetNumberField(TEXT("maxEdges"), 16);
+		return Params;
+	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -173,7 +209,8 @@ bool FMaterialGraphExecutePlanParityTest::RunTest(const FString&)
 
 	if (!TestNotNull(TEXT("Execute-plan material fixture exists"), Fixture.Material)
 		|| !TestNotNull(TEXT("Execute-plan source expression exists"), Fixture.Source)
-		|| !TestNotNull(TEXT("Execute-plan target expression exists"), Fixture.Target))
+		|| !TestNotNull(TEXT("Execute-plan target expression exists"), Fixture.Target)
+		|| !TestNotNull(TEXT("Execute-plan shared consumer exists"), Fixture.SharedConsumer))
 	{
 		return false;
 	}
@@ -192,6 +229,26 @@ bool FMaterialGraphExecutePlanParityTest::RunTest(const FString&)
 	SnapshotIds.Add(SnapshotId);
 	TestTrue(TEXT("Baseline snapshot has an immutable identity"), !SnapshotId.IsEmpty());
 	TestTrue(TEXT("Baseline snapshot has a projection hash"), !ProjectionHash.IsEmpty());
+
+	// Link mutations are destructive even when the selected target happens to
+	// have one consumer today.  They must carry a fresh boundary proof so the
+	// writer can detect shared-node impact and require explicit confirmation.
+	const FMCPToolResult UnboundedDisconnect = ExecutePlanTool->Execute(
+		MakePlanParams(
+			Fixture,
+			SnapshotId,
+			ProjectionHash,
+			{DisconnectOperation(
+				MCPMaterialInfrastructure::ExpressionNodeId(Fixture.Source),
+				MCPMaterialInfrastructure::ExpressionNodeId(Fixture.Target),
+				TEXT("A"))}));
+	TestFalse(TEXT("Disconnect without a writable boundary is rejected"),
+		UnboundedDisconnect.bSuccess);
+	TestEqual(TEXT("Unbounded link mutation has a stable protection code"),
+		UnboundedDisconnect.ErrorCode,
+		FString(TEXT("material_boundary_required_for_link_mutation")));
+	TestTrue(TEXT("Rejected link mutation preserves the authored edge"),
+		Fixture.Target->A.Expression == Fixture.Source);
 
 	// A live authored edit after capture must invalidate the old read boundary
 	// before execute_plan can perform any write.
@@ -257,6 +314,160 @@ bool FMaterialGraphExecutePlanParityTest::RunTest(const FString&)
 	TestEqual(TEXT("Committed receipt reports committed attempt"),
 	          Applied.Data->GetStringField(TEXT("attempt_status")),
 	          FString(TEXT("committed")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMaterialGraphSharedBoundaryWriterContractTest,
+	"UE_AI_integration.MaterialGraphExecutePlan.SharedBoundaryWriterContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMaterialGraphSharedBoundaryWriterContractTest::RunTest(const FString&)
+{
+	using namespace UEAIIntegration::MaterialQuery;
+
+	FMCPToolRegistry Registry;
+	Registry.BeginDomainRegistration(TEXT("content"));
+	UEAIIntegrationTools::RegisterMaterialGraphQueryTools(Registry);
+	UEAIIntegrationTools::RegisterMaterialMutationTools(Registry);
+	Registry.EndDomainRegistration();
+
+	FMCPToolBase* ExecutePlanTool = Registry.FindTool(
+		TEXT("content.material.graph.execute_plan"));
+	FMCPToolBase* BoundaryTool = Registry.FindTool(
+		TEXT("content.material.graph.boundary.get"));
+	if (!TestNotNull(TEXT("Shared boundary execute_plan is registered"), ExecutePlanTool)
+		|| !TestNotNull(TEXT("Shared boundary query is registered"), BoundaryTool))
+	{
+		return false;
+	}
+
+	FExecutePlanFixture Fixture = CreateFixture();
+	TArray<FString> SnapshotIds;
+	ON_SCOPE_EXIT
+	{
+		for (const FString& SnapshotId : SnapshotIds)
+		{
+			Release(SnapshotId);
+		}
+		CleanupFixture(Fixture);
+	};
+
+	if (!TestNotNull(TEXT("Shared boundary material fixture exists"), Fixture.Material)
+		|| !TestNotNull(TEXT("Shared boundary source exists"), Fixture.Source)
+		|| !TestNotNull(TEXT("Shared boundary target exists"), Fixture.Target)
+		|| !TestNotNull(TEXT("Shared boundary consumer exists"), Fixture.SharedConsumer))
+	{
+		return false;
+	}
+
+	const FMCPToolResult Captured = Capture(Fixture.Material);
+	if (!TestTrue(TEXT("Shared boundary baseline capture succeeds"), Captured.bSuccess)
+		|| !TestNotNull(TEXT("Shared boundary baseline has data"), Captured.Data.Get()))
+	{
+		return false;
+	}
+	const FString SnapshotId = Captured.Data->GetStringField(TEXT("snapshotId"));
+	const FString ProjectionHash = Captured.Data->GetStringField(TEXT("projectionHash"));
+	SnapshotIds.Add(SnapshotId);
+	const FString SourceNodeId = MCPMaterialInfrastructure::ExpressionNodeId(Fixture.Source);
+	const FString TargetNodeId = MCPMaterialInfrastructure::ExpressionNodeId(Fixture.Target);
+
+	const FMCPToolResult Boundary = BoundaryTool->Execute(
+		BoundaryParams(SnapshotId, TargetNodeId));
+	if (!TestTrue(TEXT("Shared-node boundary capture succeeds"), Boundary.bSuccess)
+		|| !TestNotNull(TEXT("Shared-node boundary returns data"), Boundary.Data.Get()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("Boundary identifies the external shared consumer"),
+		Boundary.Data->GetBoolField(TEXT("hasExternallyConsumedNodes")));
+	TestTrue(TEXT("Boundary requires explicit shared-node confirmation"),
+		Boundary.Data->GetBoolField(TEXT("requiresSharedNodeConfirmation")));
+	const FString BoundaryId = Boundary.Data->GetStringField(TEXT("boundaryId"));
+	TestTrue(TEXT("Boundary returns a stable writer identity"), !BoundaryId.IsEmpty());
+
+	TSharedRef<FJsonObject> SharedBoundaryParams = MakePlanParams(
+		Fixture,
+		SnapshotId,
+		ProjectionHash,
+		{DisconnectOperation(SourceNodeId, TargetNodeId, TEXT("A"))});
+	SharedBoundaryParams->SetStringField(TEXT("boundaryId"), BoundaryId);
+	const FMCPToolResult UnconfirmedDisconnect = ExecutePlanTool->Execute(
+		SharedBoundaryParams);
+	TestFalse(TEXT("Unconfirmed shared-node disconnect is rejected"),
+		UnconfirmedDisconnect.bSuccess);
+	TestEqual(TEXT("Shared-node confirmation has a stable protection code"),
+		UnconfirmedDisconnect.ErrorCode,
+		FString(TEXT("material_boundary_shared_node_confirmation_required")));
+	TestTrue(TEXT("Unconfirmed disconnect preserves the selected edge"),
+		Fixture.Target->A.Expression == Fixture.Source);
+	TestTrue(TEXT("Unconfirmed disconnect preserves the external edge"),
+		Fixture.SharedConsumer->A.Expression == Fixture.Source);
+
+	const FMCPToolResult UnboundedDisconnect = ExecutePlanTool->Execute(
+		MakePlanParams(
+			Fixture,
+			SnapshotId,
+			ProjectionHash,
+			{DisconnectOperation(SourceNodeId, TargetNodeId, TEXT("A"))}));
+	TestFalse(TEXT("Disconnect without a boundary is rejected"),
+		UnboundedDisconnect.bSuccess);
+	TestEqual(TEXT("Unbounded link mutation has a stable protection code"),
+		UnboundedDisconnect.ErrorCode,
+		FString(TEXT("material_boundary_required_for_link_mutation")));
+
+	SharedBoundaryParams->SetBoolField(TEXT("confirmSharedNodeImpact"), true);
+	// Force the postcondition to disagree with the committed projection. The
+	// shared-node restore path must reconnect the selected edge while preserving
+	// the independent external consumer edge.
+	SharedBoundaryParams->SetStringField(TEXT("expectedAfterProjectionHash"), ProjectionHash);
+	const FMCPToolResult RolledBackDisconnect = ExecutePlanTool->Execute(
+		SharedBoundaryParams);
+	TestFalse(TEXT("Shared-node postcondition mismatch is rejected"),
+		RolledBackDisconnect.bSuccess);
+	if (RolledBackDisconnect.Data.IsValid())
+	{
+		TestEqual(TEXT("Shared-node rollback reports rolled_back attempt"),
+			RolledBackDisconnect.Data->GetStringField(TEXT("attempt_status")),
+			FString(TEXT("rolled_back")));
+		TestEqual(TEXT("Shared-node rollback reports restored state"),
+			RolledBackDisconnect.Data->GetStringField(TEXT("restore_status")),
+			FString(TEXT("restored")));
+	}
+	TestTrue(TEXT("Shared-node rollback restores the selected edge"),
+		Fixture.Target->A.Expression == Fixture.Source);
+	TestTrue(TEXT("Shared-node rollback preserves the external edge"),
+		Fixture.SharedConsumer->A.Expression == Fixture.Source);
+
+	SharedBoundaryParams->RemoveField(TEXT("expectedAfterProjectionHash"));
+	const FMCPToolResult ConfirmedDisconnect = ExecutePlanTool->Execute(
+		SharedBoundaryParams);
+	if (!ConfirmedDisconnect.bSuccess)
+	{
+		AddError(FString::Printf(
+			TEXT("Confirmed shared-node disconnect failed: code=%s message=%s"),
+			*ConfirmedDisconnect.ErrorCode,
+			*ConfirmedDisconnect.ErrorMessage));
+		if (ConfirmedDisconnect.Data.IsValid())
+		{
+			FString Details;
+			const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Details);
+			FJsonSerializer::Serialize(ConfirmedDisconnect.Data.ToSharedRef(), Writer);
+			AddInfo(Details);
+		}
+	}
+	if (!TestTrue(TEXT("Confirmed shared-node disconnect commits"), ConfirmedDisconnect.bSuccess)
+		|| !TestNotNull(TEXT("Confirmed disconnect returns a receipt"), ConfirmedDisconnect.Data.Get()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("Confirmed disconnect removes only the selected edge"),
+		Fixture.Target->A.Expression == nullptr);
+	TestTrue(TEXT("Confirmed disconnect preserves the external consumer edge"),
+		Fixture.SharedConsumer->A.Expression == Fixture.Source);
+	TestTrue(TEXT("Confirmed disconnect verifies its postcondition"),
+		ConfirmedDisconnect.Data->GetBoolField(TEXT("postconditionVerified")));
 	return true;
 }
 

@@ -2630,6 +2630,31 @@ namespace UEAIIntegration::MaterialQuery
 			                             TEXT("invalid_material_graph_plan"), 422);
 		}
 
+		// Link removal and replacement can affect consumers outside the caller's
+		// intended selection.  A boundary proof is therefore mandatory for every
+		// destructive link operation; the proof itself enforces an explicit shared
+		// node confirmation when the selected closure has external consumers.
+		if (!Params->HasField(TEXT("boundaryId")))
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *OperationValues)
+			{
+				const TSharedPtr<FJsonObject> Operation =
+					Value.IsValid() && Value->Type == EJson::Object
+						? Value->AsObject()
+						: nullptr;
+				FString Name;
+				if (Operation.IsValid()
+					&& Operation->TryGetStringField(TEXT("op"), Name)
+					&& (Name == TEXT("connect") || Name == TEXT("disconnect")))
+				{
+					return FMCPToolResult::Error(
+						TEXT("connect and disconnect require a fresh material graph boundary; confirm shared-node impact before writing."),
+						TEXT("material_boundary_required_for_link_mutation"),
+						409);
+				}
+			}
+		}
+
 		TMap<FString, UEdGraphNode*> NodesById;
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
@@ -3088,7 +3113,13 @@ namespace UEAIIntegration::MaterialQuery
 				Parsed.TargetPinName = TargetPinName;
 				Parsed.SourcePinIndex = SourceIndex;
 				Parsed.TargetPinIndex = TargetIndex;
-				if (Name == TEXT("connect") || bHasSourceNode)
+				// A disconnect may identify the source node and target pin without
+				// repeating the source pin name/index. Resolve that source from the
+				// target's current link after the target pin has been located.
+				const bool bHasExplicitSourcePin = !SourcePinName.IsEmpty()
+					|| SourceIndex != INDEX_NONE;
+				if (Name == TEXT("connect")
+					|| (Name == TEXT("disconnect") && bHasSourceNode && bHasExplicitSourcePin))
 				{
 					Parsed.SourcePin = FindPin(NodesById, NodesById.FindRef(Parsed.SourceNodeId), EGPD_Output,
 					                           SourceIndex,
@@ -3103,6 +3134,32 @@ namespace UEAIIntegration::MaterialQuery
 				if (!Parsed.TargetPin)
 				{
 					return FMCPToolResult::Error(Error, TEXT("invalid_material_graph_operation"), 422);
+				}
+				if (Name == TEXT("disconnect") && bHasSourceNode && !Parsed.SourcePin)
+				{
+					UEdGraphNode* SourceNode = NodesById.FindRef(Parsed.SourceNodeId);
+					for (UEdGraphPin* LinkedPin : Parsed.TargetPin->LinkedTo)
+					{
+						if (!LinkedPin || LinkedPin->GetOwningNode() != SourceNode)
+						{
+							continue;
+						}
+						if (Parsed.SourcePin)
+						{
+							return FMCPToolResult::Error(
+								TEXT("disconnect sourceNodeId resolves to multiple links on the target pin; specify sourcePinName or sourcePinIndex."),
+								TEXT("ambiguous_material_graph_operation"),
+								422);
+						}
+						Parsed.SourcePin = LinkedPin;
+					}
+					if (!Parsed.SourcePin)
+					{
+						return FMCPToolResult::Error(
+							TEXT("disconnect sourceNodeId is not linked to the selected target pin."),
+							TEXT("invalid_material_graph_operation"),
+							422);
+					}
 				}
 				if (Name == TEXT("connect"))
 				{
@@ -3396,18 +3453,47 @@ namespace UEAIIntegration::MaterialQuery
 			Operation.TargetPin = nullptr;
 			if (!Operation.SourceNodeId.IsEmpty())
 			{
-				Operation.SourcePin = FindPin(
-					NodesById, ResolveNodeId(Operation.SourceNodeId), EGPD_Output,
-					Operation.SourcePinIndex, Operation.SourcePinName, Error);
-				if (!Operation.SourcePin)
+				const bool bHasExplicitSourcePin = !Operation.SourcePinName.IsEmpty()
+					|| Operation.SourcePinIndex != INDEX_NONE;
+				if (Operation.Name != TEXT("disconnect") || bHasExplicitSourcePin)
 				{
-					return false;
+					Operation.SourcePin = FindPin(
+						NodesById, ResolveNodeId(Operation.SourceNodeId), EGPD_Output,
+						Operation.SourcePinIndex, Operation.SourcePinName, Error);
+					if (!Operation.SourcePin)
+					{
+						return false;
+					}
 				}
 			}
 			Operation.TargetPin = FindPin(
 				NodesById, ResolveNodeId(Operation.TargetNodeId), EGPD_Input,
 				Operation.TargetPinIndex, Operation.TargetPinName, Error);
-			return Operation.TargetPin != nullptr;
+			if (!Operation.TargetPin)
+			{
+				return false;
+			}
+			if (Operation.Name == TEXT("disconnect")
+				&& !Operation.SourceNodeId.IsEmpty()
+				&& !Operation.SourcePin)
+			{
+				UEdGraphNode* SourceNode = ResolveNodeId(Operation.SourceNodeId);
+				for (UEdGraphPin* LinkedPin : Operation.TargetPin->LinkedTo)
+				{
+					if (!LinkedPin || LinkedPin->GetOwningNode() != SourceNode)
+					{
+						continue;
+					}
+					if (Operation.SourcePin)
+					{
+						return false;
+					}
+					Operation.SourcePin = LinkedPin;
+				}
+			}
+			return Operation.Name != TEXT("disconnect")
+				|| Operation.SourceNodeId.IsEmpty()
+				|| Operation.SourcePin != nullptr;
 		};
 
 		TArray<TSharedPtr<FJsonValue>> OperationResults;

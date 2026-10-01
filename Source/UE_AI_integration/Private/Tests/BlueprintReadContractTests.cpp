@@ -1,12 +1,16 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "EditorAssetLibrary.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "GameFramework/Actor.h"
+#include "HAL/FileManager.h"
 #include "Infrastructure/BlueprintPersistence.h"
 #include "K2Node_CustomEvent.h"
 #include "K2Node_IfThenElse.h"
@@ -36,6 +40,20 @@ struct FBlueprintReadFixture
 	UEdGraph* Graph = nullptr;
 };
 
+struct FBlueprintReferenceFixture
+{
+	FString TargetPackageName;
+	FString SourcePackageName;
+	UPackage* TargetPackage = nullptr;
+	UPackage* SourcePackage = nullptr;
+	UBlueprint* TargetPrimary = nullptr;
+	UBlueprint* Source = nullptr;
+	UBlueprint* SourceSecondary = nullptr;
+};
+
+bool DeleteBlueprintReadFixture(const FString& PackageName);
+bool SaveBlueprintReadFixture(UBlueprint* Blueprint, FString& OutError);
+
 FBlueprintReadFixture CreateBlueprintReadFixture(const FString& Prefix)
 {
 	FBlueprintReadFixture Fixture;
@@ -59,6 +77,145 @@ FBlueprintReadFixture CreateBlueprintReadFixture(const FString& Prefix)
 		? Fixture.Blueprint->UbergraphPages[0]
 		: nullptr;
 	return Fixture;
+}
+
+FBlueprintReferenceFixture CreateBlueprintReferenceFixture()
+{
+	FBlueprintReferenceFixture Fixture;
+	const FString FixtureId = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	Fixture.TargetPackageName = TEXT("/Game/Automation/UEAI_ReferenceTarget_") + FixtureId;
+	Fixture.SourcePackageName = TEXT("/Game/Automation/UEAI_ReferenceSource_") + FixtureId;
+	Fixture.TargetPackage = CreatePackage(*Fixture.TargetPackageName);
+	if (!Fixture.TargetPackage)
+	{
+		return Fixture;
+	}
+
+	Fixture.TargetPrimary = FKismetEditorUtilities::CreateBlueprint(
+		AActor::StaticClass(),
+		Fixture.TargetPackage,
+		TEXT("TargetPrimary"),
+		BPTYPE_Normal,
+		UBlueprint::StaticClass(),
+		UBlueprintGeneratedClass::StaticClass(),
+		FName(TEXT("UEAI.BlueprintReferenceContract")));
+	if (!Fixture.TargetPrimary)
+	{
+		return Fixture;
+	}
+	FAssetRegistryModule::AssetCreated(Fixture.TargetPrimary);
+	FKismetEditorUtilities::CompileBlueprint(
+		Fixture.TargetPrimary,
+		EBlueprintCompileOptions::SkipSave);
+
+	Fixture.SourcePackage = CreatePackage(*Fixture.SourcePackageName);
+	Fixture.Source = Fixture.SourcePackage
+		? FKismetEditorUtilities::CreateBlueprint(
+			Fixture.TargetPrimary->GeneratedClass,
+			Fixture.SourcePackage,
+			TEXT("ReferenceSource"),
+			BPTYPE_Normal,
+			UBlueprint::StaticClass(),
+			UBlueprintGeneratedClass::StaticClass(),
+			FName(TEXT("UEAI.BlueprintReferenceContract")))
+		: nullptr;
+	Fixture.SourceSecondary = Fixture.SourcePackage
+		? FKismetEditorUtilities::CreateBlueprint(
+			Fixture.TargetPrimary->GeneratedClass,
+			Fixture.SourcePackage,
+			TEXT("ReferenceSourceSecondary"),
+			BPTYPE_Normal,
+			UBlueprint::StaticClass(),
+			UBlueprintGeneratedClass::StaticClass(),
+			FName(TEXT("UEAI.BlueprintReferenceContract")))
+		: nullptr;
+	if (Fixture.Source)
+	{
+		FAssetRegistryModule::AssetCreated(Fixture.Source);
+	}
+	if (Fixture.SourceSecondary)
+	{
+		FAssetRegistryModule::AssetCreated(Fixture.SourceSecondary);
+	}
+	return Fixture;
+}
+
+bool SaveBlueprintReferenceFixture(
+	const FBlueprintReferenceFixture& Fixture,
+	FString& OutError)
+{
+	if (!Fixture.TargetPrimary || !Fixture.Source || !Fixture.SourceSecondary)
+	{
+		OutError = TEXT("Reference fixture is incomplete.");
+		return false;
+	}
+	FKismetEditorUtilities::CompileBlueprint(
+		Fixture.Source,
+		EBlueprintCompileOptions::SkipSave);
+	if (Fixture.Source->Status == BS_Error)
+	{
+		OutError = TEXT("Reference source Blueprint did not compile.");
+		return false;
+	}
+	FKismetEditorUtilities::CompileBlueprint(
+		Fixture.SourceSecondary,
+		EBlueprintCompileOptions::SkipSave);
+	if (Fixture.SourceSecondary->Status == BS_Error)
+	{
+		OutError = TEXT("Secondary reference source Blueprint did not compile.");
+		return false;
+	}
+	if (!SaveBlueprintReadFixture(Fixture.TargetPrimary, OutError))
+	{
+		return false;
+	}
+	return SaveBlueprintReadFixture(Fixture.Source, OutError);
+}
+
+bool DeleteBlueprintReferenceFixture(const FBlueprintReferenceFixture& Fixture)
+{
+	const FString SourceObjectPath = Fixture.Source
+		? Fixture.Source->GetPathName()
+		: FString();
+	const FString SourceSecondaryObjectPath = Fixture.SourceSecondary
+		? Fixture.SourceSecondary->GetPathName()
+		: FString();
+	const FString TargetObjectPath = Fixture.TargetPrimary
+		? Fixture.TargetPrimary->GetPathName()
+		: FString();
+	auto DeleteObjects = [](const TArray<FString>& ObjectPaths,
+		const FString& PackageName)
+	{
+		bool bDeleted = true;
+		for (const FString& ObjectPath : ObjectPaths)
+		{
+			if (!ObjectPath.IsEmpty()
+				&& UEditorAssetLibrary::DoesAssetExist(ObjectPath))
+			{
+				bDeleted &= UEditorAssetLibrary::DeleteAsset(ObjectPath);
+			}
+		}
+		if (FPackageName::DoesPackageExist(PackageName))
+		{
+			const FString PackageFilename =
+				FPackageName::LongPackageNameToFilename(
+					PackageName,
+					FPackageName::GetAssetPackageExtension());
+			bDeleted &= IFileManager::Get().Delete(
+				*PackageFilename,
+				/*RequireExists=*/false,
+				/*EvenReadOnly=*/true,
+				/*Quiet=*/true);
+		}
+		return bDeleted && !FPackageName::DoesPackageExist(PackageName);
+	};
+	const bool bSourceDeleted = DeleteObjects(
+		{SourceObjectPath, SourceSecondaryObjectPath},
+		Fixture.SourcePackageName);
+	const bool bTargetDeleted = DeleteObjects(
+		{TargetObjectPath},
+		Fixture.TargetPackageName);
+	return bSourceDeleted && bTargetDeleted;
 }
 
 bool DeleteBlueprintReadFixture(const FString& PackageName)
@@ -660,6 +817,274 @@ bool FBlueprintTypeUsageReadContractTest::RunTest(const FString&)
 		Excessive.bSuccess);
 	TestEqual(TEXT("Excessive connection limit has a stable error code"),
 		Excessive.ErrorCode, FString(TEXT("invalid_params")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBlueprintAssetReferencesAmbiguityContractTest,
+	"UE_AI_integration.Blueprint.Query.AssetReferencesAmbiguityContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBlueprintAssetReferencesAmbiguityContractTest::RunTest(const FString&)
+{
+	const FBlueprintReferenceFixture Fixture =
+		CreateBlueprintReferenceFixture();
+	ON_SCOPE_EXIT
+	{
+		TestTrue(TEXT("Cross-asset reference fixtures are deleted"),
+			DeleteBlueprintReferenceFixture(Fixture));
+	};
+	if (!TestNotNull(TEXT("Cross-asset target Blueprint"),
+		Fixture.TargetPrimary)
+		|| !TestNotNull(TEXT("Cross-asset source Blueprint"), Fixture.Source)
+		|| !TestNotNull(TEXT("Second cross-asset source Blueprint"),
+			Fixture.SourceSecondary))
+	{
+		return false;
+	}
+	FString SaveError;
+	if (!TestTrue(TEXT("Cross-asset fixture compiles and saves"),
+		SaveBlueprintReferenceFixture(Fixture, SaveError)))
+	{
+		AddError(SaveError);
+		return false;
+	}
+
+	IAssetRegistry& AssetRegistry = FAssetRegistryModule::GetRegistry();
+	TArray<FString> ScanPaths;
+	ScanPaths.Add(TEXT("/Game/Automation"));
+	AssetRegistry.ScanPathsSynchronous(ScanPaths, true);
+
+	FMCPToolRegistry Registry;
+	Registry.BeginDomainRegistration(TEXT("blueprint"));
+	UEAIIntegrationTools::RegisterBlueprintReadTools(Registry);
+	Registry.EndDomainRegistration();
+	TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+	Params->SetStringField(TEXT("assetPath"), Fixture.TargetPrimary->GetPathName());
+	const FMCPToolResult Result = Registry.ExecuteTool(
+		TEXT("blueprint.asset.references"), Params);
+	if (!TestTrue(TEXT("Cross-asset reference query succeeds"), Result.bSuccess)
+		|| !TestNotNull(TEXT("Cross-asset reference response exists"), Result.Data.Get()))
+	{
+		if (!Result.ErrorMessage.IsEmpty())
+		{
+			AddError(Result.ErrorMessage);
+		}
+		return false;
+	}
+
+	TestEqual(TEXT("Reference query uses the v2 schema"),
+		Result.Data->GetStringField(TEXT("schema")),
+		FString(TEXT("ue.blueprint.asset-references.v2")));
+	TestEqual(TEXT("Object-path input is normalized to the target package"),
+		Result.Data->GetStringField(TEXT("targetPackagePath")),
+		Fixture.TargetPackageName);
+	TestEqual(TEXT("Exactly one source package references the target package"),
+		Result.Data->GetIntegerField(TEXT("totalReferencers")), 1);
+	TestEqual(TEXT("One source package is classified as a Blueprint referencer"),
+		Result.Data->GetIntegerField(TEXT("blueprintReferencerCount")), 1);
+	TestEqual(TEXT("Both source-package objects are returned as candidates"),
+		Result.Data->GetIntegerField(TEXT("candidateReferenceCount")), 2);
+	TestEqual(TEXT("The source package is reported as ambiguous"),
+		Result.Data->GetIntegerField(TEXT("ambiguousReferencerCount")), 1);
+	TestEqual(TEXT("No candidate object is unresolved"),
+		Result.Data->GetIntegerField(TEXT("unresolvedReferencerCount")), 0);
+	TestFalse(TEXT("Ambiguous source objects never claim complete identity"),
+		Result.Data->GetBoolField(TEXT("identityComplete")));
+	TestEqual(TEXT("Root identity status is explicitly ambiguous"),
+		Result.Data->GetStringField(TEXT("identityStatus")),
+		FString(TEXT("ambiguous")));
+
+	const TArray<TSharedPtr<FJsonValue>>& References =
+		Result.Data->GetArrayField(TEXT("references"));
+	TestEqual(TEXT("Reference rows contain every candidate object"),
+		References.Num(), 2);
+	TSet<FString> CandidateObjectPaths;
+	for (const TSharedPtr<FJsonValue>& Value : References)
+	{
+		const TSharedPtr<FJsonObject> Record =
+			Value.IsValid() ? Value->AsObject() : nullptr;
+		if (!TestNotNull(TEXT("Candidate reference row is an object"),
+			Record.Get()))
+		{
+			continue;
+		}
+		TestEqual(TEXT("Candidate row keeps the source package identity"),
+			Record->GetStringField(TEXT("sourcePackagePath")),
+			Fixture.SourcePackageName);
+		TestEqual(TEXT("Candidate row is explicitly ambiguous"),
+			Record->GetStringField(TEXT("identityStatus")),
+			FString(TEXT("ambiguous")));
+		TestTrue(TEXT("Candidate row exposes ambiguity"),
+			Record->GetBoolField(TEXT("ambiguous")));
+		TestFalse(TEXT("Candidate row cannot claim complete identity"),
+			Record->GetBoolField(TEXT("identityComplete")));
+		TestEqual(TEXT("Candidate count is explicit on each row"),
+			Record->GetIntegerField(TEXT("candidateCount")), 2);
+		TestEqual(TEXT("Legacy and source object paths agree"),
+			Record->GetStringField(TEXT("objectPath")),
+			Record->GetStringField(TEXT("sourceObjectPath")));
+		TestFalse(TEXT("Candidate object path is present"),
+			Record->GetStringField(TEXT("sourceObjectPath")).IsEmpty());
+		TestFalse(TEXT("Candidate source identity is present"),
+			Record->GetStringField(TEXT("sourceIdentity")).IsEmpty());
+		CandidateObjectPaths.Add(
+			Record->GetStringField(TEXT("sourceObjectPath")));
+	}
+	TestEqual(TEXT("Primary and secondary source objects remain distinct candidates"),
+		CandidateObjectPaths.Num(), 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBlueprintRuntimeAcceptanceContractTest,
+	"UE_AI_integration.Blueprint.Query.RuntimeAcceptanceContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBlueprintRuntimeAcceptanceContractTest::RunTest(const FString&)
+{
+	const FBlueprintReadFixture Fixture =
+		CreateBlueprintReadFixture(TEXT("UEAI_RuntimeAcceptance"));
+	ON_SCOPE_EXIT
+	{
+		TestTrue(TEXT("Runtime-acceptance fixture is deleted"),
+			DeleteBlueprintReadFixture(Fixture.PackageName));
+	};
+	if (!TestNotNull(TEXT("Runtime-acceptance Blueprint fixture"), Fixture.Blueprint))
+	{
+		return false;
+	}
+	FString SaveError;
+	if (!TestTrue(TEXT("Runtime-acceptance fixture compiles and saves"),
+		SaveBlueprintReadFixture(Fixture.Blueprint, SaveError)))
+	{
+		AddError(SaveError);
+		return false;
+	}
+
+	FMCPToolRegistry Registry;
+	Registry.BeginDomainRegistration(TEXT("blueprint"));
+	UEAIIntegrationTools::RegisterBlueprintReadTools(Registry);
+	Registry.EndDomainRegistration();
+	TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+	Params->SetStringField(TEXT("blueprint"), Fixture.PackageName);
+	const FMCPToolResult Result = Registry.ExecuteTool(
+		TEXT("blueprint.asset.runtime.verify"), Params);
+	if (!TestTrue(TEXT("Runtime acceptance query succeeds"), Result.bSuccess)
+		|| !TestNotNull(TEXT("Runtime acceptance response exists"), Result.Data.Get()))
+	{
+		if (!Result.ErrorMessage.IsEmpty())
+		{
+			AddError(Result.ErrorMessage);
+		}
+		return false;
+	}
+	TestEqual(TEXT("Runtime acceptance schema is explicit"),
+		Result.Data->GetStringField(TEXT("schema")),
+		FString(TEXT("ue.blueprint.runtime-acceptance.v1")));
+	TestTrue(TEXT("Compiled state is reported separately"),
+		Result.Data->GetBoolField(TEXT("compiled")));
+	TestFalse(TEXT("A non-PIE fixture never claims runtime verification"),
+		Result.Data->GetBoolField(TEXT("runtimeVerified")));
+	TestEqual(TEXT("No runtime instance has a stable reason"),
+		Result.Data->GetStringField(TEXT("runtimeVerificationReason")),
+		FString(TEXT("no_pie_instance_observed")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBlueprintRuntimeInstanceAcceptanceContractTest,
+	"UE_AI_integration.Blueprint.Query.RuntimeInstanceAcceptanceContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBlueprintRuntimeInstanceAcceptanceContractTest::RunTest(const FString&)
+{
+	const FBlueprintReadFixture Fixture =
+		CreateBlueprintReadFixture(TEXT("UEAI_RuntimeInstanceAcceptance"));
+	ON_SCOPE_EXIT
+	{
+		TestTrue(TEXT("Runtime-instance fixture is deleted"),
+			DeleteBlueprintReadFixture(Fixture.PackageName));
+	};
+	if (!TestNotNull(TEXT("Runtime-instance Blueprint fixture"), Fixture.Blueprint))
+	{
+		return false;
+	}
+	FString SaveError;
+	if (!TestTrue(TEXT("Runtime-instance fixture compiles and saves"),
+		SaveBlueprintReadFixture(Fixture.Blueprint, SaveError)))
+	{
+		AddError(SaveError);
+		return false;
+	}
+	if (!TestTrue(TEXT("Runtime-instance fixture has a generated class"),
+		Fixture.Blueprint->GeneratedClass != nullptr)
+		|| !TestNotNull(TEXT("Runtime-instance test has an engine"), GEngine))
+	{
+		return false;
+	}
+
+	UWorld* RuntimeWorld = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("Runtime-instance isolated game world"), RuntimeWorld))
+	{
+		return false;
+	}
+	FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
+	WorldContext.SetCurrentWorld(RuntimeWorld);
+	ON_SCOPE_EXIT
+	{
+		GEngine->DestroyWorldContext(RuntimeWorld);
+		RuntimeWorld->DestroyWorld(false);
+	};
+
+	FURL URL;
+	RuntimeWorld->InitializeActorsForPlay(URL);
+	RuntimeWorld->BeginPlay();
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Name = TEXT("UEAI_RuntimeInstanceAcceptanceActor");
+	AActor* SpawnedActor = RuntimeWorld->SpawnActor<AActor>(
+		Fixture.Blueprint->GeneratedClass,
+		FTransform::Identity,
+		SpawnParameters);
+	if (!TestNotNull(TEXT("Runtime-instance generated actor"), SpawnedActor))
+	{
+		return false;
+	}
+	ON_SCOPE_EXIT
+	{
+		if (SpawnedActor)
+		{
+			SpawnedActor->Destroy();
+		}
+	};
+
+	FMCPToolRegistry Registry;
+	Registry.BeginDomainRegistration(TEXT("blueprint"));
+	UEAIIntegrationTools::RegisterBlueprintReadTools(Registry);
+	Registry.EndDomainRegistration();
+	TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+	Params->SetStringField(TEXT("blueprint"), Fixture.PackageName);
+	const FMCPToolResult Result = Registry.ExecuteTool(
+		TEXT("blueprint.asset.runtime.verify"), Params);
+	if (!TestTrue(TEXT("Runtime-instance acceptance query succeeds"), Result.bSuccess)
+		|| !TestNotNull(TEXT("Runtime-instance acceptance response exists"), Result.Data.Get()))
+	{
+		if (!Result.ErrorMessage.IsEmpty())
+		{
+			AddError(Result.ErrorMessage);
+		}
+		return false;
+	}
+	TestTrue(TEXT("Runtime-instance query reports actual verification"),
+		Result.Data->GetBoolField(TEXT("runtimeVerified")));
+	TestEqual(TEXT("Runtime-instance query counts the spawned actor"),
+		Result.Data->GetIntegerField(TEXT("instanceCount")), 1);
+	TestEqual(TEXT("Runtime-instance query reports a PIE-compatible reason"),
+		Result.Data->GetStringField(TEXT("runtimeVerificationReason")),
+		FString(TEXT("pie_instance_observed")));
+	TestEqual(TEXT("Runtime-instance query reports the generated actor"),
+		Result.Data->GetStringField(TEXT("instance")),
+		SpawnedActor->GetPathName());
 	return true;
 }
 

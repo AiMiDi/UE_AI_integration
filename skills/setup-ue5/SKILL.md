@@ -109,7 +109,7 @@ apply to this shell and child processes; the entry Skill can also find
 `<PluginRoot>/CLI/bin` directly. Do not overwrite global PATH or existing
 client configuration just to make discovery work.
 
-Release 1.0.0 currently ships 564 capabilities across six domains. This is
+Release 1.0.0 currently ships 583 capabilities across six domains. This is
 release metadata; the installed manifest and live availability remain the
 acceptance authority when versions change.
 

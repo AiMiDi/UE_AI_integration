@@ -176,9 +176,11 @@ bool FBlueprintComponentRegistrationContractTest::RunTest(const FString&)
 		TEXT("blueprint.component.add"),
 		TEXT("blueprint.component.remove"),
 		TEXT("blueprint.component.reparent"),
+		TEXT("blueprint.component.rename"),
+		TEXT("blueprint.component.duplicate"),
 	};
 	TestEqual(
-		TEXT("Exactly six component capabilities register"),
+		TEXT("Exactly eight component capabilities register"),
 		Registry.Num(),
 		static_cast<int32>(UE_ARRAY_COUNT(ExpectedCapabilities)));
 	for (const TCHAR* Capability : ExpectedCapabilities)
@@ -349,6 +351,22 @@ bool FBlueprintComponentReadWriteContractTest::RunTest(const FString&)
 	TestTrue(
 		TEXT("Component state hash is available"),
 		RootGet.Data->GetBoolField(TEXT("stateHashAvailable")));
+	const TSharedPtr<FJsonObject> TemplateIdentity =
+		RootGet.Data->GetObjectField(TEXT("templateIdentity"));
+	if (TestNotNull(TEXT("Component template identity is published"), TemplateIdentity.Get()))
+	{
+		TestEqual(
+			TEXT("Template identity object path matches the legacy path"),
+			TemplateIdentity->GetStringField(TEXT("objectPath")),
+			RootGet.Data->GetStringField(TEXT("componentTemplatePath")));
+		TestTrue(
+			TEXT("Template identity includes a class path"),
+			!TemplateIdentity->GetStringField(TEXT("classPath")).IsEmpty());
+		TestEqual(
+			TEXT("Template identity is bound to the selected component node"),
+			TemplateIdentity->GetStringField(TEXT("componentNodeId")),
+			RootId.ToString());
+	}
 	const TSharedPtr<FJsonObject> Coverage =
 		RootGet.Data->GetObjectField(TEXT("stateHashCoverage"));
 	if (TestNotNull(TEXT("State-hash coverage is published"), Coverage.Get()))
@@ -418,27 +436,53 @@ bool FBlueprintComponentReadWriteContractTest::RunTest(const FString&)
 			FirstProperty < SecondProperty);
 	}
 
+	FString ReadOnlyPropertyName;
+	if (Fixture.Light && Fixture.Light->ComponentTemplate)
+	{
+		for (TFieldIterator<FProperty> It(
+			Fixture.Light->ComponentTemplate->GetClass(),
+			EFieldIteratorFlags::IncludeSuper);
+			It;
+			++It)
+		{
+			FProperty* Candidate = *It;
+			if (Candidate
+				&& Candidate->GetOwnerClass() != UObject::StaticClass()
+				&& Candidate->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible)
+				&& !Candidate->HasAnyPropertyFlags(
+					CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient | CPF_Deprecated)
+				&& (!Candidate->HasAnyPropertyFlags(CPF_Edit)
+					|| Candidate->HasAnyPropertyFlags(CPF_EditConst)))
+			{
+				ReadOnlyPropertyName = Candidate->GetName();
+				break;
+			}
+		}
+	}
+	TestTrue(
+		TEXT("Fixture exposes a reflected readable but non-writable property"),
+		!ReadOnlyPropertyName.IsEmpty());
 	auto LightGetParams = MakeComponentSelector(Fixture.PackageName, Fixture.Light);
-	LightGetParams->SetStringField(TEXT("property"), TEXT("Intensity"));
+	LightGetParams->SetStringField(TEXT("property"), ReadOnlyPropertyName);
 	const FMCPToolResult LightGet = Registry.ExecuteTool(
 		TEXT("blueprint.component.get"), LightGetParams);
 	const TSharedPtr<FJsonObject> Intensity =
-		FindPropertyRecord(LightGet, TEXT("Intensity"));
+		FindPropertyRecord(LightGet, ReadOnlyPropertyName);
 	if (TestNotNull(
-			TEXT("BlueprintVisible-only Intensity is readable"),
+			TEXT("BlueprintVisible-only property is readable"),
 			Intensity.Get()))
 	{
 		TestFalse(
-			TEXT("BlueprintVisible-only Intensity is not claimed writable"),
+			TEXT("BlueprintVisible-only property is not claimed writable"),
 			Intensity->GetBoolField(TEXT("editable")));
 		TestTrue(
-			TEXT("BlueprintVisible-only Intensity is marked read-only"),
+			TEXT("BlueprintVisible-only property is marked read-only"),
 			Intensity->GetBoolField(TEXT("readOnly")));
 	}
 
 	const bool bDirtyBeforeReadOnlySet = Fixture.Package->IsDirty();
 	auto ReadOnlySet = MakeComponentSelector(Fixture.PackageName, Fixture.Light);
-	ReadOnlySet->SetStringField(TEXT("property"), TEXT("Intensity"));
+	ReadOnlySet->SetStringField(TEXT("property"), ReadOnlyPropertyName);
 	ReadOnlySet->SetStringField(TEXT("value"), TEXT("5000.0"));
 	const FMCPToolResult ReadOnlyRejected = Registry.ExecuteTool(
 		TEXT("blueprint.component.property.set"), ReadOnlySet);
@@ -499,6 +543,32 @@ bool FBlueprintComponentReadWriteContractTest::RunTest(const FString&)
 		StaleTemplateRejected.ErrorCode,
 		FString(TEXT("stale_component")));
 
+	if (TemplateIdentity.IsValid())
+	{
+		auto StaleTemplateIdentity = MakeComponentSelector(Fixture.PackageName, Fixture.Root);
+		StaleTemplateIdentity->SetStringField(TEXT("property"), TEXT("bAutoActivate"));
+		StaleTemplateIdentity->SetStringField(TEXT("value"), NewAutoActivate);
+		TSharedRef<FJsonObject> ExpectedStaleIdentity = MakeShared<FJsonObject>();
+		ExpectedStaleIdentity->SetStringField(
+			TEXT("objectPath"), TemplateIdentity->GetStringField(TEXT("objectPath")));
+		ExpectedStaleIdentity->SetStringField(
+			TEXT("classPath"), TemplateIdentity->GetStringField(TEXT("classPath")));
+		ExpectedStaleIdentity->SetStringField(
+			TEXT("stateHash"),
+			TEXT("sha256:0000000000000000000000000000000000000000000000000000000000000000"));
+		StaleTemplateIdentity->SetObjectField(
+			TEXT("expectedTemplateIdentity"), ExpectedStaleIdentity);
+		const FMCPToolResult StaleTemplateIdentityRejected = Registry.ExecuteTool(
+			TEXT("blueprint.component.property.set"), StaleTemplateIdentity);
+		TestFalse(
+			TEXT("Stale component template identity is rejected"),
+			StaleTemplateIdentityRejected.bSuccess);
+		TestEqual(
+			TEXT("Stale component template identity uses a stable code"),
+			StaleTemplateIdentityRejected.ErrorCode,
+			FString(TEXT("stale_component_template_identity")));
+	}
+
 	const FString SensitiveExpected =
 		FString(TEXT("SensitiveExpectedOldValue-"))
 		+ FString::ChrN(6000, TEXT('x'));
@@ -545,6 +615,18 @@ bool FBlueprintComponentReadWriteContractTest::RunTest(const FString&)
 	ValidSet->SetStringField(
 		TEXT("expectedTemplatePath"),
 		RootGet.Data->GetStringField(TEXT("componentTemplatePath")));
+	if (TemplateIdentity.IsValid())
+	{
+		TSharedRef<FJsonObject> ExpectedTemplateIdentity = MakeShared<FJsonObject>();
+		ExpectedTemplateIdentity->SetStringField(
+			TEXT("objectPath"), TemplateIdentity->GetStringField(TEXT("objectPath")));
+		ExpectedTemplateIdentity->SetStringField(
+			TEXT("classPath"), TemplateIdentity->GetStringField(TEXT("classPath")));
+		ExpectedTemplateIdentity->SetStringField(
+			TEXT("stateHash"), TemplateIdentity->GetStringField(TEXT("stateHash")));
+		ValidSet->SetObjectField(
+			TEXT("expectedTemplateIdentity"), ExpectedTemplateIdentity);
+	}
 	const FMCPToolResult Applied = Registry.ExecuteTool(
 		TEXT("blueprint.component.property.set"), ValidSet);
 	if (!TestTrue(TEXT("Optimistic component property write succeeds"), Applied.bSuccess)
@@ -566,6 +648,12 @@ bool FBlueprintComponentReadWriteContractTest::RunTest(const FString&)
 		TEXT("Component write publishes complete state-hash coverage"),
 		Applied.Data->GetObjectField(TEXT("stateHashCoverage"))
 			->GetBoolField(TEXT("complete")));
+	const TSharedPtr<FJsonObject> AppliedTemplateIdentity =
+		Applied.Data->GetObjectField(TEXT("templateIdentity"));
+	TestTrue(
+		TEXT("Component write returns the final template identity"),
+		AppliedTemplateIdentity.IsValid()
+			&& !AppliedTemplateIdentity->GetStringField(TEXT("stateHash")).IsEmpty());
 	TestTrue(
 		TEXT("Component state hash changes after the write"),
 		Applied.Data->GetStringField(TEXT("stateHash"))

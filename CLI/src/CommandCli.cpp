@@ -97,7 +97,26 @@ struct ParsedEnvelope
 
 ParsedEnvelope ParseWorkerEnvelope(
     const ue::trace::WorkerResult& response,
-    const std::string& expected_request_id = {});
+    const std::string& expected_request_id = {},
+    const std::string& capability = {});
+
+void AttachCliCapabilityVerification(
+    json& envelope,
+    const std::string& capability,
+    bool local_declared,
+    bool handler_registered,
+    bool live_available,
+    bool executed);
+
+json MakeCliCapabilityFailureEnvelope(
+    const std::string& capability,
+    const std::string& code,
+    const std::string& message,
+    bool local_declared,
+    bool handler_registered,
+    bool live_available,
+    bool executed,
+    const json& details = json::object());
 
 std::optional<std::pair<std::string, std::string>>
 ExpectedTraceWorkerDigests(
@@ -1665,7 +1684,8 @@ ParsedEnvelope InvokeRawTraceWorker(
     }
     return ParseWorkerEnvelope(
         worker.Invoke(request.dump()),
-        request["requestId"].get<std::string>());
+        request["requestId"].get<std::string>(),
+        capability);
 }
 
 ParsedEnvelope InvokeRawTraceWorkerOneShot(
@@ -1692,7 +1712,8 @@ ParsedEnvelope InvokeRawTraceWorkerOneShot(
         : worker.InvokeOneShot(request.dump());
     return ParseWorkerEnvelope(
         result,
-        request["requestId"].get<std::string>());
+        request["requestId"].get<std::string>(),
+        capability);
 }
 
 ParsedEnvelope ValidateTraceWorkerHandshake(
@@ -1849,6 +1870,17 @@ ParsedEnvelope InvokeTraceWorker(
         worker.Transport() == ue::trace::WorkerTransport::Stdio);
     if (!handshake.ok || action == "handshake")
     {
+        if (!handshake.ok && !capability.empty())
+        {
+            handshake.value = MakeCliCapabilityFailureEnvelope(
+                capability,
+                handshake.code,
+                handshake.message,
+                true,
+                false,
+                false,
+                false);
+        }
         return handshake;
     }
     return InvokeRawTraceWorker(
@@ -1869,6 +1901,17 @@ ParsedEnvelope InvokeTraceWorkerImport(
         true);
     if (!handshake.ok)
     {
+        if (!capability.empty())
+        {
+            handshake.value = MakeCliCapabilityFailureEnvelope(
+                capability,
+                handshake.code,
+                handshake.message,
+                true,
+                false,
+                false,
+                false);
+        }
         return handshake;
     }
     return InvokeRawTraceWorkerOneShot(
@@ -3241,17 +3284,148 @@ json LocalCapabilitySummary(const json& descriptor)
     return summary;
 }
 
+void AttachCliCapabilityVerification(
+    json& envelope,
+    const std::string& capability,
+    const bool local_declared,
+    const bool handler_registered,
+    const bool live_available,
+    const bool executed)
+{
+    if (capability.empty())
+    {
+        return;
+    }
+
+    json* target = nullptr;
+    if (envelope.value("ok", false))
+    {
+        if (!envelope.contains("data") || !envelope["data"].is_object())
+        {
+            envelope["data"] = json::object();
+        }
+        target = &envelope["data"];
+    }
+    else
+    {
+        if (!envelope.contains("error") || !envelope["error"].is_object())
+        {
+            envelope["error"] = json::object();
+        }
+        if (!envelope["error"].contains("details")
+            || !envelope["error"]["details"].is_object())
+        {
+            envelope["error"]["details"] = json::object();
+        }
+        target = &envelope["error"]["details"];
+    }
+
+    const auto bool_or_null = [](const json& object, const char* field)
+    {
+        const auto found = object.find(field);
+        return found != object.end() && found->is_boolean()
+            ? *found
+            : json(nullptr);
+    };
+    const auto prior_state = target->find("verificationState");
+    const json prior = prior_state != target->end() && prior_state->is_object()
+        ? *prior_state
+        : json::object();
+    const auto prior_bool = [&prior, target, &bool_or_null](const char* field)
+    {
+        const auto nested = bool_or_null(prior, field);
+        return !nested.is_null() ? nested : bool_or_null(*target, field);
+    };
+    const json local = prior_bool("localDeclared");
+    const json handler = prior_bool("handlerRegistered");
+    const json live = prior_bool("liveAvailable");
+    const json ran = prior_bool("executed");
+    const json readback = prior_bool("readbackVerified");
+    const json runtime = prior_bool("runtimeVerified");
+    const bool effective_local = local.is_boolean()
+        ? local.get<bool>()
+        : local_declared;
+    const bool effective_handler = handler.is_boolean()
+        ? handler.get<bool>()
+        : handler_registered;
+    const bool effective_live = live.is_boolean()
+        ? live.get<bool>()
+        : live_available;
+    const bool effective_executed = ran.is_boolean()
+        ? ran.get<bool>()
+        : executed;
+    const json state = {
+        { "schema", "ue.capability-verification.v1" },
+        { "capability", capability },
+        { "localDeclared", effective_local },
+        { "handlerRegistered", effective_handler },
+        { "liveAvailable", effective_live },
+        { "executed", effective_executed },
+        { "readbackVerified", readback },
+        { "runtimeVerified", runtime },
+    };
+    (*target)["localDeclared"] = effective_local;
+    (*target)["handlerRegistered"] = effective_handler;
+    (*target)["liveAvailable"] = effective_live;
+    (*target)["executed"] = effective_executed;
+    (*target)["readbackVerified"] = readback;
+    (*target)["runtimeVerified"] = runtime;
+    (*target)["verificationState"] = state;
+}
+
+json MakeCliCapabilityFailureEnvelope(
+    const std::string& capability,
+    const std::string& code,
+    const std::string& message,
+    const bool local_declared,
+    const bool handler_registered,
+    const bool live_available,
+    const bool executed,
+    const json& details)
+{
+    json envelope = {
+        { "ok", false },
+        { "error", {
+            { "code", code },
+            { "message", message },
+        } },
+    };
+    if (details.is_object() && !details.empty())
+    {
+        envelope["error"]["details"] = details;
+    }
+    AttachCliCapabilityVerification(
+        envelope,
+        capability,
+        local_declared,
+        handler_registered,
+        live_available,
+        executed);
+    return envelope;
+}
+
 ParsedEnvelope ParseWorkerEnvelope(
     const ue::trace::WorkerResult& response,
-    const std::string& expected_request_id)
+    const std::string& expected_request_id,
+    const std::string& capability)
 {
     if (!response.code.empty())
     {
+        const std::string message = response.error;
         return {
             false,
-            json(),
+            capability.empty()
+                ? json()
+                : MakeCliCapabilityFailureEnvelope(
+                    capability,
+                    response.code,
+                    message,
+                    true,
+                    false,
+                    false,
+                    false),
             response.code,
-            response.error,
+            message,
         };
     }
     auto envelope = json::parse(
@@ -3272,42 +3446,84 @@ ParsedEnvelope ParseWorkerEnvelope(
             && meta.value("requestId", std::string{})
                 != expected_request_id))
     {
+        const std::string code = "trace_worker_invalid_response";
+        const std::string message =
+            "Trace Worker returned an invalid or uncorrelated JSON response envelope.";
         return {
             false,
-            json(),
-            "trace_worker_invalid_response",
-            "Trace Worker returned an invalid or uncorrelated JSON response envelope.",
+            capability.empty()
+                ? json()
+                : MakeCliCapabilityFailureEnvelope(
+                    capability,
+                    code,
+                    message,
+                    true,
+                    false,
+                    false,
+                    false),
+            code,
+            message,
         };
     }
     if (response.exit_code == 0 && envelope.value("ok", false))
     {
+        AttachCliCapabilityVerification(
+            envelope,
+            capability,
+            true,
+            true,
+            true,
+            true);
         return { true, std::move(envelope), {}, {} };
     }
     const auto error = envelope.value("error", json::object());
+    const std::string code = error.value("code", "trace_worker_failed");
+    const std::string message = error.value(
+        "message",
+        "Trace Worker rejected the request.");
+    AttachCliCapabilityVerification(
+        envelope,
+        capability,
+        true,
+        true,
+        true,
+        true);
     return {
         false,
         std::move(envelope),
-        error.value("code", "trace_worker_failed"),
-        error.value("message", "Trace Worker rejected the request."),
+        code,
+        message,
     };
 }
 
 ParsedEnvelope ParseLocalCapabilityEnvelope(
     const LocalCapabilityCliResult& response,
     const std::string& expected_backend,
-    const std::string& expected_request_id)
+    const std::string& expected_request_id,
+    const std::string& capability,
+    const bool local_declared,
+    const bool handler_registered)
 {
     if (response.envelope.empty())
     {
+        const std::string code = response.exit_code == kExitUnavailable
+            ? "local_backend_unavailable"
+            : "local_backend_adapter_failed";
+        const std::string message = response.error.empty()
+            ? "Local capability adapter returned no response."
+            : response.error;
         return {
             false,
-            json(),
-            response.exit_code == kExitUnavailable
-                ? "local_backend_unavailable"
-                : "local_backend_adapter_failed",
-            response.error.empty()
-                ? "Local capability adapter returned no response."
-                : response.error,
+            MakeCliCapabilityFailureEnvelope(
+                capability,
+                code,
+                message,
+                local_declared,
+                false,
+                false,
+                false),
+            code,
+            message,
         };
     }
     auto envelope = json::parse(
@@ -3330,27 +3546,53 @@ ParsedEnvelope ParseLocalCapabilityEnvelope(
             != expected_backend
         || !request_matches)
     {
+        const std::string code = "local_backend_invalid_response";
+        const std::string message =
+            "Local capability adapter returned an invalid or uncorrelated JSON response envelope.";
         return {
             false,
-            json(),
-            "local_backend_invalid_response",
-            "Local capability adapter returned an invalid or uncorrelated JSON response envelope.",
+            MakeCliCapabilityFailureEnvelope(
+                capability,
+                code,
+                message,
+                local_declared,
+                false,
+                false,
+                false),
+            code,
+            message,
         };
     }
     if (response.exit_code == 0 && envelope.value("ok", false))
     {
+        AttachCliCapabilityVerification(
+            envelope,
+            capability,
+            local_declared,
+            handler_registered,
+            handler_registered,
+            true);
         return { true, std::move(envelope), {}, {} };
     }
     const auto error = envelope.value("error", json::object());
+    const std::string code = error.value("code", "local_backend_failed");
+    const std::string message = error.value(
+        "message",
+        response.error.empty()
+            ? "Local capability backend rejected the request."
+            : response.error);
+    AttachCliCapabilityVerification(
+        envelope,
+        capability,
+        local_declared,
+        handler_registered,
+        handler_registered,
+        handler_registered);
     return {
         false,
         std::move(envelope),
-        error.value("code", "local_backend_failed"),
-        error.value(
-            "message",
-            response.error.empty()
-                ? "Local capability backend rejected the request."
-                : response.error),
+        code,
+        message,
     };
 }
 
@@ -4740,13 +4982,23 @@ std::optional<json> ResolveDescriptor(
                     ? catalog->FindTombstone(capability)
                     : nullptr)
             {
+                const std::string message =
+                    "Capability '" + capability + "' was removed; use '"
+                    + tombstone->value("replacement", std::string()) + "'.";
                 exit_code = PrintFailure(
                     {
                         false,
-                        *tombstone,
+                        MakeCliCapabilityFailureEnvelope(
+                            capability,
+                            "capability_removed",
+                            message,
+                            false,
+                            false,
+                            false,
+                            false,
+                            *tombstone),
                         "capability_removed",
-                        "Capability '" + capability + "' was removed; use '"
-                            + tombstone->value("replacement", std::string()) + "'.",
+                        message,
                     },
                     options.json_output,
                     kExitUsage,
@@ -4757,7 +5009,15 @@ std::optional<json> ResolveDescriptor(
             exit_code = PrintFailure(
                 {
                     false,
-                    json(),
+                    MakeCliCapabilityFailureEnvelope(
+                        capability,
+                        "capability_not_found",
+                        "Local capability catalog does not contain '"
+                            + capability + "'.",
+                        false,
+                        false,
+                        false,
+                        false),
                     "capability_not_found",
                     "Local capability catalog does not contain '"
                         + capability + "'.",
@@ -4775,8 +5035,32 @@ std::optional<json> ResolveDescriptor(
         ParseEnvelope(client.Get(CapabilityPath(capability)));
     if (!descriptor_response.ok)
     {
+        const json details = descriptor_response.value.is_object()
+            && descriptor_response.value.contains("error")
+            && descriptor_response.value["error"].is_object()
+            ? descriptor_response.value["error"].value(
+                "details",
+                json::object())
+            : json::object();
+        const bool editor_available =
+            descriptor_response.code != "editor_unreachable";
+        const std::string message = descriptor_response.message;
+        const json failure = MakeCliCapabilityFailureEnvelope(
+            capability,
+            descriptor_response.code,
+            message,
+            true,
+            false,
+            editor_available,
+            false,
+            details);
         exit_code = PrintFailure(
-            descriptor_response,
+            {
+                false,
+                failure,
+                descriptor_response.code,
+                message,
+            },
             options.json_output,
             descriptor_response.code == "editor_unreachable"
                 ? kExitUnavailable
@@ -4789,12 +5073,22 @@ std::optional<json> ResolveDescriptor(
         ExtractCapability(descriptor_response);
     if (!descriptor)
     {
+        const std::string message =
+            "Exact capability query did not return one descriptor.";
         exit_code = PrintFailure(
             {
                 false,
-                descriptor_response.value,
+                MakeCliCapabilityFailureEnvelope(
+                    capability,
+                    "invalid_editor_response",
+                    message,
+                    true,
+                    false,
+                    true,
+                    false,
+                    descriptor_response.value),
                 "invalid_editor_response",
-                "Exact capability query did not return one descriptor.",
+                message,
             },
             options.json_output,
             kExitExecution,
@@ -4804,23 +5098,25 @@ std::optional<json> ResolveDescriptor(
     }
     if (!descriptor->value("available", true))
     {
+        const json reasons = descriptor->value(
+            "availabilityReasons",
+            json::array());
+        const std::string message =
+            "Capability is unavailable in this Editor.";
         exit_code = PrintFailure(
             {
                 false,
-                json({
-                    { "ok", false },
-                    { "error", {
-                        { "code", "capability_unavailable" },
-                        { "message",
-                            "Capability is unavailable in this Editor." },
-                        { "details",
-                            descriptor->value(
-                                "availabilityReasons",
-                                json::array()) },
-                    } },
-                }),
+                MakeCliCapabilityFailureEnvelope(
+                    capability,
+                    "capability_unavailable",
+                    message,
+                    true,
+                    true,
+                    false,
+                    false,
+                    json({ { "availabilityReasons", reasons } })),
                 "capability_unavailable",
-                "Capability is unavailable in this Editor.",
+                message,
             },
             options.json_output,
             kExitUnavailable,
@@ -6766,6 +7062,29 @@ int ExecuteOptions(
     {
         return descriptor_exit;
     }
+    const auto CapabilityFailure = [&](
+        const std::string& code,
+        const std::string& message,
+        const json& details = json::object(),
+        const bool handler_registered = false,
+        const bool live_available = false,
+        const bool executed = false)
+    {
+        return ParsedEnvelope{
+            false,
+            MakeCliCapabilityFailureEnvelope(
+                capability,
+                code,
+                message,
+                true,
+                handler_registered,
+                live_available,
+                executed,
+                details),
+            code,
+            message,
+        };
+    };
     if ((options.command == "help" || options.help)
         && !options.params_template
         && !options.params_preflight)
@@ -6806,12 +7125,9 @@ int ExecuteOptions(
             || options.confirm_write)
         {
             return PrintFailure(
-                {
-                    false,
-                    json(),
+                CapabilityFailure(
                     "parameter_template_options_conflict",
-                    "Parameter templates do not accept params or write confirmation options.",
-                },
+                    "Parameter templates do not accept params or write confirmation options."),
                 options.json_output,
                 kExitUsage,
                 output,
@@ -6838,13 +7154,10 @@ int ExecuteOptions(
         && !options.raw_options.empty())
     {
         return PrintFailure(
-            {
-                false,
-                json(),
+            CapabilityFailure(
                 "parameter_sources_conflict",
                 "--params/--params-file cannot be combined with "
-                "schema-derived --field options.",
-            },
+                    "schema-derived --field options."),
             options.json_output,
             kExitUsage,
             output,
@@ -6863,17 +7176,14 @@ int ExecuteOptions(
             read_error_message);
         if (!params_text)
         {
+            const std::string code = read_error_code.empty()
+                ? "params_invalid"
+                : read_error_code;
+            const std::string message = read_error_message.empty()
+                ? "Params JSON could not be read."
+                : read_error_message;
             return PrintFailure(
-                {
-                    false,
-                    json(),
-                    read_error_code.empty()
-                        ? "params_invalid"
-                        : read_error_code,
-                    read_error_message.empty()
-                        ? "Params JSON could not be read."
-                        : read_error_message,
-                },
+                CapabilityFailure(code, message),
                 options.json_output,
                 kExitUsage,
                 output,
@@ -6884,12 +7194,9 @@ int ExecuteOptions(
         if (params.is_discarded() || !params.is_object())
         {
             return PrintFailure(
-                {
-                    false,
-                    json(),
+                CapabilityFailure(
                     "params_invalid",
-                    "--params/--params-file must contain one JSON object.",
-                },
+                    "--params/--params-file must contain one JSON object."),
                 options.json_output,
                 kExitUsage,
                 output,
@@ -6910,12 +7217,7 @@ int ExecuteOptions(
     if (!conversion.ok)
     {
         return PrintFailure(
-            {
-                false,
-                json(),
-                conversion.code,
-                conversion.message,
-            },
+            CapabilityFailure(conversion.code, conversion.message),
             options.json_output,
             kExitUsage,
             output,
@@ -6945,15 +7247,11 @@ int ExecuteOptions(
             conversion.params, import_error);
         if (!explicit_trace_import)
         {
+            const std::string message = import_error.empty()
+                ? "The explicit Trace import path is invalid."
+                : import_error;
             return PrintFailure(
-                {
-                    false,
-                    json(),
-                    "trace_import_path_invalid",
-                    import_error.empty()
-                        ? "The explicit Trace import path is invalid."
-                        : import_error,
-                },
+                CapabilityFailure("trace_import_path_invalid", message),
                 options.json_output,
                 kExitUsage,
                 output,
@@ -6970,7 +7268,7 @@ int ExecuteOptions(
     if (!backend.ok)
     {
         return PrintFailure(
-            { false, json(), backend.code, backend.message },
+            CapabilityFailure(backend.code, backend.message),
             options.json_output,
             kExitUsage,
             output,
@@ -7052,6 +7350,16 @@ int ExecuteOptions(
     }
     else if (used_node_local)
     {
+        const json execution = descriptor->value(
+            "execution",
+            json::object());
+        const json declared_backends = execution.is_object()
+            ? execution.value("backends", json::array())
+            : json::array();
+        const bool local_backend_declared = std::find(
+            declared_backends.begin(),
+            declared_backends.end(),
+            BackendName(selected_backend)) != declared_backends.end();
         response = ParseLocalCapabilityEnvelope(
             RunLocalCapabilityCliAdapter(
                 capability,
@@ -7060,7 +7368,10 @@ int ExecuteOptions(
                 request_id,
                 executable),
             BackendName(selected_backend),
-            request_id);
+            request_id,
+            capability,
+            true,
+            local_backend_declared);
     }
     else
     {
@@ -7101,6 +7412,19 @@ int ExecuteOptions(
     }
     if (!response.ok)
     {
+        if (!response.value.is_object()
+            || response.value.empty()
+            || response.value.value("ok", true))
+        {
+            response = CapabilityFailure(response.code, response.message);
+        }
+        else
+        {
+            // A transport failure may not have reached a UE handler. Preserve
+            // native proofs where present and otherwise keep these states false.
+            AttachCliCapabilityVerification(
+                response.value, capability, true, false, false, false);
+        }
         return PrintFailure(
             response,
             options.json_output,
@@ -7118,18 +7442,42 @@ int ExecuteOptions(
     {
         if (selected_backend != ExecutionBackend::Editor)
         {
+            const std::string message =
+                "Use capability-specific artifact/output parameters "
+                "instead of the global --output option with a local backend.";
             return PrintFailure(
-                {
-                    false,
-                    response.value,
+                CapabilityFailure(
                     "local_output_option_unsupported",
-                    "Use capability-specific artifact/output parameters "
-                    "instead of the global --output option with a local backend.",
-                },
+                    message,
+                    response.value.value("data", json::object()),
+                    true,
+                    true,
+                    true),
                 options.json_output,
                 kExitUsage,
                 output,
                 error);
+        }
+        // Export can fail after a successfully executed handler, including
+        // before the first chunk is written. Retain only its verification
+        // proof, without echoing the potentially large Base64 artifact.
+        json execution_proof = json::object();
+        const auto data = response.value.find("data");
+        if (data != response.value.end() && data->is_object())
+        {
+            const auto state = data->find("verificationState");
+            if (state != data->end() && state->is_object())
+            {
+                execution_proof["verificationState"] = *state;
+            }
+            for (const char* field : { "readbackVerified", "runtimeVerified" })
+            {
+                const auto value = data->find(field);
+                if (value != data->end() && value->is_boolean())
+                {
+                    execution_proof[field] = *value;
+                }
+            }
         }
         response = ExportPayload(
             client,
@@ -7140,6 +7488,23 @@ int ExecuteOptions(
             options.output_path);
         if (!response.ok)
         {
+            if (!response.value.is_object()
+                || response.value.empty()
+                || response.value.value("ok", true))
+            {
+                response = CapabilityFailure(
+                    response.code,
+                    response.message,
+                    execution_proof,
+                    true,
+                    true,
+                    true);
+            }
+            else
+            {
+                AttachCliCapabilityVerification(
+                    response.value, capability, true, true, true, true);
+            }
             return PrintFailure(
                 response,
                 options.json_output,

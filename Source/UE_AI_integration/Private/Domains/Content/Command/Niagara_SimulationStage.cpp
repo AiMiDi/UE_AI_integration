@@ -15,6 +15,7 @@
 
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
+#include "EdGraphUtilities.h"
 #include "EdGraphSchema_Niagara.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraEmitterHandle.h"
@@ -27,6 +28,7 @@
 #include "NiagaraSimulationStageBase.h"
 #include "NiagaraSystem.h"
 #include "Misc/PackageName.h"
+#include "Misc/SecureHash.h"
 #include "ScopedTransaction.h"
 #include "UObject/Package.h"
 
@@ -87,6 +89,10 @@ namespace UEAINiagaraSimulationStagePrivate
 		FString GraphPath;
 		FString StagePath;
 		FString StageClassPath;
+		FString BeforeGraphExport;
+		FString GraphAfterDigest;
+		int32 BeforeGraphNodeCount = 0;
+		bool bHasGraphSnapshot = false;
 		FString EmitterChangeIdAfter;
 		FGuid EmitterVersion;
 		FGuid UsageId;
@@ -94,11 +100,104 @@ namespace UEAINiagaraSimulationStagePrivate
 		TWeakObjectPtr<UNiagaraEmitter> Emitter;
 		TWeakObjectPtr<UNiagaraGraph> Graph;
 		TWeakObjectPtr<UNiagaraSimulationStageBase> Stage;
+		FString Operation = TEXT("add");
+		FName BeforeStageName;
+		bool bBeforeEnabled = true;
+		int32 BeforeIndex = INDEX_NONE;
+		bool bHasBeforeState = false;
 		bool bChanged = false;
 		bool bCompiled = false;
 		FString CompileStatus = TEXT("notRequired");
 		bool bRolledBack = false;
 	};
+
+	struct FGraphSnapshot
+	{
+		FString Export;
+		FString Digest;
+		int32 NodeCount = 0;
+		bool bCaptured = false;
+	};
+
+	FString GraphSnapshotDigest(const FString& Export)
+	{
+		FTCHARToUTF8 Bytes(*Export);
+		uint8 Digest[FSHA1::DigestSize];
+		FSHA1::HashBuffer(Bytes.Get(), Bytes.Length(), Digest);
+		return BytesToHex(Digest, UE_ARRAY_COUNT(Digest)).ToLower();
+	}
+
+	bool CaptureGraphSnapshot(UNiagaraGraph* Graph, FGraphSnapshot& OutSnapshot)
+	{
+		OutSnapshot = FGraphSnapshot();
+		if (!Graph)
+		{
+			return false;
+		}
+		TSet<UObject*> Nodes;
+		const TArray<UEdGraphNode*> PartialNodes = Graph->Nodes;
+		for (UEdGraphNode* Node : PartialNodes)
+		{
+			if (Node)
+			{
+				Nodes.Add(Node);
+			}
+		}
+		FEdGraphUtilities::ExportNodesToText(Nodes, OutSnapshot.Export);
+		OutSnapshot.Digest = GraphSnapshotDigest(OutSnapshot.Export);
+		OutSnapshot.NodeCount = Nodes.Num();
+		OutSnapshot.bCaptured = true;
+		return true;
+	}
+
+	bool RestoreGraphSnapshot(UNiagaraGraph* Graph, const FGraphSnapshot& Snapshot)
+	{
+		if (!Graph || !Snapshot.bCaptured)
+		{
+			return false;
+		}
+		const bool bEmptySnapshot = Snapshot.NodeCount == 0 && Snapshot.Export.IsEmpty();
+		if (!bEmptySnapshot && !FEdGraphUtilities::CanImportNodesFromText(Graph, Snapshot.Export))
+		{
+			return false;
+		}
+		Graph->Modify();
+		const TArray<UEdGraphNode*> ExistingNodes = Graph->Nodes;
+		for (UEdGraphNode* Node : ExistingNodes)
+		{
+			if (Node)
+			{
+				Node->Modify();
+				Node->DestroyNode();
+			}
+		}
+		if (bEmptySnapshot)
+		{
+			Graph->NotifyGraphChanged();
+			return true;
+		}
+		TSet<UEdGraphNode*> ImportedNodes;
+		FEdGraphUtilities::ImportNodesFromText(Graph, Snapshot.Export, ImportedNodes);
+		Graph->NotifyGraphChanged();
+		if (ImportedNodes.Num() == Snapshot.NodeCount)
+		{
+			return true;
+		}
+		// Import can create a partial set before rejecting an unsupported
+		// Niagara node class (notably output nodes).  Clear that partial graph
+		// before the caller attempts the explicit stage-output recovery path.
+		const TArray<UEdGraphNode*> PartialNodes = Graph->Nodes;
+		for (UEdGraphNode* Node : PartialNodes)
+		{
+			if (Node)
+			{
+				Node->Modify();
+				Node->DestroyNode();
+			}
+		}
+		Graph->NotifyGraphChanged();
+		return false;
+	}
 
 	TMap<FString, FStageReceipt>& Receipts()
 	{
@@ -351,7 +450,13 @@ namespace UEAINiagaraSimulationStagePrivate
 		if (UNiagaraNodeOutput* Existing = Graph->FindEquivalentOutputNode(ENiagaraScriptUsage::ParticleSimulationStageScript,
 		                                                         UsageId))
 		{
-			return Existing;
+			UEdGraphPin* ExistingInput = FindParameterMapPin(Existing, EGPD_Input);
+			if (ExistingInput && ExistingInput->LinkedTo.Num() == 1)
+			{
+				return Existing;
+			}
+			Existing->Modify();
+			Existing->DestroyNode();
 		}
 		FGraphNodeCreator<UNiagaraNodeOutput> OutputCreator(*Graph);
 		UNiagaraNodeOutput* Output = OutputCreator.CreateNode();
@@ -377,6 +482,7 @@ namespace UEAINiagaraSimulationStagePrivate
 			Graph->RemoveNode(Input);
 			return nullptr;
 		}
+		OutputInput->BreakAllPinLinks();
 		OutputInput->MakeLinkTo(InputOutput);
 		Graph->NotifyGraphChanged();
 		return Output;
@@ -398,29 +504,12 @@ namespace UEAINiagaraSimulationStagePrivate
 		{
 			return true;
 		}
-		TArray<UNiagaraNode*> Nodes;
-		Nodes.Add(Output);
-		for (UEdGraphPin* Pin : Output->GetAllPins())
-		{
-			if (Pin)
-			{
-				for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
-				{
-					if (UNiagaraNode* LinkedNode = LinkedPin ? Cast<UNiagaraNode>(LinkedPin->GetOwningNode()) : nullptr)
-					{
-						Nodes.AddUnique(LinkedNode);
-					}
-				}
-			}
-		}
-		for (UNiagaraNode* Node : Nodes)
-		{
-			if (Node)
-			{
-				Node->Modify();
-				Node->DestroyNode();
-			}
-		}
+		// Removing a stage output must not delete the authored nodes feeding it.
+		// The complete graph snapshot held by the receipt is the rollback boundary;
+		// leaving upstream nodes in place also preserves shared-node ownership.
+		Output->Modify();
+		Output->BreakAllNodeLinks();
+		Output->DestroyNode();
 		Graph->NotifyGraphChanged();
 		return Graph->FindEquivalentOutputNode(ENiagaraScriptUsage::ParticleSimulationStageScript, UsageId) == nullptr;
 	}
@@ -460,6 +549,37 @@ namespace UEAINiagaraSimulationStagePrivate
 		return Summary;
 	}
 
+	FCompileSummary CompileSystem(UNiagaraSystem* System)
+	{
+		FCompileSummary Summary;
+		if (!System)
+		{
+			return Summary;
+		}
+		System->RequestCompile(false);
+		System->WaitForCompilationComplete(true, false);
+		Summary.Status = System->HasOutstandingCompilationRequests(false) ? TEXT("dirty") : TEXT("upToDate");
+		Summary.bCompiled = !System->HasOutstandingCompilationRequests(false);
+		return Summary;
+	}
+
+	int32 FindStageIndex(FVersionedNiagaraEmitterData* Data, const UNiagaraSimulationStageBase* Stage)
+	{
+		if (!Data || !Stage)
+		{
+			return INDEX_NONE;
+		}
+		const TArray<UNiagaraSimulationStageBase*>& Stages = Data->GetSimulationStages();
+		for (int32 Index = 0; Index < Stages.Num(); ++Index)
+		{
+			if (Stages[Index] == Stage)
+			{
+				return Index;
+			}
+		}
+		return INDEX_NONE;
+	}
+
 	bool ReadBackMatches(const FStageTarget& Target, const FStageRequest& Request)
 	{
 		UNiagaraSimulationStageBase* Stage = FindStage(Target.Data, Request.UsageId);
@@ -467,6 +587,7 @@ namespace UEAINiagaraSimulationStagePrivate
 			&& Stage->SimulationStageName == FName(*Request.StageName)
 			&& Stage->bEnabled == Request.bEnabled
 			&& Stage->GetClass()->GetPathName() == Request.StageClassPath
+			&& (Request.TargetIndex == INDEX_NONE || FindStageIndex(Target.Data, Stage) == Request.TargetIndex)
 			&& HasStageOutput(Target.Graph, Request.UsageId);
 	}
 
@@ -558,7 +679,7 @@ namespace UEAINiagaraSimulationStagePrivate
 	TSharedRef<FJsonObject> MakeResult(const FStageReceipt& Receipt, bool bReplay)
 	{
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetStringField(TEXT("schema"), TEXT("ue.niagara-simulation-stage-add.v1"));
+		Result->SetStringField(TEXT("schema"), TEXT("ue.niagara-simulation-stage.v1"));
 		Result->SetStringField(TEXT("status"), TEXT("succeeded"));
 		Result->SetStringField(TEXT("receiptId"), Receipt.ReceiptId);
 		Result->SetStringField(TEXT("requestId"), Receipt.RequestId);
@@ -569,6 +690,7 @@ namespace UEAINiagaraSimulationStagePrivate
 		Result->SetStringField(TEXT("graph"), Receipt.GraphPath);
 		Result->SetStringField(TEXT("stage"), Receipt.StagePath);
 		Result->SetStringField(TEXT("stageClass"), Receipt.StageClassPath);
+		Result->SetStringField(TEXT("action"), Receipt.Operation);
 		Result->SetStringField(TEXT("usageId"), Receipt.UsageId.ToString(EGuidFormats::DigitsWithHyphensLower));
 		Result->SetBoolField(TEXT("changed"), Receipt.bChanged);
 		Result->SetBoolField(TEXT("verified"), true);
@@ -582,6 +704,582 @@ namespace UEAINiagaraSimulationStagePrivate
 			TEXT("scope"), TEXT("authored simulation stage; GPU execution and runtime behavior unverified"));
 		return Result;
 	}
+
+	bool BuildExistingPlanData(
+		const TSharedPtr<FJsonObject>& Params,
+		FStagePlanData& OutData,
+		FString& OutCode,
+		FString& OutError)
+	{
+		OutData = FStagePlanData();
+		if (!ParseRequest(Params, OutData.Request, OutCode, OutError)
+			|| !ResolveTarget(OutData.Request, OutData.Target, OutCode, OutError))
+		{
+			return false;
+		}
+		UNiagaraSimulationStageBase* Existing = FindStage(OutData.Target.Data, OutData.Request.UsageId);
+		if (!Existing || !Existing->Script || !HasStageOutput(OutData.Target.Graph, OutData.Request.UsageId))
+		{
+			OutCode = TEXT("stage_not_found");
+			OutError = TEXT("The requested simulation stage does not exist with a matching graph output.");
+			return false;
+		}
+		if (Params->HasField(TEXT("stageClass"))
+			&& OutData.Request.StageClassPath != Existing->GetClass()->GetPathName())
+		{
+			OutCode = TEXT("stage_class_immutable");
+			OutError = TEXT("stageClass identifies the existing UObject class and cannot be changed in place.");
+			return false;
+		}
+		if (!Params->HasField(TEXT("stageClass"))) OutData.Request.StageClassPath = Existing->GetClass()->GetPathName();
+		if (!Params->HasField(TEXT("name"))) OutData.Request.StageName = Existing->SimulationStageName.ToString();
+		if (!Params->HasField(TEXT("enabled"))) OutData.Request.bEnabled = Existing->bEnabled;
+		if (!Params->HasField(TEXT("index"))) OutData.Request.TargetIndex = FindStageIndex(OutData.Target.Data, Existing);
+		const UPackage* Package = OutData.Target.System->GetOutermost();
+		OutData.bBlocked = !Package || !Package->GetName().StartsWith(TEXT("/Game/"))
+			|| OutData.Target.Emitter->GetOutermost() != Package;
+		if (OutData.bBlocked) OutData.Risks.Add(TEXT("The selected System or emitter is not an owned non-transient /Game/ asset."));
+		OutData.Warnings.Add(TEXT("The operation changes authored Simulation Stage configuration and does not prove GPU execution or runtime particle behavior."));
+		return true;
+	}
+
+	TSharedRef<FJsonObject> BuildExistingPlanJson(const FStagePlanData& Data, const TCHAR* Action)
+	{
+		TSharedRef<FJsonObject> Plan = BuildPlanJson(Data);
+		Plan->SetStringField(TEXT("planKind"), FString::Printf(TEXT("niagaraSimulationStage%s"), Action));
+		Plan->SetStringField(TEXT("action"), FString::Printf(TEXT("%sSimulationStage"), Action));
+		TSharedPtr<FJsonObject> Preconditions = Plan->GetObjectField(TEXT("preconditions"));
+		if (Preconditions.IsValid()) Preconditions->SetBoolField(TEXT("stagePresent"), true);
+		TSharedPtr<FJsonObject> Before = Plan->GetObjectField(TEXT("before"));
+		TSharedPtr<FJsonObject> After = Plan->GetObjectField(TEXT("after"));
+		if (Before.IsValid()) Before->SetBoolField(TEXT("stagePresent"), true);
+		if (After.IsValid()) After->SetBoolField(TEXT("stagePresent"), !FString(Action).Equals(TEXT("Remove")));
+		if (UNiagaraSimulationStageBase* Existing = FindStage(Data.Target.Data, Data.Request.UsageId))
+		{
+			if (Before.IsValid())
+			{
+				Before->SetStringField(TEXT("stageClass"), Existing->GetClass()->GetPathName());
+				Before->SetStringField(TEXT("name"), Existing->SimulationStageName.ToString());
+				Before->SetBoolField(TEXT("enabled"), Existing->bEnabled);
+				Before->SetNumberField(TEXT("index"), FindStageIndex(Data.Target.Data, Existing));
+			}
+			if (After.IsValid() && !FString(Action).Equals(TEXT("Remove")))
+			{
+				After->SetStringField(TEXT("stageClass"), Data.Request.StageClassPath);
+				After->SetStringField(TEXT("name"), Data.Request.StageName);
+				After->SetBoolField(TEXT("enabled"), Data.Request.bEnabled);
+				After->SetNumberField(TEXT("index"), Data.Request.TargetIndex);
+			}
+		}
+		return Plan;
+	}
+
+	class FTool_NiagaraSimulationStageList final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.simulation_stage.list"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FStageRequest Request; FString Code, Error;
+			if (!Params.IsValid() || !Params->TryGetStringField(TEXT("system"), Request.SystemPath) || Request.SystemPath.TrimStartAndEnd().IsEmpty()) return ErrorResult(TEXT("system is required."), TEXT("system_required"));
+			if (!Params->TryGetStringField(TEXT("emitter"), Request.EmitterSelector) || Request.EmitterSelector.TrimStartAndEnd().IsEmpty()) return ErrorResult(TEXT("emitter is required."), TEXT("emitter_required"));
+			int32 Offset = 0, Limit = 32;
+			if (Params->HasField(TEXT("offset"))) { double N = 0; if (!Params->TryGetNumberField(TEXT("offset"), N) || N < 0 || N > 65536 || FMath::TruncToInt(N) != N) return ErrorResult(TEXT("offset must be an integer from 0 to 65536."), TEXT("page_invalid")); Offset = FMath::TruncToInt(N); }
+			if (Params->HasField(TEXT("limit"))) { double N = 0; if (!Params->TryGetNumberField(TEXT("limit"), N) || N < 1 || N > 128 || FMath::TruncToInt(N) != N) return ErrorResult(TEXT("limit must be an integer from 1 to 128."), TEXT("page_invalid")); Limit = FMath::TruncToInt(N); }
+			Request.SystemPath = Request.SystemPath.TrimStartAndEnd(); Request.EmitterSelector = Request.EmitterSelector.TrimStartAndEnd();
+			FStageTarget Target;
+			if (!ResolveTarget(Request, Target, Code, Error)) return ErrorResult(Error, Code, Code.Contains(TEXT("not_found")) ? 404 : 422);
+			const TArray<UNiagaraSimulationStageBase*>& Stages = Target.Data->GetSimulationStages();
+			const int32 End = FMath::Min(Stages.Num(), Offset + Limit);
+			TArray<TSharedPtr<FJsonValue>> Rows;
+			for (int32 Index = Offset; Index < End; ++Index)
+			{
+				UNiagaraSimulationStageBase* Stage = Stages[Index]; if (!Stage || !Stage->Script) continue;
+				TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+				Row->SetStringField(TEXT("usageId"), Stage->Script->GetUsageId().ToString(EGuidFormats::DigitsWithHyphensLower));
+				Row->SetStringField(TEXT("name"), Stage->SimulationStageName.ToString());
+				Row->SetBoolField(TEXT("enabled"), Stage->bEnabled);
+				Row->SetStringField(TEXT("stageClass"), Stage->GetClass()->GetPathName());
+				Row->SetStringField(TEXT("script"), Stage->Script->GetPathName());
+				Row->SetBoolField(TEXT("graphPresent"), HasStageOutput(Target.Graph, Stage->Script->GetUsageId()));
+				Row->SetNumberField(TEXT("index"), Index);
+				Rows.Add(MakeShared<FJsonValueObject>(Row));
+			}
+			TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+			Result->SetStringField(TEXT("schema"), TEXT("ue.niagara.simulation-stages.v1"));
+			Result->SetStringField(TEXT("system"), Target.System->GetPathName()); Result->SetStringField(TEXT("emitter"), Target.EmitterName); Result->SetStringField(TEXT("emitterPath"), Target.EmitterPath); Result->SetStringField(TEXT("graph"), Target.GraphPath);
+			Result->SetNumberField(TEXT("total"), Stages.Num()); Result->SetNumberField(TEXT("offset"), Offset); Result->SetNumberField(TEXT("limit"), Limit); Result->SetBoolField(TEXT("hasMore"), End < Stages.Num()); Result->SetNumberField(TEXT("nextOffset"), End); Result->SetArrayField(TEXT("simulationStages"), Rows);
+			return FMCPToolResult::Ok(Result);
+		}
+	};
+
+	TMap<FString, FString>& UpdateRequestReceiptIds()
+	{
+		static TMap<FString, FString> Values;
+		return Values;
+	}
+
+	TMap<FString, FString>& RemoveRequestReceiptIds()
+	{
+		static TMap<FString, FString> Values;
+		return Values;
+	}
+
+	class FTool_NiagaraSimulationStageUpdatePlan final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.simulation_stage.update.plan"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FStagePlanData Data;
+			FString Code;
+			FString Error;
+			if (!BuildExistingPlanData(Params, Data, Code, Error))
+			{
+				return ErrorResult(Error, Code, Code.Contains(TEXT("not_found")) ? 404 : 422);
+			}
+			TSharedRef<FJsonObject> Plan = BuildExistingPlanJson(Data, TEXT("Update"));
+			FString Digest;
+			if (!TryDigestJson(Plan, Digest))
+			{
+				return ErrorResult(TEXT("Unable to compute the simulation-stage update plan digest."), TEXT("digest_unavailable"), 500);
+			}
+			Plan->SetStringField(TEXT("planDigest"), Digest);
+			return FMCPToolResult::Ok(Plan);
+		}
+	};
+
+	class FTool_NiagaraSimulationStageUpdateApply final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.simulation_stage.update.apply"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FString RequestId;
+			FString Code;
+			FString Error;
+			if (!Params.IsValid() || !Params->TryGetStringField(TEXT("requestId"), RequestId) || RequestId.IsEmpty())
+			{
+				return ErrorResult(TEXT("A non-empty requestId is required."), TEXT("request_id_required"));
+			}
+			if (const FString* ExistingId = UpdateRequestReceiptIds().Find(RequestId))
+			{
+				if (FStageReceipt* Existing = Receipts().Find(*ExistingId))
+				{
+					if (!ValidateChangeApproval(Params, Existing->PlanDigest, Code, Error))
+					{
+						return ErrorResult(Error, Code, 409);
+					}
+					return FMCPToolResult::Ok(MakeResult(*Existing, true));
+				}
+				return ErrorResult(TEXT("requestId is associated with an unavailable receipt."), TEXT("request_id_conflict"), 409);
+			}
+			FStagePlanData Data;
+		if (!BuildExistingPlanData(Params, Data, Code, Error))
+			{
+				return ErrorResult(Error, Code, Code.Contains(TEXT("not_found")) ? 404 : 422);
+			}
+			TSharedRef<FJsonObject> Plan = BuildExistingPlanJson(Data, TEXT("Update"));
+			FString Digest;
+			if (!TryDigestJson(Plan, Digest))
+			{
+				return ErrorResult(TEXT("Unable to compute the simulation-stage update plan digest."), TEXT("digest_unavailable"), 500);
+			}
+			if (!ValidateChangeApproval(Params, Digest, Code, Error))
+			{
+				return ErrorResult(Error, Code, 409);
+			}
+			if (Data.bBlocked)
+			{
+				return ErrorResult(TEXT("The simulation-stage target is read-only or not owned by the System package."), TEXT("plan_blocked"), 409);
+			}
+			if (Data.Target.Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower) != Data.Target.EmitterChangeId)
+			{
+				return ErrorResult(TEXT("The Niagara emitter changed after the plan was created; re-plan before applying."), TEXT("plan_digest_mismatch"), 409);
+			}
+			UNiagaraSimulationStageBase* Stage = FindStage(Data.Target.Data, Data.Request.UsageId);
+			if (!Stage || !Stage->Script)
+			{
+				return ErrorResult(TEXT("The simulation stage disappeared before apply."), TEXT("stage_not_found"), 404);
+			}
+			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Update Niagara Simulation Stage")));
+			Data.Target.System->Modify();
+			Data.Target.Emitter->Modify();
+			FStageReceipt Receipt;
+			Receipt.BeforeStageName = Stage->SimulationStageName;
+			Receipt.bBeforeEnabled = Stage->bEnabled;
+			Receipt.BeforeIndex = FindStageIndex(Data.Target.Data, Stage);
+			Receipt.bHasBeforeState = true;
+			Stage->Modify();
+			Stage->SimulationStageName = FName(*Data.Request.StageName);
+			Stage->bEnabled = Data.Request.bEnabled;
+			if (Data.Request.TargetIndex != INDEX_NONE)
+			{
+				Data.Target.Emitter->MoveSimulationStageToIndex(Stage, Data.Request.TargetIndex, Data.Target.EmitterVersion);
+			}
+			const FCompileSummary Compile = CompileStage(Data.Target.System, Stage->Script);
+			const bool bReadBack = ReadBackMatches(Data.Target, Data.Request);
+			if (!bReadBack || !Compile.bCompiled)
+			{
+				Stage->SimulationStageName = Receipt.BeforeStageName;
+				Stage->bEnabled = Receipt.bBeforeEnabled;
+				if (Receipt.BeforeIndex != INDEX_NONE)
+				{
+					Data.Target.Emitter->MoveSimulationStageToIndex(Stage, Receipt.BeforeIndex, Data.Target.EmitterVersion);
+				}
+				Transaction.Cancel();
+				return ErrorResult(FString::Printf(TEXT("Simulation-stage update read-back or compilation failed (status=%s)."), *Compile.Status), !bReadBack ? TEXT("verification_failed") : TEXT("compile_failed"), 500);
+			}
+			Receipt.ReceiptId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+			Receipt.RequestId = RequestId;
+			Receipt.PlanDigest = Digest;
+			Receipt.SystemPath = Data.Target.System->GetPathName();
+			Receipt.EmitterName = Data.Target.EmitterName;
+			Receipt.EmitterPath = Data.Target.EmitterPath;
+			Receipt.GraphPath = Data.Target.GraphPath;
+			Receipt.StagePath = Stage->GetPathName();
+			Receipt.StageClassPath = Stage->GetClass()->GetPathName();
+			Receipt.EmitterVersion = Data.Target.EmitterVersion;
+			Receipt.UsageId = Data.Request.UsageId;
+			Receipt.System = Data.Target.System;
+			Receipt.Emitter = Data.Target.Emitter;
+			Receipt.Graph = Data.Target.Graph;
+			Receipt.Stage = Stage;
+			Receipt.EmitterChangeIdAfter = Data.Target.Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower);
+			Receipt.Operation = TEXT("update");
+			Receipt.bChanged = true;
+			Receipt.bCompiled = Compile.bCompiled;
+			Receipt.CompileStatus = Compile.Status;
+			Data.Target.System->MarkPackageDirty();
+			Receipts().Add(Receipt.ReceiptId, Receipt);
+			UpdateRequestReceiptIds().Add(RequestId, Receipt.ReceiptId);
+			return FMCPToolResult::Ok(MakeResult(Receipt, false));
+		}
+	};
+
+	class FTool_NiagaraSimulationStageUpdateRollback final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.simulation_stage.update.rollback"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FString ReceiptId;
+			FString RequestId;
+			bool bConfirm = false;
+			if (!Params.IsValid() || !Params->TryGetStringField(TEXT("rollbackId"), ReceiptId)
+				|| !Params->TryGetStringField(TEXT("requestId"), RequestId)
+				|| !Params->TryGetBoolField(TEXT("confirmWrite"), bConfirm)
+				|| ReceiptId.IsEmpty() || RequestId.IsEmpty() || !bConfirm)
+			{
+				return ErrorResult(TEXT("rollbackId, requestId and confirmWrite=true are required."), TEXT("write_confirmation_required"));
+			}
+			FStageReceipt* Receipt = Receipts().Find(ReceiptId);
+			if (!Receipt || Receipt->Operation != TEXT("update") || !Receipt->bHasBeforeState)
+			{
+				return ErrorResult(TEXT("The simulation-stage update receipt is unknown."), TEXT("receipt_not_found"), 404);
+			}
+			if (Receipt->bRolledBack)
+			{
+				return FMCPToolResult::Ok(MakeResult(*Receipt, true));
+			}
+			if (Receipt->RequestId != RequestId)
+			{
+				return ErrorResult(TEXT("requestId does not match the receipt."), TEXT("request_id_mismatch"), 409);
+			}
+			UNiagaraSystem* System = Receipt->System.Get();
+			UNiagaraEmitter* Emitter = Receipt->Emitter.Get();
+			UNiagaraSimulationStageBase* Stage = Receipt->Stage.Get();
+			if (!System || !Emitter || !Stage
+				|| Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower) != Receipt->EmitterChangeIdAfter)
+			{
+				return ErrorResult(TEXT("The emitter changed after update; rollback was refused."), TEXT("rollback_conflict"), 409);
+			}
+			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Rollback Niagara Simulation Stage Update")));
+			System->Modify();
+			Emitter->Modify();
+			Stage->Modify();
+			Stage->SimulationStageName = Receipt->BeforeStageName;
+			Stage->bEnabled = Receipt->bBeforeEnabled;
+			if (Receipt->BeforeIndex != INDEX_NONE)
+			{
+				Emitter->MoveSimulationStageToIndex(Stage, Receipt->BeforeIndex, Receipt->EmitterVersion);
+			}
+			const FCompileSummary Compile = CompileStage(System, Stage->Script);
+			FVersionedNiagaraEmitterData* Data = Emitter->GetEmitterData(Receipt->EmitterVersion);
+			const bool bReadBack = FindStage(Data, Receipt->UsageId) == Stage
+				&& Stage->SimulationStageName == Receipt->BeforeStageName
+				&& Stage->bEnabled == Receipt->bBeforeEnabled
+				&& FindStageIndex(Data, Stage) == Receipt->BeforeIndex;
+			if (!bReadBack || !Compile.bCompiled)
+			{
+				return ErrorResult(TEXT("Simulation-stage update rollback verification failed."), TEXT("rollback_verification_failed"), 500);
+			}
+			System->MarkPackageDirty();
+			Receipt->bRolledBack = true;
+			Receipt->bCompiled = Compile.bCompiled;
+			Receipt->CompileStatus = Compile.Status;
+			return FMCPToolResult::Ok(MakeResult(*Receipt, false));
+		}
+	};
+
+	class FTool_NiagaraSimulationStageRemovePlan final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.simulation_stage.remove.plan"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FStagePlanData Data;
+			FString Code;
+			FString Error;
+			if (!BuildExistingPlanData(Params, Data, Code, Error))
+			{
+				return ErrorResult(Error, Code, Code.Contains(TEXT("not_found")) ? 404 : 422);
+			}
+			TSharedRef<FJsonObject> Plan = BuildExistingPlanJson(Data, TEXT("Remove"));
+			FString Digest;
+			if (!TryDigestJson(Plan, Digest))
+			{
+				return ErrorResult(TEXT("Unable to compute the simulation-stage removal plan digest."), TEXT("digest_unavailable"), 500);
+			}
+			Plan->SetStringField(TEXT("planDigest"), Digest);
+			return FMCPToolResult::Ok(Plan);
+		}
+	};
+
+	class FTool_NiagaraSimulationStageRemoveApply final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.simulation_stage.remove.apply"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FString RequestId;
+			FString Code;
+			FString Error;
+			if (!Params.IsValid() || !Params->TryGetStringField(TEXT("requestId"), RequestId) || RequestId.IsEmpty())
+			{
+				return ErrorResult(TEXT("A non-empty requestId is required."), TEXT("request_id_required"));
+			}
+			if (const FString* ExistingId = RemoveRequestReceiptIds().Find(RequestId))
+			{
+				if (FStageReceipt* Existing = Receipts().Find(*ExistingId))
+				{
+					if (!ValidateChangeApproval(Params, Existing->PlanDigest, Code, Error))
+					{
+						return ErrorResult(Error, Code, 409);
+					}
+					return FMCPToolResult::Ok(MakeResult(*Existing, true));
+				}
+				return ErrorResult(TEXT("requestId is associated with an unavailable receipt."), TEXT("request_id_conflict"), 409);
+			}
+			FStagePlanData Data;
+		if (!BuildExistingPlanData(Params, Data, Code, Error))
+			{
+				return ErrorResult(Error, Code, Code.Contains(TEXT("not_found")) ? 404 : 422);
+			}
+			TSharedRef<FJsonObject> Plan = BuildExistingPlanJson(Data, TEXT("Remove"));
+			FString Digest;
+			if (!TryDigestJson(Plan, Digest))
+			{
+				return ErrorResult(TEXT("Unable to compute the simulation-stage removal plan digest."), TEXT("digest_unavailable"), 500);
+			}
+			if (!ValidateChangeApproval(Params, Digest, Code, Error))
+			{
+				return ErrorResult(Error, Code, 409);
+			}
+			if (Data.bBlocked)
+			{
+				return ErrorResult(TEXT("The simulation-stage target is read-only or not owned by the System package."), TEXT("plan_blocked"), 409);
+			}
+			if (Data.Target.Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower) != Data.Target.EmitterChangeId)
+			{
+				return ErrorResult(TEXT("The Niagara emitter changed after the plan was created; re-plan before applying."), TEXT("plan_digest_mismatch"), 409);
+			}
+			UNiagaraSimulationStageBase* Stage = FindStage(Data.Target.Data, Data.Request.UsageId);
+			if (!Stage || !Stage->Script)
+			{
+				return ErrorResult(TEXT("The simulation stage disappeared before apply."), TEXT("stage_not_found"), 404);
+			}
+			FGraphSnapshot BeforeGraph;
+			if (!CaptureGraphSnapshot(Data.Target.Graph, BeforeGraph))
+			{
+				return ErrorResult(TEXT("The simulation-stage graph could not be snapshotted safely."), TEXT("graph_snapshot_failed"), 500);
+			}
+			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Remove Niagara Simulation Stage")));
+			Data.Target.System->Modify();
+			Data.Target.Emitter->Modify();
+			Data.Target.Graph->Modify();
+			FStageReceipt Receipt;
+			Receipt.BeforeStageName = Stage->SimulationStageName;
+			Receipt.bBeforeEnabled = Stage->bEnabled;
+			Receipt.BeforeIndex = FindStageIndex(Data.Target.Data, Stage);
+			Receipt.bHasBeforeState = true;
+			const bool bGraphRemoved = RemoveStageOutput(Data.Target.Graph, Data.Request.UsageId);
+			Data.Target.Emitter->RemoveSimulationStage(Stage, Data.Target.EmitterVersion);
+			const FCompileSummary Compile = CompileSystem(Data.Target.System);
+			const bool bReadBack = bGraphRemoved && FindStage(Data.Target.Data, Data.Request.UsageId) == nullptr;
+			if (!bReadBack || !Compile.bCompiled)
+			{
+				bool bGraphRestored = RestoreGraphSnapshot(Data.Target.Graph, BeforeGraph);
+				if (!bGraphRestored || !HasStageOutput(Data.Target.Graph, Data.Request.UsageId))
+				{
+					bGraphRestored = CreateStageOutput(Data.Target.Graph, Data.Request.UsageId) != nullptr;
+				}
+				if (!FindStage(Data.Target.Data, Data.Request.UsageId))
+				{
+					Data.Target.Emitter->AddSimulationStage(Stage, Data.Target.EmitterVersion);
+					if (Receipt.BeforeIndex != INDEX_NONE)
+					{
+						Data.Target.Emitter->MoveSimulationStageToIndex(Stage, Receipt.BeforeIndex, Data.Target.EmitterVersion);
+					}
+				}
+				Data.Target.Data = Data.Target.Emitter->GetEmitterData(Data.Target.EmitterVersion);
+				UNiagaraSimulationStageBase* Restored = FindStage(Data.Target.Data, Data.Request.UsageId);
+				const FCompileSummary RestoreCompile = CompileStage(Data.Target.System, Restored ? Restored->Script : nullptr);
+				Transaction.Cancel();
+				if (!bGraphRestored || !HasStageOutput(Data.Target.Graph, Data.Request.UsageId) || !Restored || !RestoreCompile.bCompiled)
+					return ErrorResult(TEXT("Simulation-stage removal read-back or compilation failed and restoration was not verified."), TEXT("restore_verification_failed"), 500);
+				return ErrorResult(TEXT("Simulation-stage removal read-back or compilation failed; the graph was restored."), TEXT("verification_failed"), 500);
+			}
+			FGraphSnapshot AfterGraph;
+			if (!CaptureGraphSnapshot(Data.Target.Graph, AfterGraph))
+			{
+				bool bGraphRestored = RestoreGraphSnapshot(Data.Target.Graph, BeforeGraph);
+				if (!bGraphRestored || !HasStageOutput(Data.Target.Graph, Data.Request.UsageId))
+					bGraphRestored = CreateStageOutput(Data.Target.Graph, Data.Request.UsageId) != nullptr;
+				Data.Target.Emitter->AddSimulationStage(Stage, Data.Target.EmitterVersion);
+				if (Receipt.BeforeIndex != INDEX_NONE)
+				{
+					Data.Target.Emitter->MoveSimulationStageToIndex(Stage, Receipt.BeforeIndex, Data.Target.EmitterVersion);
+				}
+				Data.Target.Data = Data.Target.Emitter->GetEmitterData(Data.Target.EmitterVersion);
+				UNiagaraSimulationStageBase* Restored = FindStage(Data.Target.Data, Data.Request.UsageId);
+				const FCompileSummary RestoreCompile = CompileStage(Data.Target.System, Restored ? Restored->Script : nullptr);
+				Transaction.Cancel();
+				if (!bGraphRestored || !HasStageOutput(Data.Target.Graph, Data.Request.UsageId) || !Restored || !RestoreCompile.bCompiled)
+					return ErrorResult(TEXT("The simulation-stage removal result could not be snapshotted safely and restoration was not verified."), TEXT("restore_verification_failed"), 500);
+				return ErrorResult(TEXT("The simulation-stage removal result could not be snapshotted safely; the graph was restored."), TEXT("graph_snapshot_failed"), 500);
+			}
+			Receipt.ReceiptId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+			Receipt.RequestId = RequestId;
+			Receipt.PlanDigest = Digest;
+			Receipt.SystemPath = Data.Target.System->GetPathName();
+			Receipt.EmitterName = Data.Target.EmitterName;
+			Receipt.EmitterPath = Data.Target.EmitterPath;
+			Receipt.GraphPath = Data.Target.GraphPath;
+			Receipt.StagePath = Stage->GetPathName();
+			Receipt.StageClassPath = Stage->GetClass()->GetPathName();
+			Receipt.EmitterVersion = Data.Target.EmitterVersion;
+			Receipt.UsageId = Data.Request.UsageId;
+			Receipt.System = Data.Target.System;
+			Receipt.Emitter = Data.Target.Emitter;
+			Receipt.Graph = Data.Target.Graph;
+			Receipt.Stage = Stage;
+			Receipt.BeforeGraphExport = MoveTemp(BeforeGraph.Export);
+			Receipt.GraphAfterDigest = AfterGraph.Digest;
+			Receipt.BeforeGraphNodeCount = BeforeGraph.NodeCount;
+			Receipt.bHasGraphSnapshot = true;
+			Receipt.EmitterChangeIdAfter = Data.Target.Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower);
+			Receipt.Operation = TEXT("remove");
+			Receipt.bChanged = true;
+			Receipt.bCompiled = Compile.bCompiled;
+			Receipt.CompileStatus = Compile.Status;
+			Data.Target.System->MarkPackageDirty();
+			Receipts().Add(Receipt.ReceiptId, Receipt);
+			RemoveRequestReceiptIds().Add(RequestId, Receipt.ReceiptId);
+			return FMCPToolResult::Ok(MakeResult(Receipt, false));
+		}
+	};
+
+	class FTool_NiagaraSimulationStageRemoveRollback final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.simulation_stage.remove.rollback"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FString ReceiptId;
+			FString RequestId;
+			bool bConfirm = false;
+			if (!Params.IsValid() || !Params->TryGetStringField(TEXT("rollbackId"), ReceiptId)
+				|| !Params->TryGetStringField(TEXT("requestId"), RequestId)
+				|| !Params->TryGetBoolField(TEXT("confirmWrite"), bConfirm)
+				|| ReceiptId.IsEmpty() || RequestId.IsEmpty() || !bConfirm)
+			{
+				return ErrorResult(TEXT("rollbackId, requestId and confirmWrite=true are required."), TEXT("write_confirmation_required"));
+			}
+			FStageReceipt* Receipt = Receipts().Find(ReceiptId);
+			if (!Receipt || Receipt->Operation != TEXT("remove") || !Receipt->bHasBeforeState || !Receipt->bHasGraphSnapshot)
+			{
+				return ErrorResult(TEXT("The simulation-stage removal receipt is unknown."), TEXT("receipt_not_found"), 404);
+			}
+			if (Receipt->bRolledBack)
+			{
+				return FMCPToolResult::Ok(MakeResult(*Receipt, true));
+			}
+			if (Receipt->RequestId != RequestId)
+			{
+				return ErrorResult(TEXT("requestId does not match the receipt."), TEXT("request_id_mismatch"), 409);
+			}
+			UNiagaraSystem* System = Receipt->System.Get();
+			UNiagaraEmitter* Emitter = Receipt->Emitter.Get();
+			UNiagaraGraph* Graph = Receipt->Graph.Get();
+			UNiagaraSimulationStageBase* Stage = Receipt->Stage.Get();
+			if (!System || !Emitter || !Graph || !Stage
+				|| Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower) != Receipt->EmitterChangeIdAfter)
+			{
+				return ErrorResult(TEXT("The emitter changed after removal; rollback was refused."), TEXT("rollback_conflict"), 409);
+			}
+			FGraphSnapshot CurrentGraph;
+			if (!CaptureGraphSnapshot(Graph, CurrentGraph) || CurrentGraph.Digest != Receipt->GraphAfterDigest)
+			{
+				return ErrorResult(TEXT("The simulation-stage graph changed after removal; rollback was refused."), TEXT("rollback_conflict"), 409);
+			}
+			FVersionedNiagaraEmitterData* Data = Emitter->GetEmitterData(Receipt->EmitterVersion);
+			if (FindStage(Data, Receipt->UsageId) || HasStageOutput(Graph, Receipt->UsageId))
+			{
+				return ErrorResult(TEXT("The removed simulation-stage identity is already in use."), TEXT("rollback_conflict"), 409);
+			}
+			FGraphSnapshot BeforeGraph;
+			BeforeGraph.Export = Receipt->BeforeGraphExport;
+			BeforeGraph.Digest = GraphSnapshotDigest(BeforeGraph.Export);
+			BeforeGraph.NodeCount = Receipt->BeforeGraphNodeCount;
+			BeforeGraph.bCaptured = true;
+			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Rollback Niagara Simulation Stage Removal")));
+			System->Modify();
+			Emitter->Modify();
+			Graph->Modify();
+			Emitter->AddSimulationStage(Stage, Receipt->EmitterVersion);
+			Data = Emitter->GetEmitterData(Receipt->EmitterVersion);
+			if (Receipt->BeforeIndex != INDEX_NONE)
+			{
+				Emitter->MoveSimulationStageToIndex(Stage, Receipt->BeforeIndex, Receipt->EmitterVersion);
+			}
+			bool bGraphRestored = RestoreGraphSnapshot(Graph, BeforeGraph);
+			// Niagara's generic graph text importer is not available for every
+			// commandlet-only node class.  Recreate the stable simulation-stage
+			// output if the snapshot could not produce a usable output node;
+			// the full snapshot remains the preferred restoration path.
+			if (!bGraphRestored || !HasStageOutput(Graph, Receipt->UsageId))
+			{
+				bGraphRestored = CreateStageOutput(Graph, Receipt->UsageId) != nullptr;
+			}
+			const FCompileSummary Compile = CompileStage(System, Stage->Script);
+			const bool bReadBack = FindStage(Data, Receipt->UsageId) == Stage && bGraphRestored
+				&& HasStageOutput(Graph, Receipt->UsageId);
+			if (!bReadBack || !Compile.bCompiled)
+			{
+				return ErrorResult(FString::Printf(TEXT("Simulation-stage removal rollback verification failed (stageIdentity=%s graphRestored=%s graphPresent=%s compiled=%s exportChars=%d nodes=%d)."),
+					FindStage(Data, Receipt->UsageId) == Stage ? TEXT("true") : TEXT("false"),
+					bGraphRestored ? TEXT("true") : TEXT("false"),
+					HasStageOutput(Graph, Receipt->UsageId) ? TEXT("true") : TEXT("false"),
+					Compile.bCompiled ? TEXT("true") : TEXT("false"), BeforeGraph.Export.Len(), BeforeGraph.NodeCount), TEXT("rollback_verification_failed"), 500);
+			}
+			System->MarkPackageDirty();
+			Receipt->bRolledBack = true;
+			Receipt->bCompiled = Compile.bCompiled;
+			Receipt->CompileStatus = Compile.Status;
+			return FMCPToolResult::Ok(MakeResult(*Receipt, false));
+		}
+	};
 
 	class FTool_NiagaraSimulationStageAddPlan final : public FMCPToolBase
 	{
@@ -780,9 +1478,16 @@ namespace UEAIIntegrationTools
 	{
 #if WITH_UEAI_NIAGARA && WITH_EDITORONLY_DATA
 		using namespace UEAINiagaraSimulationStagePrivate;
+		Registry.Register(MakeShared<FTool_NiagaraSimulationStageList>());
 		Registry.Register(MakeShared<FTool_NiagaraSimulationStageAddPlan>());
 		Registry.Register(MakeShared<FTool_NiagaraSimulationStageAddApply>());
 		Registry.Register(MakeShared<FTool_NiagaraSimulationStageAddRollback>());
+		Registry.Register(MakeShared<FTool_NiagaraSimulationStageUpdatePlan>());
+		Registry.Register(MakeShared<FTool_NiagaraSimulationStageUpdateApply>());
+		Registry.Register(MakeShared<FTool_NiagaraSimulationStageUpdateRollback>());
+		Registry.Register(MakeShared<FTool_NiagaraSimulationStageRemovePlan>());
+		Registry.Register(MakeShared<FTool_NiagaraSimulationStageRemoveApply>());
+		Registry.Register(MakeShared<FTool_NiagaraSimulationStageRemoveRollback>());
 #else
 		class FUnavailableNiagaraSimulationStage final : public FMCPToolBase
 		{
@@ -809,6 +1514,20 @@ namespace UEAIIntegrationTools
 			MakeShared<FUnavailableNiagaraSimulationStage>(TEXT("content.niagara.simulation_stage.add.apply")));
 		Registry.Register(
 			MakeShared<FUnavailableNiagaraSimulationStage>(TEXT("content.niagara.simulation_stage.add.rollback")));
+		Registry.Register(
+			MakeShared<FUnavailableNiagaraSimulationStage>(TEXT("content.niagara.simulation_stage.list")));
+		Registry.Register(
+			MakeShared<FUnavailableNiagaraSimulationStage>(TEXT("content.niagara.simulation_stage.update.plan")));
+		Registry.Register(
+			MakeShared<FUnavailableNiagaraSimulationStage>(TEXT("content.niagara.simulation_stage.update.apply")));
+		Registry.Register(
+			MakeShared<FUnavailableNiagaraSimulationStage>(TEXT("content.niagara.simulation_stage.update.rollback")));
+		Registry.Register(
+			MakeShared<FUnavailableNiagaraSimulationStage>(TEXT("content.niagara.simulation_stage.remove.plan")));
+		Registry.Register(
+			MakeShared<FUnavailableNiagaraSimulationStage>(TEXT("content.niagara.simulation_stage.remove.apply")));
+		Registry.Register(
+			MakeShared<FUnavailableNiagaraSimulationStage>(TEXT("content.niagara.simulation_stage.remove.rollback")));
 #endif
 	}
 }

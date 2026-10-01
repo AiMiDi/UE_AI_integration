@@ -3,6 +3,7 @@
 #include "Infrastructure/MaterialAssetHelpers.h"
 #include "Infrastructure/MaterialCustomEditing.h"
 #include "Infrastructure/MaterialFunctionDependencies.h"
+#include "Infrastructure/MaterialGraphSnapshot.h"
 #include "Workflow/UEWorkflowExecutionContext.h"
 #include "Tools/MCPToolRegistry.h"
 #include "MaterialEditingLibrary.h"
@@ -34,6 +35,305 @@ namespace MCPMaterialInfrastructure
 		FMCPToolResult BadFunctionEdit(const FString& Message)
 		{
 			return FMCPToolResult::Error(Message, TEXT("invalid_material_function_edit"), 400);
+		}
+
+		FMCPToolResult RequireFunctionMutationBoundary(
+			UMaterialFunction* Function,
+			const TSharedPtr<FJsonObject>& Params,
+			UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& OutValidation)
+		{
+			const TSharedPtr<FJsonObject>* WorkflowContext = nullptr;
+			bool bApprovedPlan = false;
+			if (Params->TryGetObjectField(TEXT("__ueWorkflow"), WorkflowContext)
+				&& WorkflowContext && (*WorkflowContext).IsValid())
+			{
+				(*WorkflowContext)->TryGetBoolField(TEXT("approvedPlan"), bApprovedPlan);
+			}
+			if (!Params->HasField(TEXT("boundaryId")))
+			{
+				if (bApprovedPlan)
+				{
+					return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+				}
+				return FMCPToolResult::Error(
+					TEXT("Authored material function graph writes require boundaryId, snapshotId and expectedProjectionHash."),
+					TEXT("material_boundary_required_for_mutation"),
+					409);
+			}
+			return UEAIIntegration::MaterialQuery::ValidateBoundaryWrite(Function, Params, OutValidation);
+		}
+
+		FMCPToolResult RequireFunctionBoundaryNode(
+			const UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& Validation,
+			const UMaterialExpression* Expression,
+			const TCHAR* Role)
+		{
+			if (!Validation.Boundary.IsValid())
+			{
+				return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+			}
+			const FString NodeId = Expression ? ExpressionNodeId(const_cast<UMaterialExpression*>(Expression)) : FString();
+			if (NodeId.IsEmpty())
+			{
+				return FMCPToolResult::Error(
+					FString::Printf(TEXT("The %s function node has no stable material identity."), Role),
+					TEXT("material_boundary_node_identity_missing"),
+					409);
+			}
+			if (!Validation.Boundary->SelectedNodeIds.Contains(NodeId))
+			{
+				return FMCPToolResult::Error(
+					FString::Printf(TEXT("The %s function node '%s' is outside the selected material boundary."), Role, *NodeId),
+					TEXT("material_boundary_node_outside_selection"),
+					409);
+			}
+			if (!Validation.Boundary->WritableNodeIds.Contains(NodeId))
+			{
+				return FMCPToolResult::Error(
+					FString::Printf(TEXT("The %s function node '%s' is not writable in the selected material boundary."), Role, *NodeId),
+					TEXT("material_boundary_node_not_writable"),
+					409);
+			}
+			return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+		}
+
+		struct FFunctionConnectionSnapshot
+		{
+			UMaterialExpression* Owner = nullptr;
+			int32 InputIndex = INDEX_NONE;
+			FExpressionInput Value;
+		};
+
+		void CaptureFunctionConnections(
+			UMaterialFunction* Function,
+			TArray<FFunctionConnectionSnapshot>& OutConnections)
+		{
+			OutConnections.Reset();
+			if (!Function)
+			{
+				return;
+			}
+			for (UMaterialExpression* Expression : Function->GetExpressions())
+			{
+				if (!Expression)
+				{
+					continue;
+				}
+				const TArrayView<FExpressionInput*> Inputs = Expression->GetInputsView();
+				for (int32 InputIndex = 0; InputIndex < Inputs.Num(); ++InputIndex)
+				{
+					if (!Inputs[InputIndex])
+					{
+						continue;
+					}
+					FFunctionConnectionSnapshot& Snapshot = OutConnections.AddDefaulted_GetRef();
+					Snapshot.Owner = Expression;
+					Snapshot.InputIndex = InputIndex;
+					Snapshot.Value = *Inputs[InputIndex];
+				}
+			}
+		}
+
+		bool RestoreFunctionConnections(
+			UMaterialFunction* Function,
+			const TArray<FFunctionConnectionSnapshot>& Connections)
+		{
+			if (!Function)
+			{
+				return false;
+			}
+			for (UMaterialExpression* Expression : Function->GetExpressions())
+			{
+				if (!Expression)
+				{
+					continue;
+				}
+				for (FExpressionInput* Input : Expression->GetInputsView())
+				{
+					if (Input)
+					{
+						*Input = FExpressionInput();
+					}
+				}
+			}
+			for (const FFunctionConnectionSnapshot& Snapshot : Connections)
+			{
+				if (!Snapshot.Owner)
+				{
+					return false;
+				}
+				FExpressionInput* Input = Snapshot.Owner->GetInput(Snapshot.InputIndex);
+				if (!Input)
+				{
+					return false;
+				}
+				*Input = Snapshot.Value;
+			}
+			return true;
+		}
+
+		struct FFunctionExpressionDeleteSnapshot
+		{
+			UMaterialExpression* Expression = nullptr;
+			TArray<UMaterialExpression*> ExpressionOrder;
+			TArray<FFunctionConnectionSnapshot> Connections;
+		};
+
+		FFunctionExpressionDeleteSnapshot CaptureFunctionExpressionDeleteSnapshot(
+			UMaterialFunction* Function,
+			UMaterialExpression* Expression)
+		{
+			FFunctionExpressionDeleteSnapshot Snapshot;
+			Snapshot.Expression = Expression;
+			if (Function)
+			{
+				const auto Expressions = Function->GetExpressions();
+				Snapshot.ExpressionOrder.Reserve(Expressions.Num());
+				for (UMaterialExpression* Current : Expressions)
+				{
+					if (Current)
+					{
+						Snapshot.ExpressionOrder.Add(Current);
+					}
+				}
+			}
+			CaptureFunctionConnections(Function, Snapshot.Connections);
+			return Snapshot;
+		}
+
+		bool RestoreFunctionExpressionDeleteSnapshot(
+			UMaterialFunction* Function,
+			const FFunctionExpressionDeleteSnapshot& Snapshot)
+		{
+			if (!Function || !Snapshot.Expression || !Snapshot.ExpressionOrder.Contains(Snapshot.Expression))
+			{
+				return false;
+			}
+			if (!Function->GetExpressions().Contains(Snapshot.Expression))
+			{
+				Function->GetExpressionCollection().AddExpression(Snapshot.Expression);
+			}
+			return RestoreFunctionConnections(Function, Snapshot.Connections);
+		}
+
+		FMCPToolResult VerifyFunctionMutationPostcondition(
+			UMaterialFunction* Function,
+			const UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& Validation,
+			const TSharedPtr<FJsonObject>& Params)
+		{
+			FString Expected;
+			if (!Params->TryGetStringField(TEXT("expectedAfterProjectionHash"), Expected) || Expected.IsEmpty())
+			{
+				return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+			}
+			TSharedPtr<const UEAIIntegration::MaterialQuery::FSnapshot> Fresh;
+			const FMCPToolResult CaptureResult = UEAIIntegration::MaterialQuery::Capture(
+				Function,
+				Function->GetPathName(),
+				FString(),
+				nullptr,
+				Validation.SourceSnapshot.IsValid() ? Validation.SourceSnapshot->bIncludeNamedReroutes : false,
+				&Fresh,
+				false);
+			if (!CaptureResult.bSuccess || !Fresh)
+			{
+				return FMCPToolResult::Error(
+					TEXT("The material function mutation completed, but its postcondition projection could not be captured."),
+					TEXT("material_boundary_postcondition_capture_failed"),
+					500);
+			}
+			if (Fresh->ProjectionHash != Expected)
+			{
+				return FMCPToolResult::Error(
+					TEXT("The material function mutation did not produce the expected projection."),
+					TEXT("material_boundary_postcondition_failed"),
+					409);
+			}
+			return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+		}
+
+		void FinalizeFunctionRollback(UMaterialFunction* Function, const TSharedPtr<FJsonObject>& Params)
+		{
+			if (!Function)
+			{
+				return;
+			}
+			Function->MarkPackageDirty();
+			UEAIIntegration::MaterialEditing::NotifyMaterialSourceEdited(Function);
+			if (!UEAIIntegration::Workflow::ShouldDeferCompile(Params))
+			{
+				Function->PostEditChange();
+				UMaterialEditingLibrary::UpdateMaterialFunction(Function, nullptr);
+				SaveMaterialPackage(Function);
+			}
+		}
+
+		FMCPToolResult RollbackFunctionMutation(
+			UMaterialFunction* Function,
+			const TArray<FFunctionConnectionSnapshot>& Connections,
+			const TSharedPtr<FJsonObject>& Params,
+			const UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& Validation,
+			FMCPToolResult Failure)
+		{
+			const bool bRestored = RestoreFunctionConnections(Function, Connections);
+			FinalizeFunctionRollback(Function, Params);
+			bool bVerified = bRestored;
+			if (bVerified && Validation.SourceSnapshot.IsValid())
+			{
+				TSharedPtr<const UEAIIntegration::MaterialQuery::FSnapshot> Restored;
+				const FMCPToolResult CaptureResult = UEAIIntegration::MaterialQuery::Capture(
+					Function,
+					Function->GetPathName(),
+					FString(),
+					nullptr,
+					Validation.SourceSnapshot->bIncludeNamedReroutes,
+					&Restored,
+					false);
+				bVerified = CaptureResult.bSuccess && Restored.IsValid()
+					&& Restored->ProjectionHash == Validation.SourceSnapshot->ProjectionHash;
+			}
+			if (!Failure.Data.IsValid())
+			{
+				Failure.Data = MakeShared<FJsonObject>();
+			}
+			Failure.Data->SetStringField(TEXT("attempt_status"), TEXT("rolled_back"));
+			Failure.Data->SetStringField(TEXT("restore_status"), bVerified ? TEXT("restored") : TEXT("restore_failed"));
+			Failure.Data->SetBoolField(TEXT("rollbackVerified"), bVerified);
+			return Failure;
+		}
+
+		FMCPToolResult RollbackFunctionExpressionDelete(
+			UMaterialFunction* Function,
+			const FFunctionExpressionDeleteSnapshot& Snapshot,
+			const UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& Validation,
+			const TSharedPtr<FJsonObject>& Params,
+			FMCPToolResult Failure)
+		{
+			const bool bRestored = RestoreFunctionExpressionDeleteSnapshot(Function, Snapshot);
+			FinalizeFunctionRollback(Function, Params);
+			bool bVerified = bRestored;
+			if (bVerified && Validation.SourceSnapshot.IsValid())
+			{
+				TSharedPtr<const UEAIIntegration::MaterialQuery::FSnapshot> Restored;
+				const FMCPToolResult CaptureResult = UEAIIntegration::MaterialQuery::Capture(
+					Function,
+					Function->GetPathName(),
+					FString(),
+					nullptr,
+					Validation.SourceSnapshot->bIncludeNamedReroutes,
+					&Restored,
+					false);
+				bVerified = CaptureResult.bSuccess && Restored.IsValid()
+					&& Restored->ProjectionHash == Validation.SourceSnapshot->ProjectionHash;
+			}
+			if (!Failure.Data.IsValid())
+			{
+				Failure.Data = MakeShared<FJsonObject>();
+			}
+			Failure.Data->SetStringField(TEXT("attempt_status"), TEXT("rolled_back"));
+			Failure.Data->SetStringField(TEXT("restore_status"), bVerified ? TEXT("restored") : TEXT("restore_failed"));
+			Failure.Data->SetBoolField(TEXT("rollbackVerified"), bVerified);
+			return Failure;
 		}
 
 		UMaterialFunctionInterface* LoadMaterialFunctionInterfaceByName(const FString& Name, FString& OutError)
@@ -587,11 +887,41 @@ namespace MCPMaterialInfrastructure
 			if (OutputIndex == INDEX_NONE || InputIndex == INDEX_NONE || !Target->GetInput(InputIndex))
 				return
 					BadFunctionEdit(TEXT("Source output or target input was not found; use a pin name or index:N."));
+			UEAIIntegration::MaterialQuery::FBoundaryWriteValidation BoundaryValidation;
+			FMCPToolResult BoundaryResult = RequireFunctionMutationBoundary(Function, Params, BoundaryValidation);
+			if (!BoundaryResult.bSuccess)
+			{
+				return BoundaryResult;
+			}
+			BoundaryResult = RequireFunctionBoundaryNode(BoundaryValidation, Source, TEXT("source"));
+			if (!BoundaryResult.bSuccess)
+			{
+				return BoundaryResult;
+			}
+			BoundaryResult = RequireFunctionBoundaryNode(BoundaryValidation, Target, TEXT("target"));
+			if (!BoundaryResult.bSuccess)
+			{
+				return BoundaryResult;
+			}
+			TArray<FFunctionConnectionSnapshot> ConnectionSnapshot;
+			CaptureFunctionConnections(Function, ConnectionSnapshot);
 			Function->Modify();
 			Target->Modify();
 			Target->GetInput(InputIndex)->Connect(OutputIndex, Source);
 			Result->SetStringField(TEXT("sourceNodeId"), ExpressionNodeId(Source));
 			Result->SetStringField(TEXT("targetNodeId"), ExpressionNodeId(Target));
+			if (BoundaryValidation.Boundary.IsValid())
+			{
+				Result->SetStringField(TEXT("boundaryId"), BoundaryValidation.Boundary->BoundaryId);
+				Result->SetStringField(TEXT("snapshotId"), BoundaryValidation.SourceSnapshot->Id);
+				Result->SetStringField(TEXT("sourceProjectionHash"), BoundaryValidation.SourceSnapshot->ProjectionHash);
+				Result->SetStringField(TEXT("freshProjectionHash"), BoundaryValidation.FreshSnapshot->ProjectionHash);
+			}
+			const FMCPToolResult Postcondition = VerifyFunctionMutationPostcondition(Function, BoundaryValidation, Params);
+			if (!Postcondition.bSuccess)
+			{
+				return RollbackFunctionMutation(Function, ConnectionSnapshot, Params, BoundaryValidation, Postcondition);
+			}
 			return FinishFunctionEdit(Function, Params, Result);
 		}
 
@@ -603,6 +933,26 @@ namespace MCPMaterialInfrastructure
 			if (Expression->IsA<UMaterialExpressionComposite>() || Expression->IsA<UMaterialExpressionPinBase>())
 				return
 					BadFunctionEdit(TEXT("Composite interfaces require a dedicated editing operation."));
+			UEAIIntegration::MaterialQuery::FBoundaryWriteValidation BoundaryValidation;
+			FMCPToolResult BoundaryResult = RequireFunctionMutationBoundary(Function, Params, BoundaryValidation);
+			if (!BoundaryResult.bSuccess)
+			{
+				return BoundaryResult;
+			}
+			BoundaryResult = RequireFunctionBoundaryNode(BoundaryValidation, Expression, TEXT("deleted"));
+			if (!BoundaryResult.bSuccess)
+			{
+				return BoundaryResult;
+			}
+			const FFunctionExpressionDeleteSnapshot DeleteSnapshot =
+				CaptureFunctionExpressionDeleteSnapshot(Function, Expression);
+			if (BoundaryValidation.Boundary.IsValid())
+			{
+				Result->SetStringField(TEXT("boundaryId"), BoundaryValidation.Boundary->BoundaryId);
+				Result->SetStringField(TEXT("snapshotId"), BoundaryValidation.SourceSnapshot->Id);
+				Result->SetStringField(TEXT("sourceProjectionHash"), BoundaryValidation.SourceSnapshot->ProjectionHash);
+				Result->SetStringField(TEXT("freshProjectionHash"), BoundaryValidation.FreshSnapshot->ProjectionHash);
+			}
 			Function->Modify();
 			Expression->Modify();
 			for (UMaterialExpression* Other : Function->GetExpressions())
@@ -618,6 +968,16 @@ namespace MCPMaterialInfrastructure
 			Function->GetExpressionCollection().RemoveExpression(Expression);
 			// Workflow's transaction/checkpoint owns detached objects until completion.
 			// Never garbage-mark a deleted expression before rollback can restore it.
+			const FMCPToolResult Postcondition = VerifyFunctionMutationPostcondition(Function, BoundaryValidation, Params);
+			if (!Postcondition.bSuccess)
+			{
+				return RollbackFunctionExpressionDelete(
+					Function,
+					DeleteSnapshot,
+					BoundaryValidation,
+					Params,
+					Postcondition);
+			}
 			return FinishFunctionEdit(Function, Params, Result);
 		}
 		if (Capability == TEXT("content.material.expression.move"))
@@ -648,6 +1008,19 @@ namespace MCPMaterialInfrastructure
 			if (InputIndex != INDEX_NONE && OutputIndex != INDEX_NONE)
 				return BadFunctionEdit(
 					TEXT("Ambiguous input/output pin name; use a unique pin name."));
+			UEAIIntegration::MaterialQuery::FBoundaryWriteValidation BoundaryValidation;
+			FMCPToolResult BoundaryResult = RequireFunctionMutationBoundary(Function, Params, BoundaryValidation);
+			if (!BoundaryResult.bSuccess)
+			{
+				return BoundaryResult;
+			}
+			BoundaryResult = RequireFunctionBoundaryNode(BoundaryValidation, Expression, TEXT("target"));
+			if (!BoundaryResult.bSuccess)
+			{
+				return BoundaryResult;
+			}
+			TArray<FFunctionConnectionSnapshot> ConnectionSnapshot;
+			CaptureFunctionConnections(Function, ConnectionSnapshot);
 			Function->Modify();
 			int32 Removed = 0;
 			if (InputIndex != INDEX_NONE)
@@ -673,6 +1046,18 @@ namespace MCPMaterialInfrastructure
 						}
 				}
 			Result->SetNumberField(TEXT("disconnectedCount"), Removed);
+			if (BoundaryValidation.Boundary.IsValid())
+			{
+				Result->SetStringField(TEXT("boundaryId"), BoundaryValidation.Boundary->BoundaryId);
+				Result->SetStringField(TEXT("snapshotId"), BoundaryValidation.SourceSnapshot->Id);
+				Result->SetStringField(TEXT("sourceProjectionHash"), BoundaryValidation.SourceSnapshot->ProjectionHash);
+				Result->SetStringField(TEXT("freshProjectionHash"), BoundaryValidation.FreshSnapshot->ProjectionHash);
+			}
+			const FMCPToolResult Postcondition = VerifyFunctionMutationPostcondition(Function, BoundaryValidation, Params);
+			if (!Postcondition.bSuccess)
+			{
+				return RollbackFunctionMutation(Function, ConnectionSnapshot, Params, BoundaryValidation, Postcondition);
+			}
 			return FinishFunctionEdit(Function, Params, Result);
 		}
 		return BadFunctionEdit(TEXT("Unsupported material function operation."));

@@ -1,11 +1,16 @@
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 
+import { loadCapabilityCatalog } from "./capability-catalog.js";
 import type { CapabilityExecutor } from "./domain-router.js";
 import { DevelopmentBridgeExecutor } from "./development-bridge.js";
 import { LocalAssetExecutor, LocalProjectExecutor } from "./project-executor.js";
 import { RecipeRunnerExecutor } from "./recipe-executor.js";
 import { SalExecutor } from "./sal-executor.js";
 import { UEApiError } from "./ue-bridge.js";
+import {
+  attachCapabilityVerification,
+  verificationErrorDetails,
+} from "./capability-verification.js";
 
 type JsonObject = Record<string, unknown>;
 type LocalBackend = "localProject" | "localAsset" | "localRecipe" | "localSal" | "developmentRuntime";
@@ -41,6 +46,13 @@ async function main(): Promise<void> {
   if (typeof input.backend !== "string" || !allowed.has(input.backend as LocalBackend)) throw new Error("backend is not a supported local capability backend.");
   if (input.params === null || typeof input.params !== "object" || Array.isArray(input.params)) throw new Error("params must be an object.");
   const backend = input.backend as LocalBackend;
+  const descriptor = loadCapabilityCatalog().get(input.capability);
+  const backendDeclared = descriptor?.execution?.backends.includes(backend) ?? false;
+  const verificationDefaults = {
+    localDeclared: descriptor !== undefined,
+    handlerRegistered: backendDeclared,
+    liveAvailable: backendDeclared,
+  };
 
   try {
     const data = await executor(backend).execute(
@@ -50,7 +62,10 @@ async function main(): Promise<void> {
     );
     writeFileSync(resultPath, JSON.stringify({
       ok: true,
-      data,
+      data: attachCapabilityVerification(input.capability, data, {
+        ...verificationDefaults,
+        executed: true,
+      }),
       meta: {
         requestId: typeof input.requestId === "string" ? input.requestId : null,
         executionBackend: backend,
@@ -58,12 +73,22 @@ async function main(): Promise<void> {
     }), "utf8");
   } catch (error) {
     const apiError = error instanceof UEApiError ? error : undefined;
+    const handlerRejected = apiError?.code === "capability_not_found"
+      || apiError?.code.endsWith("_operation_unsupported")
+      || apiError?.code === "recipe_run_id_required";
     writeFileSync(resultPath, JSON.stringify({
       ok: false,
       error: {
         code: apiError?.code ?? "local_backend_failed",
         message: error instanceof Error ? error.message : String(error),
-        ...(apiError?.details === undefined ? {} : { details: apiError.details }),
+        details: verificationErrorDetails(input.capability, apiError?.details, {
+          ...verificationDefaults,
+          handlerRegistered: handlerRejected
+            ? false
+            : verificationDefaults.handlerRegistered,
+          liveAvailable: false,
+          executed: false,
+        }),
       },
       meta: {
         requestId: typeof input.requestId === "string" ? input.requestId : null,
@@ -77,11 +102,28 @@ async function main(): Promise<void> {
 main().catch((error) => {
   try {
     const resultPath = argument("--result-file");
+    let capability = "unknown";
+    try {
+      const argsPath = argument("--args-file");
+      const input = JSON.parse(readFileSync(argsPath, "utf8")) as { capability?: unknown };
+      if (typeof input.capability === "string" && input.capability.length > 0) {
+        capability = input.capability;
+      }
+    } catch {
+      // Keep the stable unknown capability marker when the argument file
+      // itself cannot be decoded.
+    }
     writeFileSync(resultPath, JSON.stringify({
       ok: false,
       error: {
         code: "local_backend_adapter_failed",
         message: error instanceof Error ? error.message : String(error),
+        details: verificationErrorDetails(capability, undefined, {
+          localDeclared: false,
+          handlerRegistered: false,
+          liveAvailable: false,
+          executed: false,
+        }),
       },
     }), "utf8");
   } catch {

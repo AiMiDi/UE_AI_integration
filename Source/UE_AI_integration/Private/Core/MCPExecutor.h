@@ -31,6 +31,17 @@ public:
 		const FString& RequestId,
 		const FString& Reason);
 
+	/**
+	 * Attach the transport-wide capability verification state to a result
+	 * produced by a transport-side capability path.  The normal execute path
+	 * calls this internally; HTTP debug/workflow bypasses use the same helper
+	 * so their result contract cannot drift.
+	 */
+	void AnnotateVerification(
+		const FMCPExecutionContext& Context,
+		FMCPResult& Result,
+		bool bExecuted) const;
+
 private:
 	struct FIdempotencyRecord
 	{
@@ -54,15 +65,6 @@ private:
 		TSharedPtr<FJsonObject>& OutEffectiveParams,
 		FMCPResult& OutFailure) const;
 	static FMCPResult ConvertToolResult(FMCPToolResult&& ToolResult);
-	/**
-	 * Attach the transport-wide capability verification state to every result.
-	 * Handlers may provide a more specific readback/runtime value; unknown
-	 * values remain JSON null instead of being inferred as success.
-	 */
-	void AnnotateVerification(
-		const FMCPExecutionContext& Context,
-		FMCPResult& Result,
-		bool bExecuted) const;
 	void StoreIdempotencyResult(
 		const FString& RequestId,
 		const FString& PayloadKey,

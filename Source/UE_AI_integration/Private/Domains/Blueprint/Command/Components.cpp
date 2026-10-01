@@ -1073,6 +1073,18 @@ public:
 		{
 			Result->SetStringField(TEXT("stateHash"), StateHash);
 		}
+		TSharedRef<FJsonObject> TemplateIdentity = MakeShared<FJsonObject>();
+		TemplateIdentity->SetStringField(
+			TEXT("objectPath"), ComponentTemplate->GetPathName());
+		TemplateIdentity->SetStringField(
+			TEXT("classPath"), ComponentTemplate->GetClass()->GetPathName());
+		TemplateIdentity->SetStringField(
+			TEXT("componentNodeId"), Node->VariableGuid.ToString());
+		if (!StateHash.IsEmpty())
+		{
+			TemplateIdentity->SetStringField(TEXT("stateHash"), StateHash);
+		}
+		Result->SetObjectField(TEXT("templateIdentity"), TemplateIdentity);
 		Result->SetStringField(
 			TEXT("componentTemplateOuter"),
 			ComponentTemplate->GetOuter()
@@ -1296,6 +1308,47 @@ public:
 						*ExpectedTemplatePath,
 						*ComponentTemplate->GetPathName()),
 					TEXT("stale_component"),
+					409);
+			}
+		}
+
+		if (Params->HasField(TEXT("expectedTemplateIdentity")))
+		{
+			const TSharedPtr<FJsonObject>* ExpectedIdentity = nullptr;
+			if (!Params->TryGetObjectField(
+				TEXT("expectedTemplateIdentity"), ExpectedIdentity)
+				|| !ExpectedIdentity || !ExpectedIdentity->IsValid())
+			{
+				return FMCPToolResult::Error(
+					TEXT("expectedTemplateIdentity must be an object."),
+					TEXT("invalid_params"),
+					422);
+			}
+			FString ExpectedObjectPath;
+			FString ExpectedClassPath;
+			FString ExpectedIdentityStateHash;
+			if (!(*ExpectedIdentity)->TryGetStringField(
+				TEXT("objectPath"), ExpectedObjectPath)
+				|| !(*ExpectedIdentity)->TryGetStringField(
+					TEXT("classPath"), ExpectedClassPath))
+			{
+				return FMCPToolResult::Error(
+					TEXT("expectedTemplateIdentity requires objectPath and classPath."),
+					TEXT("invalid_params"),
+					422);
+			}
+			(*ExpectedIdentity)->TryGetStringField(
+				TEXT("stateHash"), ExpectedIdentityStateHash);
+			const bool bIdentityMatches = ExpectedObjectPath
+				== ComponentTemplate->GetPathName()
+				&& ExpectedClassPath == ComponentTemplate->GetClass()->GetPathName()
+				&& (ExpectedIdentityStateHash.IsEmpty()
+					|| ExpectedIdentityStateHash == StateHashBefore);
+			if (!bIdentityMatches)
+			{
+				return FMCPToolResult::Error(
+					TEXT("The component template identity changed. Re-read blueprint.component.get before writing."),
+					TEXT("stale_component_template_identity"),
 					409);
 			}
 		}
@@ -1582,6 +1635,16 @@ public:
 		Result->SetStringField(
 			TEXT("componentTemplatePath"),
 			FinalTemplate->GetPathName());
+		TSharedRef<FJsonObject> FinalTemplateIdentity = MakeShared<FJsonObject>();
+		FinalTemplateIdentity->SetStringField(
+			TEXT("objectPath"), FinalTemplate->GetPathName());
+		FinalTemplateIdentity->SetStringField(
+			TEXT("classPath"), FinalTemplate->GetClass()->GetPathName());
+		FinalTemplateIdentity->SetStringField(
+			TEXT("componentNodeId"), StableNodeId);
+		FinalTemplateIdentity->SetStringField(
+			TEXT("stateHash"), StateHashAfter);
+		Result->SetObjectField(TEXT("templateIdentity"), FinalTemplateIdentity);
 		Result->SetStringField(TEXT("property"), PropertyName.ToString());
 		SetBoundedComponentValueReceipt(Result, TEXT("old"), OldValue);
 		SetBoundedComponentValueReceipt(Result, TEXT("new"), ReadBackValue);

@@ -24,6 +24,7 @@
 namespace UEAIIntegrationTools
 {
 void RegisterNiagaraSystemParameterTools(FMCPToolRegistry& Registry);
+void RegisterNiagaraSystemParameterReceiptTools(FMCPToolRegistry& Registry);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -36,11 +37,13 @@ bool FNiagaraSystemParameterRegistrationTest::RunTest(const FString&)
 	FMCPToolRegistry Registry;
 	Registry.BeginDomainRegistration(TEXT("content"));
 	UEAIIntegrationTools::RegisterNiagaraSystemParameterTools(Registry);
+	UEAIIntegrationTools::RegisterNiagaraSystemParameterReceiptTools(Registry);
 	Registry.EndDomainRegistration();
 
 	static const TCHAR* ExpectedCapabilities[] = {
 		TEXT("content.niagara.system.parameter.add"),
 		TEXT("content.niagara.system.parameter.remove"),
+		TEXT("content.niagara.system.parameter.rename"),
 		TEXT("content.niagara.system.parameter.get"),
 		TEXT("content.niagara.system.parameter.plan"),
 		TEXT("content.niagara.system.parameter.apply"),
@@ -48,7 +51,7 @@ bool FNiagaraSystemParameterRegistrationTest::RunTest(const FString&)
 		TEXT("content.niagara.system.parameter.receipt.release"),
 	};
 	TestEqual(
-		TEXT("Exactly seven system-parameter capabilities register"),
+		TEXT("Exactly eight system-parameter capabilities register"),
 		Registry.Num(),
 		static_cast<int32>(UE_ARRAY_COUNT(ExpectedCapabilities)));
 	for (const TCHAR* Capability : ExpectedCapabilities)
@@ -348,6 +351,7 @@ bool FNiagaraSystemParameterSemanticContractTest::RunTest(const FString&)
 	FMCPToolRegistry Registry;
 	Registry.BeginDomainRegistration(TEXT("content"));
 	UEAIIntegrationTools::RegisterNiagaraSystemParameterTools(Registry);
+	UEAIIntegrationTools::RegisterNiagaraSystemParameterReceiptTools(Registry);
 	Registry.EndDomainRegistration();
 
 	// Reads report both the exposed store and the authored ScriptVariable
@@ -723,6 +727,7 @@ bool FNiagaraSystemParameterNonFiniteDigestContractTest::RunTest(const FString&)
 	FMCPToolRegistry Registry;
 	Registry.BeginDomainRegistration(TEXT("content"));
 	UEAIIntegrationTools::RegisterNiagaraSystemParameterTools(Registry);
+	UEAIIntegrationTools::RegisterNiagaraSystemParameterReceiptTools(Registry);
 	Registry.EndDomainRegistration();
 
 	const float QuietNaN = std::numeric_limits<float>::quiet_NaN();
@@ -825,6 +830,7 @@ bool FNiagaraSystemParameterAddContractTest::RunTest(const FString&)
 	FMCPToolRegistry Registry;
 	Registry.BeginDomainRegistration(TEXT("content"));
 	UEAIIntegrationTools::RegisterNiagaraSystemParameterTools(Registry);
+	UEAIIntegrationTools::RegisterNiagaraSystemParameterReceiptTools(Registry);
 	Registry.EndDomainRegistration();
 
 	auto MakeAddParams = [&Fixture](const FString& Name, const FString& Type,

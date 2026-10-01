@@ -2,6 +2,12 @@ reference/
 node_modules/
 *.o
 *.obj
+*.dll
+*.pdb
+*.lib
+*.exp
+*.ilk
+*.exe
 Binaries/
 Intermediate/
 DerivedDataCache/

@@ -304,6 +304,136 @@ bool FNiagaraEventHandlerAddApplyContractTest::RunTest(const FString&)
 	TestTrue(TEXT("Event-handler add rollback succeeds"), RolledBack.bSuccess);
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FNiagaraEventHandlerUpdateRemoveContractTest,
+	"UE_AI_integration.Niagara.EventHandlerQuery.UpdateRemove",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FNiagaraEventHandlerUpdateRemoveContractTest::RunTest(const FString&)
+{
+	FNiagaraEventHandlerQueryFixture Fixture;
+	ON_SCOPE_EXIT
+	{
+		if (Fixture.System)
+		{
+			Fixture.System->WaitForCompilationComplete(false, false);
+		}
+		TestTrue(TEXT("Event-handler update/remove fixture and package are deleted"), DeleteNiagaraEventHandlerQueryFixture(Fixture.PackageName));
+	};
+	if (!TestTrue(TEXT("Event-handler update/remove fixture builds"), CreateNiagaraEventHandlerQueryFixture(Fixture, false)))
+	{
+		AddInfo(TEXT("The /Game/ event-handler fixture could not be built; skipping update/remove contract."));
+		return true;
+	}
+
+	FMCPToolRegistry Registry;
+	Registry.BeginDomainRegistration(TEXT("content"));
+	UEAIIntegrationTools::RegisterNiagaraEventHandlerTools(Registry);
+	Registry.EndDomainRegistration();
+
+	const FGuid UsageId = FGuid::NewGuid();
+	TSharedPtr<FJsonObject> AddParams = MakeShared<FJsonObject>();
+	AddParams->SetStringField(TEXT("system"), Fixture.System->GetPathName());
+	AddParams->SetStringField(TEXT("emitter"), Fixture.EmitterHandleId.ToString(EGuidFormats::DigitsWithHyphensLower));
+	AddParams->SetStringField(TEXT("usageId"), UsageId.ToString(EGuidFormats::DigitsWithHyphensLower));
+	AddParams->SetStringField(TEXT("sourceEventName"), TEXT("Burst"));
+	AddParams->SetStringField(TEXT("executionMode"), TEXT("SpawnedParticles"));
+	AddParams->SetNumberField(TEXT("spawnNumber"), 4);
+	AddParams->SetNumberField(TEXT("minSpawnNumber"), 2);
+	AddParams->SetNumberField(TEXT("maxEventsPerFrame"), 32);
+	AddParams->SetBoolField(TEXT("randomSpawnNumber"), true);
+	AddParams->SetBoolField(TEXT("updateAttributeInitialValues"), false);
+	const FMCPToolResult AddPlan = Registry.ExecuteTool(TEXT("content.niagara.event_handler.add.plan"), AddParams);
+	if (!TestTrue(TEXT("Event-handler setup plan succeeds"), AddPlan.bSuccess) || !AddPlan.Data)
+	{
+		return false;
+	}
+	AddParams->SetStringField(TEXT("requestId"), FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower));
+	AddParams->SetBoolField(TEXT("confirmWrite"), true);
+	AddParams->SetStringField(TEXT("approvePlanDigest"), AddPlan.Data->GetStringField(TEXT("planDigest")));
+	const FMCPToolResult Added = Registry.ExecuteTool(TEXT("content.niagara.event_handler.add.apply"), AddParams);
+	if (!TestTrue(TEXT("Event-handler setup apply succeeds"), Added.bSuccess))
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> UpdateParams = MakeShared<FJsonObject>();
+	UpdateParams->SetStringField(TEXT("system"), Fixture.System->GetPathName());
+	UpdateParams->SetStringField(TEXT("emitter"), Fixture.EmitterHandleId.ToString(EGuidFormats::DigitsWithHyphensLower));
+	UpdateParams->SetStringField(TEXT("usageId"), UsageId.ToString(EGuidFormats::DigitsWithHyphensLower));
+	UpdateParams->SetStringField(TEXT("sourceEventName"), TEXT("EditedBurst"));
+	const FMCPToolResult UpdatePlan = Registry.ExecuteTool(TEXT("content.niagara.event_handler.update.plan"), UpdateParams);
+	if (!TestTrue(TEXT("Event-handler update plan succeeds"), UpdatePlan.bSuccess) || !UpdatePlan.Data)
+	{
+		return false;
+	}
+	const FString UpdateRequestId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	UpdateParams->SetStringField(TEXT("requestId"), UpdateRequestId);
+	UpdateParams->SetBoolField(TEXT("confirmWrite"), true);
+	UpdateParams->SetStringField(TEXT("approvePlanDigest"), UpdatePlan.Data->GetStringField(TEXT("planDigest")));
+	const FMCPToolResult Updated = Registry.ExecuteTool(TEXT("content.niagara.event_handler.update.apply"), UpdateParams);
+	TestTrue(TEXT("Event-handler update apply succeeds with omitted options preserved"), Updated.bSuccess);
+
+	TSharedPtr<FJsonObject> RemoveParams = MakeShared<FJsonObject>();
+	RemoveParams->SetStringField(TEXT("system"), Fixture.System->GetPathName());
+	RemoveParams->SetStringField(TEXT("emitter"), Fixture.EmitterHandleId.ToString(EGuidFormats::DigitsWithHyphensLower));
+	RemoveParams->SetStringField(TEXT("usageId"), UsageId.ToString(EGuidFormats::DigitsWithHyphensLower));
+	const FMCPToolResult RemovePlan = Registry.ExecuteTool(TEXT("content.niagara.event_handler.remove.plan"), RemoveParams);
+	if (!TestTrue(TEXT("Event-handler remove plan succeeds"), RemovePlan.bSuccess) || !RemovePlan.Data)
+	{
+		return false;
+	}
+	const FString RemoveRequestId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	RemoveParams->SetStringField(TEXT("requestId"), RemoveRequestId);
+	RemoveParams->SetBoolField(TEXT("confirmWrite"), true);
+	RemoveParams->SetStringField(TEXT("approvePlanDigest"), RemovePlan.Data->GetStringField(TEXT("planDigest")));
+	const FMCPToolResult Removed = Registry.ExecuteTool(TEXT("content.niagara.event_handler.remove.apply"), RemoveParams);
+	if (!TestTrue(TEXT("Event-handler remove apply succeeds"), Removed.bSuccess) || !Removed.Data)
+	{
+		return false;
+	}
+	const FString RemoveReceipt = Removed.Data->GetStringField(TEXT("receiptId"));
+
+	TSharedPtr<FJsonObject> ListParams = MakeShared<FJsonObject>();
+	ListParams->SetStringField(TEXT("system"), Fixture.System->GetPathName());
+	ListParams->SetStringField(TEXT("emitter"), Fixture.EmitterHandleId.ToString(EGuidFormats::DigitsWithHyphensLower));
+	const FMCPToolResult EmptyList = Registry.ExecuteTool(TEXT("content.niagara.event_handler.list"), ListParams);
+	TestTrue(TEXT("Event-handler list succeeds after removal"), EmptyList.bSuccess);
+	TestEqual(TEXT("Removed event-handler list is empty"), EmptyList.Data->GetIntegerField(TEXT("total")), 0);
+
+	TSharedPtr<FJsonObject> RollbackParams = MakeShared<FJsonObject>();
+	RollbackParams->SetStringField(TEXT("rollbackId"), RemoveReceipt);
+	RollbackParams->SetStringField(TEXT("requestId"), RemoveRequestId);
+	RollbackParams->SetBoolField(TEXT("confirmWrite"), true);
+	const FMCPToolResult RolledBack = Registry.ExecuteTool(TEXT("content.niagara.event_handler.remove.rollback"), RollbackParams);
+	if (!RolledBack.bSuccess)
+	{
+		AddError(FString::Printf(TEXT("Event-handler removal rollback returned %s: %s"), *RolledBack.ErrorCode, *RolledBack.ErrorMessage));
+	}
+	if (!TestTrue(TEXT("Event-handler removal rollback succeeds"), RolledBack.bSuccess))
+	{
+		return false;
+	}
+	const FMCPToolResult RestoredList = Registry.ExecuteTool(TEXT("content.niagara.event_handler.list"), ListParams);
+	TestTrue(TEXT("Event-handler list succeeds after rollback"), RestoredList.bSuccess);
+	TestEqual(TEXT("Rollback restores one event-handler"), RestoredList.Data->GetIntegerField(TEXT("total")), 1);
+	const TArray<TSharedPtr<FJsonValue>>* Rows = nullptr;
+	if (RestoredList.Data->TryGetArrayField(TEXT("eventHandlers"), Rows) && Rows && Rows->Num() == 1)
+	{
+		TestEqual(TEXT("Rollback restores the updated source event"), (*Rows)[0]->AsObject()->GetStringField(TEXT("sourceEventName")), FString(TEXT("EditedBurst")));
+		TestTrue(TEXT("Rollback restores the event graph"), (*Rows)[0]->AsObject()->GetBoolField(TEXT("graphPresent")));
+	}
+
+	TSharedPtr<FJsonObject> InvalidParams = MakeShared<FJsonObject>();
+	InvalidParams->SetStringField(TEXT("system"), Fixture.System->GetPathName());
+	InvalidParams->SetStringField(TEXT("emitter"), Fixture.EmitterHandleId.ToString(EGuidFormats::DigitsWithHyphensLower));
+	InvalidParams->SetStringField(TEXT("usageId"), FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower));
+	const FMCPToolResult Invalid = Registry.ExecuteTool(TEXT("content.niagara.event_handler.remove.plan"), InvalidParams);
+	TestFalse(TEXT("Event-handler remove rejects an unknown stable identity"), Invalid.bSuccess);
+	TestEqual(TEXT("Unknown event-handler uses a stable error code"), Invalid.ErrorCode, FString(TEXT("handler_not_found")));
+	return true;
+}
 #endif // WITH_UEAI_NIAGARA && WITH_EDITORONLY_DATA
 
 #endif // WITH_DEV_AUTOMATION_TESTS

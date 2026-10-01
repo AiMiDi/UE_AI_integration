@@ -2488,31 +2488,37 @@ namespace UEAINiagaraRendererMaterial
 					TEXT("property_value_out_of_range"));
 			}
 
+			// Resolve the renderer-specific property and capture its current value
+			// before opening a transaction.  `Modify()` can dirty the package even
+			// when a later dispatch check rejects the request, which would make a
+			// failed cross-renderer write observable as an authored change.
+			FProperty* KnownProperty = FindKnownRendererProperty(Target.Renderer, Key);
+			if (!KnownProperty)
+			{
+				return Error(
+					FString::Printf(TEXT("Renderer property '%s' is unavailable for this renderer."), *Property),
+					TEXT("property_unsupported_for_renderer"));
+			}
+			FString BeforeText;
+		KnownProperty->ExportTextItem_Direct(
+				BeforeText,
+				KnownProperty->ContainerPtrToValuePtr<void>(Target.Renderer),
+				nullptr,
+				Target.Renderer,
+				PPF_None);
+			const TSharedPtr<FJsonValue> BeforeReadback = ReadKnownRendererProperty(Target.Renderer, Key);
+			if (!BeforeReadback.IsValid())
+			{
+				return Error(
+					FString::Printf(TEXT("Renderer property '%s' cannot be read before mutation."), *Property),
+					TEXT("property_readback_failed"), 500);
+			}
+
 			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Set Niagara Renderer Property")));
 			Target.System->Modify();
 			Target.Renderer->Modify();
 			bool bChanged = false;
 			TSharedPtr<FJsonValue> Readback;
-			FProperty* KnownProperty = FindKnownRendererProperty(Target.Renderer, Key);
-			FString BeforeText;
-			if (!KnownProperty)
-			{
-				Transaction.Cancel();
-				return Error(
-					FString::Printf(TEXT("Renderer property '%s' is unavailable for this renderer."), *Property),
-					TEXT("property_unsupported_for_renderer"));
-			}
-			KnownProperty->ExportTextItem_Direct(
-				BeforeText, KnownProperty->ContainerPtrToValuePtr<void>(Target.Renderer), nullptr, Target.Renderer,
-				PPF_None);
-			const TSharedPtr<FJsonValue> BeforeReadback = ReadKnownRendererProperty(Target.Renderer, Key);
-			if (!BeforeReadback.IsValid())
-			{
-				Transaction.Cancel();
-				return Error(
-					FString::Printf(TEXT("Renderer property '%s' cannot be read before mutation."), *Property),
-					TEXT("property_readback_failed"), 500);
-			}
 			Result = SetRendererPropertyValue(Target.Renderer, Key, *ValuePtr, bChanged);
 			if (!Result.bSuccess)
 			{

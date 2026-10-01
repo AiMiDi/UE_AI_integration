@@ -73,13 +73,39 @@ foreach ($needle in @(
         'UE_PORT',
         'expectedDll',
         'expectedPdb',
+        'observedProcessId',
+        'processMatches',
         'pathMatches',
         'hashMatches',
         'pdbMatches',
+        'latestBuildArtifactPath',
+        'latestBuildArtifactSha256',
+        'latestBuildArtifactPathMatches',
+        'latestBuildArtifactHashMatches',
+        'verificationFailures',
+        'failureClass',
+        'lastFailureMessage',
+        'attempts',
         'assetReadback',
         'runtimeVerified',
         'visualVerified')) {
     Assert-Contains -Text $hostText -Needle $needle -Path $hostHarness
+}
+
+$productionController = Join-Path $PluginRoot 'Source\UE_AI_integration\Private\Infrastructure\ProductionRuntimeController.cpp'
+if (-not (Test-Path -LiteralPath $productionController -PathType Leaf)) {
+    throw "Production module controller is missing: $productionController"
+}
+$productionText = Get-Content -LiteralPath $productionController -Raw
+foreach ($needle in @(
+        'processId',
+        'latestBuildArtifactPath',
+        'latestBuildArtifactSha256',
+        'latestBuildArtifactExists',
+        'latestBuildArtifactTimestampUtc',
+        'latestBuildArtifactPathMatchesLoaded',
+        'matchesLatestBuildArtifact')) {
+    Assert-Contains -Text $productionText -Needle $needle -Path $productionController
 }
 
 # Tests that create native Material/Blueprint editors or exercise shader/PIE

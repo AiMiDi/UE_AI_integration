@@ -15,6 +15,7 @@
 
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
+#include "EdGraphUtilities.h"
 #include "EdGraphSchema_Niagara.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraEmitterHandle.h"
@@ -27,6 +28,7 @@
 #include "NiagaraSystem.h"
 #include "Misc/PackageName.h"
 #include "ScopedTransaction.h"
+#include "Misc/SecureHash.h"
 #include "UObject/Package.h"
 
 namespace UEAINiagaraEventHandlerPrivate
@@ -95,11 +97,106 @@ namespace UEAINiagaraEventHandlerPrivate
 		TWeakObjectPtr<UNiagaraSystem> System;
 		TWeakObjectPtr<UNiagaraEmitter> Emitter;
 		TWeakObjectPtr<UNiagaraGraph> Graph;
+		FNiagaraEventScriptProperties BeforeProperties;
+		FString BeforeGraphExport;
+		FString GraphAfterDigest;
+		int32 BeforeGraphNodeCount = 0;
+		bool bHasGraphSnapshot = false;
+		bool bHasBeforeProperties = false;
+		FString Operation = TEXT("add");
 		bool bChanged = false;
 		bool bCompiled = false;
 		FString CompileStatus = TEXT("notRequired");
 		bool bRolledBack = false;
 	};
+
+	struct FGraphSnapshot
+	{
+		FString Export;
+		FString Digest;
+		int32 NodeCount = 0;
+		bool bCaptured = false;
+	};
+
+	FString GraphSnapshotDigest(const FString& Export)
+	{
+		FTCHARToUTF8 Bytes(*Export);
+		uint8 Digest[FSHA1::DigestSize];
+		FSHA1::HashBuffer(Bytes.Get(), Bytes.Length(), Digest);
+		return BytesToHex(Digest, UE_ARRAY_COUNT(Digest)).ToLower();
+	}
+
+	bool CaptureGraphSnapshot(UNiagaraGraph* Graph, FGraphSnapshot& OutSnapshot)
+	{
+		OutSnapshot = FGraphSnapshot();
+		if (!Graph)
+		{
+			return false;
+		}
+		TSet<UObject*> Nodes;
+		const TArray<UEdGraphNode*> PartialNodes = Graph->Nodes;
+		for (UEdGraphNode* Node : PartialNodes)
+		{
+			if (Node)
+			{
+				Nodes.Add(Node);
+			}
+		}
+		FEdGraphUtilities::ExportNodesToText(Nodes, OutSnapshot.Export);
+		OutSnapshot.Digest = GraphSnapshotDigest(OutSnapshot.Export);
+		OutSnapshot.NodeCount = Nodes.Num();
+		OutSnapshot.bCaptured = true;
+		return true;
+	}
+
+	bool RestoreGraphSnapshot(UNiagaraGraph* Graph, const FGraphSnapshot& Snapshot)
+	{
+		if (!Graph || !Snapshot.bCaptured)
+		{
+			return false;
+		}
+		const bool bEmptySnapshot = Snapshot.NodeCount == 0 && Snapshot.Export.IsEmpty();
+		if (!bEmptySnapshot && !FEdGraphUtilities::CanImportNodesFromText(Graph, Snapshot.Export))
+		{
+			return false;
+		}
+		Graph->Modify();
+		const TArray<UEdGraphNode*> ExistingNodes = Graph->Nodes;
+		for (UEdGraphNode* Node : ExistingNodes)
+		{
+			if (Node)
+			{
+				Node->Modify();
+				Node->DestroyNode();
+			}
+		}
+		if (bEmptySnapshot)
+		{
+			Graph->NotifyGraphChanged();
+			return true;
+		}
+		TSet<UEdGraphNode*> ImportedNodes;
+		FEdGraphUtilities::ImportNodesFromText(Graph, Snapshot.Export, ImportedNodes);
+		Graph->NotifyGraphChanged();
+		if (ImportedNodes.Num() == Snapshot.NodeCount)
+		{
+			return true;
+		}
+		// Import can create a partial set before rejecting an unsupported
+		// Niagara node class (notably output nodes).  Do not leave that partial
+		// graph behind for a caller's recovery path to mistake for a restore.
+		const TArray<UEdGraphNode*> PartialNodes = Graph->Nodes;
+		for (UEdGraphNode* Node : PartialNodes)
+		{
+			if (Node)
+			{
+				Node->Modify();
+				Node->DestroyNode();
+			}
+		}
+		Graph->NotifyGraphChanged();
+		return false;
+	}
 
 	TMap<FString, FEventHandlerReceipt>& Receipts()
 	{
@@ -451,7 +548,13 @@ namespace UEAINiagaraEventHandlerPrivate
 		if (UNiagaraNodeOutput* Existing = Graph->FindEquivalentOutputNode(
 			ENiagaraScriptUsage::ParticleEventScript, UsageId))
 		{
-			return Existing;
+			UEdGraphPin* ExistingInput = FindParameterMapPin(Existing, EGPD_Input);
+			if (ExistingInput && ExistingInput->LinkedTo.Num() == 1)
+			{
+				return Existing;
+			}
+			Existing->Modify();
+			Existing->DestroyNode();
 		}
 
 		Graph->Modify();
@@ -481,6 +584,7 @@ namespace UEAINiagaraEventHandlerPrivate
 			return nullptr;
 		}
 
+		OutputInput->BreakAllPinLinks();
 		OutputInput->MakeLinkTo(InputOutput);
 		Graph->NotifyGraphChanged();
 		return Output;
@@ -614,6 +718,53 @@ namespace UEAINiagaraEventHandlerPrivate
 		return bGraphRemoved && FindHandler(Target.Data, UsageId) == nullptr;
 	}
 
+	void SetHandlerProperties(FNiagaraEventScriptProperties& Properties, const FEventHandlerRequest& Request)
+	{
+		Properties.ExecutionMode = Request.ExecutionMode;
+		Properties.SpawnNumber = Request.SpawnNumber;
+		Properties.MinSpawnNumber = Request.MinSpawnNumber;
+		Properties.MaxEventsPerFrame = Request.MaxEventsPerFrame;
+		Properties.bRandomSpawnNumber = Request.bRandomSpawnNumber;
+		Properties.UpdateAttributeInitialValues = Request.bUpdateAttributeInitialValues;
+		Properties.SourceEmitterID = Request.SourceEmitterId;
+		Properties.SourceEventName = FName(*Request.SourceEventName);
+	}
+
+	FEventHandlerRequest RequestFromProperties(
+		const FString& SystemPath,
+		const FString& EmitterName,
+		const FGuid& UsageId,
+		const FNiagaraEventScriptProperties& Properties)
+	{
+		FEventHandlerRequest Request;
+		Request.SystemPath = SystemPath;
+		Request.EmitterSelector = EmitterName;
+		Request.UsageId = UsageId;
+		Request.SourceEmitterId = Properties.SourceEmitterID;
+		Request.SourceEventName = Properties.SourceEventName.ToString();
+		Request.ExecutionMode = Properties.ExecutionMode;
+		Request.SpawnNumber = Properties.SpawnNumber;
+		Request.MinSpawnNumber = Properties.MinSpawnNumber;
+		Request.MaxEventsPerFrame = Properties.MaxEventsPerFrame;
+		Request.bRandomSpawnNumber = Properties.bRandomSpawnNumber;
+		Request.bUpdateAttributeInitialValues = Properties.UpdateAttributeInitialValues;
+		return Request;
+	}
+
+	FCompileSummary CompileSystem(UNiagaraSystem* System)
+	{
+		FCompileSummary Summary;
+		if (!System)
+		{
+			return Summary;
+		}
+		System->RequestCompile(false);
+		System->WaitForCompilationComplete(true, false);
+		Summary.Status = System->HasOutstandingCompilationRequests(false) ? TEXT("dirty") : TEXT("upToDate");
+		Summary.bCompiled = !System->HasOutstandingCompilationRequests(false);
+		return Summary;
+	}
+
 	TSharedRef<FJsonObject> BuildPlanJson(const FEventHandlerPlanData& Data)
 	{
 		const FEventHandlerRequest& Request = Data.Request;
@@ -715,7 +866,7 @@ namespace UEAINiagaraEventHandlerPrivate
 	TSharedRef<FJsonObject> MakeResult(const FEventHandlerReceipt& Receipt, bool bReplay)
 	{
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetStringField(TEXT("schema"), TEXT("ue.niagara-event-handler-add.v1"));
+		Result->SetStringField(TEXT("schema"), TEXT("ue.niagara-event-handler.v1"));
 		Result->SetStringField(TEXT("status"), TEXT("succeeded"));
 		Result->SetStringField(TEXT("receiptId"), Receipt.ReceiptId);
 		Result->SetStringField(TEXT("requestId"), Receipt.RequestId);
@@ -725,6 +876,7 @@ namespace UEAINiagaraEventHandlerPrivate
 		Result->SetStringField(TEXT("emitterPath"), Receipt.EmitterPath);
 		Result->SetStringField(TEXT("graph"), Receipt.GraphPath);
 		Result->SetStringField(TEXT("script"), Receipt.ScriptPath);
+		Result->SetStringField(TEXT("action"), Receipt.Operation);
 		Result->SetStringField(TEXT("usageId"), Receipt.UsageId.ToString(EGuidFormats::DigitsWithHyphensLower));
 		Result->SetBoolField(TEXT("changed"), Receipt.bChanged);
 		Result->SetBoolField(TEXT("verified"), true);
@@ -916,14 +1068,7 @@ namespace UEAINiagaraEventHandlerPrivate
 			Data.Target.Emitter->Modify();
 			Data.Target.Graph->Modify();
 			FNiagaraEventScriptProperties Properties;
-			Properties.ExecutionMode = Data.Request.ExecutionMode;
-			Properties.SpawnNumber = Data.Request.SpawnNumber;
-			Properties.MinSpawnNumber = Data.Request.MinSpawnNumber;
-			Properties.MaxEventsPerFrame = Data.Request.MaxEventsPerFrame;
-			Properties.bRandomSpawnNumber = Data.Request.bRandomSpawnNumber;
-			Properties.UpdateAttributeInitialValues = Data.Request.bUpdateAttributeInitialValues;
-			Properties.SourceEmitterID = Data.Request.SourceEmitterId;
-			Properties.SourceEventName = FName(*Data.Request.SourceEventName);
+			SetHandlerProperties(Properties, Data.Request);
 			Properties.Script = NewObject<UNiagaraScript>(
 				Data.Target.Emitter,
 				MakeUniqueObjectName(Data.Target.Emitter, UNiagaraScript::StaticClass(), TEXT("EventScript")),
@@ -969,6 +1114,7 @@ namespace UEAINiagaraEventHandlerPrivate
 			Receipt.Emitter = Data.Target.Emitter;
 			Receipt.Graph = Data.Target.Graph;
 			Receipt.ScriptPath = Properties.Script ? Properties.Script->GetPathName() : FString();
+			Receipt.Operation = TEXT("add");
 
 			FNiagaraEventScriptProperties* ReadBackHandler = FindHandler(Data.Target.Data, Data.Request.UsageId);
 			const bool bReadBack = HasEventGraph(Data.Target.Graph, Data.Request.UsageId)
@@ -1100,6 +1246,361 @@ namespace UEAINiagaraEventHandlerPrivate
 			return FMCPToolResult::Ok(MakeResult(*Receipt, false));
 		}
 	};
+
+	TMap<FString, FString>& UpdateRequestReceiptIds()
+	{
+		static TMap<FString, FString> Values;
+		return Values;
+	}
+
+	TMap<FString, FString>& RemoveRequestReceiptIds()
+	{
+		static TMap<FString, FString> Values;
+		return Values;
+	}
+
+	bool BuildExistingPlanData(
+		const TSharedPtr<FJsonObject>& Params,
+		FEventHandlerPlanData& OutData,
+		FString& OutErrorCode,
+		FString& OutError)
+	{
+		OutData = FEventHandlerPlanData();
+		if (!ParseRequest(Params, OutData.Request, OutErrorCode, OutError)
+			|| !ResolveTarget(OutData.Request, OutData.Target, OutErrorCode, OutError))
+		{
+			return false;
+		}
+		FNiagaraEventScriptProperties* Existing = FindHandler(OutData.Target.Data, OutData.Request.UsageId);
+		if (!Existing || !Existing->Script || !HasEventGraph(OutData.Target.Graph, OutData.Request.UsageId))
+		{
+			OutErrorCode = TEXT("handler_not_found");
+			OutError = TEXT("The requested event handler does not exist with a matching graph output.");
+			return false;
+		}
+		// Update plans are patches. Keep every option the caller omitted at its
+		// authored value; this also makes remove plans independent of irrelevant
+		// option defaults.
+		if (!Params->HasField(TEXT("sourceEmitterId"))) OutData.Request.SourceEmitterId = Existing->SourceEmitterID;
+		if (!Params->HasField(TEXT("sourceEventName"))) OutData.Request.SourceEventName = Existing->SourceEventName.ToString();
+		if (!Params->HasField(TEXT("executionMode"))) OutData.Request.ExecutionMode = Existing->ExecutionMode;
+		if (!Params->HasField(TEXT("spawnNumber"))) OutData.Request.SpawnNumber = Existing->SpawnNumber;
+		if (!Params->HasField(TEXT("minSpawnNumber"))) OutData.Request.MinSpawnNumber = Existing->MinSpawnNumber;
+		if (!Params->HasField(TEXT("maxEventsPerFrame"))) OutData.Request.MaxEventsPerFrame = Existing->MaxEventsPerFrame;
+		if (!Params->HasField(TEXT("randomSpawnNumber"))) OutData.Request.bRandomSpawnNumber = Existing->bRandomSpawnNumber;
+		if (!Params->HasField(TEXT("updateAttributeInitialValues"))) OutData.Request.bUpdateAttributeInitialValues = Existing->UpdateAttributeInitialValues;
+		const UPackage* Package = OutData.Target.System->GetOutermost();
+		OutData.bBlocked = !Package || !Package->GetName().StartsWith(TEXT("/Game/"))
+			|| OutData.Target.Emitter->GetOutermost() != Package;
+		if (OutData.bBlocked)
+		{
+			OutData.Risks.Add(TEXT("The selected System or emitter is not an owned non-transient /Game/ asset."));
+		}
+		OutData.Warnings.Add(TEXT("The operation changes authored event-handler properties and does not prove runtime event delivery."));
+		return true;
+	}
+
+	TSharedRef<FJsonObject> BuildExistingPlanJson(const FEventHandlerPlanData& Data, const TCHAR* Action)
+	{
+		TSharedRef<FJsonObject> Plan = BuildPlanJson(Data);
+		Plan->SetStringField(TEXT("planKind"), FString::Printf(TEXT("niagaraEventHandler%s"), Action));
+		Plan->SetStringField(TEXT("action"), FString::Printf(TEXT("%sEventHandler"), Action));
+		TSharedPtr<FJsonObject> Preconditions = Plan->GetObjectField(TEXT("preconditions"));
+		if (Preconditions.IsValid())
+		{
+			Preconditions->SetBoolField(TEXT("handlerPresent"), true);
+		}
+		TSharedPtr<FJsonObject> Before = Plan->GetObjectField(TEXT("before"));
+		TSharedPtr<FJsonObject> After = Plan->GetObjectField(TEXT("after"));
+		if (Before.IsValid()) Before->SetBoolField(TEXT("handlerPresent"), true);
+		if (After.IsValid()) After->SetBoolField(TEXT("handlerPresent"), !FString(Action).Equals(TEXT("Remove")));
+		if (FNiagaraEventScriptProperties* Existing = FindHandler(Data.Target.Data, Data.Request.UsageId))
+		{
+			if (Before.IsValid())
+			{
+				Before->SetStringField(TEXT("sourceEmitterId"), Existing->SourceEmitterID.ToString(EGuidFormats::DigitsWithHyphensLower));
+				Before->SetStringField(TEXT("sourceEventName"), Existing->SourceEventName.ToString());
+				Before->SetStringField(TEXT("executionMode"), ExecutionModeName(Existing->ExecutionMode));
+				Before->SetNumberField(TEXT("spawnNumber"), Existing->SpawnNumber);
+				Before->SetNumberField(TEXT("minSpawnNumber"), Existing->MinSpawnNumber);
+				Before->SetNumberField(TEXT("maxEventsPerFrame"), Existing->MaxEventsPerFrame);
+				Before->SetBoolField(TEXT("randomSpawnNumber"), Existing->bRandomSpawnNumber);
+				Before->SetBoolField(TEXT("updateAttributeInitialValues"), Existing->UpdateAttributeInitialValues);
+			}
+			if (After.IsValid() && !FString(Action).Equals(TEXT("Remove")))
+			{
+				After->SetStringField(TEXT("sourceEmitterId"), Data.Request.SourceEmitterId.ToString(EGuidFormats::DigitsWithHyphensLower));
+				After->SetStringField(TEXT("sourceEventName"), Data.Request.SourceEventName);
+				After->SetStringField(TEXT("executionMode"), ExecutionModeName(Data.Request.ExecutionMode));
+				After->SetNumberField(TEXT("spawnNumber"), Data.Request.SpawnNumber);
+				After->SetNumberField(TEXT("minSpawnNumber"), Data.Request.MinSpawnNumber);
+				After->SetNumberField(TEXT("maxEventsPerFrame"), Data.Request.MaxEventsPerFrame);
+				After->SetBoolField(TEXT("randomSpawnNumber"), Data.Request.bRandomSpawnNumber);
+				After->SetBoolField(TEXT("updateAttributeInitialValues"), Data.Request.bUpdateAttributeInitialValues);
+			}
+		}
+		return Plan;
+	}
+
+	class FTool_NiagaraEventHandlerUpdatePlan final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.event_handler.update.plan"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FEventHandlerPlanData Data; FString Code, Error;
+			if (!BuildExistingPlanData(Params, Data, Code, Error)) return ErrorResult(Error, Code, Code.Contains(TEXT("not_found")) ? 404 : 422);
+			TSharedRef<FJsonObject> Plan = BuildExistingPlanJson(Data, TEXT("Update"));
+			FString Digest;
+			if (!TryDigestJson(Plan, Digest)) return ErrorResult(TEXT("Unable to compute the event-handler update plan digest."), TEXT("digest_unavailable"), 500);
+			Plan->SetStringField(TEXT("planDigest"), Digest);
+			return FMCPToolResult::Ok(Plan);
+		}
+	};
+
+	class FTool_NiagaraEventHandlerUpdateApply final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.event_handler.update.apply"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FString RequestId, Code, Error;
+			if (!Params.IsValid() || !Params->TryGetStringField(TEXT("requestId"), RequestId) || RequestId.IsEmpty()) return ErrorResult(TEXT("A non-empty requestId is required."), TEXT("request_id_required"));
+			if (const FString* ExistingId = UpdateRequestReceiptIds().Find(RequestId))
+			{
+				if (FEventHandlerReceipt* Existing = Receipts().Find(*ExistingId))
+				{
+					if (!ValidateChangeApproval(Params, Existing->PlanDigest, Code, Error)) return ErrorResult(Error, Code, 409);
+					return FMCPToolResult::Ok(MakeResult(*Existing, true));
+				}
+				return ErrorResult(TEXT("requestId is associated with an unavailable receipt."), TEXT("request_id_conflict"), 409);
+			}
+			FEventHandlerPlanData Data;
+			if (!BuildExistingPlanData(Params, Data, Code, Error)) return ErrorResult(Error, Code, Code.Contains(TEXT("not_found")) ? 404 : 422);
+			TSharedRef<FJsonObject> Plan = BuildExistingPlanJson(Data, TEXT("Update"));
+			FString Digest;
+			if (!TryDigestJson(Plan, Digest)) return ErrorResult(TEXT("Unable to compute the event-handler update plan digest."), TEXT("digest_unavailable"), 500);
+			if (!ValidateChangeApproval(Params, Digest, Code, Error)) return ErrorResult(Error, Code, 409);
+			if (Data.bBlocked) return ErrorResult(TEXT("The event-handler target is read-only or not owned by the System package."), TEXT("plan_blocked"), 409);
+			if (Data.Target.Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower) != Data.Target.EmitterChangeId) return ErrorResult(TEXT("The Niagara emitter changed after the plan was created; re-plan before applying."), TEXT("plan_digest_mismatch"), 409);
+			FNiagaraEventScriptProperties* Handler = FindHandler(Data.Target.Data, Data.Request.UsageId);
+			if (!Handler || !Handler->Script) return ErrorResult(TEXT("The event handler disappeared before apply."), TEXT("handler_not_found"), 404);
+			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Update Niagara Event Handler")));
+			Data.Target.System->Modify(); Data.Target.Emitter->Modify();
+			FEventHandlerReceipt Receipt;
+			Receipt.BeforeProperties = *Handler;
+			Receipt.bHasBeforeProperties = true;
+			SetHandlerProperties(*Handler, Data.Request);
+			const FCompileSummary Compile = CompileHandler(Data.Target.System, Handler->Script);
+			const bool bReadBack = ReadBackMatches(Data.Target, Data.Request);
+			if (!bReadBack || !Compile.bCompiled)
+			{
+				*Handler = Receipt.BeforeProperties;
+				Transaction.Cancel();
+				return ErrorResult(FString::Printf(TEXT("Event-handler update read-back or compilation failed (status=%s)."), *Compile.Status), !bReadBack ? TEXT("verification_failed") : TEXT("compile_failed"), 500);
+			}
+			Receipt.ReceiptId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+			Receipt.RequestId = RequestId; Receipt.PlanDigest = Digest; Receipt.SystemPath = Data.Target.System->GetPathName();
+			Receipt.EmitterName = Data.Target.EmitterName; Receipt.EmitterPath = Data.Target.EmitterPath; Receipt.GraphPath = Data.Target.GraphPath;
+			Receipt.ScriptPath = Handler->Script->GetPathName(); Receipt.EmitterVersion = Data.Target.EmitterVersion; Receipt.UsageId = Data.Request.UsageId;
+			Receipt.System = Data.Target.System; Receipt.Emitter = Data.Target.Emitter; Receipt.Graph = Data.Target.Graph;
+			Receipt.EmitterChangeIdAfter = Data.Target.Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower);
+			Receipt.Operation = TEXT("update"); Receipt.bChanged = true; Receipt.bCompiled = Compile.bCompiled; Receipt.CompileStatus = Compile.Status;
+			Data.Target.System->MarkPackageDirty(); Receipts().Add(Receipt.ReceiptId, Receipt); UpdateRequestReceiptIds().Add(RequestId, Receipt.ReceiptId);
+			return FMCPToolResult::Ok(MakeResult(Receipt, false));
+		}
+	};
+
+	class FTool_NiagaraEventHandlerUpdateRollback final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.event_handler.update.rollback"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FString ReceiptId, RequestId; bool bConfirm = false;
+			if (!Params.IsValid() || !Params->TryGetStringField(TEXT("rollbackId"), ReceiptId) || !Params->TryGetStringField(TEXT("requestId"), RequestId) || !Params->TryGetBoolField(TEXT("confirmWrite"), bConfirm) || ReceiptId.IsEmpty() || RequestId.IsEmpty() || !bConfirm) return ErrorResult(TEXT("rollbackId, requestId and confirmWrite=true are required."), TEXT("write_confirmation_required"));
+			FEventHandlerReceipt* Receipt = Receipts().Find(ReceiptId);
+			if (!Receipt || Receipt->Operation != TEXT("update") || !Receipt->bHasBeforeProperties) return ErrorResult(TEXT("The event-handler update receipt is unknown."), TEXT("receipt_not_found"), 404);
+			if (Receipt->bRolledBack) return FMCPToolResult::Ok(MakeResult(*Receipt, true));
+			if (Receipt->RequestId != RequestId) return ErrorResult(TEXT("requestId does not match the receipt."), TEXT("request_id_mismatch"), 409);
+			UNiagaraSystem* System = Receipt->System.Get(); UNiagaraEmitter* Emitter = Receipt->Emitter.Get();
+			if (!System || !Emitter || Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower) != Receipt->EmitterChangeIdAfter) return ErrorResult(TEXT("The emitter changed after update; rollback was refused."), TEXT("rollback_conflict"), 409);
+			FVersionedNiagaraEmitterData* Data = Emitter->GetEmitterData(Receipt->EmitterVersion); FNiagaraEventScriptProperties* Handler = FindHandler(Data, Receipt->UsageId);
+			if (!Handler || !Handler->Script || Handler->Script->GetPathName() != Receipt->ScriptPath) return ErrorResult(TEXT("The receipt-owned event handler is no longer present."), TEXT("rollback_conflict"), 409);
+			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Rollback Niagara Event Handler Update")));
+			System->Modify(); Emitter->Modify(); *Handler = Receipt->BeforeProperties;
+			const FCompileSummary Compile = CompileHandler(System, Handler->Script);
+			const FEventHandlerTarget Target{System, Emitter, Data, nullptr, Receipt->Graph.Get(), Receipt->EmitterVersion, Receipt->EmitterName, Receipt->EmitterPath, Receipt->GraphPath, Receipt->EmitterChangeIdAfter};
+			const FEventHandlerRequest Expected = RequestFromProperties(Receipt->SystemPath, Receipt->EmitterName, Receipt->UsageId, Receipt->BeforeProperties);
+			if (!ReadBackMatches(Target, Expected) || !Compile.bCompiled) return ErrorResult(TEXT("Event-handler update rollback verification failed."), TEXT("rollback_verification_failed"), 500);
+			System->MarkPackageDirty(); Receipt->bRolledBack = true; Receipt->bCompiled = Compile.bCompiled; Receipt->CompileStatus = Compile.Status;
+			return FMCPToolResult::Ok(MakeResult(*Receipt, false));
+		}
+	};
+
+	class FTool_NiagaraEventHandlerRemovePlan final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.event_handler.remove.plan"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FEventHandlerPlanData Data; FString Code, Error;
+			if (!BuildExistingPlanData(Params, Data, Code, Error)) return ErrorResult(Error, Code, Code.Contains(TEXT("not_found")) ? 404 : 422);
+			TSharedRef<FJsonObject> Plan = BuildExistingPlanJson(Data, TEXT("Remove"));
+			FString Digest;
+			if (!TryDigestJson(Plan, Digest)) return ErrorResult(TEXT("Unable to compute the event-handler removal plan digest."), TEXT("digest_unavailable"), 500);
+			Plan->SetStringField(TEXT("planDigest"), Digest);
+			return FMCPToolResult::Ok(Plan);
+		}
+	};
+
+	class FTool_NiagaraEventHandlerRemoveApply final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.event_handler.remove.apply"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FString RequestId, Code, Error;
+			if (!Params.IsValid() || !Params->TryGetStringField(TEXT("requestId"), RequestId) || RequestId.IsEmpty()) return ErrorResult(TEXT("A non-empty requestId is required."), TEXT("request_id_required"));
+			if (const FString* ExistingId = RemoveRequestReceiptIds().Find(RequestId))
+			{
+				if (FEventHandlerReceipt* Existing = Receipts().Find(*ExistingId))
+				{
+					if (!ValidateChangeApproval(Params, Existing->PlanDigest, Code, Error)) return ErrorResult(Error, Code, 409);
+					return FMCPToolResult::Ok(MakeResult(*Existing, true));
+				}
+				return ErrorResult(TEXT("requestId is associated with an unavailable receipt."), TEXT("request_id_conflict"), 409);
+			}
+			FEventHandlerPlanData Data;
+			if (!BuildExistingPlanData(Params, Data, Code, Error)) return ErrorResult(Error, Code, Code.Contains(TEXT("not_found")) ? 404 : 422);
+			TSharedRef<FJsonObject> Plan = BuildExistingPlanJson(Data, TEXT("Remove"));
+			FString Digest;
+			if (!TryDigestJson(Plan, Digest)) return ErrorResult(TEXT("Unable to compute the event-handler removal plan digest."), TEXT("digest_unavailable"), 500);
+			if (!ValidateChangeApproval(Params, Digest, Code, Error)) return ErrorResult(Error, Code, 409);
+			if (Data.bBlocked) return ErrorResult(TEXT("The event-handler target is read-only or not owned by the System package."), TEXT("plan_blocked"), 409);
+			if (Data.Target.Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower) != Data.Target.EmitterChangeId) return ErrorResult(TEXT("The Niagara emitter changed after the plan was created; re-plan before applying."), TEXT("plan_digest_mismatch"), 409);
+			FNiagaraEventScriptProperties* Handler = FindHandler(Data.Target.Data, Data.Request.UsageId);
+			if (!Handler || !Handler->Script) return ErrorResult(TEXT("The event handler disappeared before apply."), TEXT("handler_not_found"), 404);
+			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Remove Niagara Event Handler")));
+			Data.Target.System->Modify(); Data.Target.Emitter->Modify(); Data.Target.Graph->Modify();
+			FGraphSnapshot BeforeGraph;
+			if (!CaptureGraphSnapshot(Data.Target.Graph, BeforeGraph))
+			{
+				return ErrorResult(TEXT("The event-handler graph could not be snapshotted safely."), TEXT("graph_snapshot_failed"), 500);
+			}
+			FEventHandlerReceipt Receipt;
+			Receipt.BeforeProperties = *Handler; Receipt.bHasBeforeProperties = true;
+			const FString ScriptPath = Handler->Script->GetPathName();
+			const bool bGraphRemoved = RemoveEventGraph(Data.Target.Graph, Data.Request.UsageId);
+			Data.Target.Emitter->RemoveEventHandlerByUsageId(Data.Request.UsageId, Data.Target.EmitterVersion);
+			const FCompileSummary Compile = CompileSystem(Data.Target.System);
+			const bool bReadBack = bGraphRemoved && FindHandler(Data.Target.Data, Data.Request.UsageId) == nullptr;
+			if (!bReadBack || !Compile.bCompiled)
+			{
+				bool bGraphRestored = RestoreGraphSnapshot(Data.Target.Graph, BeforeGraph);
+				if (!bGraphRestored || !HasEventGraph(Data.Target.Graph, Data.Request.UsageId))
+				{
+					bGraphRestored = CreateEventGraphOutput(Data.Target.Graph, Data.Request.UsageId) != nullptr;
+				}
+				if (!FindHandler(Data.Target.Data, Data.Request.UsageId))
+				{
+					Data.Target.Emitter->AddEventHandler(Receipt.BeforeProperties, Data.Target.EmitterVersion);
+				}
+				Data.Target.Data = Data.Target.Emitter->GetEmitterData(Data.Target.EmitterVersion);
+				const FNiagaraEventScriptProperties* Restored = FindHandler(Data.Target.Data, Data.Request.UsageId);
+				const FCompileSummary RestoreCompile = CompileHandler(Data.Target.System, Restored ? Restored->Script : nullptr);
+				Transaction.Cancel();
+				if (!bGraphRestored || !HasEventGraph(Data.Target.Graph, Data.Request.UsageId) || !Restored || !RestoreCompile.bCompiled)
+				{
+					return ErrorResult(FString::Printf(TEXT("Event-handler removal read-back or compilation failed and restoration was not verified (status=%s)."), *Compile.Status), TEXT("restore_verification_failed"), 500);
+				}
+				return ErrorResult(FString::Printf(TEXT("Event-handler removal read-back or compilation failed (status=%s); the graph was restored."), *Compile.Status), !bReadBack ? TEXT("verification_failed") : TEXT("compile_failed"), 500);
+			}
+			FGraphSnapshot AfterGraph;
+			if (!CaptureGraphSnapshot(Data.Target.Graph, AfterGraph))
+			{
+				bool bGraphRestored = RestoreGraphSnapshot(Data.Target.Graph, BeforeGraph);
+				if (!bGraphRestored || !HasEventGraph(Data.Target.Graph, Data.Request.UsageId))
+				{
+					bGraphRestored = CreateEventGraphOutput(Data.Target.Graph, Data.Request.UsageId) != nullptr;
+				}
+				Data.Target.Emitter->AddEventHandler(Receipt.BeforeProperties, Data.Target.EmitterVersion);
+				Data.Target.Data = Data.Target.Emitter->GetEmitterData(Data.Target.EmitterVersion);
+				const FNiagaraEventScriptProperties* Restored = FindHandler(Data.Target.Data, Data.Request.UsageId);
+				const FCompileSummary RestoreCompile = CompileHandler(Data.Target.System, Restored ? Restored->Script : nullptr);
+				Transaction.Cancel();
+				if (!bGraphRestored || !HasEventGraph(Data.Target.Graph, Data.Request.UsageId) || !Restored || !RestoreCompile.bCompiled)
+					return ErrorResult(TEXT("The event-handler removal result could not be snapshotted safely and restoration was not verified."), TEXT("restore_verification_failed"), 500);
+				return ErrorResult(TEXT("The event-handler removal result could not be snapshotted safely; the graph was restored."), TEXT("graph_snapshot_failed"), 500);
+			}
+			Receipt.ReceiptId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower); Receipt.RequestId = RequestId; Receipt.PlanDigest = Digest;
+			Receipt.SystemPath = Data.Target.System->GetPathName(); Receipt.EmitterName = Data.Target.EmitterName; Receipt.EmitterPath = Data.Target.EmitterPath; Receipt.GraphPath = Data.Target.GraphPath;
+			Receipt.ScriptPath = ScriptPath; Receipt.EmitterVersion = Data.Target.EmitterVersion; Receipt.UsageId = Data.Request.UsageId;
+			Receipt.System = Data.Target.System; Receipt.Emitter = Data.Target.Emitter; Receipt.Graph = Data.Target.Graph; Receipt.EmitterChangeIdAfter = Data.Target.Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower);
+			Receipt.BeforeGraphExport = MoveTemp(BeforeGraph.Export); Receipt.GraphAfterDigest = AfterGraph.Digest; Receipt.BeforeGraphNodeCount = BeforeGraph.NodeCount; Receipt.bHasGraphSnapshot = true;
+			Receipt.Operation = TEXT("remove"); Receipt.bChanged = true; Receipt.bCompiled = Compile.bCompiled; Receipt.CompileStatus = Compile.Status;
+			Data.Target.System->MarkPackageDirty(); Receipts().Add(Receipt.ReceiptId, Receipt); RemoveRequestReceiptIds().Add(RequestId, Receipt.ReceiptId);
+			return FMCPToolResult::Ok(MakeResult(Receipt, false));
+		}
+	};
+
+	class FTool_NiagaraEventHandlerRemoveRollback final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.event_handler.remove.rollback"); }
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FString ReceiptId, RequestId; bool bConfirm = false;
+			if (!Params.IsValid() || !Params->TryGetStringField(TEXT("rollbackId"), ReceiptId) || !Params->TryGetStringField(TEXT("requestId"), RequestId) || !Params->TryGetBoolField(TEXT("confirmWrite"), bConfirm) || ReceiptId.IsEmpty() || RequestId.IsEmpty() || !bConfirm) return ErrorResult(TEXT("rollbackId, requestId and confirmWrite=true are required."), TEXT("write_confirmation_required"));
+			FEventHandlerReceipt* Receipt = Receipts().Find(ReceiptId);
+			if (!Receipt || Receipt->Operation != TEXT("remove") || !Receipt->bHasBeforeProperties) return ErrorResult(TEXT("The event-handler removal receipt is unknown."), TEXT("receipt_not_found"), 404);
+			if (Receipt->bRolledBack) return FMCPToolResult::Ok(MakeResult(*Receipt, true));
+			if (Receipt->RequestId != RequestId) return ErrorResult(TEXT("requestId does not match the receipt."), TEXT("request_id_mismatch"), 409);
+			UNiagaraSystem* System = Receipt->System.Get(); UNiagaraEmitter* Emitter = Receipt->Emitter.Get(); UNiagaraGraph* Graph = Receipt->Graph.Get();
+			if (!System || !Emitter || !Graph || Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower) != Receipt->EmitterChangeIdAfter) return ErrorResult(TEXT("The emitter changed after removal; rollback was refused."), TEXT("rollback_conflict"), 409);
+			FVersionedNiagaraEmitterData* Data = Emitter->GetEmitterData(Receipt->EmitterVersion);
+			if (FindHandler(Data, Receipt->UsageId) || HasEventGraph(Graph, Receipt->UsageId)) return ErrorResult(TEXT("The removed event handler identity is already in use."), TEXT("rollback_conflict"), 409);
+			if (!Receipt->bHasGraphSnapshot) return ErrorResult(TEXT("The event-handler removal receipt has no graph snapshot."), TEXT("rollback_conflict"), 409);
+			FGraphSnapshot CurrentGraph;
+			if (!CaptureGraphSnapshot(Graph, CurrentGraph) || CurrentGraph.Digest != Receipt->GraphAfterDigest)
+			{
+				return ErrorResult(TEXT("The event-handler graph changed after removal; rollback was refused."), TEXT("rollback_conflict"), 409);
+			}
+			FGraphSnapshot BeforeGraph;
+			BeforeGraph.Export = Receipt->BeforeGraphExport;
+			BeforeGraph.Digest = GraphSnapshotDigest(BeforeGraph.Export);
+			BeforeGraph.NodeCount = Receipt->BeforeGraphNodeCount;
+			BeforeGraph.bCaptured = true;
+			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Rollback Niagara Event Handler Removal")));
+			System->Modify(); Emitter->Modify(); Graph->Modify();
+			Emitter->AddEventHandler(Receipt->BeforeProperties, Receipt->EmitterVersion);
+			Data = Emitter->GetEmitterData(Receipt->EmitterVersion);
+			bool bGraphCreated = RestoreGraphSnapshot(Graph, BeforeGraph);
+			// Some Niagara graph node classes cannot be reconstructed by the
+			// generic text importer in a commandlet.  The event output is the
+			// stable authored boundary, so recreate it when the full snapshot
+			// importer leaves no usable event graph.  This keeps rollback
+			// deterministic while preserving the graph snapshot as the primary
+			// restoration path for editor-backed graphs.
+			if (!bGraphCreated || !HasEventGraph(Graph, Receipt->UsageId))
+			{
+				bGraphCreated = CreateEventGraphOutput(Graph, Receipt->UsageId) != nullptr;
+			}
+			const FNiagaraEventScriptProperties* Restored = FindHandler(Data, Receipt->UsageId);
+			const FCompileSummary Compile = CompileHandler(System, Restored ? Restored->Script : nullptr);
+			if (!bGraphCreated || !HasEventGraph(Graph, Receipt->UsageId) || !Restored || !Compile.bCompiled)
+			{
+				Transaction.Cancel();
+				return ErrorResult(FString::Printf(TEXT("Event-handler removal rollback verification failed (graphRestored=%s graphPresent=%s handlerPresent=%s compiled=%s exportChars=%d nodes=%d)."),
+					bGraphCreated ? TEXT("true") : TEXT("false"),
+					HasEventGraph(Graph, Receipt->UsageId) ? TEXT("true") : TEXT("false"),
+					Restored ? TEXT("true") : TEXT("false"),
+					Compile.bCompiled ? TEXT("true") : TEXT("false"), BeforeGraph.Export.Len(), BeforeGraph.NodeCount), TEXT("rollback_verification_failed"), 500);
+			}
+			System->MarkPackageDirty(); Receipt->bRolledBack = true; Receipt->bCompiled = Compile.bCompiled; Receipt->CompileStatus = Compile.Status;
+			return FMCPToolResult::Ok(MakeResult(*Receipt, false));
+		}
+	};
 }
 #endif
 
@@ -1113,6 +1614,12 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_NiagaraEventHandlerAddPlan>());
 		Registry.Register(MakeShared<FTool_NiagaraEventHandlerAddApply>());
 		Registry.Register(MakeShared<FTool_NiagaraEventHandlerAddRollback>());
+		Registry.Register(MakeShared<FTool_NiagaraEventHandlerUpdatePlan>());
+		Registry.Register(MakeShared<FTool_NiagaraEventHandlerUpdateApply>());
+		Registry.Register(MakeShared<FTool_NiagaraEventHandlerUpdateRollback>());
+		Registry.Register(MakeShared<FTool_NiagaraEventHandlerRemovePlan>());
+		Registry.Register(MakeShared<FTool_NiagaraEventHandlerRemoveApply>());
+		Registry.Register(MakeShared<FTool_NiagaraEventHandlerRemoveRollback>());
 #else
 		class FUnavailableNiagaraEventHandler final : public FMCPToolBase
 		{
@@ -1142,6 +1649,18 @@ namespace UEAIIntegrationTools
 			TEXT("content.niagara.event_handler.add.apply")));
 		Registry.Register(MakeShared<FUnavailableNiagaraEventHandler>(
 			TEXT("content.niagara.event_handler.add.rollback")));
+		Registry.Register(MakeShared<FUnavailableNiagaraEventHandler>(
+			TEXT("content.niagara.event_handler.update.plan")));
+		Registry.Register(MakeShared<FUnavailableNiagaraEventHandler>(
+			TEXT("content.niagara.event_handler.update.apply")));
+		Registry.Register(MakeShared<FUnavailableNiagaraEventHandler>(
+			TEXT("content.niagara.event_handler.update.rollback")));
+		Registry.Register(MakeShared<FUnavailableNiagaraEventHandler>(
+			TEXT("content.niagara.event_handler.remove.plan")));
+		Registry.Register(MakeShared<FUnavailableNiagaraEventHandler>(
+			TEXT("content.niagara.event_handler.remove.apply")));
+		Registry.Register(MakeShared<FUnavailableNiagaraEventHandler>(
+			TEXT("content.niagara.event_handler.remove.rollback")));
 #endif
 	}
 }

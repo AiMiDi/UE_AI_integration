@@ -1,4 +1,5 @@
 // Blueprint Read Tools — list, get, search, describe blueprints (read-only)
+#include "Containers/StringConv.h"
 #include "Tools/MCPToolBase.h"
 #include "Tools/MCPToolRegistry.h"
 #include "Domains/Blueprint/BlueprintGraphEditorSupport.h"
@@ -7,6 +8,7 @@
 #include "Engine/World.h"
 #include "Engine/Level.h"
 #include "Engine/LevelScriptBlueprint.h"
+#include "GameFramework/Actor.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
@@ -22,6 +24,10 @@
 #include "K2Node_FunctionResult.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "Infrastructure/Sha256.h"
+#include "Editor.h"
+#include "EngineUtils.h"
+#include "Misc/PackageName.h"
 
 namespace
 {
@@ -1608,7 +1614,9 @@ public:
 
 		IAssetRegistry& Registry = *IAssetRegistry::Get();
 		TArray<FName> Referencers;
-		Registry.GetReferencers(FName(*AssetPath), Referencers);
+		const FString TargetPackagePath = FPackageName::ObjectPathToPackageName(AssetPath);
+		Registry.GetReferencers(FName(*TargetPackagePath), Referencers);
+		Referencers.Sort(FNameLexicalLess());
 
 		TArray<FAssetData> AllBP;
 		Registry.GetAssetsByClass(UBlueprint::StaticClass()->GetClassPathName(), AllBP, true);
@@ -1617,6 +1625,12 @@ public:
 			BlueprintPackages.Add(A.PackageName.ToString());
 
 		TArray<TSharedPtr<FJsonValue>> BPRefs, OtherRefs;
+		TArray<TSharedPtr<FJsonValue>> ReferenceRecords;
+		TArray<FString> ReferenceIdentities;
+		int32 CandidateReferenceCount = 0;
+		int32 AmbiguousReferencerCount = 0;
+		int32 UnresolvedReferencerCount = 0;
+		bool bIdentityComplete = true;
 		for (const FName& Ref : Referencers)
 		{
 			FString RefStr = Ref.ToString();
@@ -1624,15 +1638,229 @@ public:
 				BPRefs.Add(MakeShared<FJsonValueString>(RefStr));
 			else
 				OtherRefs.Add(MakeShared<FJsonValueString>(RefStr));
+
+			// Package names alone are ambiguous when a package contains more than
+			// one asset.  Return every candidate instead of silently choosing the
+			// lexically first asset.  The package-level identityComplete flag stays
+			// false whenever the actual source object cannot be uniquely resolved.
+			TArray<FAssetData> PackageAssets;
+			Registry.GetAssetsByPackageName(Ref, PackageAssets, true);
+			PackageAssets.Sort([](const FAssetData& Left, const FAssetData& Right)
+			{
+				return Left.GetSoftObjectPath().ToString()
+					< Right.GetSoftObjectPath().ToString();
+			});
+			const int32 CandidateCount = PackageAssets.Num();
+			CandidateReferenceCount += CandidateCount;
+			const bool bAmbiguous = CandidateCount > 1;
+			const bool bUnresolved = CandidateCount == 0;
+			if (bAmbiguous)
+			{
+				++AmbiguousReferencerCount;
+			}
+			if (bUnresolved)
+			{
+				++UnresolvedReferencerCount;
+			}
+			bIdentityComplete &= CandidateCount == 1;
+
+			const FString PackageKind = BlueprintPackages.Contains(RefStr)
+				? TEXT("blueprint")
+				: TEXT("asset");
+			if (PackageAssets.IsEmpty())
+			{
+				// Keep one row for an unresolved package referencer, but do not put
+				// the package path in objectPath: that would falsely claim object
+				// identity and make identityComplete appear trustworthy.
+				const FString StableIdentity = RefStr + TEXT("||");
+				ReferenceIdentities.Add(StableIdentity);
+				TSharedRef<FJsonObject> Record = MakeShared<FJsonObject>();
+				Record->SetStringField(TEXT("packagePath"), RefStr);
+				Record->SetStringField(TEXT("objectPath"), FString());
+				Record->SetStringField(TEXT("classPath"), FString());
+				Record->SetStringField(TEXT("kind"), PackageKind);
+				Record->SetStringField(TEXT("sourcePackagePath"), RefStr);
+				Record->SetStringField(TEXT("sourceObjectPath"), FString());
+				Record->SetStringField(TEXT("sourceClassPath"), FString());
+				Record->SetStringField(TEXT("sourceIdentity"), StableIdentity);
+				Record->SetStringField(TEXT("identityStatus"), TEXT("unresolved"));
+				Record->SetNumberField(TEXT("candidateCount"), 0);
+				Record->SetBoolField(TEXT("ambiguous"), false);
+				Record->SetBoolField(TEXT("identityComplete"), false);
+				ReferenceRecords.Add(MakeShared<FJsonValueObject>(Record));
+				continue;
+			}
+
+			for (const FAssetData& Candidate : PackageAssets)
+			{
+				const FString ObjectPath = Candidate.GetSoftObjectPath().ToString();
+				const FString ClassPath = Candidate.AssetClassPath.ToString();
+				const bool bCandidateIdentityComplete = !RefStr.IsEmpty()
+					&& !ObjectPath.IsEmpty()
+					&& !ClassPath.IsEmpty();
+				const FString StableIdentity = RefStr + TEXT("|") + ObjectPath
+					+ TEXT("|") + ClassPath;
+				ReferenceIdentities.Add(StableIdentity);
+				bIdentityComplete &= bCandidateIdentityComplete;
+
+				TSharedRef<FJsonObject> Record = MakeShared<FJsonObject>();
+				Record->SetStringField(TEXT("packagePath"), RefStr);
+				Record->SetStringField(TEXT("objectPath"), ObjectPath);
+				Record->SetStringField(TEXT("classPath"), ClassPath);
+				Record->SetStringField(TEXT("kind"), PackageKind);
+				Record->SetStringField(TEXT("sourcePackagePath"), RefStr);
+				Record->SetStringField(TEXT("sourceObjectPath"), ObjectPath);
+				Record->SetStringField(TEXT("sourceClassPath"), ClassPath);
+				Record->SetStringField(TEXT("sourceIdentity"), StableIdentity);
+				Record->SetStringField(
+					TEXT("identityStatus"),
+					bAmbiguous
+						? TEXT("ambiguous")
+						: (bCandidateIdentityComplete
+							? TEXT("resolved")
+							: TEXT("incomplete")));
+				Record->SetNumberField(TEXT("candidateCount"), CandidateCount);
+				Record->SetBoolField(TEXT("ambiguous"), bAmbiguous);
+				Record->SetBoolField(
+					TEXT("identityComplete"),
+					bCandidateIdentityComplete && !bAmbiguous);
+				ReferenceRecords.Add(MakeShared<FJsonValueObject>(Record));
+			}
 		}
+		ReferenceIdentities.Sort();
+		FString IdentityDigest;
+		const FString CanonicalIdentities = FString::Join(ReferenceIdentities, TEXT("\n"));
+		const FTCHARToUTF8 IdentityUtf8(*CanonicalIdentities);
+		UEAIIntegration::Infrastructure::TrySha256Hex(
+			IdentityUtf8.Get(), IdentityUtf8.Length(), IdentityDigest);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetStringField(TEXT("schema"), TEXT("ue.blueprint.asset-references.v2"));
 		Result->SetStringField(TEXT("assetPath"), AssetPath);
+		Result->SetStringField(TEXT("targetPackagePath"), TargetPackagePath);
 		Result->SetNumberField(TEXT("totalReferencers"), Referencers.Num());
 		Result->SetNumberField(TEXT("blueprintReferencerCount"), BPRefs.Num());
 		Result->SetArrayField(TEXT("blueprintReferencers"), BPRefs);
 		Result->SetNumberField(TEXT("otherReferencerCount"), OtherRefs.Num());
 		Result->SetArrayField(TEXT("otherReferencers"), OtherRefs);
+		Result->SetArrayField(TEXT("references"), ReferenceRecords);
+		Result->SetNumberField(TEXT("candidateReferenceCount"), CandidateReferenceCount);
+		Result->SetNumberField(TEXT("ambiguousReferencerCount"), AmbiguousReferencerCount);
+		Result->SetNumberField(TEXT("unresolvedReferencerCount"), UnresolvedReferencerCount);
+		Result->SetStringField(TEXT("referenceIdentityDigest"), IdentityDigest);
+		Result->SetBoolField(TEXT("identityComplete"), bIdentityComplete);
+		Result->SetStringField(
+			TEXT("identityStatus"),
+			bIdentityComplete
+				? TEXT("complete")
+				: (AmbiguousReferencerCount > 0 ? TEXT("ambiguous") : TEXT("incomplete")));
+		return FMCPToolResult::Ok(Result);
+	}
+};
+
+// ============================================================
+// verify_runtime_instance — runtime acceptance boundary
+// ============================================================
+class FTool_VerifyBlueprintRuntimeInstance : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("blueprint.asset.runtime.verify");
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		FString BlueprintInput;
+		if (!Params.IsValid()
+			|| !Params->TryGetStringField(TEXT("blueprint"), BlueprintInput)
+			|| BlueprintInput.IsEmpty()
+			|| BlueprintInput.Len() > 1024)
+		{
+			return FMCPToolResult::Error(
+				TEXT("blueprint must be a non-empty string of at most 1024 characters."),
+				TEXT("invalid_params"),
+				422);
+		}
+
+		FString LoadError;
+		UBlueprint* Blueprint = MCPHelpers::LoadBlueprintByName(
+			BlueprintInput,
+			LoadError);
+		if (!Blueprint)
+		{
+			return FMCPToolResult::Error(
+				LoadError,
+				TEXT("blueprint_not_found"),
+				404);
+		}
+		if (!Blueprint->GeneratedClass)
+		{
+			return FMCPToolResult::Error(
+				TEXT("The Blueprint has no generated class. Compile it before runtime acceptance."),
+				TEXT("generated_class_unavailable"),
+				409);
+		}
+
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetStringField(TEXT("schema"), TEXT("ue.blueprint.runtime-acceptance.v1"));
+		Result->SetStringField(TEXT("blueprint"), Blueprint->GetPathName());
+		Result->SetStringField(TEXT("generatedClass"), Blueprint->GeneratedClass->GetPathName());
+		Result->SetBoolField(TEXT("compiled"), Blueprint->Status != BS_Error);
+		Result->SetBoolField(TEXT("runtimeVerified"), false);
+		Result->SetNumberField(TEXT("instanceCount"), 0);
+
+		if (!Blueprint->GeneratedClass->IsChildOf(AActor::StaticClass()))
+		{
+			Result->SetStringField(TEXT("runtimeVerificationReason"), TEXT("unsupported_runtime_class"));
+			Result->SetStringField(TEXT("scope"), TEXT("PIE actor instance acceptance; no CDO or compile-only inference"));
+			return FMCPToolResult::Ok(Result);
+		}
+
+		int32 InstanceCount = 0;
+		FString ObservedWorld;
+		FString ObservedInstance;
+		if (GEngine)
+		{
+			for (const FWorldContext& Context : GEngine->GetWorldContexts())
+			{
+				if (Context.WorldType != EWorldType::PIE
+					&& Context.WorldType != EWorldType::Game)
+				{
+					continue;
+				}
+				UWorld* World = Context.World();
+				if (!World)
+				{
+					continue;
+				}
+				for (TActorIterator<AActor> It(World); It; ++It)
+				{
+					AActor* Actor = *It;
+					if (!Actor || !Actor->IsA(Blueprint->GeneratedClass))
+					{
+						continue;
+					}
+					++InstanceCount;
+					if (ObservedWorld.IsEmpty())
+					{
+						ObservedWorld = World->GetPathName();
+						ObservedInstance = Actor->GetPathName();
+					}
+				}
+			}
+		}
+		Result->SetNumberField(TEXT("instanceCount"), InstanceCount);
+		Result->SetBoolField(TEXT("runtimeVerified"), InstanceCount > 0);
+		Result->SetStringField(
+			TEXT("runtimeVerificationReason"),
+			InstanceCount > 0 ? TEXT("pie_instance_observed") : TEXT("no_pie_instance_observed"));
+		if (!ObservedWorld.IsEmpty())
+		{
+			Result->SetStringField(TEXT("world"), ObservedWorld);
+			Result->SetStringField(TEXT("instance"), ObservedInstance);
+		}
+		Result->SetStringField(TEXT("scope"), TEXT("PIE actor instance acceptance; compile and asset persistence are reported separately"));
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -2499,6 +2727,7 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_GetBlueprintSummary>());
 		Registry.Register(MakeShared<FTool_DescribeGraph>());
 		Registry.Register(MakeShared<FTool_FindAssetReferences>());
+		Registry.Register(MakeShared<FTool_VerifyBlueprintRuntimeInstance>());
 		Registry.Register(MakeShared<FTool_SearchByType>());
 		Registry.Register(MakeShared<FTool_GetBlueprintGraphExport>());
 	}

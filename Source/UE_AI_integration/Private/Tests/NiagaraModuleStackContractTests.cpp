@@ -65,9 +65,11 @@ bool FNiagaraModuleStackRegistrationTest::RunTest(const FString&)
 		TEXT("content.niagara.graph.module.input.binding.set"),
 		TEXT("content.niagara.graph.module.input.di.set"),
 		TEXT("content.niagara.system.spec.export"),
+		TEXT("content.niagara.system.spec.import"),
+		TEXT("content.niagara.system.spec.round_trip"),
 	};
 	TestEqual(
-		TEXT("Eighteen graph-module capabilities register"),
+		TEXT("Twenty graph-module capabilities register"),
 		Registry.Num(),
 		static_cast<int32>(UE_ARRAY_COUNT(ExpectedCapabilities)));
 	for (const TCHAR* Capability : ExpectedCapabilities)

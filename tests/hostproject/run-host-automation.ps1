@@ -244,8 +244,24 @@ function Get-ProductionModuleLoadedProof {
     $requestId = "harness-module-$([Guid]::NewGuid().ToString('N'))"
     $expectedDll = Get-FileIdentity -Path $ExpectedDllPath
     $expectedPdb = Get-FileIdentity -Path $ExpectedPdbPath
+    $attemptCount = 0
+    $lastFailureClass = 'not_started'
+    $lastFailureMessage = $null
+    $lastResponse = $null
+    $observedPathBase = Join-Path $EngineRoot 'Engine\Binaries\Win64'
+    $resolveObservedPath = {
+        param([string] $ObservedPath)
+        if ([string]::IsNullOrWhiteSpace($ObservedPath)) {
+            return ''
+        }
+        if ([IO.Path]::IsPathRooted($ObservedPath)) {
+            return [IO.Path]::GetFullPath($ObservedPath)
+        }
+        return [IO.Path]::GetFullPath((Join-Path $observedPathBase $ObservedPath))
+    }
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     while (-not $Process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+        $attemptCount++
         try {
             $request = [ordered]@{
                 capability = 'production.module.loaded.get'
@@ -260,39 +276,74 @@ function Get-ProductionModuleLoadedProof {
                 $dll = $data.dll
                 $pdb = $data.pdb
                 $observedModulePath = [string]$data.modulePath
+                $observedProcessId = if ($null -ne $data.processId) { [int64]$data.processId } else { $null }
                 $observedDllPath = if ($dll) { [string]$dll.path } else { '' }
                 $observedDllHash = if ($dll) { [string]$dll.sha256 } else { '' }
                 $observedPdbPath = if ($pdb) { [string]$pdb.path } else { '' }
                 $observedPdbHash = if ($pdb) { [string]$pdb.sha256 } else { '' }
+                $observedLatestBuildArtifactPath = [string]$data.latestBuildArtifactPath
+                $observedLatestBuildArtifactHash = [string]$data.latestBuildArtifactSha256
+                $resolvedObservedDllPath = & $resolveObservedPath $observedDllPath
+                $resolvedObservedModulePath = & $resolveObservedPath $observedModulePath
+                $resolvedObservedPdbPath = & $resolveObservedPath $observedPdbPath
+                $resolvedObservedLatestBuildArtifactPath = & $resolveObservedPath $observedLatestBuildArtifactPath
                 $pathMatches = $false
                 if ($expectedDll.present -and $observedDllPath -and $observedModulePath) {
                     $pathMatches =
-                        [IO.Path]::GetFullPath($observedDllPath).Equals(
+                        $resolvedObservedDllPath.Equals(
                             [IO.Path]::GetFullPath($expectedDll.path),
                             [StringComparison]::OrdinalIgnoreCase) -and
-                        [IO.Path]::GetFullPath($observedModulePath).Equals(
+                        $resolvedObservedModulePath.Equals(
                             [IO.Path]::GetFullPath($expectedDll.path),
                             [StringComparison]::OrdinalIgnoreCase)
                 }
                 $hashMatches = [bool]($expectedDll.present -and
                     $observedDllHash -and
                     $observedDllHash.ToLowerInvariant() -eq $expectedDll.sha256)
+                $processMatches = $observedProcessId -eq [int64]$Process.Id
                 $pdbMatches = -not $expectedPdb.present
                 if ($expectedPdb.present -and $observedPdbPath -and $observedPdbHash) {
                     $pdbMatches =
-                        [IO.Path]::GetFullPath($observedPdbPath).Equals(
+                        $resolvedObservedPdbPath.Equals(
                             [IO.Path]::GetFullPath($expectedPdb.path),
                             [StringComparison]::OrdinalIgnoreCase) -and
                         $observedPdbHash.ToLowerInvariant() -eq $expectedPdb.sha256
                 }
+                # The loaded module must also be the exact latest build
+                # artifact visible to the isolated package.  The API exposes
+                # both path and hash; checking both prevents a stale package
+                # or a same-content DLL in a different directory from being
+                # accepted as this run's build.
+                $latestBuildArtifactPathMatches = [bool]($expectedDll.present -and
+                    $observedLatestBuildArtifactPath -and
+                    $resolvedObservedLatestBuildArtifactPath.Equals(
+                        [IO.Path]::GetFullPath($expectedDll.path),
+                        [StringComparison]::OrdinalIgnoreCase))
+                $latestBuildArtifactHashMatches = [bool]($expectedDll.present -and
+                    $observedLatestBuildArtifactHash -and
+                    $observedLatestBuildArtifactHash.ToLowerInvariant() -eq $expectedDll.sha256)
                 $loaded = [bool]$data.loaded
-                $verified = $loaded -and $pathMatches -and $hashMatches -and $pdbMatches
+                $matchesLatestBuildArtifact = [bool]$data.matchesLatestBuildArtifact
+                $verificationFailures = @()
+                if (-not $loaded) { $verificationFailures += 'module_not_loaded' }
+                if (-not $processMatches) { $verificationFailures += 'process_id_mismatch' }
+                if (-not $pathMatches) { $verificationFailures += 'module_path_mismatch' }
+                if (-not $hashMatches) { $verificationFailures += 'dll_hash_mismatch' }
+                if (-not $pdbMatches) { $verificationFailures += 'pdb_identity_mismatch' }
+                if (-not $matchesLatestBuildArtifact) { $verificationFailures += 'latest_artifact_mismatch' }
+                if (-not $latestBuildArtifactPathMatches) { $verificationFailures += 'latest_artifact_path_mismatch' }
+                if (-not $latestBuildArtifactHashMatches) { $verificationFailures += 'latest_artifact_hash_mismatch' }
+                $verified = $loaded -and $processMatches -and $pathMatches -and
+                    $hashMatches -and $pdbMatches -and $matchesLatestBuildArtifact -and
+                    $latestBuildArtifactPathMatches -and $latestBuildArtifactHashMatches
                 return [ordered]@{
                     status = if ($verified) { 'verified' } else { 'mismatch' }
                     capability = 'production.module.loaded.get'
                     endpoint = $endpoint
                     requestId = $requestId
+                    attempts = $attemptCount
                     processId = $Process.Id
+                    observedProcessId = $observedProcessId
                     loaded = $loaded
                     modulePath = $observedModulePath
                     dll = $dll
@@ -300,16 +351,44 @@ function Get-ProductionModuleLoadedProof {
                     expectedDll = $expectedDll
                     expectedPdb = $expectedPdb
                     pathMatches = $pathMatches
+                    processMatches = $processMatches
                     hashMatches = $hashMatches
                     pdbMatches = $pdbMatches
-                    matchesLatestBuildArtifact = [bool]$data.matchesLatestBuildArtifact
+                    matchesLatestBuildArtifact = $matchesLatestBuildArtifact
+                    latestBuildArtifactPath = $observedLatestBuildArtifactPath
+                    latestBuildArtifactSha256 = $observedLatestBuildArtifactHash
+                    latestBuildArtifactPathMatches = $latestBuildArtifactPathMatches
+                    latestBuildArtifactHashMatches = $latestBuildArtifactHashMatches
+                    verificationFailures = $verificationFailures
                 }
+            }
+            elseif ($response.ok -ne $true) {
+                $lastFailureClass = 'api_error'
+                $lastResponse = $response
+                $error = $response.error
+                $lastFailureMessage = if ($error -and $error.message) {
+                    [string]$error.message
+                }
+                else {
+                    'production.module.loaded.get returned ok=false.'
+                }
+            }
+            else {
+                $lastFailureClass = 'malformed_response'
+                $lastResponse = $response
+                $lastFailureMessage = 'production.module.loaded.get returned ok=true without a data object.'
             }
         }
         catch {
-            # The subsystem may not have bound the listener yet. Retry while
-            # the isolated Editor is alive; the final report keeps the exact
-            # failure class as unavailable rather than guessing module state.
+            $lastFailureClass = 'transport_error'
+            $lastFailureMessage = $_.Exception.Message
+            try {
+                $statusCode = [int]$_.Exception.Response.StatusCode.value__
+                if ($statusCode -gt 0) {
+                    $lastFailureClass = "http_$statusCode"
+                }
+            }
+            catch { }
         }
         Start-Sleep -Milliseconds 250
         try { $Process.Refresh() } catch { }
@@ -320,15 +399,25 @@ function Get-ProductionModuleLoadedProof {
         capability = 'production.module.loaded.get'
         endpoint = $endpoint
         requestId = $requestId
+        attempts = $attemptCount
         processId = $Process.Id
         loaded = $null
         expectedDll = $expectedDll
         expectedPdb = $expectedPdb
+        failureClass = if ($Process.HasExited) { 'process_exited' } else { $lastFailureClass }
+        lastFailureMessage = $lastFailureMessage
+        lastResponse = $lastResponse
+        processExitCode = if ($Process.HasExited) { $Process.ExitCode } else { $null }
         reason = if ($Process.HasExited) {
             'The isolated Editor exited before production.module.loaded.get returned.'
         }
         else {
-            'production.module.loaded.get did not become reachable within the bounded startup window.'
+            if ($lastFailureMessage) {
+                "production.module.loaded.get did not become usable within the bounded startup window: $lastFailureMessage"
+            }
+            else {
+                'production.module.loaded.get did not become reachable within the bounded startup window.'
+            }
         }
     }
 }
@@ -459,7 +548,7 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
             Move-Item -LiteralPath $item.FullName -Destination (Join-Path $hostPluginDir $item.Name)
         }
         Set-Content -LiteralPath $hostUproject `
-            -Value '{ "FileVersion": 3, "Plugins": [ { "Name": "UE_AI_integration", "Enabled": true }, { "Name": "Niagara", "Enabled": true }, { "Name": "ResonanceAudio", "Enabled": false }, { "Name": "SoundFields", "Enabled": false }, { "Name": "AudioCapture", "Enabled": false }, { "Name": "Synthesis", "Enabled": false } ] }' `
+            -Value '{ "FileVersion": 3, "Plugins": [ { "Name": "UE_AI_integration", "Enabled": true }, { "Name": "Niagara", "Enabled": true }, { "Name": "UbaController", "Enabled": false }, { "Name": "XGEController", "Enabled": false }, { "Name": "SNDBSController", "Enabled": false }, { "Name": "ResonanceAudio", "Enabled": false }, { "Name": "SoundFields", "Enabled": false }, { "Name": "AudioCapture", "Enabled": false }, { "Name": "Synthesis", "Enabled": false } ] }' `
             -Encoding ASCII
         Write-Host "[harness] recreated HostProject at $hostUproject"
     }
@@ -536,6 +625,8 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
         '-nosplash',
         '-NoSound',
         $(if ($VerificationLane -eq 'isolated-nullrhi') { '-NullRHI' } else { '-RenderOffscreen' }),
+        '-NoEnginePlugins',
+        '-EnablePlugins=UE_AI_integration,Niagara',
         '-NoLiveCoding',
         '-stdout',
         '-FullStdOutLogOutput',
@@ -653,6 +744,13 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
         $AutomationEndSnapshot.snapshotSha256 -ne $Snapshot.snapshotSha256) {
         $gateReasons += 'source_changed_during_automation'
     }
+    if ($null -eq $AutomationModuleProof -or
+        $AutomationModuleProof.status -eq 'unavailable') {
+        $gateReasons += 'module_identity_proof_unavailable'
+    }
+    elseif ($AutomationModuleProof.status -ne 'verified') {
+        $gateReasons += 'module_identity_mismatch'
+    }
     $AutomationOk = $gateReasons.Count -eq 0
     Write-Host ("[harness] automation exit={0} succeeded={1} succeededWithWarnings={2} successfulTestStates={3} failed={4} notRun={5} tests={6} report={7}" -f $AutomationExit, $reportSucceeded, $reportSucceededWithWarnings, $successfulTestCount, $reportFailed, $reportNotRun, $reportTests.Count, $reportPath)
     if ($gateReasons.Count -gt 0) {
@@ -683,7 +781,7 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
             visualVerified = $null
             unknownReasons = @(
                 if ($null -eq $AutomationModuleProof -or $AutomationModuleProof.status -ne 'verified') {
-                    'production.module.loaded.get did not prove the exact packaged DLL/PDB identity.'
+                    'production.module.loaded.get did not prove the isolated process and exact packaged DLL/PDB identity.'
                 }
                 if ($VerificationLane -eq 'isolated-nullrhi') {
                     'NullRHI contract results are not NonNullRHI runtime or visual acceptance.'

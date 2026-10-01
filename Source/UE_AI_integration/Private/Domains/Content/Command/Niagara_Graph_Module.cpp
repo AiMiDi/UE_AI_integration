@@ -36,11 +36,15 @@
 #include "NiagaraRendererProperties.h"
 #include "NiagaraParameterMapHistory.h"
 #include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
+#include "AssetRegistry/AssetData.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 
 #include "Misc/Guid.h"
 #include "Misc/PackageName.h"
 #include "ScopedTransaction.h"
 #include "UObject/Package.h"
+#include "UObject/UnrealType.h"
+#include "UObject/UObjectIterator.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "NiagaraEmitterFactoryNew.h"
@@ -1527,6 +1531,11 @@ namespace UEAINiagaraModulePrivate
 		{
 			return false;
 		}
+		FGuid RequestedGuid;
+		if (FGuid::Parse(Selector, RequestedGuid) && Node->NodeGuid == RequestedGuid)
+		{
+			return true;
+		}
 		return MatchesSelector(Selector, Node->GetName(), Node->GetPathName())
 			|| MatchesSelector(Selector, Node->GetFunctionName(), Node->GetPathName())
 			|| ModuleScriptIdentityMatches(Node, Selector);
@@ -2105,6 +2114,28 @@ namespace UEAINiagaraModulePrivate
 	// input) instead of exposing only a pin's raw DefaultValue.
 	UEdGraphPin* FindExistingOverridePin(UNiagaraNodeFunctionCall* Node, FName AliasedPinName);
 	FNiagaraParameterHandle AliasedInputHandle(UNiagaraNodeFunctionCall* Node, FName FullName);
+	void GetDynamicInputChildBindings(
+		UNiagaraNodeFunctionCall* Parent,
+		UNiagaraSystem* System,
+		ENiagaraScriptUsage Usage,
+		TArray<TPair<FString, UNiagaraNodeFunctionCall*>>& OutChildren);
+	void GetDynamicInputChildren(
+		UNiagaraNodeFunctionCall* Parent,
+		UNiagaraSystem* System,
+		ENiagaraScriptUsage Usage,
+		TArray<UNiagaraNodeFunctionCall*>& OutChildren);
+	bool FindDynamicInputInSubtree(
+		UNiagaraNodeFunctionCall* Root,
+		UNiagaraSystem* System,
+		ENiagaraScriptUsage Usage,
+		const FGuid& WantedGuid,
+		UNiagaraNodeFunctionCall*& OutNode,
+		TSet<UNiagaraNodeFunctionCall*>* OutSubtree = nullptr);
+	void CollectDynamicInputSubtree(
+		UNiagaraNodeFunctionCall* Root,
+		UNiagaraSystem* System,
+		ENiagaraScriptUsage Usage,
+		TSet<UNiagaraNodeFunctionCall*>& OutNodes);
 
 	// Niagara's exported linked-value helper is not available to external modules
 	// in UE 5.4.  Reproduce its read-only structural check without including the
@@ -2671,52 +2702,39 @@ namespace UEAINiagaraModulePrivate
 
 					++NodeCount;
 					ActiveNodes.Add(Current);
-					TArray<UEdGraphPin*> InputPins;
-					Current->GetInputPins(InputPins);
+					const ENiagaraScriptUsage CurrentUsage = Resolve.Target.OwningScript
+						? Resolve.Target.OwningScript->GetUsage()
+						: ENiagaraScriptUsage::Function;
+					TArray<TPair<FString, UNiagaraNodeFunctionCall*>> ChildBindings;
+					GetDynamicInputChildBindings(Current, Resolve.System.Get(), CurrentUsage, ChildBindings);
 					TArray<TSharedPtr<FJsonValue>> Children;
 					bool bChildrenTruncated = false;
 					if (Depth < MaxDepth)
 					{
-						for (UEdGraphPin* InputPin : InputPins)
+						for (const TPair<FString, UNiagaraNodeFunctionCall*>& Binding : ChildBindings)
 						{
-							if (!InputPin)
+							UNiagaraNodeFunctionCall* Child = Binding.Value;
+							if (!Child)
 							{
 								continue;
 							}
-							for (UEdGraphPin* LinkedPin : InputPin->LinkedTo)
+							if (NodeCount >= MaxNodes)
 							{
-								if (!LinkedPin || LinkedPin->Direction != EGPD_Output)
-								{
-									continue;
-								}
-								UNiagaraNodeFunctionCall* Child = Cast<UNiagaraNodeFunctionCall>(
-									LinkedPin->GetOwningNodeUnchecked());
-								if (!Child
-									|| !Child->FunctionScript
-									|| Child->FunctionScript->GetUsage() != ENiagaraScriptUsage::DynamicInput)
-								{
-									continue;
-								}
-
-								const FString ChildType = InputPin->PinType.PinCategory.ToString();
-								if (NodeCount >= MaxNodes)
-								{
-									bChildrenTruncated = true;
-									bTreeTruncated = true;
-									continue;
-								}
-								Children.Add(MakeShared<FJsonValueObject>(
-									BuildNode(Child, InputPin->PinName.ToString(), ChildType, Depth + 1)));
+								bChildrenTruncated = true;
+								bTreeTruncated = true;
+								continue;
 							}
+							Children.Add(MakeShared<FJsonValueObject>(
+								BuildNode(Child, Binding.Key, FString(), Depth + 1)));
 						}
 					}
-					else if (InputPins.Num() > 0)
+					else if (ChildBindings.Num() > 0)
 					{
 						bChildrenTruncated = true;
 						bTreeTruncated = true;
 					}
 					ActiveNodes.Remove(Current);
-					Entry->SetNumberField(TEXT("inputCount"), InputPins.Num());
+					Entry->SetNumberField(TEXT("inputCount"), ChildBindings.Num());
 					Entry->SetBoolField(TEXT("childrenTruncated"), bChildrenTruncated);
 					Entry->SetArrayField(TEXT("children"), Children);
 					return Entry;
@@ -3029,22 +3047,20 @@ namespace UEAINiagaraModulePrivate
 					409);
 			}
 
-			UNiagaraNodeFunctionCall* DynamicNode = nullptr;
-			TArray<UNiagaraNodeFunctionCall*> FunctionNodes;
-			Graph->GetNodesOfClass(FunctionNodes);
-			for (UNiagaraNodeFunctionCall* Candidate : FunctionNodes)
+			FGuid RequestedGuid;
+			if (!FGuid::Parse(DynamicInputGuid, RequestedGuid) || !RequestedGuid.IsValid())
 			{
-				if (!Candidate || !Candidate->FunctionScript
-					|| Candidate->FunctionScript->GetUsage() != ENiagaraScriptUsage::DynamicInput)
-				{
-					continue;
-				}
-				if (Candidate->NodeGuid.ToString(EGuidFormats::DigitsWithHyphensLower)
-				             .Equals(DynamicInputGuid, ESearchCase::IgnoreCase))
-				{
-					DynamicNode = Candidate;
-					break;
-				}
+				return ErrorResult(
+					TEXT("dynamicInputGuid must be a valid GUID."), TEXT("dynamic_input_guid_invalid"), 422);
+			}
+			UNiagaraNodeFunctionCall* DynamicNode = nullptr;
+			const ENiagaraScriptUsage RootUsage = Resolve.Target.OwningScript
+				? Resolve.Target.OwningScript->GetUsage()
+				: ENiagaraScriptUsage::Function;
+			if (!FindDynamicInputInSubtree(
+				ModuleNode, Resolve.System.Get(), RootUsage, RequestedGuid, DynamicNode))
+			{
+				DynamicNode = nullptr;
 			}
 			if (!DynamicNode)
 			{
@@ -3187,6 +3203,272 @@ namespace UEAINiagaraModulePrivate
 			Result->SetStringField(
 				TEXT("scope"),
 				TEXT("Authored Dynamic Input sub-input readback only; does not compile, save, or mutate the graph."));
+			return FMCPToolResult::Ok(Result);
+		}
+	};
+
+	// Remove a mounted Dynamic Input node by its stable graph GUID. This accepts
+	// nodes at any depth in the selected module graph, so callers can edit the
+	// complete tree returned by dynamic_inputs.tree. Only Dynamic Input function
+	// calls are eligible; unrelated graph nodes are never removed.
+	class FTool_NiagaraModuleDynamicInputRemove final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override
+		{
+			return TEXT("content.niagara.graph.module.dynamic_input.remove");
+		}
+
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FStackModuleRequest Request;
+			FString ErrorCode;
+			FString Error;
+			if (!ParseStackRequest(Params, Request, ErrorCode, Error))
+			{
+				return ErrorResult(Error, ErrorCode, ErrorCode.Contains(TEXT("not_found")) ? 404 : 422);
+			}
+			FString GuidText;
+			FGuid DynamicGuid;
+			if (!Params->TryGetStringField(TEXT("dynamicInputGuid"), GuidText)
+				|| !FGuid::Parse(GuidText, DynamicGuid) || !DynamicGuid.IsValid())
+			{
+				return ErrorResult(
+					TEXT("dynamicInputGuid must be a valid mounted Dynamic Input node GUID."),
+					TEXT("dynamic_input_guid_required"), 422);
+			}
+			FStackModuleResolve Resolve;
+			if (!ResolveStackModule(Request, Resolve, ErrorCode, Error))
+			{
+				return ErrorResult(Error, ErrorCode, ErrorCode.Contains(TEXT("not_found")) ? 404 : 422);
+			}
+			UNiagaraSystem* System = Resolve.System.Get();
+			UNiagaraGraph* Graph = Resolve.Target.Graph;
+			if (!System || !Graph || Resolve.bBlocked)
+			{
+				return ErrorResult(
+					TEXT("The selected Niagara graph is unavailable or read-only."), TEXT("plan_blocked"), 409);
+			}
+			UNiagaraNodeFunctionCall* DynamicNode = nullptr;
+			TArray<UNiagaraNodeFunctionCall*> FunctionNodes;
+			Graph->GetNodesOfClass(FunctionNodes);
+			for (UNiagaraNodeFunctionCall* Candidate : FunctionNodes)
+			{
+				if (Candidate && Candidate->NodeGuid == DynamicGuid && Candidate->FunctionScript
+					&& Candidate->FunctionScript->GetUsage() == ENiagaraScriptUsage::DynamicInput)
+				{
+					DynamicNode = Candidate;
+					break;
+				}
+			}
+			if (!DynamicNode)
+			{
+				return ErrorResult(
+					FString::Printf(TEXT("Dynamic Input node '%s' was not found."), *GuidText),
+					TEXT("dynamic_input_not_found"), 404);
+			}
+			const ENiagaraScriptUsage RootUsage = Resolve.Target.OwningScript
+				? Resolve.Target.OwningScript->GetUsage()
+				: ENiagaraScriptUsage::Function;
+			UNiagaraNodeFunctionCall* ReachableNode = nullptr;
+			if (!FindDynamicInputInSubtree(
+				Resolve.Selected, System, RootUsage, DynamicGuid, ReachableNode)
+				|| ReachableNode != DynamicNode)
+			{
+				return ErrorResult(
+					TEXT("The requested Dynamic Input GUID is not reachable beneath the selected module."),
+					TEXT("dynamic_input_not_found"), 404);
+			}
+
+			TSet<UNiagaraNodeFunctionCall*> Subtree;
+			CollectDynamicInputSubtree(DynamicNode, System, RootUsage, Subtree);
+			// A nested node may be shared by multiple authored override pins. Removing
+			// it would silently change another input, so reject the operation unless
+			// the only outside parent is the selected module's direct override.
+			int32 OutsideParentCount = 0;
+			TArray<UNiagaraNodeFunctionCall*> GraphFunctions;
+			Graph->GetNodesOfClass(GraphFunctions);
+			for (UNiagaraNodeFunctionCall* Candidate : GraphFunctions)
+			{
+				if (!Candidate)
+				{
+					continue;
+				}
+				TArray<TPair<FString, UNiagaraNodeFunctionCall*>> Bindings;
+				GetDynamicInputChildBindings(Candidate, System, RootUsage, Bindings);
+				for (const TPair<FString, UNiagaraNodeFunctionCall*>& Binding : Bindings)
+				{
+					if (Binding.Value == DynamicNode || Subtree.Contains(Binding.Value))
+					{
+						if (!Subtree.Contains(Candidate))
+						{
+							++OutsideParentCount;
+						}
+					}
+				}
+			}
+			if (OutsideParentCount != 1)
+			{
+				return ErrorResult(
+					TEXT("The Dynamic Input subtree is shared or has an unexpected parent; removal was refused."),
+					TEXT("dynamic_input_shared"), 409);
+			}
+
+			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Remove Niagara Dynamic Input")));
+			System->Modify();
+			Graph->Modify();
+			TArray<TPair<UEdGraphPin*, UEdGraphPin*>> SavedLinks;
+			for (UNiagaraNodeFunctionCall* Node : Subtree)
+			{
+				if (!Node)
+				{
+					continue;
+				}
+				Node->Modify();
+				for (UEdGraphPin* Pin : Node->Pins)
+				{
+					if (!Pin || Pin->Direction != EGPD_Output)
+					{
+						continue;
+					}
+					for (UEdGraphPin* Linked : Pin->LinkedTo)
+					{
+						if (Linked)
+						{
+							SavedLinks.Add(TPair<UEdGraphPin*, UEdGraphPin*>(Pin, Linked));
+						}
+					}
+				}
+				Node->BreakAllNodeLinks();
+				Graph->RemoveNode(Node);
+			}
+			Graph->NotifyGraphChanged();
+			const FCompileSummary CompileSummary = CompileSystem(System);
+			bool bReadBack = true;
+		for (UNiagaraNodeFunctionCall* Node : Subtree)
+		{
+			bReadBack &= Node && !Graph->Nodes.Contains(Node);
+		}
+			if (!bReadBack || !CompileSummary.bCompiled)
+			{
+				for (UNiagaraNodeFunctionCall* Node : Subtree)
+				{
+					if (Node && !Graph->Nodes.Contains(Node))
+					{
+						Graph->AddNode(Node, false, false);
+					}
+				}
+				for (const TPair<UEdGraphPin*, UEdGraphPin*>& Link : SavedLinks)
+				{
+					if (Link.Key && Link.Value && Link.Key->GetOwningNodeUnchecked()
+						&& Link.Value->GetOwningNodeUnchecked())
+					{
+						Link.Key->MakeLinkTo(Link.Value);
+					}
+				}
+				Graph->NotifyGraphChanged();
+				CompileSystem(System);
+				return ErrorResult(
+					FString::Printf(TEXT("Dynamic Input removal read-back or compilation failed (status=%s); the graph was restored."), *CompileSummary.Status),
+					!bReadBack ? TEXT("verification_failed") : TEXT("compile_failed"), 500);
+			}
+			System->MarkPackageDirty();
+			TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+			Result->SetStringField(TEXT("schema"), TEXT("ue.niagara.dynamic-input-remove.v1"));
+			Result->SetStringField(TEXT("system"), Resolve.SystemObjectPath);
+			Result->SetStringField(TEXT("graph"), Resolve.Target.GraphPath);
+			Result->SetStringField(TEXT("moduleSelector"), Request.ModuleSelector);
+			Result->SetStringField(TEXT("dynamicInputGuid"), GuidText);
+			Result->SetBoolField(TEXT("changed"), true);
+			Result->SetBoolField(TEXT("verified"), true);
+			Result->SetBoolField(TEXT("saved"), false);
+			Result->SetBoolField(TEXT("compiled"), CompileSummary.bCompiled);
+			Result->SetStringField(TEXT("compileStatus"), CompileSummary.Status);
+			Result->SetStringField(TEXT("scope"), TEXT("authored Dynamic Input tree; runtime resolution unverified"));
+			return FMCPToolResult::Ok(Result);
+		}
+	};
+
+	// Search Dynamic Input script assets through Asset Registry metadata. This is
+	// intentionally unloaded and bounded: callers can discover project assets
+	// without forcing every script into memory, then opt into an explicit load
+	// through the authoring/readback commands.
+	class FTool_NiagaraDynamicInputSearch final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override
+		{
+			return TEXT("content.niagara.graph.dynamic_input.search");
+		}
+
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			FString Query;
+			if (Params.IsValid() && Params->HasField(TEXT("query"))
+				&& (!Params->TryGetStringField(TEXT("query"), Query) || Query.Len() > 512))
+			{
+				return ErrorResult(TEXT("query must be at most 512 characters."), TEXT("query_invalid"), 422);
+			}
+			int32 Limit = 64;
+			if (Params.IsValid() && Params->HasField(TEXT("limit")))
+			{
+				double Number = 0.0;
+				if (!Params->TryGetNumberField(TEXT("limit"), Number) || !FMath::IsFinite(Number)
+					|| Number < 1.0 || Number > 256.0 || FMath::TruncToInt(Number) != Number)
+				{
+					return ErrorResult(TEXT("limit must be an integer from 1 to 256."), TEXT("limit_invalid"), 422);
+				}
+				Limit = FMath::TruncToInt(Number);
+			}
+			Query = Query.TrimStartAndEnd();
+			IAssetRegistry& AssetRegistry =
+				FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+			FARFilter Filter;
+			Filter.ClassPaths.Add(UNiagaraScript::StaticClass()->GetClassPathName());
+			Filter.bRecursiveClasses = true;
+			Filter.bRecursivePaths = true;
+			// Usage is an AssetRegistrySearchable enum on UNiagaraScript.  Filter
+			// on the authored usage instead of inferring Dynamic Input assets from
+			// a conventional directory name; projects are free to store them in
+			// any content folder.
+			Filter.TagsAndValues.Add(
+				GET_MEMBER_NAME_CHECKED(UNiagaraScript, Usage),
+				TOptional<FString>(TEXT("DynamicInput")));
+			TArray<FAssetData> Assets;
+			AssetRegistry.GetAssets(Filter, Assets);
+			Assets.RemoveAll([&Query](const FAssetData& Asset)
+			{
+				const FString Path = Asset.GetSoftObjectPath().ToString();
+				const FString Name = Asset.AssetName.ToString();
+				return !Query.IsEmpty()
+					&& !Name.Contains(Query, ESearchCase::IgnoreCase)
+					&& !Path.Contains(Query, ESearchCase::IgnoreCase);
+			});
+			Assets.Sort([](const FAssetData& A, const FAssetData& B)
+			{
+				return A.GetSoftObjectPath().ToString() < B.GetSoftObjectPath().ToString();
+			});
+			TArray<TSharedPtr<FJsonValue>> Rows;
+			for (int32 Index = 0; Index < Assets.Num() && Index < Limit; ++Index)
+			{
+				const FAssetData& Asset = Assets[Index];
+				TSharedRef<FJsonObject> Row = MakeShared<FJsonObject>();
+				Row->SetStringField(TEXT("name"), Asset.AssetName.ToString());
+				Row->SetStringField(TEXT("path"), Asset.GetSoftObjectPath().ToString());
+				Row->SetStringField(TEXT("usage"), TEXT("dynamicInput"));
+				Row->SetBoolField(TEXT("loaded"), FindObject<UNiagaraScript>(nullptr, *Asset.GetSoftObjectPath().ToString()) != nullptr);
+				Rows.Add(MakeShared<FJsonValueObject>(Row));
+			}
+			TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+			Result->SetStringField(TEXT("schema"), TEXT("ue.niagara.dynamic-input-search.v1"));
+			Result->SetStringField(TEXT("query"), Query);
+			Result->SetNumberField(TEXT("total"), Assets.Num());
+			Result->SetNumberField(TEXT("limit"), Limit);
+			Result->SetBoolField(TEXT("hasMore"), Assets.Num() > Limit);
+			Result->SetBoolField(TEXT("loadedOnly"), false);
+			Result->SetBoolField(TEXT("assetRegistry"), true);
+			Result->SetBoolField(TEXT("bounded"), true);
+			Result->SetArrayField(TEXT("dynamicInputs"), Rows);
 			return FMCPToolResult::Ok(Result);
 		}
 	};
@@ -3805,6 +4087,10 @@ namespace UEAINiagaraModulePrivate
 	{
 		FStackModuleRequest Stack;
 		FString Input;
+		// Optional mounted Dynamic Input GUID. When present, input resolution is
+		// rooted at the selected stack module and follows only authored Dynamic
+		// Input override links. A GUID found elsewhere in the graph is rejected.
+		FString DynamicInputGuid;
 		TSharedPtr<FJsonValue> Value;
 	};
 
@@ -3866,6 +4152,36 @@ namespace UEAINiagaraModulePrivate
 		return Values;
 	}
 
+	bool ParseOptionalDynamicInputGuid(
+		const TSharedPtr<FJsonObject>& Params,
+		FString& OutGuid,
+		FString& OutErrorCode,
+		FString& OutError)
+	{
+		OutGuid.Reset();
+		if (!Params.IsValid() || !Params->HasField(TEXT("dynamicInputGuid")))
+		{
+			return true;
+		}
+		FString RequestedGuid;
+		if (!Params->TryGetStringField(TEXT("dynamicInputGuid"), RequestedGuid)
+			|| RequestedGuid.TrimStartAndEnd().IsEmpty())
+		{
+			OutErrorCode = TEXT("dynamic_input_guid_invalid");
+			OutError = TEXT("dynamicInputGuid must be a non-empty GUID when provided.");
+			return false;
+		}
+		OutGuid = RequestedGuid.TrimStartAndEnd();
+		FGuid Parsed;
+		if (!FGuid::Parse(OutGuid, Parsed) || !Parsed.IsValid())
+		{
+			OutErrorCode = TEXT("dynamic_input_guid_invalid");
+			OutError = TEXT("dynamicInputGuid must be a valid mounted Dynamic Input node GUID.");
+			return false;
+		}
+		return true;
+	}
+
 	bool ParseInputValueRequest(
 		const TSharedPtr<FJsonObject>& Params,
 		FModuleInputRequest& Out,
@@ -3895,6 +4211,10 @@ namespace UEAINiagaraModulePrivate
 		{
 			OutErrorCode = TEXT("input_too_long");
 			OutError = FString::Printf(TEXT("input must be at most %d characters."), MaxModuleInputNameCharacters);
+			return false;
+		}
+		if (!ParseOptionalDynamicInputGuid(Params, Out.DynamicInputGuid, OutErrorCode, OutError))
+		{
 			return false;
 		}
 		Out.Value = Params->TryGetField(TEXT("value"));
@@ -3968,6 +4288,146 @@ namespace UEAINiagaraModulePrivate
 			FNiagaraParameterHandle(FullName), Node);
 	}
 
+	// Resolve authored Dynamic Input descendants from the selected stack module.
+	// Niagara stores nested overrides on the ParameterMapSet override node that
+	// precedes each function call; walking raw function-call pins misses those
+	// authored links. This bounded traversal follows the same override pins used
+	// by read/write commands and therefore cannot select an unrelated GUID from a
+	// different module in the shared graph.
+	void GetDynamicInputChildBindings(
+		UNiagaraNodeFunctionCall* Parent,
+		UNiagaraSystem* System,
+		ENiagaraScriptUsage Usage,
+		TArray<TPair<FString, UNiagaraNodeFunctionCall*>>& OutChildren)
+	{
+		OutChildren.Reset();
+		if (!Parent)
+		{
+			return;
+		}
+		FCompileConstantResolver ConstantResolver(System, Usage);
+		TArray<FNiagaraVariable> Inputs;
+		TSet<FNiagaraVariable> Hidden;
+		FNiagaraStackGraphUtilities::GetStackFunctionInputs(
+			*Parent,
+			Inputs,
+			Hidden,
+			ConstantResolver,
+			FNiagaraStackGraphUtilities::ENiagaraGetStackFunctionInputPinsOptions::ModuleInputsOnly);
+		TSet<UNiagaraNodeFunctionCall*> Seen;
+		for (const FNiagaraVariable& Input : Inputs)
+		{
+			const FNiagaraParameterHandle Aliased = AliasedInputHandle(Parent, Input.GetName());
+			UEdGraphPin* OverridePin = FindExistingOverridePin(Parent, Aliased.GetParameterHandleString());
+			if (!OverridePin)
+			{
+				continue;
+			}
+			for (UEdGraphPin* LinkedPin : OverridePin->LinkedTo)
+			{
+				UNiagaraNodeFunctionCall* Child = LinkedPin
+					? Cast<UNiagaraNodeFunctionCall>(LinkedPin->GetOwningNodeUnchecked())
+					: nullptr;
+				if (Child && Child->FunctionScript
+					&& Child->FunctionScript->GetUsage() == ENiagaraScriptUsage::DynamicInput
+					&& !Seen.Contains(Child))
+				{
+					Seen.Add(Child);
+					OutChildren.Add(TPair<FString, UNiagaraNodeFunctionCall*>(
+						Input.GetName().ToString(), Child));
+				}
+			}
+		}
+	}
+
+	void GetDynamicInputChildren(
+		UNiagaraNodeFunctionCall* Parent,
+		UNiagaraSystem* System,
+		ENiagaraScriptUsage Usage,
+		TArray<UNiagaraNodeFunctionCall*>& OutChildren)
+	{
+		OutChildren.Reset();
+		TArray<TPair<FString, UNiagaraNodeFunctionCall*>> Bindings;
+		GetDynamicInputChildBindings(Parent, System, Usage, Bindings);
+		for (const TPair<FString, UNiagaraNodeFunctionCall*>& Binding : Bindings)
+		{
+			OutChildren.Add(Binding.Value);
+		}
+	}
+
+	bool FindDynamicInputInSubtree(
+		UNiagaraNodeFunctionCall* Root,
+		UNiagaraSystem* System,
+		ENiagaraScriptUsage Usage,
+		const FGuid& WantedGuid,
+		UNiagaraNodeFunctionCall*& OutNode,
+		TSet<UNiagaraNodeFunctionCall*>* OutSubtree)
+	{
+		OutNode = nullptr;
+		if (!Root)
+		{
+			return false;
+		}
+		TArray<UNiagaraNodeFunctionCall*> Pending;
+		Pending.Add(Root);
+		TSet<UNiagaraNodeFunctionCall*> Visited;
+		while (Pending.Num() > 0)
+		{
+			UNiagaraNodeFunctionCall* Current = Pending.Pop(false);
+			if (!Current || Visited.Contains(Current))
+			{
+				continue;
+			}
+			Visited.Add(Current);
+			if (OutSubtree)
+			{
+				OutSubtree->Add(Current);
+			}
+			if (Current != Root && Current->NodeGuid == WantedGuid)
+			{
+				OutNode = Current;
+				return true;
+			}
+			TArray<UNiagaraNodeFunctionCall*> Children;
+			GetDynamicInputChildren(Current, System, Usage, Children);
+			for (UNiagaraNodeFunctionCall* Child : Children)
+			{
+				Pending.Add(Child);
+			}
+		}
+		return false;
+	}
+
+	void CollectDynamicInputSubtree(
+		UNiagaraNodeFunctionCall* Root,
+		UNiagaraSystem* System,
+		ENiagaraScriptUsage Usage,
+		TSet<UNiagaraNodeFunctionCall*>& OutNodes)
+	{
+		OutNodes.Reset();
+		if (!Root)
+		{
+			return;
+		}
+		TArray<UNiagaraNodeFunctionCall*> Pending;
+		Pending.Add(Root);
+		while (Pending.Num() > 0)
+		{
+			UNiagaraNodeFunctionCall* Current = Pending.Pop(false);
+			if (!Current || OutNodes.Contains(Current))
+			{
+				continue;
+			}
+			OutNodes.Add(Current);
+			TArray<UNiagaraNodeFunctionCall*> Children;
+			GetDynamicInputChildren(Current, System, Usage, Children);
+			for (UNiagaraNodeFunctionCall* Child : Children)
+			{
+				Pending.Add(Child);
+			}
+		}
+	}
+
 	bool ResolveModuleInput(
 		const FModuleInputRequest& Request,
 		FModuleInputResolve& Out,
@@ -3985,6 +4445,34 @@ namespace UEAINiagaraModulePrivate
 			OutErrorCode = TEXT("module_unavailable");
 			OutError = TEXT("The selected stack module is unavailable.");
 			return false;
+		}
+		if (!Request.DynamicInputGuid.IsEmpty())
+		{
+			FGuid WantedGuid;
+			if (!FGuid::Parse(Request.DynamicInputGuid, WantedGuid) || !WantedGuid.IsValid())
+			{
+				OutErrorCode = TEXT("dynamic_input_guid_invalid");
+				OutError = TEXT("dynamicInputGuid must be a valid mounted Dynamic Input node GUID.");
+				return false;
+			}
+			const ENiagaraScriptUsage RootUsage = Out.Module.Target.OwningScript
+				? Out.Module.Target.OwningScript->GetUsage()
+				: ENiagaraScriptUsage::Function;
+			UNiagaraNodeFunctionCall* NestedNode = nullptr;
+			if (!FindDynamicInputInSubtree(
+				Node, Out.Module.System.Get(), RootUsage, WantedGuid, NestedNode))
+			{
+				OutErrorCode = TEXT("dynamic_input_not_found");
+				OutError = FString::Printf(
+					TEXT("Dynamic Input node '%s' is not reachable beneath module '%s'."),
+					*Request.DynamicInputGuid,
+					*Node->GetName());
+				return false;
+			}
+			// Keep the enclosing graph/output identity for plan and receipt checks,
+			// while making all pin mutations target the reachable nested function.
+			Out.Module.Selected = NestedNode;
+			Node = NestedNode;
 		}
 		Out.Input = Request.Input;
 
@@ -4558,14 +5046,14 @@ namespace UEAINiagaraModulePrivate
 			Node->Modify();
 
 			const FNiagaraParameterHandle Aliased = AliasedInputHandle(Node, Resolve.MatchedFullName);
-			UEdGraphPin& OverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+			UEdGraphPin* OverridePin = &FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
 				*Node, Aliased, Resolve.InputType, FGuid(), FGuid());
-			if (OverridePin.LinkedTo.Num() > 0)
+			if (OverridePin->LinkedTo.Num() > 0)
 			{
-				OverridePin.BreakAllPinLinks();
+				OverridePin->BreakAllPinLinks();
 			}
-			OverridePin.GetOwningNodeUnchecked()->Modify();
-			OverridePin.DefaultValue = ValueString;
+			OverridePin->GetOwningNodeUnchecked()->Modify();
+			OverridePin->DefaultValue = ValueString;
 			Graph->NotifyGraphChanged();
 
 			UEdGraphPin* ReadBackPin = FindExistingOverridePin(Node, Aliased.GetParameterHandleString());
@@ -5038,6 +5526,11 @@ namespace UEAINiagaraModulePrivate
 			OutError = FString::Printf(TEXT("input must be at most %d characters."), MaxModuleInputNameCharacters);
 			return false;
 		}
+		if (!ParseOptionalDynamicInputGuid(
+			Params, OutRequest.DynamicInputGuid, OutErrorCode, OutError))
+		{
+			return false;
+		}
 		if (!Params->TryGetStringField(TEXT("parameter"), OutParameter)
 			|| OutParameter.TrimStartAndEnd().IsEmpty())
 		{
@@ -5214,18 +5707,18 @@ namespace UEAINiagaraModulePrivate
 			Graph->Modify();
 			Node->Modify();
 
-			UEdGraphPin& OverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+			UEdGraphPin* OverridePin = &FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
 				*Node, Aliased, Resolve.InputType, FGuid(), FGuid());
 			// A binding replaces any prior link or inline value on the override pin;
 			// break existing links so the linked-parameter API can attach a fresh
 			// parameter-map get node (it asserts the pin is unlinked).
-			if (OverridePin.LinkedTo.Num() > 0)
+			if (OverridePin->LinkedTo.Num() > 0)
 			{
-				OverridePin.BreakAllPinLinks();
+				OverridePin->BreakAllPinLinks();
 			}
 			const FNiagaraVariableBase LinkedParameter(Resolve.InputType, FName(*LinkedName));
 			FNiagaraStackGraphUtilities::SetLinkedParameterValueForFunctionInput(
-				OverridePin,
+				*OverridePin,
 				LinkedParameter,
 				Known,
 				ENiagaraDefaultMode::FailIfPreviouslyNotSet,
@@ -5312,6 +5805,11 @@ namespace UEAINiagaraModulePrivate
 			OutError = FString::Printf(TEXT("input must be at most %d characters."), MaxModuleInputNameCharacters);
 			return false;
 		}
+		if (!ParseOptionalDynamicInputGuid(
+			Params, OutRequest.DynamicInputGuid, OutErrorCode, OutError))
+		{
+			return false;
+		}
 		if (!Params->TryGetStringField(TEXT("dynamicInput"), OutDynamicInput)
 			|| OutDynamicInput.TrimStartAndEnd().IsEmpty())
 		{
@@ -5357,6 +5855,54 @@ namespace UEAINiagaraModulePrivate
 		}
 		return DynamicInputNode->FunctionScript != nullptr
 			&& DynamicInputNode->FunctionScript->GetUsage() == ENiagaraScriptUsage::DynamicInput;
+	}
+
+	// Remove only the Dynamic Input node currently mounted on an override pin.
+	// Literal values and parameter bindings are deliberately preserved so the
+	// direct set command cannot destroy a non-DI authoring choice by accident.
+	bool RemoveMountedDynamicInput(
+		UNiagaraGraph* Graph,
+		UNiagaraNodeFunctionCall* Module,
+		UEdGraphPin* OverridePin)
+	{
+		if (!Graph || !Module || !OverridePin || OverridePin->LinkedTo.Num() != 1)
+		{
+			return false;
+		}
+		UEdGraphPin* LinkedPin = OverridePin->LinkedTo[0];
+		UNiagaraNodeFunctionCall* DynamicNode = LinkedPin
+			? Cast<UNiagaraNodeFunctionCall>(LinkedPin->GetOwningNodeUnchecked())
+			: nullptr;
+		if (!DynamicNode || !DynamicNode->FunctionScript
+			|| DynamicNode->FunctionScript->GetUsage() != ENiagaraScriptUsage::DynamicInput)
+		{
+			return false;
+		}
+		UEdGraphNode* OverrideNode = OverridePin->GetOwningNodeUnchecked();
+		OverridePin->BreakAllPinLinks();
+		DynamicNode->Modify();
+		DynamicNode->BreakAllNodeLinks();
+		Graph->RemoveNode(DynamicNode);
+		if (OverrideNode && IsStackOverrideNode(OverrideNode))
+		{
+			bool bHasOtherInputs = false;
+			for (UEdGraphPin* Pin : OverrideNode->Pins)
+			{
+				if (Pin && Pin->Direction == EGPD_Input
+					&& Pin != FindMapPin(Cast<UNiagaraNode>(OverrideNode), EGPD_Input)
+					&& Pin->PinName != TEXT("Add")
+					&& (Pin->LinkedTo.Num() > 0 || !Pin->DefaultValue.IsEmpty()))
+				{
+					bHasOtherInputs = true;
+					break;
+				}
+			}
+			if (!bHasOtherInputs)
+			{
+				SpliceOutOverrideNode(Graph, Cast<UNiagaraNode>(OverrideNode), Module);
+			}
+		}
+		return !Graph->Nodes.Contains(DynamicNode);
 	}
 
 	class FTool_NiagaraModuleInputDISet final : public FMCPToolBase
@@ -5420,21 +5966,31 @@ namespace UEAINiagaraModulePrivate
 			Graph->Modify();
 			Node->Modify();
 
-			UEdGraphPin& OverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+			UEdGraphPin* OverridePin = &FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
 				*Node, Aliased, Resolve.InputType, FGuid(), FGuid());
 			// A dynamic input replaces any prior link or inline value on the override
 			// pin; break existing links and clear the default so the engine's
 			// SetDynamicInputForFunctionInput (which asserts the pin is unlinked) can
 			// attach a fresh dynamic-input node.
-			if (OverridePin.LinkedTo.Num() > 0)
+			if (OverridePin->LinkedTo.Num() > 0)
 			{
-				OverridePin.BreakAllPinLinks();
+				// A prior Dynamic Input node is owned by this override and must be
+				// removed; otherwise repeated set operations leave unreachable graph
+				// nodes that still participate in compilation and tree readback.
+				if (!RemoveMountedDynamicInput(Graph, Node, OverridePin))
+				{
+					OverridePin->BreakAllPinLinks();
+				}
 			}
-			OverridePin.GetOwningNodeUnchecked()->Modify();
-			OverridePin.DefaultValue = FString();
+			// Removing the last mounted node may splice the override node out;
+			// reacquire the pin before clearing its default and mounting the new DI.
+			OverridePin = &FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+				*Node, Aliased, Resolve.InputType, FGuid(), FGuid());
+			OverridePin->GetOwningNodeUnchecked()->Modify();
+			OverridePin->DefaultValue = FString();
 			UNiagaraNodeFunctionCall* DynamicInputNode = nullptr;
 			FNiagaraStackGraphUtilities::SetDynamicInputForFunctionInput(
-				OverridePin, DynamicInputScript, DynamicInputNode);
+				*OverridePin, DynamicInputScript, DynamicInputNode);
 			Graph->NotifyGraphChanged();
 
 			UEdGraphPin* ReadBackPin = FindExistingOverridePin(Node, Aliased.GetParameterHandleString());
@@ -6024,7 +6580,62 @@ namespace UEAINiagaraModulePrivate
 
 	TSharedRef<FJsonObject> SpecExportBuildInput(
 		UNiagaraNodeFunctionCall* Node,
-		const FNiagaraVariable& Input)
+		const FNiagaraVariable& Input,
+		UNiagaraSystem* System);
+
+	TSharedRef<FJsonObject> SpecExportBuildDynamicNode(
+		UNiagaraNodeFunctionCall* Node,
+		UNiagaraSystem* System,
+		ENiagaraScriptUsage Usage,
+		int32 Depth,
+		TSet<UNiagaraNodeFunctionCall*>& Active)
+	{
+		auto Result = MakeShared<FJsonObject>();
+		if (!Node || Active.Contains(Node) || Depth > 16)
+		{
+			Result->SetBoolField(TEXT("truncated"), true);
+			return Result;
+		}
+		Active.Add(Node);
+		const ENiagaraScriptUsage NodeUsage = Node->FunctionScript
+			? Node->FunctionScript->GetUsage()
+			: Usage;
+		Result->SetStringField(TEXT("name"), Node->GetFunctionName());
+		Result->SetStringField(TEXT("guid"), Node->NodeGuid.ToString(EGuidFormats::DigitsWithHyphensLower));
+		Result->SetStringField(TEXT("scriptPath"), NodeScriptPath(Node));
+		const FCompileConstantResolver ConstantResolver(System, NodeUsage);
+		TArray<FNiagaraVariable> InputVariables;
+		TSet<FNiagaraVariable> HiddenVariables;
+		FNiagaraStackGraphUtilities::GetStackFunctionInputs(
+			*Node,
+			InputVariables,
+			HiddenVariables,
+			ConstantResolver,
+			FNiagaraStackGraphUtilities::ENiagaraGetStackFunctionInputPinsOptions::ModuleInputsOnly);
+		TArray<TSharedPtr<FJsonValue>> Inputs;
+		for (const FNiagaraVariable& Input : InputVariables)
+		{
+			Inputs.Add(MakeShared<FJsonValueObject>(SpecExportBuildInput(Node, Input, System)));
+		}
+		Result->SetArrayField(TEXT("inputs"), Inputs);
+		TArray<TPair<FString, UNiagaraNodeFunctionCall*>> Bindings;
+		GetDynamicInputChildBindings(Node, System, NodeUsage, Bindings);
+		TArray<TSharedPtr<FJsonValue>> Children;
+		for (const TPair<FString, UNiagaraNodeFunctionCall*>& Binding : Bindings)
+		{
+			auto Child = SpecExportBuildDynamicNode(Binding.Value, System, NodeUsage, Depth + 1, Active);
+			Child->SetStringField(TEXT("input"), Binding.Key);
+			Children.Add(MakeShared<FJsonValueObject>(Child));
+		}
+		Result->SetArrayField(TEXT("children"), Children);
+		Active.Remove(Node);
+		return Result;
+	}
+
+	TSharedRef<FJsonObject> SpecExportBuildInput(
+		UNiagaraNodeFunctionCall* Node,
+		const FNiagaraVariable& Input,
+		UNiagaraSystem* System)
 	{
 		auto Entry = MakeShared<FJsonObject>();
 		FString InputName = Input.GetName().ToString();
@@ -6050,6 +6661,16 @@ namespace UEAINiagaraModulePrivate
 						&& LinkedCall->FunctionScript->GetUsage() == ENiagaraScriptUsage::DynamicInput)
 					{
 						Entry->SetStringField(TEXT("dynamicInput"), NodeScriptPath(LinkedCall));
+						Entry->SetStringField(
+							TEXT("dynamicInputGuid"),
+							LinkedCall->NodeGuid.ToString(EGuidFormats::DigitsWithHyphensLower));
+						TSet<UNiagaraNodeFunctionCall*> Active;
+						const ENiagaraScriptUsage Usage = Node->FunctionScript
+							? Node->FunctionScript->GetUsage()
+							: ENiagaraScriptUsage::Function;
+						Entry->SetObjectField(
+							TEXT("dynamicInputTree"),
+							SpecExportBuildDynamicNode(LinkedCall, System, Usage, 0, Active));
 					}
 					else
 					{
@@ -6070,10 +6691,15 @@ namespace UEAINiagaraModulePrivate
 	TSharedRef<FJsonObject> SpecExportBuildModule(
 		UNiagaraNodeFunctionCall* Node,
 		const FCompileConstantResolver& ConstantResolver,
-		bool& bOutInputsTruncated)
+		bool& bOutInputsTruncated,
+		UNiagaraSystem* System)
 	{
 		auto Entry = MakeShared<FJsonObject>();
 		Entry->SetStringField(TEXT("scriptPath"), NodeScriptPath(Node));
+		Entry->SetStringField(TEXT("nodePath"), Node ? Node->GetPathName() : FString());
+		Entry->SetStringField(
+			TEXT("nodeGuid"),
+			Node ? Node->NodeGuid.ToString(EGuidFormats::DigitsWithHyphensLower) : FString());
 
 		TArray<FNiagaraVariable> InputVariables;
 		TSet<FNiagaraVariable> HiddenVariables;
@@ -6089,7 +6715,7 @@ namespace UEAINiagaraModulePrivate
 		Inputs.Reserve(Count);
 		for (int32 Index = 0; Index < Count; ++Index)
 		{
-			Inputs.Add(MakeShared<FJsonValueObject>(SpecExportBuildInput(Node, InputVariables[Index])));
+			Inputs.Add(MakeShared<FJsonValueObject>(SpecExportBuildInput(Node, InputVariables[Index], System)));
 		}
 		Entry->SetArrayField(TEXT("inputs"), Inputs);
 		const bool bInputsTruncated = InputVariables.Num() > SpecExportMaxInputs;
@@ -6103,7 +6729,8 @@ namespace UEAINiagaraModulePrivate
 		UNiagaraScript* Script,
 		const FCompileConstantResolver& ConstantResolver,
 		bool& bOutModulesTruncated,
-		bool& bOutInputsTruncated)
+		bool& bOutInputsTruncated,
+		UNiagaraSystem* System)
 	{
 		auto Stack = MakeShared<FJsonObject>();
 		Stack->SetStringField(TEXT("stackName"), UsageName(Script->GetUsage()));
@@ -6124,7 +6751,7 @@ namespace UEAINiagaraModulePrivate
 						break;
 					}
 					Modules.Add(MakeShared<FJsonValueObject>(SpecExportBuildModule(
-						FunctionCall, ConstantResolver, bOutInputsTruncated)));
+						FunctionCall, ConstantResolver, bOutInputsTruncated, System)));
 					++ModuleIndex;
 				}
 			}
@@ -6133,11 +6760,65 @@ namespace UEAINiagaraModulePrivate
 		return Stack;
 	}
 
+	FString SpecCanonicalRendererPropertyText(const FName PropertyName, FString Value)
+	{
+		// Niagara normalizes this binding's cached-value bookkeeping while
+		// importing a renderer property.  It is derived editor metadata, not an
+		// authored renderer setting, so omit it from the wire contract to keep
+		// export -> import -> export stable.
+		if (PropertyName == TEXT("RendererEnabledBinding"))
+		{
+			Value.ReplaceInline(TEXT(",bIsCachedParticleValue=True"), TEXT(""), ESearchCase::CaseSensitive);
+			Value.ReplaceInline(TEXT(",bIsCachedParticleValue=False"), TEXT(""), ESearchCase::CaseSensitive);
+		}
+		return Value;
+	}
+
+	TSharedRef<FJsonObject> SpecExportBuildRenderer(UNiagaraRendererProperties* Renderer)
+	{
+		auto Result = MakeShared<FJsonObject>();
+		if (!Renderer) return Result;
+		Result->SetStringField(TEXT("rendererClass"), Renderer->GetClass()->GetPathName());
+		Result->SetStringField(TEXT("rendererPath"), Renderer->GetPathName());
+		TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
+		int32 PropertyCount = 0;
+		bool bTruncated = false;
+		for (TFieldIterator<FProperty> It(Renderer->GetClass()); It; ++It)
+		{
+			FProperty* Property = *It;
+			if (!Property
+				|| !Property->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible)
+				|| Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient))
+			{
+				continue;
+			}
+			if (PropertyCount >= SpecExportMaxInputs)
+			{
+				bTruncated = true;
+				break;
+			}
+			FString Value;
+			Property->ExportTextItem_Direct(
+				Value,
+				Property->ContainerPtrToValuePtr<void>(Renderer),
+				nullptr,
+				nullptr,
+				PPF_None);
+			Value = SpecCanonicalRendererPropertyText(Property->GetFName(), MoveTemp(Value));
+			Properties->SetStringField(Property->GetName(), Value.Left(64 * 1024));
+			++PropertyCount;
+		}
+		Result->SetObjectField(TEXT("properties"), Properties);
+		Result->SetBoolField(TEXT("propertiesTruncated"), bTruncated);
+		return Result;
+	}
+
 	TSharedRef<FJsonObject> SpecExportBuildEmitter(
 		const FNiagaraEmitterHandle& Handle,
 		bool& bOutStacksTruncated,
 		bool& bOutModulesTruncated,
-		bool& bOutInputsTruncated)
+		bool& bOutInputsTruncated,
+		UNiagaraSystem* System)
 	{
 		auto Emitter = MakeShared<FJsonObject>();
 		Emitter->SetStringField(TEXT("name"), Handle.GetName().ToString());
@@ -6152,7 +6833,7 @@ namespace UEAINiagaraModulePrivate
 			{
 				if (Renderer)
 				{
-					Renderers.Add(MakeShared<FJsonValueString>(Renderer->GetClass()->GetPathName()));
+					Renderers.Add(MakeShared<FJsonValueObject>(SpecExportBuildRenderer(Renderer)));
 				}
 			}
 
@@ -6183,7 +6864,7 @@ namespace UEAINiagaraModulePrivate
 				const FCompileConstantResolver ConstantResolver(Handle.GetInstance(), Script->GetUsage());
 				Stacks.Add(MakeShared<FJsonValueObject>(SpecExportBuildStack(
 					Output, Script, ConstantResolver,
-					bOutModulesTruncated, bOutInputsTruncated)));
+					bOutModulesTruncated, bOutInputsTruncated, System)));
 				++StackIndex;
 			}
 		}
@@ -6191,6 +6872,8 @@ namespace UEAINiagaraModulePrivate
 		Emitter->SetArrayField(TEXT("stacks"), Stacks);
 		return Emitter;
 	}
+
+	bool SpecContentDigest(const TSharedPtr<FJsonObject>& Spec, FString& OutDigest);
 
 	class FTool_NiagaraSystemSpecExport final : public FMCPToolBase
 	{
@@ -6278,7 +6961,7 @@ namespace UEAINiagaraModulePrivate
 			for (int32 Index = 0; Index < EmitterCount; ++Index)
 			{
 				Emitters.Add(MakeShared<FJsonValueObject>(SpecExportBuildEmitter(
-					Handles[Index], bStacksTruncated, bModulesTruncated, bInputsTruncated)));
+					Handles[Index], bStacksTruncated, bModulesTruncated, bInputsTruncated, System)));
 			}
 			Json->SetArrayField(TEXT("emitters"), Emitters);
 			Json->SetBoolField(TEXT("emittersTruncated"), Handles.Num() > SpecExportMaxEmitters);
@@ -6288,6 +6971,1273 @@ namespace UEAINiagaraModulePrivate
 
 			Json->SetBoolField(TEXT("saved"), false);
 			Json->SetBoolField(TEXT("compiled"), false);
+			// The digest excludes itself and is stable across JSON key ordering.  It
+			// gives import/round-trip callers an exact source snapshot identity while
+			// keeping the export read-only.
+			FString SpecDigest;
+			if (!SpecContentDigest(Json, SpecDigest))
+			{
+				return ErrorResult(
+					TEXT("Could not compute the Niagara System spec digest."), TEXT("digest_unavailable"), 500);
+			}
+			Json->SetStringField(TEXT("specDigest"), SpecDigest);
+			return FMCPToolResult::Ok(Json);
+		}
+	};
+
+	// A spec carries its own digest for transport, so digesting the object as
+	// supplied would make a valid export fail round-trip (the digest would be
+	// included on the second pass). Keep the transport field outside the
+	// canonical content digest while retaining every authored field.
+	bool SpecContentDigest(const TSharedPtr<FJsonObject>& Spec, FString& OutDigest)
+	{
+		if (!Spec.IsValid())
+		{
+			return false;
+		}
+		TSharedRef<FJsonObject> Content = MakeShared<FJsonObject>();
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Spec->Values)
+		{
+			const bool bTransportField = Pair.Key.Equals(TEXT("specDigest"), ESearchCase::CaseSensitive)
+				|| Pair.Key.Equals(TEXT("localDeclared"), ESearchCase::CaseSensitive)
+				|| Pair.Key.Equals(TEXT("handlerRegistered"), ESearchCase::CaseSensitive)
+				|| Pair.Key.Equals(TEXT("liveAvailable"), ESearchCase::CaseSensitive)
+				|| Pair.Key.Equals(TEXT("executed"), ESearchCase::CaseSensitive)
+				|| Pair.Key.Equals(TEXT("readbackVerified"), ESearchCase::CaseSensitive)
+				|| Pair.Key.Equals(TEXT("runtimeVerified"), ESearchCase::CaseSensitive)
+				|| Pair.Key.Equals(TEXT("verificationState"), ESearchCase::CaseSensitive)
+				|| Pair.Key.Equals(TEXT("ok"), ESearchCase::CaseSensitive)
+				|| Pair.Key.Equals(TEXT("errorCode"), ESearchCase::CaseSensitive)
+				|| Pair.Key.Equals(TEXT("message"), ESearchCase::CaseSensitive)
+				|| Pair.Key.Equals(TEXT("status"), ESearchCase::CaseSensitive);
+			if (!bTransportField)
+			{
+				Content->SetField(Pair.Key, Pair.Value);
+			}
+		}
+		return TryDigestJson(Content, OutDigest);
+	}
+
+	// Import is deliberately strict: it applies authored user-parameter defaults
+	// to an existing System only when the emitter/renderer/stack structure in the
+	// supplied spec still matches the live asset.  This prevents a stale export
+	// from deleting or recreating graph objects behind the user's back while still
+	// providing a useful export -> edit -> import -> export round-trip.
+	bool SpecImportReadNumber(const TSharedPtr<FJsonObject>& Object, const TCHAR* Name, float& Out)
+	{
+		double Number = 0.0;
+		if (!Object.IsValid() || !Object->TryGetNumberField(Name, Number) || !FMath::IsFinite(Number)) return false;
+		Out = static_cast<float>(Number);
+		return FMath::IsFinite(Out);
+	}
+
+	bool SpecValidateEnvelope(const TSharedPtr<FJsonObject>& Spec, FString& OutError)
+	{
+		OutError.Reset();
+		if (!Spec.IsValid())
+		{
+			OutError = TEXT("spec must be an object.");
+			return false;
+		}
+		FString Schema;
+		double Version = 0.0;
+		if (!Spec->TryGetStringField(TEXT("schema"), Schema)
+			|| Schema != TEXT("ue.niagara.system-spec.v1")
+			|| !Spec->TryGetNumberField(TEXT("specVersion"), Version)
+			|| !FMath::IsFinite(Version)
+			|| FMath::TruncToInt(Version) != Version
+			|| static_cast<int32>(Version) != 1)
+		{
+			OutError = TEXT("spec must be a ue.niagara.system-spec.v1 object with integer specVersion 1.");
+			return false;
+		}
+		return true;
+	}
+
+	FString SpecImportShortName(FString Name)
+	{
+		Name.TrimStartAndEndInline();
+		if (Name.StartsWith(TEXT("User."), ESearchCase::IgnoreCase)) Name.RightChopInline(5);
+		return Name;
+	}
+
+	bool SpecImportSetDefault(
+		FNiagaraUserRedirectionParameterStore& Store,
+		const FNiagaraVariable& Variable,
+		const TSharedPtr<FJsonValue>& Value)
+	{
+		if (!Value.IsValid()) return false;
+		const FNiagaraTypeDefinition& Type = Variable.GetType();
+		if (Type == FNiagaraTypeDefinition::GetFloatDef() && Value->Type == EJson::Number)
+		{
+			const double Number = Value->AsNumber();
+			return FMath::IsFinite(Number) && Store.SetParameterValue<float>(static_cast<float>(Number), Variable, false);
+		}
+		if (Type == FNiagaraTypeDefinition::GetIntDef() && Value->Type == EJson::Number)
+		{
+			const double Number = Value->AsNumber();
+			if (!FMath::IsFinite(Number) || Number != FMath::FloorToDouble(Number)
+				|| Number < MIN_int32 || Number > MAX_int32)
+			{
+				return false;
+			}
+			return Store.SetParameterValue<int32>(static_cast<int32>(Number), Variable, false);
+		}
+		if (Type == FNiagaraTypeDefinition::GetBoolDef() && Value->Type == EJson::Boolean)
+		{
+			FNiagaraBool Bool;
+			Bool.SetValue(Value->AsBool());
+			return Store.SetParameterValue<FNiagaraBool>(Bool, Variable, false);
+		}
+		if (Value->Type != EJson::Object) return false;
+		const TSharedPtr<FJsonObject> Object = Value->AsObject();
+		if (!Object.IsValid()) return false;
+		if (Type == FNiagaraTypeDefinition::GetVec2Def())
+		{
+			FVector2f Result;
+			return SpecImportReadNumber(Object, TEXT("x"), Result.X)
+				&& SpecImportReadNumber(Object, TEXT("y"), Result.Y)
+				&& Store.SetParameterValue<FVector2f>(Result, Variable, false);
+		}
+		if (Type == FNiagaraTypeDefinition::GetVec3Def() || Type == FNiagaraTypeDefinition::GetPositionDef())
+		{
+			FVector3f Result;
+			return SpecImportReadNumber(Object, TEXT("x"), Result.X)
+				&& SpecImportReadNumber(Object, TEXT("y"), Result.Y)
+				&& SpecImportReadNumber(Object, TEXT("z"), Result.Z)
+				&& Store.SetParameterValue<FVector3f>(Result, Variable, false);
+		}
+		if (Type == FNiagaraTypeDefinition::GetVec4Def())
+		{
+			FVector4f Result;
+			return SpecImportReadNumber(Object, TEXT("x"), Result.X)
+				&& SpecImportReadNumber(Object, TEXT("y"), Result.Y)
+				&& SpecImportReadNumber(Object, TEXT("z"), Result.Z)
+				&& SpecImportReadNumber(Object, TEXT("w"), Result.W)
+				&& Store.SetParameterValue<FVector4f>(Result, Variable, false);
+		}
+		if (Type == FNiagaraTypeDefinition::GetQuatDef())
+		{
+			FQuat4f Result;
+			return SpecImportReadNumber(Object, TEXT("x"), Result.X)
+				&& SpecImportReadNumber(Object, TEXT("y"), Result.Y)
+				&& SpecImportReadNumber(Object, TEXT("z"), Result.Z)
+				&& SpecImportReadNumber(Object, TEXT("w"), Result.W)
+				&& Store.SetParameterValue<FQuat4f>(Result, Variable, false);
+		}
+		if (Type == FNiagaraTypeDefinition::GetColorDef())
+		{
+			FLinearColor Result = FLinearColor::White;
+			return SpecImportReadNumber(Object, TEXT("r"), Result.R)
+				&& SpecImportReadNumber(Object, TEXT("g"), Result.G)
+				&& SpecImportReadNumber(Object, TEXT("b"), Result.B)
+				&& (!Object->HasField(TEXT("a")) || SpecImportReadNumber(Object, TEXT("a"), Result.A))
+				&& Store.SetParameterValue<FLinearColor>(Result, Variable, false);
+		}
+		return false;
+	}
+
+	bool SpecImportDefaultShapeValid(
+		const FNiagaraTypeDefinition& Type,
+		const TSharedPtr<FJsonValue>& Value)
+	{
+		if (!Value.IsValid()) return false;
+		if (Type == FNiagaraTypeDefinition::GetFloatDef())
+		{
+			if (Value->Type != EJson::Number) return false;
+			double Number = Value->AsNumber();
+			float Converted = static_cast<float>(Number);
+			return FMath::IsFinite(Number) && FMath::IsFinite(Converted);
+		}
+		if (Type == FNiagaraTypeDefinition::GetIntDef())
+		{
+			if (Value->Type != EJson::Number) return false;
+			const double Number = Value->AsNumber();
+			return FMath::IsFinite(Number) && Number == FMath::FloorToDouble(Number)
+				&& Number >= MIN_int32 && Number <= MAX_int32;
+		}
+		if (Type == FNiagaraTypeDefinition::GetBoolDef()) return Value->Type == EJson::Boolean;
+		if (Value->Type != EJson::Object || !Value->AsObject().IsValid()) return false;
+		const TSharedPtr<FJsonObject> Object = Value->AsObject();
+		auto HasFinite = [&Object](const TCHAR* Name)
+		{
+			float Value = 0.0f;
+			return SpecImportReadNumber(Object, Name, Value);
+		};
+		if (Type == FNiagaraTypeDefinition::GetVec2Def()) return HasFinite(TEXT("x")) && HasFinite(TEXT("y"));
+		if (Type == FNiagaraTypeDefinition::GetVec3Def() || Type == FNiagaraTypeDefinition::GetPositionDef())
+			return HasFinite(TEXT("x")) && HasFinite(TEXT("y")) && HasFinite(TEXT("z"));
+		if (Type == FNiagaraTypeDefinition::GetVec4Def() || Type == FNiagaraTypeDefinition::GetQuatDef())
+			return HasFinite(TEXT("x")) && HasFinite(TEXT("y")) && HasFinite(TEXT("z")) && HasFinite(TEXT("w"));
+		if (Type == FNiagaraTypeDefinition::GetColorDef())
+			return HasFinite(TEXT("r")) && HasFinite(TEXT("g")) && HasFinite(TEXT("b"))
+				&& HasFinite(TEXT("a"));
+		return false;
+	}
+
+	TSharedPtr<FJsonValue> SpecImportCloneValue(const TSharedPtr<FJsonValue>& Value)
+	{
+		if (!Value.IsValid())
+		{
+			return MakeShared<FJsonValueNull>();
+		}
+		switch (Value->Type)
+		{
+		case EJson::Object:
+		{
+			const TSharedPtr<FJsonObject> Source = Value->AsObject();
+			if (!Source.IsValid()) return MakeShared<FJsonValueNull>();
+			auto Copy = MakeShared<FJsonObject>();
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Source->Values)
+			{
+				Copy->SetField(Pair.Key, SpecImportCloneValue(Pair.Value));
+			}
+			return MakeShared<FJsonValueObject>(Copy);
+		}
+		case EJson::Array:
+		{
+			const TArray<TSharedPtr<FJsonValue>>* Source = nullptr;
+			if (!Value->TryGetArray(Source) || !Source) return MakeShared<FJsonValueNull>();
+			TArray<TSharedPtr<FJsonValue>> Copy;
+			Copy.Reserve(Source->Num());
+			for (const TSharedPtr<FJsonValue>& Item : *Source)
+			{
+				Copy.Add(SpecImportCloneValue(Item));
+			}
+			return MakeShared<FJsonValueArray>(MoveTemp(Copy));
+		}
+		case EJson::String:
+			return MakeShared<FJsonValueString>(Value->AsString());
+		case EJson::Number:
+			return MakeShared<FJsonValueNumber>(Value->AsNumber());
+		case EJson::Boolean:
+			return MakeShared<FJsonValueBoolean>(Value->AsBool());
+		case EJson::Null:
+		default:
+			return MakeShared<FJsonValueNull>();
+		}
+	}
+
+	TSharedPtr<FJsonObject> SpecImportCloneObject(const TSharedPtr<FJsonObject>& Object)
+	{
+		if (!Object.IsValid())
+			return nullptr;
+		const TSharedPtr<FJsonValue> Clone = SpecImportCloneValue(MakeShared<FJsonValueObject>(Object));
+		return Clone.IsValid() && Clone->Type == EJson::Object ? Clone->AsObject() : nullptr;
+	}
+
+	bool SpecImportStructureDigest(const TSharedPtr<FJsonObject>& Spec, FString& OutDigest)
+	{
+		if (!Spec.IsValid()) return false;
+		const TArray<TSharedPtr<FJsonValue>>* Emitters = nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* Parameters = nullptr;
+		if (!Spec->TryGetArrayField(TEXT("emitters"), Emitters) || !Emitters
+			|| !Spec->TryGetArrayField(TEXT("userParameters"), Parameters) || !Parameters)
+		{
+			return false;
+		}
+		auto Structure = MakeShared<FJsonObject>();
+		for (const TCHAR* Field : {TEXT("schema"), TEXT("specVersion"), TEXT("emittersTruncated"),
+			TEXT("stacksTruncated"), TEXT("modulesTruncated"), TEXT("inputsTruncated"), TEXT("userParametersTruncated")})
+		{
+			if (Spec->HasField(Field)) Structure->SetField(Field, SpecImportCloneValue(Spec->TryGetField(Field)));
+		}
+		// User defaults are the one mutable portion applied by import.  Exclude
+		// only those values from the structure digest; every emitter, stack,
+		// module input, dynamic-input tree, and renderer field remains covered.
+		TArray<TSharedPtr<FJsonValue>> ParameterRows;
+		ParameterRows.Reserve(Parameters->Num());
+		for (const TSharedPtr<FJsonValue>& Value : *Parameters)
+		{
+			const TSharedPtr<FJsonObject> Parameter = Value.IsValid() && Value->Type == EJson::Object ? Value->AsObject() : nullptr;
+			if (!Parameter.IsValid()) return false;
+			auto Row = MakeShared<FJsonObject>();
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Parameter->Values)
+			{
+				if (!Pair.Key.Equals(TEXT("default"), ESearchCase::CaseSensitive))
+					Row->SetField(Pair.Key, SpecImportCloneValue(Pair.Value));
+			}
+			ParameterRows.Add(MakeShared<FJsonValueObject>(Row));
+		}
+		Structure->SetArrayField(TEXT("userParameters"), MoveTemp(ParameterRows));
+		TArray<TSharedPtr<FJsonValue>> EmitterRows;
+		EmitterRows.Reserve(Emitters->Num());
+		// Module input authoring and renderer properties are the mutable part of a
+		// system spec.  Keep the object identity/type/stack topology in the stale
+		// snapshot guard, while allowing an export -> edit -> import to change
+		// those authored values.  The full content digest below still covers every
+		// field and is therefore the read-back proof after a write.
+		auto CloneStructureEmitter = [](const TSharedPtr<FJsonValue>& Value) -> TSharedPtr<FJsonValue>
+		{
+			if (!Value.IsValid() || Value->Type != EJson::Object || !Value->AsObject().IsValid())
+			{
+				return MakeShared<FJsonValueNull>();
+			}
+			const TSharedPtr<FJsonObject> Source = Value->AsObject();
+			auto Emitter = MakeShared<FJsonObject>();
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Source->Values)
+			{
+				if (Pair.Key.Equals(TEXT("renderers"), ESearchCase::CaseSensitive))
+				{
+					const TArray<TSharedPtr<FJsonValue>>* Renderers = nullptr;
+					if (!Pair.Value.IsValid() || !Pair.Value->TryGetArray(Renderers) || !Renderers)
+						return MakeShared<FJsonValueNull>();
+					TArray<TSharedPtr<FJsonValue>> Rows;
+					for (const TSharedPtr<FJsonValue>& RendererValue : *Renderers)
+					{
+						const TSharedPtr<FJsonObject> Renderer = RendererValue.IsValid()
+							&& RendererValue->Type == EJson::Object ? RendererValue->AsObject() : nullptr;
+						if (!Renderer.IsValid()) return MakeShared<FJsonValueNull>();
+						auto Row = MakeShared<FJsonObject>();
+						for (const TPair<FString, TSharedPtr<FJsonValue>>& RendererPair : Renderer->Values)
+						{
+							if (!RendererPair.Key.Equals(TEXT("properties"), ESearchCase::CaseSensitive))
+								Row->SetField(RendererPair.Key, SpecImportCloneValue(RendererPair.Value));
+						}
+						Rows.Add(MakeShared<FJsonValueObject>(Row));
+					}
+					Emitter->SetArrayField(Pair.Key, MoveTemp(Rows));
+				}
+				else if (Pair.Key.Equals(TEXT("stacks"), ESearchCase::CaseSensitive))
+				{
+					const TArray<TSharedPtr<FJsonValue>>* Stacks = nullptr;
+					if (!Pair.Value.IsValid() || !Pair.Value->TryGetArray(Stacks) || !Stacks)
+						return MakeShared<FJsonValueNull>();
+					TArray<TSharedPtr<FJsonValue>> StackRows;
+					for (const TSharedPtr<FJsonValue>& StackValue : *Stacks)
+					{
+						const TSharedPtr<FJsonObject> Stack = StackValue.IsValid()
+							&& StackValue->Type == EJson::Object ? StackValue->AsObject() : nullptr;
+						if (!Stack.IsValid()) return MakeShared<FJsonValueNull>();
+						auto StackRow = MakeShared<FJsonObject>();
+						for (const TPair<FString, TSharedPtr<FJsonValue>>& StackPair : Stack->Values)
+						{
+							if (!StackPair.Key.Equals(TEXT("modules"), ESearchCase::CaseSensitive))
+							{
+								StackRow->SetField(StackPair.Key, SpecImportCloneValue(StackPair.Value));
+								continue;
+							}
+							const TArray<TSharedPtr<FJsonValue>>* Modules = nullptr;
+							if (!StackPair.Value.IsValid() || !StackPair.Value->TryGetArray(Modules) || !Modules)
+								return MakeShared<FJsonValueNull>();
+							TArray<TSharedPtr<FJsonValue>> ModuleRows;
+							for (const TSharedPtr<FJsonValue>& ModuleValue : *Modules)
+							{
+								const TSharedPtr<FJsonObject> Module = ModuleValue.IsValid()
+									&& ModuleValue->Type == EJson::Object ? ModuleValue->AsObject() : nullptr;
+								if (!Module.IsValid()) return MakeShared<FJsonValueNull>();
+								auto ModuleRow = MakeShared<FJsonObject>();
+								for (const TPair<FString, TSharedPtr<FJsonValue>>& ModulePair : Module->Values)
+								{
+									if (!ModulePair.Key.Equals(TEXT("inputs"), ESearchCase::CaseSensitive))
+									{
+										ModuleRow->SetField(ModulePair.Key, SpecImportCloneValue(ModulePair.Value));
+										continue;
+									}
+									const TArray<TSharedPtr<FJsonValue>>* Inputs = nullptr;
+								if (!ModulePair.Value.IsValid() || !ModulePair.Value->TryGetArray(Inputs) || !Inputs)
+										return MakeShared<FJsonValueNull>();
+									TArray<TSharedPtr<FJsonValue>> InputRows;
+									for (const TSharedPtr<FJsonValue>& InputValue : *Inputs)
+									{
+										const TSharedPtr<FJsonObject> Input = InputValue.IsValid()
+											&& InputValue->Type == EJson::Object ? InputValue->AsObject() : nullptr;
+										if (!Input.IsValid()) return MakeShared<FJsonValueNull>();
+										auto InputRow = MakeShared<FJsonObject>();
+										for (const TPair<FString, TSharedPtr<FJsonValue>>& InputPair : Input->Values)
+										{
+											if (InputPair.Key.Equals(TEXT("value"), ESearchCase::CaseSensitive)
+												|| InputPair.Key.Equals(TEXT("binding"), ESearchCase::CaseSensitive)
+												|| InputPair.Key.Equals(TEXT("dynamicInput"), ESearchCase::CaseSensitive)
+												|| InputPair.Key.Equals(TEXT("dynamicInputGuid"), ESearchCase::CaseSensitive)
+								|| InputPair.Key.Equals(TEXT("dynamicInputTree"), ESearchCase::CaseSensitive))
+												continue;
+											InputRow->SetField(InputPair.Key, SpecImportCloneValue(InputPair.Value));
+										}
+										InputRows.Add(MakeShared<FJsonValueObject>(InputRow));
+									}
+									ModuleRow->SetArrayField(ModulePair.Key, MoveTemp(InputRows));
+								}
+								ModuleRows.Add(MakeShared<FJsonValueObject>(ModuleRow));
+							}
+							StackRow->SetArrayField(StackPair.Key, MoveTemp(ModuleRows));
+						}
+						StackRows.Add(MakeShared<FJsonValueObject>(StackRow));
+					}
+					Emitter->SetArrayField(Pair.Key, MoveTemp(StackRows));
+				}
+				else
+				{
+					Emitter->SetField(Pair.Key, SpecImportCloneValue(Pair.Value));
+				}
+			}
+			return MakeShared<FJsonValueObject>(Emitter);
+		};
+
+		for (const TSharedPtr<FJsonValue>& Value : *Emitters)
+		{
+			if (!Value.IsValid() || Value->Type != EJson::Object || !Value->AsObject().IsValid()) return false;
+			const TSharedPtr<FJsonValue> Row = CloneStructureEmitter(Value);
+			if (!Row.IsValid() || Row->Type == EJson::Null) return false;
+			EmitterRows.Add(Row);
+		}
+		Structure->SetArrayField(TEXT("emitters"), MoveTemp(EmitterRows));
+		return TryDigestJson(Structure, OutDigest);
+	}
+
+	class FTool_NiagaraSystemSpecRoundTrip final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.system.spec.round_trip"); }
+
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			if (!Params.IsValid() || !Params->HasField(TEXT("spec")))
+				return ErrorResult(TEXT("spec is required."), TEXT("spec_required"), 422);
+			UNiagaraSystem* System = nullptr;
+			FString Selector;
+			if (!Params->TryGetStringField(TEXT("system"), Selector) || Selector.IsEmpty())
+				return ErrorResult(TEXT("system is required."), TEXT("system_required"), 422);
+			const FString SystemPath = NormalizeObjectPath(Selector.TrimStartAndEnd());
+			System = LoadObject<UNiagaraSystem>(nullptr, *SystemPath);
+			if (!System) return ErrorResult(TEXT("The Niagara System was not found."), TEXT("system_not_found"), 404);
+			const TSharedPtr<FJsonObject>* SpecField = nullptr;
+			if (!Params->TryGetObjectField(TEXT("spec"), SpecField) || !SpecField || !SpecField->IsValid())
+				return ErrorResult(TEXT("spec must be an object."), TEXT("spec_invalid"), 422);
+			const TSharedPtr<FJsonObject> Spec = *SpecField;
+			FString EnvelopeError;
+			if (!SpecValidateEnvelope(Spec, EnvelopeError))
+				return ErrorResult(EnvelopeError, TEXT("spec_invalid"), 422);
+			FString CurrentDigest;
+			auto ExportParams = MakeShared<FJsonObject>();
+			ExportParams->SetStringField(TEXT("system"), SystemPath);
+			FMCPToolResult ExportResult = FTool_NiagaraSystemSpecExport().Execute(ExportParams);
+			if (!ExportResult.bSuccess || !ExportResult.Data || !SpecContentDigest(Spec, CurrentDigest))
+				return ExportResult.bSuccess ? ErrorResult(TEXT("Could not digest the supplied spec."), TEXT("digest_unavailable"), 500) : ExportResult;
+			FString CurrentStructure, SuppliedStructure;
+			if (!SpecImportStructureDigest(Spec, SuppliedStructure) || !SpecImportStructureDigest(ExportResult.Data, CurrentStructure))
+				return ErrorResult(TEXT("spec structure is incomplete."), TEXT("spec_invalid"), 422);
+			auto Json = MakeShared<FJsonObject>();
+			Json->SetStringField(TEXT("schema"), TEXT("ue.niagara.system-spec-round-trip.v1"));
+			Json->SetStringField(TEXT("system"), System->GetPathName());
+			Json->SetStringField(TEXT("suppliedSpecDigest"), CurrentDigest);
+			Json->SetStringField(TEXT("currentSpecDigest"), ExportResult.Data->GetStringField(TEXT("specDigest")));
+			const bool bStructureMatch = SuppliedStructure == CurrentStructure;
+			const bool bDigestMatch = CurrentDigest == ExportResult.Data->GetStringField(TEXT("specDigest"));
+			const bool bRoundTripVerified = bStructureMatch && bDigestMatch;
+			Json->SetBoolField(TEXT("structureMatch"), bStructureMatch);
+			Json->SetBoolField(TEXT("roundTripVerified"), bRoundTripVerified);
+			Json->SetBoolField(TEXT("readbackVerified"), bRoundTripVerified);
+			Json->SetBoolField(TEXT("saved"), false);
+			return FMCPToolResult::Ok(Json);
+		}
+	};
+
+	struct FSpecModuleImportEdit
+	{
+		FModuleInputResolve Resolve;
+		TSharedPtr<FJsonObject> Before;
+		TSharedPtr<FJsonObject> DynamicInputTree;
+		bool bHadOverrideNodeBefore = false;
+		FString ValueString;
+		TSharedPtr<FJsonValue> DesiredValue;
+		FString BindingName;
+		TWeakObjectPtr<UNiagaraScript> DynamicInputScript;
+		FString Mode;
+		bool bAttempted = false;
+	};
+
+	struct FSpecRendererImportEdit
+	{
+		TWeakObjectPtr<UNiagaraRendererProperties> Renderer;
+		FString PropertyName;
+		FString NewValue;
+		FString Before;
+		bool bAttempted = false;
+	};
+
+	bool SpecImportClearInputOverride(
+		UNiagaraGraph* Graph,
+		UNiagaraNodeFunctionCall* Node,
+		const FNiagaraParameterHandle& Aliased)
+	{
+		if (!Graph || !Node)
+			return false;
+		UEdGraphPin* Pin = FindExistingOverridePin(Node, Aliased.GetParameterHandleString());
+		if (!Pin)
+			return true;
+		if (Pin->LinkedTo.Num() > 0)
+		{
+			UNiagaraNodeFunctionCall* DynamicNode = Cast<UNiagaraNodeFunctionCall>(
+				Pin->LinkedTo[0] ? Pin->LinkedTo[0]->GetOwningNodeUnchecked() : nullptr);
+			if (DynamicNode && DynamicNode->FunctionScript
+				&& DynamicNode->FunctionScript->GetUsage() == ENiagaraScriptUsage::DynamicInput)
+			{
+				if (!RemoveMountedDynamicInput(Graph, Node, Pin))
+					return false;
+			}
+			else
+			{
+				Pin->BreakAllPinLinks();
+			}
+		}
+		Pin = FindExistingOverridePin(Node, Aliased.GetParameterHandleString());
+		if (Pin)
+			Pin->DefaultValue.Reset();
+		return true;
+	}
+
+	// System-spec exports use Niagara pin text for module input values.  The
+	// interactive value capability uses typed JSON instead, so accept both
+	// representations while rejecting empty/control-bearing text before any
+	// graph mutation.  The Niagara pin schema remains the final parser at apply.
+	bool SpecImportValueToPinString(
+		const FNiagaraTypeDefinition& Type,
+		const TSharedPtr<FJsonValue>& Value,
+		FString& OutString)
+	{
+		OutString.Reset();
+		if (!Value.IsValid())
+		{
+			return false;
+		}
+		if (Value->Type == EJson::String)
+		{
+			OutString = Value->AsString();
+			return !OutString.IsEmpty()
+				&& !OutString.Contains(TEXT("\r"))
+				&& !OutString.Contains(TEXT("\n"));
+		}
+		return ValueToPinString(Type, Value, OutString);
+	}
+
+	bool SpecImportApplyDynamicInputTree(
+		UNiagaraSystem* System,
+		UNiagaraNodeFunctionCall* Node,
+		const TSharedPtr<FJsonObject>& Tree,
+		int32 Depth,
+		int32& NodeBudget);
+
+	bool SpecImportSetInputState(
+		UNiagaraSystem* System,
+		UNiagaraGraph* Graph,
+		UNiagaraNodeFunctionCall* Node,
+		const FNiagaraVariable& Input,
+		const TSharedPtr<FJsonObject>& State,
+		const bool bHadOverrideNodeBefore)
+	{
+		if (!System || !Graph || !Node || !State.IsValid())
+			return false;
+		const FNiagaraParameterHandle Aliased = AliasedInputHandle(Node, Input.GetName());
+		FString DynamicInputPath;
+		FString Binding;
+		const TSharedPtr<FJsonValue> Value = State->TryGetField(TEXT("value"));
+		const bool bHasValue = State->HasField(TEXT("value")) && Value.IsValid();
+		const bool bHasBinding = State->TryGetStringField(TEXT("binding"), Binding);
+		const bool bHasDynamic = State->TryGetStringField(TEXT("dynamicInput"), DynamicInputPath);
+		const int32 SourceCount = (bHasValue ? 1 : 0) + (bHasBinding ? 1 : 0) + (bHasDynamic ? 1 : 0);
+		if (SourceCount > 1)
+			return false;
+		if (bHasDynamic)
+		{
+			UNiagaraScript* Script = LoadObject<UNiagaraScript>(nullptr, *NormalizeObjectPath(DynamicInputPath));
+			if (!Script || Script->GetUsage() != ENiagaraScriptUsage::DynamicInput)
+				return false;
+			const TSharedPtr<FJsonObject>* Tree = nullptr;
+			State->TryGetObjectField(TEXT("dynamicInputTree"), Tree);
+			FString RequestedGuid;
+			State->TryGetStringField(TEXT("dynamicInputGuid"), RequestedGuid);
+			if (Tree && Tree->IsValid() && RequestedGuid.IsEmpty())
+				(*Tree)->TryGetStringField(TEXT("guid"), RequestedGuid);
+			UEdGraphPin* ExistingPin = FindExistingOverridePin(Node, Aliased.GetParameterHandleString());
+			UNiagaraNodeFunctionCall* DynamicNode = ExistingPin && ExistingPin->LinkedTo.Num() > 0
+				? Cast<UNiagaraNodeFunctionCall>(ExistingPin->LinkedTo[0]->GetOwningNodeUnchecked())
+				: nullptr;
+			const bool bSameScript = DynamicNode && DynamicNode->FunctionScript
+				&& NormalizeObjectPath(NodeScriptPath(DynamicNode)) == NormalizeObjectPath(DynamicInputPath);
+			const bool bSameGuid = RequestedGuid.IsEmpty()
+				|| (DynamicNode && DynamicNode->NodeGuid.ToString(EGuidFormats::DigitsWithHyphensLower) == RequestedGuid);
+			if (!bSameScript || !bSameGuid)
+			{
+				if (!SpecImportClearInputOverride(Graph, Node, Aliased))
+					return false;
+				ExistingPin = nullptr;
+				DynamicNode = nullptr;
+			}
+			if (!DynamicNode)
+			{
+				UEdGraphPin* Pin = &FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+					*Node, Aliased, Input.GetType(), FGuid(), FGuid());
+				Pin->GetOwningNodeUnchecked()->Modify();
+				Pin->DefaultValue.Reset();
+				FNiagaraStackGraphUtilities::SetDynamicInputForFunctionInput(*Pin, Script, DynamicNode);
+			}
+			if (!DynamicNode)
+				return false;
+			if (!bSameScript || !bSameGuid)
+			{
+				FGuid RequestedNodeGuid;
+				if (!RequestedGuid.IsEmpty())
+				{
+					if (!FGuid::Parse(RequestedGuid, RequestedNodeGuid) || !RequestedNodeGuid.IsValid())
+						return false;
+					for (UEdGraphNode* Candidate : Graph->Nodes)
+					{
+						if (Candidate && Candidate != DynamicNode && Candidate->NodeGuid == RequestedNodeGuid)
+							return false;
+					}
+					DynamicNode->NodeGuid = RequestedNodeGuid;
+				}
+			}
+			if (!Tree || !Tree->IsValid())
+				return true;
+			int32 NodeBudget = 512;
+			return SpecImportApplyDynamicInputTree(System, DynamicNode, *Tree, 0, NodeBudget);
+		}
+		if (!SpecImportClearInputOverride(Graph, Node, Aliased))
+			return false;
+		if (bHasBinding)
+		{
+			TSet<FNiagaraVariableBase> Known;
+			TArray<FNiagaraVariableBase> Ordered;
+			BuildKnownBindingParameters(System, Known, Ordered);
+			FString LinkedName, ErrorCode, Error;
+			if (!ResolveLinkedParameter(Ordered, Binding, LinkedName, ErrorCode, Error))
+				return false;
+			UEdGraphPin* Pin = &FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+				*Node, Aliased, Input.GetType(), FGuid(), FGuid());
+			const FNiagaraVariableBase LinkedParameter(Input.GetType(), FName(*LinkedName));
+			FNiagaraStackGraphUtilities::SetLinkedParameterValueForFunctionInput(
+				*Pin, LinkedParameter, Known, ENiagaraDefaultMode::FailIfPreviouslyNotSet, FGuid());
+			return true;
+		}
+		if (bHasValue)
+		{
+			FString ValueString;
+			if (!SpecImportValueToPinString(Input.GetType(), Value, ValueString))
+				return false;
+			UEdGraphPin* Pin = &FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
+				*Node, Aliased, Input.GetType(), FGuid(), FGuid());
+			Pin->GetOwningNodeUnchecked()->Modify();
+			Pin->DefaultValue = ValueString;
+			return true;
+		}
+		UEdGraphPin* Pin = FindExistingOverridePin(Node, Aliased.GetParameterHandleString());
+		if (Pin)
+		{
+			UEdGraphNode* OverrideNode = Pin->GetOwningNodeUnchecked();
+			OverrideNode->Modify();
+			Pin->BreakAllPinLinks();
+			OverrideNode->RemovePin(Pin);
+		}
+		if (!bHadOverrideNodeBefore)
+		{
+			if (UNiagaraNode* OverrideNode = FindStackOverrideNode(Node))
+				SpliceOutOverrideNode(Graph, OverrideNode, Node);
+		}
+		return FindExistingOverridePin(Node, Aliased.GetParameterHandleString()) == nullptr;
+	}
+
+	bool SpecImportApplyDynamicInputTree(
+		UNiagaraSystem* System,
+		UNiagaraNodeFunctionCall* Node,
+		const TSharedPtr<FJsonObject>& Tree,
+		int32 Depth,
+		int32& NodeBudget)
+	{
+		if (!System || !Node || !Tree.IsValid() || Depth > 16 || NodeBudget-- <= 0)
+			return false;
+		bool bTruncated = false;
+		if (Tree->TryGetBoolField(TEXT("truncated"), bTruncated) && bTruncated)
+			return false;
+		FString TreeScriptPath;
+		if (Tree->TryGetStringField(TEXT("scriptPath"), TreeScriptPath)
+			&& !TreeScriptPath.IsEmpty()
+			&& NormalizeObjectPath(TreeScriptPath) != NormalizeObjectPath(NodeScriptPath(Node)))
+			return false;
+		FString TreeGuid;
+		if (Tree->TryGetStringField(TEXT("guid"), TreeGuid)
+			&& !TreeGuid.IsEmpty()
+			&& TreeGuid != Node->NodeGuid.ToString(EGuidFormats::DigitsWithHyphensLower))
+			return false;
+		FString TreeName;
+		if (Tree->TryGetStringField(TEXT("name"), TreeName)
+			&& !TreeName.IsEmpty()
+			&& TreeName != Node->GetFunctionName())
+			return false;
+		const TArray<TSharedPtr<FJsonValue>>* Inputs = nullptr;
+		if (!Tree->TryGetArrayField(TEXT("inputs"), Inputs) || !Inputs)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
+			return !Tree->TryGetArrayField(TEXT("children"), Children) || !Children || Children->Num() == 0;
+		}
+		const ENiagaraScriptUsage Usage = Node->FunctionScript
+			? Node->FunctionScript->GetUsage()
+			: ENiagaraScriptUsage::DynamicInput;
+		const FCompileConstantResolver ConstantResolver(System, Usage);
+		TArray<FNiagaraVariable> InputVariables;
+		TSet<FNiagaraVariable> HiddenVariables;
+		FNiagaraStackGraphUtilities::GetStackFunctionInputs(
+			*Node,
+			InputVariables,
+			HiddenVariables,
+			ConstantResolver,
+			FNiagaraStackGraphUtilities::ENiagaraGetStackFunctionInputPinsOptions::ModuleInputsOnly);
+		for (const TSharedPtr<FJsonValue>& Value : *Inputs)
+		{
+			const TSharedPtr<FJsonObject> InputSpec = Value.IsValid() && Value->Type == EJson::Object
+				? Value->AsObject()
+				: nullptr;
+			if (!InputSpec.IsValid())
+				return false;
+			FString Name;
+			if (!InputSpec->TryGetStringField(TEXT("name"), Name) || Name.IsEmpty())
+				return false;
+			FString TypeName;
+			InputSpec->TryGetStringField(TEXT("type"), TypeName);
+			const FNiagaraVariable* Match = nullptr;
+			for (const FNiagaraVariable& Candidate : InputVariables)
+			{
+				FString CandidateName = Candidate.GetName().ToString();
+				CandidateName.RemoveFromStart(PARAM_MAP_MODULE_STR);
+				if (CandidateName.Equals(Name, ESearchCase::IgnoreCase)
+					&& (TypeName.IsEmpty() || Candidate.GetType().GetName() == TypeName))
+				{
+					Match = &Candidate;
+					break;
+				}
+			}
+			if (!Match)
+				return false;
+			const FNiagaraParameterHandle Aliased = AliasedInputHandle(Node, Match->GetName());
+			const bool bHadOverride = FindExistingOverridePin(Node, Aliased.GetParameterHandleString()) != nullptr;
+			if (!SpecImportSetInputState(System, Cast<UNiagaraGraph>(Node->GetGraph()), Node, *Match, InputSpec, bHadOverride))
+				return false;
+			const TSharedPtr<FJsonObject>* ChildTree = nullptr;
+			if (InputSpec->TryGetObjectField(TEXT("dynamicInputTree"), ChildTree)
+				&& ChildTree && ChildTree->IsValid())
+			{
+				// SpecImportSetInputState applies the child tree while mounting the
+				// dynamic input.  Do not recurse a second time here: doing so clears
+				// and reapplies nested overrides and can change graph identity.
+			}
+		}
+		const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
+		if (Tree->TryGetArrayField(TEXT("children"), Children) && Children)
+		{
+			TSet<FString> ExpectedChildren;
+			TMap<FString, TSharedPtr<FJsonObject>> ExpectedTrees;
+			for (const TSharedPtr<FJsonValue>& InputValue : *Inputs)
+			{
+				const TSharedPtr<FJsonObject> InputSpec = InputValue.IsValid() && InputValue->Type == EJson::Object
+					? InputValue->AsObject() : nullptr;
+				const TSharedPtr<FJsonObject>* ChildTree = nullptr;
+				if (InputSpec.IsValid() && InputSpec->TryGetObjectField(TEXT("dynamicInputTree"), ChildTree)
+					&& ChildTree && ChildTree->IsValid())
+				{
+					FString InputName;
+					InputSpec->TryGetStringField(TEXT("name"), InputName);
+					ExpectedChildren.Add(InputName);
+					ExpectedTrees.Add(InputName, *ChildTree);
+				}
+			}
+			TSet<FString> SeenChildren;
+			for (const TSharedPtr<FJsonValue>& ChildValue : *Children)
+			{
+				const TSharedPtr<FJsonObject> Child = ChildValue.IsValid() && ChildValue->Type == EJson::Object
+					? ChildValue->AsObject() : nullptr;
+				FString InputName;
+				if (!Child.IsValid() || !Child->TryGetStringField(TEXT("input"), InputName)
+					|| !ExpectedChildren.Contains(InputName) || SeenChildren.Contains(InputName))
+					return false;
+				const TSharedPtr<FJsonObject>* ExpectedTree = ExpectedTrees.Find(InputName);
+				if (!ExpectedTree || !ExpectedTree->IsValid())
+					return false;
+				for (const TCHAR* IdentityField : {TEXT("guid"), TEXT("scriptPath")})
+				{
+					FString ExpectedIdentity;
+					FString ChildIdentity;
+					(*ExpectedTree)->TryGetStringField(IdentityField, ExpectedIdentity);
+					Child->TryGetStringField(IdentityField, ChildIdentity);
+					if (!ExpectedIdentity.IsEmpty() && ExpectedIdentity != ChildIdentity)
+						return false;
+				}
+				SeenChildren.Add(InputName);
+			}
+			if (SeenChildren.Num() != ExpectedChildren.Num())
+				return false;
+		}
+		return true;
+	}
+
+	class FTool_NiagaraSystemSpecImport final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("content.niagara.system.spec.import"); }
+
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			if (!Params.IsValid() || !Params->HasField(TEXT("spec")))
+				return ErrorResult(TEXT("spec is required."), TEXT("spec_required"), 422);
+			FString Selector;
+			if (!Params->TryGetStringField(TEXT("system"), Selector) || Selector.IsEmpty())
+				return ErrorResult(TEXT("system is required."), TEXT("system_required"), 422);
+			const FString SystemPath = NormalizeObjectPath(Selector.TrimStartAndEnd());
+			UNiagaraSystem* System = LoadObject<UNiagaraSystem>(nullptr, *SystemPath);
+			if (!System) return ErrorResult(TEXT("The Niagara System was not found."), TEXT("system_not_found"), 404);
+			if (!System->GetOutermost()->GetName().StartsWith(TEXT("/Game/")) || System->HasAnyFlags(RF_Transient))
+				return ErrorResult(TEXT("Spec import requires a non-transient /Game/ Niagara System."), TEXT("system_read_only"), 409);
+			const TSharedPtr<FJsonObject>* SpecField = nullptr;
+			if (!Params->TryGetObjectField(TEXT("spec"), SpecField) || !SpecField || !SpecField->IsValid())
+				return ErrorResult(TEXT("spec must be an object."), TEXT("spec_invalid"), 422);
+			const TSharedPtr<FJsonObject> Spec = *SpecField;
+			FString EnvelopeError;
+			if (!SpecValidateEnvelope(Spec, EnvelopeError))
+				return ErrorResult(EnvelopeError, TEXT("spec_invalid"), 422);
+			FString RequestId;
+			if (!Params->TryGetStringField(TEXT("requestId"), RequestId) || RequestId.IsEmpty())
+				return ErrorResult(TEXT("requestId is required."), TEXT("request_id_required"), 422);
+			bool ConfirmWrite = false;
+			if (!Params->TryGetBoolField(TEXT("confirmWrite"), ConfirmWrite) || !ConfirmWrite)
+				return ErrorResult(TEXT("confirmWrite must be true."), TEXT("confirm_write_required"), 409);
+			auto ExportParams = MakeShared<FJsonObject>();
+			ExportParams->SetStringField(TEXT("system"), SystemPath);
+			FMCPToolResult ExportResult = FTool_NiagaraSystemSpecExport().Execute(ExportParams);
+			if (!ExportResult.bSuccess || !ExportResult.Data) return ExportResult;
+			FString SuppliedStructure, CurrentStructure;
+			if (!SpecImportStructureDigest(Spec, SuppliedStructure) || !SpecImportStructureDigest(ExportResult.Data, CurrentStructure))
+				return ErrorResult(TEXT("spec structure is incomplete."), TEXT("spec_invalid"), 422);
+			if (SuppliedStructure != CurrentStructure)
+				return ErrorResult(TEXT("The live System structure changed since the spec was exported; re-export before importing."), TEXT("spec_structure_mismatch"), 409);
+			const TArray<TSharedPtr<FJsonValue>>* Parameters = nullptr;
+			if (!Spec->TryGetArrayField(TEXT("userParameters"), Parameters) || !Parameters)
+				return ErrorResult(TEXT("spec.userParameters must be an array."), TEXT("spec_invalid"), 422);
+			struct FImportParameterSnapshot
+			{
+				FNiagaraVariable Variable;
+				TSharedPtr<FJsonValue> Before;
+				bool bRestorable = false;
+			};
+			FNiagaraUserRedirectionParameterStore& Store = System->GetExposedParameters();
+			TArray<TPair<const FNiagaraVariableWithOffset*, TSharedPtr<FJsonValue>>> Pending;
+			TArray<FImportParameterSnapshot> Snapshots;
+			TSet<FString> SeenParameters;
+			for (const TSharedPtr<FJsonValue>& Value : *Parameters)
+			{
+				const TSharedPtr<FJsonObject> Parameter = Value.IsValid() && Value->Type == EJson::Object ? Value->AsObject() : nullptr;
+				if (!Parameter.IsValid())
+					return ErrorResult(TEXT("Each user parameter must be an object."), TEXT("spec_invalid"), 422);
+				if (!Parameter->HasField(TEXT("default"))) continue;
+				FString Name, TypeName;
+				if (!Parameter->TryGetStringField(TEXT("name"), Name) || !Parameter->TryGetStringField(TEXT("type"), TypeName))
+					return ErrorResult(TEXT("Each user parameter requires name and type."), TEXT("spec_invalid"), 422);
+				const FString CanonicalName = SpecImportShortName(Name).ToLower();
+				if (SeenParameters.Contains(CanonicalName))
+					return ErrorResult(FString::Printf(TEXT("User parameter '%s' appears more than once."), *Name), TEXT("spec_invalid"), 422);
+				SeenParameters.Add(CanonicalName);
+				const FNiagaraVariableWithOffset* Match = nullptr;
+				for (const FNiagaraVariableWithOffset& Candidate : Store.ReadParameterVariables())
+				{
+					if (SpecImportShortName(Candidate.GetName().ToString()).Equals(SpecImportShortName(Name), ESearchCase::IgnoreCase)
+						&& Candidate.GetType().GetName() == TypeName)
+					{
+						Match = &Candidate;
+						break;
+					}
+				}
+				if (!Match) return ErrorResult(FString::Printf(TEXT("User parameter '%s' was not found or changed type."), *Name), TEXT("parameter_not_found"), 409);
+				const TSharedPtr<FJsonValue> DefaultValue = Parameter->TryGetField(TEXT("default"));
+				if (!SpecImportDefaultShapeValid(Match->GetType(), DefaultValue))
+					return ErrorResult(FString::Printf(TEXT("User parameter '%s' has an unsupported or invalid default."), *Name), TEXT("parameter_default_invalid"), 422);
+				bool bBeforeSupported = false;
+				const TSharedPtr<FJsonValue> Before = SpecExportUserDefault(*Match, Store, bBeforeSupported);
+				Snapshots.Add({FNiagaraVariable(*Match), Before, bBeforeSupported});
+				Pending.Add(TPair<const FNiagaraVariableWithOffset*, TSharedPtr<FJsonValue>>(Match, DefaultValue));
+			}
+
+			TArray<FSpecModuleImportEdit> ModuleEdits;
+			TArray<FSpecRendererImportEdit> RendererEdits;
+			const TArray<TSharedPtr<FJsonValue>>* Emitters = nullptr;
+			if (!Spec->TryGetArrayField(TEXT("emitters"), Emitters) || !Emitters)
+				return ErrorResult(TEXT("spec.emitters must be an array."), TEXT("spec_invalid"), 422);
+			for (const TSharedPtr<FJsonValue>& EmitterValue : *Emitters)
+			{
+				const TSharedPtr<FJsonObject> EmitterSpec = EmitterValue.IsValid()
+					&& EmitterValue->Type == EJson::Object ? EmitterValue->AsObject() : nullptr;
+				if (!EmitterSpec.IsValid())
+					return ErrorResult(TEXT("Each emitter must be an object."), TEXT("spec_invalid"), 422);
+				FString EmitterName;
+			if (!EmitterSpec->TryGetStringField(TEXT("name"), EmitterName) || EmitterName.IsEmpty())
+					return ErrorResult(TEXT("Each emitter requires a name."), TEXT("spec_invalid"), 422);
+				FNiagaraEmitterHandle* Handle = nullptr;
+				for (const FNiagaraEmitterHandle& Candidate : System->GetEmitterHandles())
+				{
+					if (Candidate.GetName().ToString().Equals(EmitterName, ESearchCase::CaseSensitive))
+					{
+						Handle = const_cast<FNiagaraEmitterHandle*>(&Candidate);
+						break;
+					}
+				}
+				if (!Handle || !Handle->GetEmitterData())
+					return ErrorResult(FString::Printf(TEXT("Emitter '%s' was not found."), *EmitterName), TEXT("emitter_not_found"), 409);
+
+				const TArray<TSharedPtr<FJsonValue>>* Renderers = nullptr;
+				if (EmitterSpec->TryGetArrayField(TEXT("renderers"), Renderers) && Renderers)
+				{
+					const TArray<UNiagaraRendererProperties*>& LiveRenderers = Handle->GetEmitterData()->GetRenderers();
+					if (Renderers->Num() != LiveRenderers.Num())
+						return ErrorResult(FString::Printf(TEXT("Emitter '%s' renderer count changed."), *EmitterName), TEXT("spec_structure_mismatch"), 409);
+					for (int32 RendererIndex = 0; RendererIndex < Renderers->Num(); ++RendererIndex)
+					{
+						const TSharedPtr<FJsonObject> RendererSpec = (*Renderers)[RendererIndex].IsValid()
+							&& (*Renderers)[RendererIndex]->Type == EJson::Object ? (*Renderers)[RendererIndex]->AsObject() : nullptr;
+						UNiagaraRendererProperties* Renderer = LiveRenderers.IsValidIndex(RendererIndex) ? LiveRenderers[RendererIndex] : nullptr;
+						if (!RendererSpec.IsValid() || !Renderer)
+							return ErrorResult(TEXT("Each renderer entry must match a live renderer."), TEXT("renderer_not_found"), 409);
+						FString RendererClass;
+						if (!RendererSpec->TryGetStringField(TEXT("rendererClass"), RendererClass)
+							|| RendererClass != Renderer->GetClass()->GetPathName())
+							return ErrorResult(TEXT("Renderer class changed since export."), TEXT("spec_structure_mismatch"), 409);
+						FString RendererPath;
+						if (RendererSpec->TryGetStringField(TEXT("rendererPath"), RendererPath)
+							&& !RendererPath.IsEmpty()
+							&& RendererPath != Renderer->GetPathName())
+							return ErrorResult(TEXT("Renderer identity changed since export."), TEXT("spec_structure_mismatch"), 409);
+						const TSharedPtr<FJsonObject>* Properties = nullptr;
+						if (!RendererSpec->TryGetObjectField(TEXT("properties"), Properties) || !Properties || !Properties->IsValid())
+							continue;
+						for (const TPair<FString, TSharedPtr<FJsonValue>>& PropertyPair : (*Properties)->Values)
+						{
+							FString ValueText;
+							if (!PropertyPair.Value.IsValid() || !PropertyPair.Value->TryGetString(ValueText))
+								return ErrorResult(TEXT("Renderer properties must contain exported text values."), TEXT("renderer_property_invalid"), 422);
+							FProperty* Property = FindFProperty<FProperty>(Renderer->GetClass(), FName(*PropertyPair.Key));
+							if (!Property || !Property->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible)
+								|| Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient))
+								return ErrorResult(FString::Printf(TEXT("Renderer property '%s' is not editable."), *PropertyPair.Key), TEXT("renderer_property_unsupported"), 422);
+							ValueText = SpecCanonicalRendererPropertyText(Property->GetFName(), MoveTemp(ValueText));
+							FString Before;
+							Property->ExportTextItem_Direct(Before, Property->ContainerPtrToValuePtr<void>(Renderer), nullptr, nullptr, PPF_None);
+							Before = SpecCanonicalRendererPropertyText(Property->GetFName(), MoveTemp(Before));
+							if (Before == ValueText)
+								continue;
+							RendererEdits.Add({Renderer, PropertyPair.Key, ValueText, Before});
+						}
+					}
+				}
+
+				const TArray<TSharedPtr<FJsonValue>>* Stacks = nullptr;
+				if (!EmitterSpec->TryGetArrayField(TEXT("stacks"), Stacks) || !Stacks)
+					continue;
+				for (const TSharedPtr<FJsonValue>& StackValue : *Stacks)
+				{
+					const TSharedPtr<FJsonObject> StackSpec = StackValue.IsValid()
+						&& StackValue->Type == EJson::Object ? StackValue->AsObject() : nullptr;
+					if (!StackSpec.IsValid()) return ErrorResult(TEXT("Each stack must be an object."), TEXT("spec_invalid"), 422);
+					FString StackName;
+					if (!StackSpec->TryGetStringField(TEXT("stackName"), StackName) || StackName.IsEmpty())
+						return ErrorResult(TEXT("Each stack requires stackName."), TEXT("spec_invalid"), 422);
+					UNiagaraScript* StackScript = nullptr;
+					UNiagaraNodeOutput* StackOutput = nullptr;
+					TArray<UNiagaraScript*> Scripts;
+					Handle->GetEmitterData()->GetScripts(Scripts, false, false);
+					for (UNiagaraScript* Candidate : Scripts)
+					{
+						if (!Candidate || UsageName(Candidate->GetUsage()) != StackName) continue;
+						UNiagaraScriptSource* Source = Cast<UNiagaraScriptSource>(Candidate->GetLatestSource());
+						UNiagaraNodeOutput* CandidateOutput = Source && Source->NodeGraph ? FindOutputForScript(Source->NodeGraph, Candidate) : nullptr;
+						if (CandidateOutput) { StackScript = Candidate; StackOutput = CandidateOutput; break; }
+					}
+					if (!StackScript || !StackOutput)
+						return ErrorResult(FString::Printf(TEXT("Stack '%s' was not found."), *StackName), TEXT("stack_not_found"), 409);
+					const TArray<TSharedPtr<FJsonValue>>* Modules = nullptr;
+					if (!StackSpec->TryGetArrayField(TEXT("modules"), Modules) || !Modules) continue;
+					for (const TSharedPtr<FJsonValue>& ModuleValue : *Modules)
+					{
+						const TSharedPtr<FJsonObject> ModuleSpec = ModuleValue.IsValid()
+							&& ModuleValue->Type == EJson::Object ? ModuleValue->AsObject() : nullptr;
+						if (!ModuleSpec.IsValid()) return ErrorResult(TEXT("Each module must be an object."), TEXT("spec_invalid"), 422);
+						FString ModuleScriptPath;
+						if (!ModuleSpec->TryGetStringField(TEXT("scriptPath"), ModuleScriptPath) || ModuleScriptPath.IsEmpty())
+							return ErrorResult(TEXT("Each module requires scriptPath."), TEXT("spec_invalid"), 422);
+						FString ModuleNodePath;
+						FString ModuleNodeGuid;
+						ModuleSpec->TryGetStringField(TEXT("nodePath"), ModuleNodePath);
+						ModuleSpec->TryGetStringField(TEXT("nodeGuid"), ModuleNodeGuid);
+						FStackModuleRequest ModuleRequest;
+						ModuleRequest.SystemPath = SystemPath;
+						ModuleRequest.EmitterSelector = EmitterName;
+						ModuleRequest.OutputNodePath = StackOutput->GetPathName();
+						ModuleRequest.ModuleSelector = !ModuleNodeGuid.IsEmpty()
+							? ModuleNodeGuid
+							: (!ModuleNodePath.IsEmpty() ? ModuleNodePath : ModuleScriptPath);
+						FModuleInputResolve ModuleResolve;
+						const TArray<TSharedPtr<FJsonValue>>* Inputs = nullptr;
+						if (!ModuleSpec->TryGetArrayField(TEXT("inputs"), Inputs) || !Inputs) continue;
+						for (const TSharedPtr<FJsonValue>& InputValue : *Inputs)
+						{
+							const TSharedPtr<FJsonObject> InputSpec = InputValue.IsValid()
+								&& InputValue->Type == EJson::Object ? InputValue->AsObject() : nullptr;
+							if (!InputSpec.IsValid()) return ErrorResult(TEXT("Each module input must be an object."), TEXT("spec_invalid"), 422);
+							FString InputName, TypeName;
+							if (!InputSpec->TryGetStringField(TEXT("name"), InputName) || !InputSpec->TryGetStringField(TEXT("type"), TypeName))
+								return ErrorResult(TEXT("Each module input requires name and type."), TEXT("spec_invalid"), 422);
+							const bool bHasValue = InputSpec->HasField(TEXT("value"));
+							FString BindingName, DynamicInputPath;
+							const bool bHasBinding = InputSpec->TryGetStringField(TEXT("binding"), BindingName);
+							const bool bHasDynamic = InputSpec->TryGetStringField(TEXT("dynamicInput"), DynamicInputPath);
+							const int32 SourceCount = (bHasValue ? 1 : 0) + (bHasBinding ? 1 : 0) + (bHasDynamic ? 1 : 0);
+							if (SourceCount == 0) continue;
+							if (SourceCount != 1) return ErrorResult(TEXT("A module input may specify only one of value, binding, or dynamicInput."), TEXT("input_state_invalid"), 422);
+							FModuleInputRequest InputRequest;
+							InputRequest.Stack = ModuleRequest;
+							InputRequest.Input = InputName;
+							FString InputErrorCode;
+							FString InputError;
+							if (!ResolveModuleInput(InputRequest, ModuleResolve, InputErrorCode, InputError))
+								return ErrorResult(InputError, InputErrorCode.IsEmpty() ? TEXT("input_not_found") : InputErrorCode, 409);
+							if (!ModuleNodeGuid.IsEmpty()
+								&& (!ModuleResolve.Module.Selected
+									|| ModuleResolve.Module.Selected->NodeGuid.ToString(EGuidFormats::DigitsWithHyphensLower) != ModuleNodeGuid))
+								return ErrorResult(TEXT("Module node identity changed since export."), TEXT("spec_structure_mismatch"), 409);
+							if (ModuleResolve.TypeName != TypeName)
+								return ErrorResult(FString::Printf(TEXT("Input '%s' changed type since export."), *InputName), TEXT("input_type_changed"), 409);
+							if (ModuleResolve.Module.bBlocked)
+								return ErrorResult(
+									TEXT("System spec import cannot edit a shared or read-only Niagara graph."),
+									TEXT("plan_blocked"), 409);
+							FSpecModuleImportEdit Edit;
+							Edit.Resolve = ModuleResolve;
+							Edit.Before = SpecExportBuildInput(ModuleResolve.Module.Selected, FNiagaraVariable(ModuleResolve.InputType, ModuleResolve.MatchedFullName), System);
+							Edit.bHadOverrideNodeBefore = FindStackOverrideNode(ModuleResolve.Module.Selected) != nullptr;
+							Edit.Mode = bHasValue ? TEXT("value") : (bHasBinding ? TEXT("binding") : TEXT("dynamicInput"));
+							Edit.BindingName = BindingName;
+							if (bHasValue && !SpecImportValueToPinString(ModuleResolve.InputType, InputSpec->TryGetField(TEXT("value")), Edit.ValueString))
+								return ErrorResult(FString::Printf(TEXT("Input '%s' has an invalid inline value."), *InputName), TEXT("value_invalid"), 422);
+			if (bHasValue)
+				Edit.DesiredValue = SpecImportCloneValue(InputSpec->TryGetField(TEXT("value")));
+							if (bHasBinding)
+							{
+								TSet<FNiagaraVariableBase> Known;
+								TArray<FNiagaraVariableBase> Ordered;
+								BuildKnownBindingParameters(System, Known, Ordered);
+								FString LinkedName, ErrorCode, Error;
+								if (!ResolveLinkedParameter(Ordered, BindingName, LinkedName, ErrorCode, Error)) return ErrorResult(Error, ErrorCode, 404);
+								Edit.BindingName = LinkedName;
+							}
+							if (bHasDynamic)
+							{
+								UNiagaraScript* DynamicScript = LoadObject<UNiagaraScript>(nullptr, *NormalizeObjectPath(DynamicInputPath));
+								if (!DynamicScript || DynamicScript->GetUsage() != ENiagaraScriptUsage::DynamicInput)
+									return ErrorResult(TEXT("dynamicInput is not a Dynamic Input script."), TEXT("dynamic_input_not_found"), 404);
+								Edit.DynamicInputScript = DynamicScript;
+				const TSharedPtr<FJsonObject>* DynamicTree = nullptr;
+				if (InputSpec->TryGetObjectField(TEXT("dynamicInputTree"), DynamicTree)
+					&& DynamicTree && DynamicTree->IsValid())
+				{
+					Edit.DynamicInputTree = SpecImportCloneObject(*DynamicTree);
+				}
+						}
+							ModuleEdits.Add(MoveTemp(Edit));
+					}
+				}
+			}
+			}
+
+			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Import Niagara System Spec")));
+			System->Modify();
+			FNiagaraParameterStore::FScopedSuppressOnChanged Suppress(Store);
+			int32 Applied = 0;
+			int32 AppliedModuleEdits = 0;
+			int32 AppliedRendererEdits = 0;
+			bool bApplyFailed = false;
+			for (const TPair<const FNiagaraVariableWithOffset*, TSharedPtr<FJsonValue>>& Item : Pending)
+			{
+				if (!Item.Key || !SpecImportSetDefault(Store, *Item.Key, Item.Value))
+				{
+					bApplyFailed = true;
+					break;
+				}
+				++Applied;
+			}
+			bool bGraphChanged = false;
+			for (FSpecModuleImportEdit& Edit : ModuleEdits)
+			{
+				Edit.bAttempted = true;
+				UNiagaraSystem* EditSystem = Edit.Resolve.Module.System.Get();
+				UNiagaraGraph* EditGraph = Edit.Resolve.Module.Target.Graph;
+				UNiagaraNodeFunctionCall* EditNode = Edit.Resolve.Module.Selected;
+				if (!EditSystem || !EditGraph || !EditNode)
+				{
+					bApplyFailed = true;
+					break;
+				}
+				auto Desired = MakeShared<FJsonObject>();
+				if (Edit.Mode == TEXT("value"))
+					Desired->SetField(TEXT("value"), Edit.DesiredValue);
+				else if (Edit.Mode == TEXT("binding"))
+					Desired->SetStringField(TEXT("binding"), Edit.BindingName);
+				else if (UNiagaraScript* DynamicScript = Edit.DynamicInputScript.Get())
+				{
+					Desired->SetStringField(TEXT("dynamicInput"), DynamicScript->GetPathName());
+					if (Edit.DynamicInputTree.IsValid())
+						Desired->SetObjectField(TEXT("dynamicInputTree"), Edit.DynamicInputTree);
+				}
+				else
+				{
+					bApplyFailed = true;
+					break;
+				}
+				const FNiagaraVariable InputVariable(Edit.Resolve.InputType, Edit.Resolve.MatchedFullName);
+				if (!SpecImportSetInputState(
+					EditSystem, EditGraph, EditNode, InputVariable, Desired,
+					Edit.bHadOverrideNodeBefore))
+				{
+					bApplyFailed = true;
+					break;
+				}
+				EditGraph->NotifyGraphChanged();
+				bGraphChanged = true;
+				++AppliedModuleEdits;
+			}
+			for (int32 EditIndex = 0; !bApplyFailed && EditIndex < RendererEdits.Num(); ++EditIndex)
+			{
+				FSpecRendererImportEdit& Edit = RendererEdits[EditIndex];
+				Edit.bAttempted = true;
+				UNiagaraRendererProperties* Renderer = Edit.Renderer.Get();
+				FProperty* Property = Renderer ? FindFProperty<FProperty>(Renderer->GetClass(), FName(*Edit.PropertyName)) : nullptr;
+				if (!Renderer || !Property)
+				{
+					bApplyFailed = true;
+					break;
+				}
+				Renderer->Modify();
+				void* Address = Property->ContainerPtrToValuePtr<void>(Renderer);
+				const TCHAR* ImportEnd = Property->ImportText_Direct(*Edit.NewValue, Address, Renderer, PPF_None);
+				if (!ImportEnd)
+				{
+					bApplyFailed = true;
+					break;
+				}
+				while (*ImportEnd && FChar::IsWhitespace(*ImportEnd)) ++ImportEnd;
+				if (*ImportEnd != TEXT('\0')) bApplyFailed = true;
+				if (!bApplyFailed)
+					++AppliedRendererEdits;
+				bGraphChanged = true;
+			}
+			auto RestoreImportChanges = [&]()
+			{
+				bool bRestored = true;
+				for (int32 Index = ModuleEdits.Num() - 1; Index >= 0; --Index)
+				{
+					FSpecModuleImportEdit& Edit = ModuleEdits[Index];
+					if (!Edit.bAttempted)
+						continue;
+					UNiagaraSystem* EditSystem = Edit.Resolve.Module.System.Get();
+					UNiagaraGraph* EditGraph = Edit.Resolve.Module.Target.Graph;
+					UNiagaraNodeFunctionCall* EditNode = Edit.Resolve.Module.Selected;
+					if (!EditSystem || !EditGraph || !EditNode
+						|| !SpecImportSetInputState(
+							EditSystem, EditGraph, EditNode,
+							FNiagaraVariable(Edit.Resolve.InputType, Edit.Resolve.MatchedFullName),
+							Edit.Before, Edit.bHadOverrideNodeBefore))
+					{
+						bRestored = false;
+					}
+				}
+				for (int32 Index = RendererEdits.Num() - 1; Index >= 0; --Index)
+				{
+					FSpecRendererImportEdit& Edit = RendererEdits[Index];
+					if (!Edit.bAttempted)
+						continue;
+					UNiagaraRendererProperties* Renderer = Edit.Renderer.Get();
+					FProperty* Property = Renderer ? FindFProperty<FProperty>(Renderer->GetClass(), FName(*Edit.PropertyName)) : nullptr;
+					if (!Renderer || !Property)
+					{
+						bRestored = false;
+						continue;
+					}
+					void* Address = Property->ContainerPtrToValuePtr<void>(Renderer);
+					const TCHAR* RestoreEnd = Property->ImportText_Direct(*Edit.Before, Address, Renderer, PPF_None);
+					if (!RestoreEnd)
+						bRestored = false;
+					else
+					{
+						while (*RestoreEnd && FChar::IsWhitespace(*RestoreEnd)) ++RestoreEnd;
+						if (*RestoreEnd != TEXT('\0')) bRestored = false;
+					}
+				}
+				for (const FImportParameterSnapshot& Snapshot : Snapshots)
+				{
+					bRestored &= Snapshot.bRestorable
+						&& SpecImportSetDefault(Store, Snapshot.Variable, Snapshot.Before);
+				}
+				return bRestored;
+			};
+			if (bApplyFailed)
+			{
+				bool bRestored = RestoreImportChanges();
+				if (bRestored)
+				{
+					bRestored = CompileSystem(System).bCompiled;
+				}
+				Transaction.Cancel();
+				return ErrorResult(
+					TEXT("Spec import failed while applying a default; all previously changed defaults were restored."),
+					bRestored ? TEXT("parameter_default_invalid") : TEXT("restore_verification_failed"),
+					500);
+			}
+
+			FCompileSummary ImportCompileSummary;
+			if (bGraphChanged)
+			{
+				ImportCompileSummary = CompileSystem(System);
+				if (!ImportCompileSummary.bCompiled)
+				{
+					bool bRestored = RestoreImportChanges();
+					if (bRestored)
+						bRestored = CompileSystem(System).bCompiled;
+					Transaction.Cancel();
+					return ErrorResult(
+						FString::Printf(TEXT("Spec import compilation failed (status=%s); authored changes were restored."), *ImportCompileSummary.Status),
+						bRestored ? TEXT("compile_failed") : TEXT("restore_verification_failed"), 500);
+				}
+			}
+			if (Applied > 0 || bGraphChanged) System->MarkPackageDirty();
+			// Re-export the authored asset and compare the canonical digest. This is
+			// the readback proof for both no-op and changed imports; a transport-level
+			// success flag alone is insufficient.
+			FMCPToolResult ReadbackExport = FTool_NiagaraSystemSpecExport().Execute(ExportParams);
+			FString SuppliedDigest;
+			FString ReadbackDigest;
+			const bool bReadback = ReadbackExport.bSuccess && ReadbackExport.Data
+				&& SpecContentDigest(Spec, SuppliedDigest)
+				&& ReadbackExport.Data->TryGetStringField(TEXT("specDigest"), ReadbackDigest)
+				&& SuppliedDigest == ReadbackDigest;
+			if (!bReadback)
+			{
+				bool bRestored = RestoreImportChanges();
+				if (bRestored)
+					bRestored = CompileSystem(System).bCompiled;
+				Transaction.Cancel();
+				return ErrorResult(
+					FString::Printf(TEXT("Spec import read-back digest did not match the supplied spec; authored changes were restored (supplied=%s readback=%s)."), *SuppliedDigest, *ReadbackDigest),
+					bRestored ? TEXT("readback_verification_failed") : TEXT("restore_verification_failed"),
+					500);
+			}
+			auto Json = MakeShared<FJsonObject>();
+			Json->SetStringField(TEXT("schema"), TEXT("ue.niagara.system-spec-import.v1"));
+			Json->SetStringField(TEXT("system"), System->GetPathName());
+			Json->SetStringField(TEXT("requestId"), RequestId);
+			Json->SetNumberField(TEXT("appliedUserParameters"), Applied);
+			Json->SetNumberField(TEXT("appliedModuleInputs"), AppliedModuleEdits);
+			Json->SetNumberField(TEXT("appliedRendererProperties"), AppliedRendererEdits);
+			Json->SetBoolField(TEXT("changed"), Applied > 0 || bGraphChanged);
+			Json->SetBoolField(TEXT("saved"), false);
+			Json->SetBoolField(TEXT("readbackVerified"), bReadback);
+			Json->SetBoolField(TEXT("roundTripVerified"), bReadback);
+			Json->SetStringField(TEXT("importMode"), TEXT("userParameterDefaultsAndAuthoredSystemSpec"));
+			Json->SetBoolField(TEXT("compiled"), bGraphChanged ? ImportCompileSummary.bCompiled : false);
 			return FMCPToolResult::Ok(Json);
 		}
 	};
@@ -6365,6 +8315,8 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_NiagaraModuleInputDISet>());
 		Registry.Register(MakeShared<FTool_NiagaraEmitterModulesClear>());
 		Registry.Register(MakeShared<FTool_NiagaraSystemSpecExport>());
+		Registry.Register(MakeShared<FTool_NiagaraSystemSpecImport>());
+		Registry.Register(MakeShared<FTool_NiagaraSystemSpecRoundTrip>());
 	}
 
 	void RegisterNiagaraDynamicInputTools(FMCPToolRegistry& Registry)
@@ -6374,6 +8326,8 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FTool_NiagaraModuleDynamicInputsTree>());
 		Registry.Register(MakeShared<FTool_NiagaraDynamicInputInputsGet>());
 		Registry.Register(MakeShared<FTool_NiagaraModuleDynamicInputValueGet>());
+		Registry.Register(MakeShared<FTool_NiagaraDynamicInputSearch>());
+		Registry.Register(MakeShared<FTool_NiagaraModuleDynamicInputRemove>());
 		Registry.Register(MakeShared<FTool_NiagaraDynamicInputAddPlan>());
 		Registry.Register(MakeShared<FTool_NiagaraDynamicInputAddApply>());
 		Registry.Register(MakeShared<FTool_NiagaraDynamicInputAddRollback>());
@@ -6444,6 +8398,10 @@ namespace UEAIIntegrationTools
 			TEXT("content.niagara.emitter.modules.clear")));
 		Registry.Register(MakeShared<FUnavailableNiagaraModuleTool>(
 			TEXT("content.niagara.system.spec.export")));
+		Registry.Register(MakeShared<FUnavailableNiagaraModuleTool>(
+			TEXT("content.niagara.system.spec.import")));
+		Registry.Register(MakeShared<FUnavailableNiagaraModuleTool>(
+			TEXT("content.niagara.system.spec.round_trip")));
 	}
 
 	void RegisterNiagaraDynamicInputTools(FMCPToolRegistry& Registry)
@@ -6453,6 +8411,8 @@ namespace UEAIIntegrationTools
 			     TEXT("content.niagara.graph.module.dynamic_inputs.tree"),
 			     TEXT("content.niagara.graph.dynamic_input.inputs.get"),
 			     TEXT("content.niagara.graph.module.dynamic_input.value.get"),
+			     TEXT("content.niagara.graph.dynamic_input.search"),
+			     TEXT("content.niagara.graph.module.dynamic_input.remove"),
 			     TEXT("content.niagara.graph.module.dynamic_input.add.plan"),
 			     TEXT("content.niagara.graph.module.dynamic_input.add.apply"),
 			     TEXT("content.niagara.graph.module.dynamic_input.add.rollback")

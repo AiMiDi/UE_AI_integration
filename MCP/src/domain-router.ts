@@ -8,6 +8,10 @@ import {
   formatErrorResponse,
   type MCPResponse,
 } from "./helpers.js";
+import {
+  attachCapabilityVerification,
+  verificationErrorDetails,
+} from "./capability-verification.js";
 import { UEApiError, type UEExecuteData } from "./ue-bridge.js";
 
 export const DOMAIN_TOOL_NAMES: Record<CapabilityDomain, string> = {
@@ -40,6 +44,16 @@ export interface CapabilityExecutor {
     requestId?: string,
     context?: CapabilityExecutionContext,
   ): Promise<UEExecuteData>;
+}
+
+interface VerificationAwareExecutor extends CapabilityExecutor {
+  readonly verificationAware: true;
+}
+
+function isVerificationAwareExecutor(
+  executor: CapabilityExecutor,
+): executor is VerificationAwareExecutor {
+  return (executor as Partial<VerificationAwareExecutor>).verificationAware === true;
 }
 
 export interface CapabilityExecutionContext {
@@ -98,6 +112,9 @@ function targetBoundBackend(
 }
 
 export class BackendRoutingExecutor implements CapabilityExecutor {
+  /** Native/local routes return the shared capability verification state. */
+  readonly verificationAware = true;
+
   constructor(
     private readonly catalog: CapabilityCatalog,
     private readonly editor: CapabilityExecutor,
@@ -393,16 +410,66 @@ export async function runDomainOperation(
   requestId?: string,
   context?: CapabilityExecutionContext,
 ): Promise<MCPResponse> {
+  let capability: CapabilityDescriptor | undefined;
+  let handlerReturned = false;
   try {
-    const capability = validateDomainOperation(catalog, domain, operation);
+    capability = validateDomainOperation(catalog, domain, operation);
     const data = await executor.execute(
       capability.id,
       params,
       requestId,
       context,
     );
-    return formatCapabilityResponse(capability, data);
+    handlerReturned = true;
+    const responseData = isVerificationAwareExecutor(executor)
+      ? attachCapabilityVerification(capability.id, data, {
+          localDeclared: true,
+          handlerRegistered: true,
+          liveAvailable: true,
+          executed: true,
+        })
+      : data;
+    return formatCapabilityResponse(capability, responseData);
   } catch (error) {
-    return formatErrorResponse(error);
+    const capabilityId = capability?.id ?? operation;
+    if (!isVerificationAwareExecutor(executor)) {
+      return formatErrorResponse(error);
+    }
+    if (error instanceof UEApiError) {
+      return formatErrorResponse(
+        new UEApiError(
+          {
+            code: error.code,
+            message: error.message,
+            details: verificationErrorDetails(
+              capabilityId,
+              error.details,
+              {
+                localDeclared: capability !== undefined,
+                // A transport error does not prove that a UE handler was
+                // registered. Preserve any native proof in error.details;
+                // otherwise report the conservative false state.
+                handlerRegistered: handlerReturned,
+                liveAvailable: handlerReturned,
+                executed: handlerReturned,
+              },
+            ),
+          },
+          error.status,
+        ),
+      );
+    }
+    return formatErrorResponse(
+      new UEApiError({
+        code: "mcp_error",
+        message: error instanceof Error ? error.message : String(error),
+        details: verificationErrorDetails(capabilityId, undefined, {
+          localDeclared: capability !== undefined,
+          handlerRegistered: handlerReturned,
+          liveAvailable: handlerReturned,
+          executed: handlerReturned,
+        }),
+      }),
+    );
   }
 }

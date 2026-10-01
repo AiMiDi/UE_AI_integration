@@ -318,15 +318,23 @@ void FMCPExecutor::AnnotateVerification(
 {
 	const TSharedPtr<FJsonObject>* Descriptor =
 		Registry.FindCapabilityDescriptor(Context.Capability);
-	const bool bLocalDeclared = Descriptor && Descriptor->IsValid();
-	const bool bHandlerRegistered =
-		Registry.FindTool(Context.Capability) != nullptr;
+	// Workflow actions are a transport-level capability family rather than
+	// manifest entries.  They still have a registered native handler and must
+	// expose the same verification contract when reached through the HTTP
+	// workflow route.
+	const bool bWorkflowAction = Context.Capability.StartsWith(TEXT("workflow."));
+	const bool bLocalDeclared = bWorkflowAction || (Descriptor && Descriptor->IsValid());
+	const bool bHandlerRegistered = bWorkflowAction
+		? true
+		: Registry.FindTool(Context.Capability) != nullptr;
 	const TArray<FString> AvailabilityReasons =
-		bLocalDeclared
+		(!bWorkflowAction && bLocalDeclared)
 			? UEAIIntegration::Infrastructure::GetCapabilityUnavailableReasons(
 				*Descriptor)
 			: TArray<FString>();
-	const bool bLiveAvailable = bLocalDeclared
+	const bool bLiveAvailable = bWorkflowAction
+		? Registry.IsReady()
+		: bLocalDeclared
 		&& bHandlerRegistered
 		&& Registry.IsReady()
 		&& AvailabilityReasons.IsEmpty();

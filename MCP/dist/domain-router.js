@@ -1,4 +1,5 @@
 import { formatCapabilityResponse, formatErrorResponse, } from "./helpers.js";
+import { attachCapabilityVerification, verificationErrorDetails, } from "./capability-verification.js";
 import { UEApiError } from "./ue-bridge.js";
 export const DOMAIN_TOOL_NAMES = {
     blueprint: "ue_blueprint",
@@ -16,6 +17,9 @@ export const DOMAIN_DESCRIPTIONS = {
     ai: "Execute Behavior Tree, Blackboard, and related AI authoring capabilities.",
     production: "Execute Sequencer, build, packaging, diagnostics, and production workflow capabilities.",
 };
+function isVerificationAwareExecutor(executor) {
+    return executor.verificationAware === true;
+}
 const LOCAL_TRACE_ID_PREFIXES = [
     "trace-local-",
     "trace-analysis-local-",
@@ -66,6 +70,8 @@ export class BackendRoutingExecutor {
     localAsset;
     localSal;
     developmentRuntime;
+    /** Native/local routes return the shared capability verification state. */
+    verificationAware = true;
     constructor(catalog, editor, localTrace, localRecipe, localProject, localAsset, localSal, developmentRuntime) {
         this.catalog = catalog;
         this.editor = editor;
@@ -307,13 +313,52 @@ function suggestCapabilityIds(catalog, domain, operation) {
     return scored.slice(0, 3).map(({ id }) => id);
 }
 export async function runDomainOperation(catalog, executor, domain, operation, params = {}, requestId, context) {
+    let capability;
+    let handlerReturned = false;
     try {
-        const capability = validateDomainOperation(catalog, domain, operation);
+        capability = validateDomainOperation(catalog, domain, operation);
         const data = await executor.execute(capability.id, params, requestId, context);
-        return formatCapabilityResponse(capability, data);
+        handlerReturned = true;
+        const responseData = isVerificationAwareExecutor(executor)
+            ? attachCapabilityVerification(capability.id, data, {
+                localDeclared: true,
+                handlerRegistered: true,
+                liveAvailable: true,
+                executed: true,
+            })
+            : data;
+        return formatCapabilityResponse(capability, responseData);
     }
     catch (error) {
-        return formatErrorResponse(error);
+        const capabilityId = capability?.id ?? operation;
+        if (!isVerificationAwareExecutor(executor)) {
+            return formatErrorResponse(error);
+        }
+        if (error instanceof UEApiError) {
+            return formatErrorResponse(new UEApiError({
+                code: error.code,
+                message: error.message,
+                details: verificationErrorDetails(capabilityId, error.details, {
+                    localDeclared: capability !== undefined,
+                    // A transport error does not prove that a UE handler was
+                    // registered. Preserve any native proof in error.details;
+                    // otherwise report the conservative false state.
+                    handlerRegistered: handlerReturned,
+                    liveAvailable: handlerReturned,
+                    executed: handlerReturned,
+                }),
+            }, error.status));
+        }
+        return formatErrorResponse(new UEApiError({
+            code: "mcp_error",
+            message: error instanceof Error ? error.message : String(error),
+            details: verificationErrorDetails(capabilityId, undefined, {
+                localDeclared: capability !== undefined,
+                handlerRegistered: handlerReturned,
+                liveAvailable: handlerReturned,
+                executed: handlerReturned,
+            }),
+        }));
     }
 }
 //# sourceMappingURL=domain-router.js.map

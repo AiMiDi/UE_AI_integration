@@ -7,6 +7,7 @@
 #include "Infrastructure/MaterialFunctionMutation.h"
 #include "Infrastructure/MaterialCustomEditing.h"
 #include "Infrastructure/MaterialFunctionDependencies.h"
+#include "Infrastructure/MaterialGraphSnapshot.h"
 #include "MaterialEditingLibrary.h"
 #include "Infrastructure/DeferredGraphMutation.h"
 #include "Infrastructure/MCPToolHelpers.h"
@@ -113,6 +114,415 @@ static void CancelMaterialMutation(
 	{
 		Asset->PostEditChange();
 	}
+}
+
+// Authored material graph writes must be fenced by an immutable graph boundary.
+// Preview writes are routed before reaching these helpers and retain their
+// editor-context contract.  Keeping this check in the mutation adapter closes
+// the older direct entry points that otherwise bypass graph.execute_plan.
+static FMCPToolResult RequireMaterialMutationBoundary(
+	UObject* Asset,
+	const TSharedPtr<FJsonObject>& Params,
+	UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& OutValidation)
+{
+	const TSharedPtr<FJsonObject>* WorkflowContext = nullptr;
+	bool bApprovedPlan = false;
+	if (Params->TryGetObjectField(TEXT("__ueWorkflow"), WorkflowContext)
+		&& WorkflowContext && (*WorkflowContext).IsValid())
+	{
+		(*WorkflowContext)->TryGetBoolField(TEXT("approvedPlan"), bApprovedPlan);
+	}
+	if (!Params->HasField(TEXT("boundaryId")))
+	{
+		if (bApprovedPlan)
+		{
+			return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+		}
+		return FMCPToolResult::Error(
+			TEXT("Authored material graph writes require boundaryId, snapshotId and expectedProjectionHash."),
+			TEXT("material_boundary_required_for_mutation"),
+			409);
+	}
+	return UEAIIntegration::MaterialQuery::ValidateBoundaryWrite(Asset, Params, OutValidation);
+}
+
+static FString MaterialMutationNodeId(const UEdGraphNode* Node)
+{
+	if (!Node)
+	{
+		return FString();
+	}
+	if (Node->IsA<UMaterialGraphNode_Root>())
+	{
+		return TEXT("root");
+	}
+	if (const UMaterialGraphNode* MaterialNode = Cast<UMaterialGraphNode>(Node))
+	{
+		if (MaterialNode->MaterialExpression)
+		{
+			return MCPMaterialInfrastructure::ExpressionNodeId(MaterialNode->MaterialExpression);
+		}
+	}
+	return Node->NodeGuid.ToString();
+}
+
+static FMCPToolResult RequireMaterialBoundaryNode(
+	const UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& Validation,
+	const UEdGraphNode* Node,
+	const TCHAR* Role,
+	bool bRequireWritable)
+{
+	if (!Validation.Boundary.IsValid())
+	{
+		return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+	}
+	const FString NodeId = MaterialMutationNodeId(Node);
+	if (NodeId.IsEmpty())
+	{
+		return FMCPToolResult::Error(
+			FString::Printf(TEXT("The %s graph node has no stable material identity."), Role),
+			TEXT("material_boundary_node_identity_missing"),
+			409);
+	}
+	if (!Validation.Boundary->SelectedNodeIds.Contains(NodeId))
+	{
+		return FMCPToolResult::Error(
+			FString::Printf(TEXT("The %s node '%s' is outside the selected material boundary."), Role, *NodeId),
+			TEXT("material_boundary_node_outside_selection"),
+			409);
+	}
+	if (bRequireWritable && !Validation.Boundary->WritableNodeIds.Contains(NodeId))
+	{
+		return FMCPToolResult::Error(
+			FString::Printf(TEXT("The %s node '%s' is not writable in the selected material boundary."), Role, *NodeId),
+			TEXT("material_boundary_node_not_writable"),
+			409);
+	}
+	return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+}
+
+struct FMaterialGraphLinkSnapshot
+{
+	UEdGraphPin* A = nullptr;
+	UEdGraphPin* B = nullptr;
+};
+
+static void CaptureMaterialGraphLinks(
+	const UEdGraph* Graph,
+	TArray<FMaterialGraphLinkSnapshot>& OutLinks)
+{
+	OutLinks.Reset();
+	if (!Graph)
+	{
+		return;
+	}
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		if (!Node)
+		{
+			continue;
+		}
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (!Pin)
+			{
+				continue;
+			}
+			for (UEdGraphPin* Linked : Pin->LinkedTo)
+			{
+				if (!Linked || reinterpret_cast<UPTRINT>(Pin) >= reinterpret_cast<UPTRINT>(Linked))
+				{
+					continue;
+				}
+				FMaterialGraphLinkSnapshot& Link = OutLinks.AddDefaulted_GetRef();
+				Link.A = Pin;
+				Link.B = Linked;
+			}
+		}
+	}
+}
+
+static bool RestoreMaterialGraphLinks(
+	UEdGraph* Graph,
+	const TArray<FMaterialGraphLinkSnapshot>& Links)
+{
+	if (!Graph)
+	{
+		return false;
+	}
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		if (!Node)
+		{
+			continue;
+		}
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (Pin)
+			{
+				Pin->BreakAllPinLinks();
+			}
+		}
+	}
+	for (const FMaterialGraphLinkSnapshot& Link : Links)
+	{
+		if (!Link.A || !Link.B || Link.A->LinkedTo.Contains(Link.B))
+		{
+			continue;
+		}
+		Link.A->MakeLinkTo(Link.B);
+	}
+	return true;
+}
+
+struct FMaterialExpressionDeleteSnapshot
+{
+	UMaterialExpression* Expression = nullptr;
+	UMaterialGraphNode* GraphNode = nullptr;
+	TArray<UMaterialExpression*> ExpressionOrder;
+	TMap<UMaterialExpression*, TArray<FExpressionInput>> Inputs;
+	TArray<FExpressionInput> MaterialInputs;
+	TArray<FMaterialGraphLinkSnapshot> GraphLinks;
+};
+
+static FMaterialExpressionDeleteSnapshot CaptureMaterialExpressionDeleteSnapshot(
+	UMaterial* Material,
+	UMaterialFunction* Function,
+	UMaterialExpression* Expression,
+	UMaterialGraphNode* GraphNode,
+	UEdGraph* Graph)
+{
+	FMaterialExpressionDeleteSnapshot Snapshot;
+	Snapshot.Expression = Expression;
+	Snapshot.GraphNode = GraphNode;
+	const auto Expressions = Material ? Material->GetExpressions() : Function->GetExpressions();
+	Snapshot.ExpressionOrder.Reserve(Expressions.Num());
+	for (UMaterialExpression* Current : Expressions)
+	{
+		if (!Current)
+		{
+			continue;
+		}
+		Snapshot.ExpressionOrder.Add(Current);
+		TArray<FExpressionInput>& SavedInputs = Snapshot.Inputs.Add(Current);
+		for (FExpressionInput* Input : Current->GetInputsView())
+		{
+			SavedInputs.Add(Input ? *Input : FExpressionInput());
+		}
+	}
+	if (Material)
+	{
+		Snapshot.MaterialInputs.Reserve(MP_MAX);
+		for (int32 InputIndex = 0; InputIndex < MP_MAX; ++InputIndex)
+		{
+			const FExpressionInput* Input = Material->GetExpressionInputForProperty(
+				static_cast<EMaterialProperty>(InputIndex));
+			Snapshot.MaterialInputs.Add(Input ? *Input : FExpressionInput());
+		}
+	}
+	CaptureMaterialGraphLinks(Graph, Snapshot.GraphLinks);
+	return Snapshot;
+}
+
+static bool RestoreMaterialExpressionDeleteSnapshot(
+	UMaterial* Material,
+	UMaterialFunction* Function,
+	UEdGraph* Graph,
+	const FMaterialExpressionDeleteSnapshot& Snapshot,
+	const TSharedPtr<FJsonObject>& Params)
+{
+	UObject* Asset = Material ? static_cast<UObject*>(Material) : static_cast<UObject*>(Function);
+	if (!Asset || !Snapshot.Expression)
+	{
+		return false;
+	}
+	Asset->Modify();
+	if (!Snapshot.ExpressionOrder.Contains(Snapshot.Expression))
+	{
+		return false;
+	}
+	if (!Snapshot.ExpressionOrder.Contains(Snapshot.Expression)
+		|| (Material ? !Material->GetExpressions().Contains(Snapshot.Expression)
+		             : !Function->GetExpressions().Contains(Snapshot.Expression)))
+	{
+		if (Material)
+		{
+			Material->GetExpressionCollection().AddExpression(Snapshot.Expression);
+		}
+		else
+		{
+			Function->GetExpressionCollection().AddExpression(Snapshot.Expression);
+		}
+	}
+	if (Graph && Snapshot.GraphNode && !Graph->Nodes.Contains(Snapshot.GraphNode))
+	{
+		Graph->AddNode(Snapshot.GraphNode, false);
+	}
+	for (const TPair<UMaterialExpression*, TArray<FExpressionInput>>& Pair : Snapshot.Inputs)
+	{
+		if (!Pair.Key)
+		{
+			continue;
+		}
+		TArrayView<FExpressionInput*> Inputs = Pair.Key->GetInputsView();
+		for (int32 Index = 0; Index < Inputs.Num(); ++Index)
+		{
+			if (Inputs[Index] && Pair.Value.IsValidIndex(Index))
+			{
+				*Inputs[Index] = Pair.Value[Index];
+			}
+		}
+	}
+	if (Material)
+	{
+		for (int32 InputIndex = 0; InputIndex < MP_MAX; ++InputIndex)
+		{
+			FExpressionInput* Input = Material->GetExpressionInputForProperty(
+				static_cast<EMaterialProperty>(InputIndex));
+			if (Input && Snapshot.MaterialInputs.IsValidIndex(InputIndex))
+			{
+				*Input = Snapshot.MaterialInputs[InputIndex];
+			}
+		}
+	}
+	if (Graph)
+	{
+		RestoreMaterialGraphLinks(Graph, Snapshot.GraphLinks);
+		if (!UEAIIntegration::Workflow::ShouldDeferCompile(Params))
+		{
+			CastChecked<UMaterialGraph>(Graph)->LinkMaterialExpressionsFromGraph();
+			Graph->NotifyGraphChanged();
+		}
+	}
+	return true;
+}
+
+static FMCPToolResult RollbackMaterialExpressionDelete(
+	UMaterial* Material,
+	UMaterialFunction* Function,
+	UEdGraph* Graph,
+	const FMaterialExpressionDeleteSnapshot& Snapshot,
+	const UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& Validation,
+	const TSharedPtr<FJsonObject>& Params,
+	FMCPToolResult Failure)
+{
+	const bool bRestored = RestoreMaterialExpressionDeleteSnapshot(
+		Material,
+		Function,
+		Graph,
+		Snapshot,
+		Params);
+	UObject* Asset = Material ? static_cast<UObject*>(Material) : static_cast<UObject*>(Function);
+	CancelMaterialMutation(Asset, Params);
+	bool bVerified = bRestored;
+	if (bVerified && Validation.SourceSnapshot.IsValid())
+	{
+		TSharedPtr<const UEAIIntegration::MaterialQuery::FSnapshot> Restored;
+		const FMCPToolResult CaptureResult = UEAIIntegration::MaterialQuery::Capture(
+			Asset,
+			Asset->GetPathName(),
+			FString(),
+			nullptr,
+			Validation.SourceSnapshot->bIncludeNamedReroutes,
+			&Restored,
+			false);
+		bVerified = CaptureResult.bSuccess && Restored.IsValid()
+			&& Restored->ProjectionHash == Validation.SourceSnapshot->ProjectionHash;
+	}
+	if (!Failure.Data.IsValid())
+	{
+		Failure.Data = MakeShared<FJsonObject>();
+	}
+	Failure.Data->SetStringField(TEXT("attempt_status"), TEXT("rolled_back"));
+	Failure.Data->SetStringField(TEXT("restore_status"), bVerified ? TEXT("restored") : TEXT("restore_failed"));
+	Failure.Data->SetBoolField(TEXT("rollbackVerified"), bVerified);
+	return Failure;
+}
+
+static FMCPToolResult VerifyMaterialMutationPostcondition(
+	UObject* Asset,
+	const UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& Validation,
+	const TSharedPtr<FJsonObject>& Params,
+	FString& OutExpected,
+	FString& OutActual)
+{
+	OutExpected.Reset();
+	OutActual.Reset();
+	if (!Params->TryGetStringField(TEXT("expectedAfterProjectionHash"), OutExpected)
+		|| OutExpected.IsEmpty())
+	{
+		return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+	}
+
+	TSharedPtr<const UEAIIntegration::MaterialQuery::FSnapshot> Fresh;
+	const bool bIncludeNamedReroutes = Validation.SourceSnapshot.IsValid()
+		? Validation.SourceSnapshot->bIncludeNamedReroutes
+		: false;
+	const FMCPToolResult CaptureResult = UEAIIntegration::MaterialQuery::Capture(
+		Asset,
+		Asset->GetPathName(),
+		FString(),
+		nullptr,
+		bIncludeNamedReroutes,
+		&Fresh,
+		false);
+	if (!CaptureResult.bSuccess || !Fresh)
+	{
+		return FMCPToolResult::Error(
+			TEXT("The material graph changed, but the postcondition projection could not be captured."),
+			TEXT("material_boundary_postcondition_capture_failed"),
+			500);
+	}
+	OutActual = Fresh->ProjectionHash;
+	if (OutActual != OutExpected)
+	{
+		return FMCPToolResult::Error(
+			TEXT("The authored material mutation did not produce the expected projection."),
+			TEXT("material_boundary_postcondition_failed"),
+			409);
+	}
+	return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+}
+
+static FMCPToolResult RollbackMaterialMutation(
+	UObject* Asset,
+	UEdGraph* Graph,
+	const TArray<FMaterialGraphLinkSnapshot>& Links,
+	const UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& Validation,
+	const TSharedPtr<FJsonObject>& Params,
+	FMCPToolResult Failure)
+{
+	const bool bRestoredGraph = RestoreMaterialGraphLinks(Graph, Links);
+	if (Graph && !UEAIIntegration::Workflow::ShouldDeferCompile(Params))
+	{
+		CastChecked<UMaterialGraph>(Graph)->LinkMaterialExpressionsFromGraph();
+		Graph->NotifyGraphChanged();
+	}
+	CancelMaterialMutation(Asset, Params);
+
+	bool bRestoredProjection = bRestoredGraph;
+	if (bRestoredProjection && Validation.SourceSnapshot.IsValid())
+	{
+		TSharedPtr<const UEAIIntegration::MaterialQuery::FSnapshot> Restored;
+		const FMCPToolResult RestoredCapture = UEAIIntegration::MaterialQuery::Capture(
+			Asset,
+			Asset->GetPathName(),
+			FString(),
+			nullptr,
+			Validation.SourceSnapshot->bIncludeNamedReroutes,
+			&Restored,
+			false);
+		bRestoredProjection = RestoredCapture.bSuccess && Restored.IsValid()
+			&& Restored->ProjectionHash == Validation.SourceSnapshot->ProjectionHash;
+	}
+	if (!Failure.Data.IsValid())
+	{
+		Failure.Data = MakeShared<FJsonObject>();
+	}
+	Failure.Data->SetStringField(TEXT("attempt_status"), TEXT("rolled_back"));
+	Failure.Data->SetStringField(TEXT("restore_status"), bRestoredProjection ? TEXT("restored") : TEXT("restore_failed"));
+	Failure.Data->SetBoolField(TEXT("rollbackVerified"), bRestoredProjection);
+	return Failure;
 }
 
 // ============================================================
@@ -545,6 +955,13 @@ public:
 		if (Material) EnsureMaterialGraph(Material);
 		UEdGraph* Graph = Material ? (UEdGraph*)Material->MaterialGraph : (MatFunc ? MatFunc->MaterialGraph : nullptr);
 		if (!Graph) return FMCPToolResult::Error(FString::Printf(TEXT("'%s' has no material graph"), *AssetDisplayName));
+		UObject* Asset = Material ? (UObject*)Material : (UObject*)MatFunc;
+		UEAIIntegration::MaterialQuery::FBoundaryWriteValidation BoundaryValidation;
+		FMCPToolResult BoundaryResult = RequireMaterialMutationBoundary(Asset, Params, BoundaryValidation);
+		if (!BoundaryResult.bSuccess)
+		{
+			return BoundaryResult;
+		}
 
 		UMaterialGraphNode* TargetMatNode = nullptr;
 		for (UEdGraphNode* Node : Graph->Nodes)
@@ -563,12 +980,26 @@ public:
 		{
 			return FMCPToolResult::Error(TEXT("This node requires material subgraph deletion and cannot be deleted as a single expression."));
 		}
+		BoundaryResult = RequireMaterialBoundaryNode(
+			BoundaryValidation,
+			TargetMatNode,
+			TEXT("deleted"),
+			true);
+		if (!BoundaryResult.bSuccess)
+		{
+			return BoundaryResult;
+		}
 
 		FString DeletedNodeTitle = TargetMatNode->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
 		FString DeletedExprClass = TargetMatNode->MaterialExpression->GetClass()->GetName();
 
 		UMaterialExpression* ExprToRemove = TargetMatNode->MaterialExpression;
-		UObject* Asset = Material ? (UObject*)Material : (UObject*)MatFunc;
+		const FMaterialExpressionDeleteSnapshot DeleteSnapshot = CaptureMaterialExpressionDeleteSnapshot(
+			Material,
+			MatFunc,
+			ExprToRemove,
+			TargetMatNode,
+			Graph);
 		BeginMaterialMutation(Asset, Params);
 		Graph->Modify();
 		TargetMatNode->Modify();
@@ -609,11 +1040,33 @@ public:
 		if (!UEAIIntegration::Workflow::ShouldDeferCompile(Params))
 		{
 			CastChecked<UMaterialGraph>(Graph)->LinkMaterialExpressionsFromGraph();
-			ExprToRemove->MarkAsGarbage();
 		}
 		// Workflow snapshots keep removed objects valid for same-session undo
 		// and memory restoration; normal GC can reclaim them after that boundary.
 		FinalizeMaterialMutation(Asset, Params);
+		FString ExpectedAfterProjectionHash;
+		FString ActualProjectionHash;
+		const FMCPToolResult Postcondition = VerifyMaterialMutationPostcondition(
+			Asset,
+			BoundaryValidation,
+			Params,
+			ExpectedAfterProjectionHash,
+			ActualProjectionHash);
+		if (!Postcondition.bSuccess)
+		{
+			return RollbackMaterialExpressionDelete(
+				Material,
+				MatFunc,
+				Graph,
+				DeleteSnapshot,
+				BoundaryValidation,
+				Params,
+				Postcondition);
+		}
+		if (!UEAIIntegration::Workflow::ShouldDeferCompile(Params))
+		{
+			ExprToRemove->MarkAsGarbage();
+		}
 
 		const bool bSaved = SaveMaterialForExecution(Asset, Params);
 
@@ -624,6 +1077,13 @@ public:
 		Result->SetStringField(TEXT("deletedNodeTitle"), DeletedNodeTitle);
 		Result->SetStringField(TEXT("deletedExpressionClass"), DeletedExprClass);
 		Result->SetBoolField(TEXT("saved"), bSaved);
+		if (BoundaryValidation.Boundary.IsValid())
+		{
+			Result->SetStringField(TEXT("boundaryId"), BoundaryValidation.Boundary->BoundaryId);
+			Result->SetStringField(TEXT("snapshotId"), BoundaryValidation.SourceSnapshot->Id);
+			Result->SetStringField(TEXT("sourceProjectionHash"), BoundaryValidation.SourceSnapshot->ProjectionHash);
+			Result->SetStringField(TEXT("freshProjectionHash"), BoundaryValidation.FreshSnapshot->ProjectionHash);
+		}
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -692,6 +1152,32 @@ public:
 		if (!SourceNode) return FMCPToolResult::Error(FString::Printf(TEXT("Source node '%s' not found"), *SourceNodeId));
 		if (!TargetNode) return FMCPToolResult::Error(FString::Printf(TEXT("Target node '%s' not found"), *TargetNodeId));
 
+		UObject* Asset = Material ? (UObject*)Material : (UObject*)MatFunc;
+		UEAIIntegration::MaterialQuery::FBoundaryWriteValidation BoundaryValidation;
+		FMCPToolResult BoundaryResult = RequireMaterialMutationBoundary(Asset, Params, BoundaryValidation);
+		if (!BoundaryResult.bSuccess)
+		{
+			return BoundaryResult;
+		}
+		BoundaryResult = RequireMaterialBoundaryNode(
+			BoundaryValidation,
+			SourceNode,
+			TEXT("source"),
+			true);
+		if (!BoundaryResult.bSuccess)
+		{
+			return BoundaryResult;
+		}
+		BoundaryResult = RequireMaterialBoundaryNode(
+			BoundaryValidation,
+			TargetNode,
+			TEXT("target"),
+			!TargetNode->IsA<UMaterialGraphNode_Root>());
+		if (!BoundaryResult.bSuccess)
+		{
+			return BoundaryResult;
+		}
+
 		UEdGraphPin* SourcePin = SourceNode->FindPin(FName(*SourcePinName));
 		if (!SourcePin) return FMCPToolResult::Error(FString::Printf(TEXT("Source pin '%s' not found"), *SourcePinName));
 		UEdGraphPin* TargetPin = TargetNode->FindPin(FName(*TargetPinName));
@@ -700,7 +1186,8 @@ public:
 		const UEdGraphSchema* Schema = Graph->GetSchema();
 		if (!Schema) return FMCPToolResult::Error(TEXT("Material graph schema not found"));
 
-		UObject* Asset = Material ? (UObject*)Material : (UObject*)MatFunc;
+		TArray<FMaterialGraphLinkSnapshot> LinkSnapshot;
+		CaptureMaterialGraphLinks(Graph, LinkSnapshot);
 		BeginMaterialMutation(Asset, Params);
 		Graph->Modify();
 		SourceNode->Modify();
@@ -717,11 +1204,37 @@ public:
 		if (bConnected)
 		{
 			FinalizeMaterialMutation(Asset, Params);
+			FString ExpectedAfterProjectionHash;
+			FString ActualProjectionHash;
+			const FMCPToolResult Postcondition = VerifyMaterialMutationPostcondition(
+				Asset,
+				BoundaryValidation,
+				Params,
+				ExpectedAfterProjectionHash,
+				ActualProjectionHash);
+			if (!Postcondition.bSuccess)
+			{
+				return RollbackMaterialMutation(
+					Asset,
+					Graph,
+					LinkSnapshot,
+					BoundaryValidation,
+					Params,
+					Postcondition);
+			}
 			const bool bSaved = SaveMaterialForExecution(Asset, Params);
 			Result->SetBoolField(TEXT("saved"), bSaved);
+			if (BoundaryValidation.Boundary.IsValid())
+			{
+				Result->SetStringField(TEXT("boundaryId"), BoundaryValidation.Boundary->BoundaryId);
+				Result->SetStringField(TEXT("snapshotId"), BoundaryValidation.SourceSnapshot->Id);
+				Result->SetStringField(TEXT("sourceProjectionHash"), BoundaryValidation.SourceSnapshot->ProjectionHash);
+				Result->SetStringField(TEXT("freshProjectionHash"), BoundaryValidation.FreshSnapshot->ProjectionHash);
+			}
 		}
 		else
 		{
+			RestoreMaterialGraphLinks(Graph, LinkSnapshot);
 			CancelMaterialMutation(Asset, Params);
 			Result->SetStringField(TEXT("error"), TEXT("Cannot connect — types may be incompatible"));
 		}
@@ -787,10 +1300,28 @@ public:
 		}
 		if (!TargetNode) return FMCPToolResult::Error(FString::Printf(TEXT("Node '%s' not found"), *NodeId));
 
+		UObject* Asset = Material ? (UObject*)Material : (UObject*)MatFunc;
+		UEAIIntegration::MaterialQuery::FBoundaryWriteValidation BoundaryValidation;
+		FMCPToolResult BoundaryResult = RequireMaterialMutationBoundary(Asset, Params, BoundaryValidation);
+		if (!BoundaryResult.bSuccess)
+		{
+			return BoundaryResult;
+		}
+		BoundaryResult = RequireMaterialBoundaryNode(
+			BoundaryValidation,
+			TargetNode,
+			TEXT("target"),
+			!TargetNode->IsA<UMaterialGraphNode_Root>());
+		if (!BoundaryResult.bSuccess)
+		{
+			return BoundaryResult;
+		}
+
 		UEdGraphPin* Pin = TargetNode->FindPin(FName(*PinName));
 		if (!Pin) return FMCPToolResult::Error(FString::Printf(TEXT("Pin '%s' not found on node '%s'"), *PinName, *NodeId));
 
-		UObject* Asset = Material ? (UObject*)Material : (UObject*)MatFunc;
+		TArray<FMaterialGraphLinkSnapshot> LinkSnapshot;
+		CaptureMaterialGraphLinks(Graph, LinkSnapshot);
 		BeginMaterialMutation(Asset, Params);
 		Graph->Modify();
 		TargetNode->Modify();
@@ -810,6 +1341,24 @@ public:
 			Graph->NotifyGraphChanged();
 		}
 		FinalizeMaterialMutation(Asset, Params);
+		FString ExpectedAfterProjectionHash;
+		FString ActualProjectionHash;
+		const FMCPToolResult Postcondition = VerifyMaterialMutationPostcondition(
+			Asset,
+			BoundaryValidation,
+			Params,
+			ExpectedAfterProjectionHash,
+			ActualProjectionHash);
+		if (!Postcondition.bSuccess)
+		{
+			return RollbackMaterialMutation(
+				Asset,
+				Graph,
+				LinkSnapshot,
+				BoundaryValidation,
+				Params,
+				Postcondition);
+		}
 		const bool bSaved = SaveMaterialForExecution(Asset, Params);
 
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
@@ -819,6 +1368,13 @@ public:
 		Result->SetStringField(TEXT("pinName"), PinName);
 		Result->SetNumberField(TEXT("brokenLinkCount"), BrokenCount);
 		Result->SetBoolField(TEXT("saved"), bSaved);
+		if (BoundaryValidation.Boundary.IsValid())
+		{
+			Result->SetStringField(TEXT("boundaryId"), BoundaryValidation.Boundary->BoundaryId);
+			Result->SetStringField(TEXT("snapshotId"), BoundaryValidation.SourceSnapshot->Id);
+			Result->SetStringField(TEXT("sourceProjectionHash"), BoundaryValidation.SourceSnapshot->ProjectionHash);
+			Result->SetStringField(TEXT("freshProjectionHash"), BoundaryValidation.FreshSnapshot->ProjectionHash);
+		}
 		return FMCPToolResult::Ok(Result);
 	}
 };

@@ -1446,7 +1446,7 @@
       "id": "production.module.loaded.get",
       "domain": "production",
       "kind": "query",
-      "description": "Report the loaded plugin module, DLL and PDB provenance, hashes, timestamps, and Live Coding state.",
+      "description": "Report the loaded plugin module, serving process identity, exact latest-build DLL/PDB provenance, hashes, timestamps, and Live Coding state.",
       "inputSchema": {
         "type": "object",
         "properties": {},

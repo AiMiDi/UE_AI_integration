@@ -940,20 +940,32 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 		}
 #endif
 		const FMCPResult Result = WorkflowRuntime->HandleRequest(RequestObject);
-		if (!Result.bOk)
+		FMCPExecutionContext WorkflowContext;
+		WorkflowContext.Capability = MarkerCapability;
+		WorkflowContext.Params = RequestObject;
+		WorkflowContext.RequestId = RequestId;
+		WorkflowContext.CallerSessionId = Pending->Caller.IsValid()
+			? Pending->Caller->SessionId
+			: FString();
+		FMCPResult AnnotatedResult = Result;
+		Executor.AnnotateVerification(
+			WorkflowContext,
+			AnnotatedResult,
+			true);
+		if (!AnnotatedResult.bOk)
 		{
 			WriteRequestMarker(
 				RequestId,
 				MarkerCapability,
 				TEXT("terminal"),
 				TEXT("failed"),
-				Result.Error.Code);
+				AnnotatedResult.Error.Code);
 			SendError(
 				Pending->OnComplete,
-				Result.Error.HttpStatus,
-				Result.Error.Code,
-				Result.Error.Message,
-				Result.Error.Details);
+				AnnotatedResult.Error.HttpStatus,
+				AnnotatedResult.Error.Code,
+				AnnotatedResult.Error.Message,
+				AnnotatedResult.Error.Details);
 			return;
 		}
 		WriteRequestMarker(
@@ -961,23 +973,8 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 			MarkerCapability,
 			TEXT("terminal"),
 			TEXT("completed"));
-		SendSuccess(Pending->OnComplete, Result.Data);
+		SendSuccess(Pending->OnComplete, AnnotatedResult.Data);
 		return;
-	}
-
-	for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : RequestObject->Values)
-	{
-		if (Field.Key != TEXT("capability")
-			&& Field.Key != TEXT("params")
-			&& Field.Key != TEXT("requestId"))
-		{
-			SendError(
-				Pending->OnComplete,
-				422,
-				TEXT("invalid_params"),
-				FString::Printf(TEXT("Unknown request field '%s'."), *Field.Key));
-			return;
-		}
 	}
 
 	FString CapabilityId;
@@ -991,6 +988,59 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 			TEXT("Field 'capability' must be a non-empty dotted capability id."));
 		return;
 	}
+
+	// Validation failures after the capability has been identified are still
+	// capability outcomes. Keep the same six-state proof as handler execution
+	// so callers can distinguish a rejected request from an unavailable or
+	// unregistered capability.
+	const auto SendCapabilityError =
+		[&](
+			int32 StatusCode,
+			const FString& Code,
+			const FString& Message,
+			const TSharedPtr<FJsonObject>& Details,
+			const TSharedPtr<FJsonObject>& Params,
+			const FString& RequestId,
+			bool bExecuted)
+	{
+		FMCPExecutionContext Context;
+		Context.Capability = CapabilityId;
+		Context.Params = Params.IsValid() ? Params : MakeShared<FJsonObject>();
+		Context.RequestId = RequestId;
+		Context.CallerSessionId = Pending->Caller.IsValid()
+			? Pending->Caller->SessionId
+			: FString();
+		FMCPResult Result = FMCPResult::Fail(
+			Code,
+			Message,
+			StatusCode,
+			Details);
+		Executor.AnnotateVerification(Context, Result, bExecuted);
+		SendError(
+			Pending->OnComplete,
+			Result.Error.HttpStatus,
+			Result.Error.Code,
+			Result.Error.Message,
+			Result.Error.Details);
+	};
+
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : RequestObject->Values)
+	{
+		if (Field.Key != TEXT("capability")
+			&& Field.Key != TEXT("params")
+			&& Field.Key != TEXT("requestId"))
+		{
+			SendCapabilityError(
+				422,
+				TEXT("invalid_params"),
+				FString::Printf(TEXT("Unknown request field '%s'."), *Field.Key),
+				nullptr,
+				MakeShared<FJsonObject>(),
+				FString(),
+				false);
+			return;
+		}
+	}
 	ClientActivityService.UpdateCapabilityActivity(
 		Pending->ActivityId,
 		CapabilityId,
@@ -1002,11 +1052,14 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 	{
 		if (!RequestObject->HasTypedField<EJson::Object>(TEXT("params")))
 		{
-			SendError(
-				Pending->OnComplete,
+			SendCapabilityError(
 				422,
 				TEXT("invalid_params"),
-				TEXT("Field 'params' must be a JSON object."));
+				TEXT("Field 'params' must be a JSON object."),
+				nullptr,
+				MakeShared<FJsonObject>(),
+				FString(),
+				false);
 			return;
 		}
 		Params = RequestObject->GetObjectField(TEXT("params"));
@@ -1019,11 +1072,14 @@ void FUEAIIntegrationServer::ProcessOneRequest()
 			|| RequestId.IsEmpty()
 			|| RequestId.Len() > 200)
 		{
-			SendError(
-				Pending->OnComplete,
+			SendCapabilityError(
 				422,
 				TEXT("invalid_params"),
-				TEXT("Field 'requestId' must be a non-empty string of at most 200 characters."));
+				TEXT("Field 'requestId' must be a non-empty string of at most 200 characters."),
+				nullptr,
+				Params,
+				FString(),
+				false);
 			return;
 		}
 	}
@@ -1606,6 +1662,35 @@ bool FUEAIIntegrationServer::HandleExecute(
 		if (RequestObject->TryGetStringField(TEXT("capability"), Capability)
 			&& IsBlueprintDebugCapability(Capability))
 		{
+			auto SendCapabilityError =
+				[&](
+					int32 StatusCode,
+					const FString& Code,
+					const FString& Message,
+					const TSharedPtr<FJsonObject>& Details,
+					const TSharedPtr<FJsonObject>& Params,
+					const FString& RequestId,
+					bool bExecuted)
+			{
+				FMCPExecutionContext Context;
+				Context.Capability = Capability;
+				Context.Params = Params;
+				Context.RequestId = RequestId;
+				Context.CallerSessionId = Caller.SessionId;
+				FMCPResult Result = FMCPResult::Fail(
+					Code,
+					Message,
+					StatusCode,
+					Details);
+				Executor.AnnotateVerification(Context, Result, bExecuted);
+				SendError(
+					EffectiveOnComplete,
+					Result.Error.HttpStatus,
+					Result.Error.Code,
+					Result.Error.Message,
+					Result.Error.Details);
+			};
+
 			ClientActivityService.UpdateCapabilityActivity(
 				ActivityId,
 				Capability,
@@ -1613,12 +1698,14 @@ bool FUEAIIntegrationServer::HandleExecute(
 				FindCapabilityRisk(Registry, Capability));
 			if (!Registry.IsReady())
 			{
-				SendError(
-					EffectiveOnComplete,
+				SendCapabilityError(
 					503,
 					TEXT("service_degraded"),
 					TEXT("Capability bindings failed validation."),
-					MakeValidationDetails(Registry.GetValidationErrors()));
+					MakeValidationDetails(Registry.GetValidationErrors()),
+					MakeShared<FJsonObject>(),
+					FString(),
+					false);
 				return true;
 			}
 			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field :
@@ -1628,13 +1715,16 @@ bool FUEAIIntegrationServer::HandleExecute(
 					&& Field.Key != TEXT("params")
 					&& Field.Key != TEXT("requestId"))
 				{
-					SendError(
-						EffectiveOnComplete,
+					SendCapabilityError(
 						422,
 						TEXT("invalid_params"),
 						FString::Printf(
 							TEXT("Unknown request field '%s'."),
-							*Field.Key));
+							*Field.Key),
+						nullptr,
+						MakeShared<FJsonObject>(),
+						FString(),
+						false);
 					return true;
 				}
 			}
@@ -1644,11 +1734,14 @@ bool FUEAIIntegrationServer::HandleExecute(
 			{
 				if (!RequestObject->HasTypedField<EJson::Object>(TEXT("params")))
 				{
-					SendError(
-						EffectiveOnComplete,
+					SendCapabilityError(
 						422,
 						TEXT("invalid_params"),
-						TEXT("Field 'params' must be a JSON object."));
+						TEXT("Field 'params' must be a JSON object."),
+						nullptr,
+						MakeShared<FJsonObject>(),
+						FString(),
+						false);
 					return true;
 				}
 				Params = RequestObject->GetObjectField(TEXT("params"));
@@ -1656,12 +1749,14 @@ bool FUEAIIntegrationServer::HandleExecute(
 			TArray<FString> ValidationErrors;
 			if (!Registry.ValidateParams(Capability, Params, ValidationErrors))
 			{
-				SendError(
-					EffectiveOnComplete,
+				SendCapabilityError(
 					422,
 					TEXT("invalid_params"),
 					TEXT("Capability parameters failed manifest schema validation."),
-					MakeValidationDetails(ValidationErrors));
+					MakeValidationDetails(ValidationErrors),
+					Params,
+					FString(),
+					false);
 				return true;
 			}
 
@@ -1671,12 +1766,15 @@ bool FUEAIIntegrationServer::HandleExecute(
 					|| RequestId.IsEmpty()
 					|| RequestId.Len() > 200))
 			{
-				SendError(
-					EffectiveOnComplete,
+				SendCapabilityError(
 					422,
 					TEXT("invalid_params"),
 					TEXT(
-						"Field 'requestId' must be a non-empty string of at most 200 characters."));
+						"Field 'requestId' must be a non-empty string of at most 200 characters."),
+					nullptr,
+					Params,
+					FString(),
+					false);
 				return true;
 			}
 			ClientActivityService.UpdateCapabilityActivity(
@@ -1694,18 +1792,39 @@ bool FUEAIIntegrationServer::HandleExecute(
 			{
 				if (Result.bSuccess)
 				{
-					SendSuccess(EffectiveOnComplete, Result.Data);
+					FMCPExecutionContext Context;
+					Context.Capability = Capability;
+					Context.Params = Params;
+					Context.RequestId = RequestId;
+					Context.CallerSessionId = Caller.SessionId;
+					FMCPResult Success = FMCPResult::Ok(Result.Data);
+					Executor.AnnotateVerification(Context, Success, true);
+					SendSuccess(EffectiveOnComplete, Success.Data);
 				}
 				else
 				{
-					SendError(
-						EffectiveOnComplete,
+					SendCapabilityError(
 						Result.HttpStatus,
 						Result.ErrorCode,
-						Result.ErrorMessage);
+						Result.ErrorMessage,
+						nullptr,
+						Params,
+						RequestId,
+						true);
 				}
 				return true;
 			}
+			SendCapabilityError(
+				423,
+				TEXT("debug_session_paused"),
+				TEXT(
+					"Only Blueprint debug snapshot queries and POD control commands "
+					"are available while Kismet is paused."),
+				nullptr,
+				Params,
+				RequestId,
+				false);
+			return true;
 		}
 		SendError(
 			EffectiveOnComplete,
@@ -1783,16 +1902,18 @@ bool FUEAIIntegrationServer::HandleWorkflow(
 			TEXT("workflow"));
 		ClientActivityService.MarkActivityStarted(ActivityId);
 		TSharedPtr<FJsonObject> RequestObject;
+		FString Action;
+		FString RequestId;
+		bool bParsedWorkflowRequest = false;
 		const FString Body = RequestBodyToString(Request);
 		const TSharedRef<TJsonReader<>> Reader =
 			TJsonReaderFactory<>::Create(Body);
 		if (FJsonSerializer::Deserialize(Reader, RequestObject)
 			&& RequestObject.IsValid())
 		{
-			FString Action;
-			FString RequestId;
 			RequestObject->TryGetStringField(TEXT("action"), Action);
 			RequestObject->TryGetStringField(TEXT("requestId"), RequestId);
+			bParsedWorkflowRequest = !Action.IsEmpty();
 			ClientActivityService.UpdateWorkflowActivity(
 				ActivityId,
 				Action,
@@ -1814,11 +1935,33 @@ bool FUEAIIntegrationServer::HandleWorkflow(
 			ClientActivityService.EndRequest(Caller);
 			Original(MoveTemp(Response));
 		};
-		SendError(
-			ObservedComplete,
-			423,
-			TEXT("debug_session_paused"),
-			TEXT("Workflow routes are unavailable while Kismet is paused."));
+		if (bParsedWorkflowRequest)
+		{
+			FMCPExecutionContext Context;
+			Context.Capability = TEXT("workflow.") + Action;
+			Context.Params = RequestObject;
+			Context.RequestId = RequestId;
+			Context.CallerSessionId = Caller.SessionId;
+			FMCPResult Result = FMCPResult::Fail(
+				TEXT("debug_session_paused"),
+				TEXT("Workflow routes are unavailable while Kismet is paused."),
+				423);
+			Executor.AnnotateVerification(Context, Result, false);
+			SendError(
+				ObservedComplete,
+				Result.Error.HttpStatus,
+				Result.Error.Code,
+				Result.Error.Message,
+				Result.Error.Details);
+		}
+		else
+		{
+			SendError(
+				ObservedComplete,
+				423,
+				TEXT("debug_session_paused"),
+				TEXT("Workflow routes are unavailable while Kismet is paused."));
+		}
 		return true;
 	}
 	return QueueRequest(

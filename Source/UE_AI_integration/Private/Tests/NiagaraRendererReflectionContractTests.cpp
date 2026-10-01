@@ -11,6 +11,7 @@
 #include "NiagaraEditorUtilities.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraMeshRendererProperties.h"
+#include "NiagaraRibbonRendererProperties.h"
 #include "NiagaraSpriteRendererProperties.h"
 #include "NiagaraSystem.h"
 #include "NiagaraSystemFactoryNew.h"
@@ -33,6 +34,7 @@ struct FRendererReflectionFixture
 	FGuid EmitterId;
 	UNiagaraSpriteRendererProperties* Sprite = nullptr;
 	UNiagaraMeshRendererProperties* Mesh = nullptr;
+	UNiagaraRibbonRendererProperties* Ribbon = nullptr;
 	UNiagaraComponentRendererProperties* Component = nullptr;
 
 	bool Create(FAutomationTestBase& Test)
@@ -79,15 +81,18 @@ struct FRendererReflectionFixture
 
 		Sprite = NewObject<UNiagaraSpriteRendererProperties>(Emitter, NAME_None, RF_Transactional);
 		Mesh = NewObject<UNiagaraMeshRendererProperties>(Emitter, NAME_None, RF_Transactional);
+		Ribbon = NewObject<UNiagaraRibbonRendererProperties>(Emitter, NAME_None, RF_Transactional);
 		Component = NewObject<UNiagaraComponentRendererProperties>(Emitter, NAME_None, RF_Transactional);
 		if (!Test.TestNotNull(TEXT("Sprite renderer fixture"), Sprite)
 			|| !Test.TestNotNull(TEXT("Mesh renderer fixture"), Mesh)
+			|| !Test.TestNotNull(TEXT("Ribbon renderer fixture"), Ribbon)
 			|| !Test.TestNotNull(TEXT("Component renderer fixture"), Component))
 		{
 			return false;
 		}
 		Emitter->AddRenderer(Sprite, Version);
 		Emitter->AddRenderer(Mesh, Version);
+		Emitter->AddRenderer(Ribbon, Version);
 		Emitter->AddRenderer(Component, Version);
 		System->WaitForCompilationComplete(false, false);
 		Package->SetDirtyFlag(false);
@@ -312,6 +317,157 @@ bool FNiagaraRendererReflectionContractTest::RunTest(const FString&)
 	TestEqual(TEXT("Integer overflow leaves the value unchanged"), Fixture.Component->ComponentCountLimit, 1u);
 	TestFalse(TEXT("Integer overflow leaves the package clean"), Fixture.Package->IsDirty());
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FNiagaraRendererMeshRibbonSubUVContractTest,
+	"UE_AI_integration.Niagara.RendererReflection.MeshRibbonSubUVContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FNiagaraRendererMeshRibbonSubUVContractTest::RunTest(const FString&)
+{
+	FRendererReflectionFixture Fixture;
+	ON_SCOPE_EXIT
+	{
+		Fixture.Cleanup(*this);
+	};
+	if (!Fixture.Create(*this))
+	{
+		return false;
+	}
+
+	FMCPToolRegistry Registry;
+	Registry.BeginDomainRegistration(TEXT("content"));
+	UEAIIntegrationTools::RegisterNiagaraRendererMaterialTools(Registry);
+	Registry.EndDomainRegistration();
+	TestNotNull(TEXT("Renderer property command is registered"),
+		Registry.FindTool(TEXT("content.niagara.renderer.property.set")));
+
+	const auto SetProperty = [&](const UObject* Renderer,
+		const TCHAR* Property,
+		const TSharedPtr<FJsonValue>& Value)
+	{
+		const TSharedRef<FJsonObject> Params = PropertyParams(Fixture, Renderer, Property);
+		Params->SetField(TEXT("value"), Value);
+		return Registry.ExecuteTool(TEXT("content.niagara.renderer.property.set"), Params);
+	};
+	const auto AssertAuthoredReceipt = [&](const TCHAR* Label, const FMCPToolResult& Result)
+	{
+		if (!TestTrue(FString::Printf(TEXT("%s succeeds"), Label), Result.bSuccess)
+			|| !TestNotNull(FString::Printf(TEXT("%s has a receipt"), Label), Result.Data.Get()))
+		{
+			AddError(Result.ErrorMessage);
+			return false;
+		}
+		TestEqual(FString::Printf(TEXT("%s uses the property receipt schema"), Label),
+			Result.Data->GetStringField(TEXT("schema")),
+			FString(TEXT("ue.niagara.renderer-property.v1")));
+		TestFalse(FString::Printf(TEXT("%s never claims persistence"), Label),
+			Result.Data->GetBoolField(TEXT("saved")));
+		TestTrue(FString::Printf(TEXT("%s declares its runtime verification boundary"), Label),
+			Result.Data->GetStringField(TEXT("scope")).Contains(TEXT("unverified")));
+		return true;
+	};
+	const auto SubImageValue = [](double X, double Y)
+	{
+		TSharedRef<FJsonObject> Size = MakeShared<FJsonObject>();
+		Size->SetNumberField(TEXT("x"), X);
+		Size->SetNumberField(TEXT("y"), Y);
+		return MakeShared<FJsonValueObject>(Size);
+	};
+
+	// SubUV aliases must dispatch to both sprite and mesh properties and publish
+	// their authored readback. These receipts prove configuration, not rendering.
+	const FMCPToolResult SpriteSubUV = SetProperty(
+		Fixture.Sprite, TEXT("subImageSize"), SubImageValue(2.0, 4.0));
+	const FMCPToolResult MeshSubUV = SetProperty(
+		Fixture.Mesh, TEXT("subImageSize"), SubImageValue(4.0, 2.0));
+	if (!AssertAuthoredReceipt(TEXT("Sprite SubUV size"), SpriteSubUV)
+		|| !AssertAuthoredReceipt(TEXT("Mesh SubUV size"), MeshSubUV))
+	{
+		return false;
+	}
+	TestTrue(TEXT("Sprite SubUV reaches its native property"),
+		Fixture.Sprite->SubImageSize.Equals(FVector2D(2.0, 4.0)));
+	TestTrue(TEXT("Mesh SubUV reaches its native property"),
+		Fixture.Mesh->SubImageSize.Equals(FVector2D(4.0, 2.0)));
+	const TSharedPtr<FJsonObject> MeshSizeReadback = MeshSubUV.Data->GetObjectField(TEXT("readback"));
+	if (TestNotNull(TEXT("Mesh SubUV readback is a vector object"), MeshSizeReadback.Get()))
+	{
+		double ReadbackX = 0.0;
+		double ReadbackY = 0.0;
+		const bool bReadbackX = MeshSizeReadback->TryGetNumberField(TEXT("x"), ReadbackX)
+			|| MeshSizeReadback->TryGetNumberField(TEXT("X"), ReadbackX);
+		const bool bReadbackY = MeshSizeReadback->TryGetNumberField(TEXT("y"), ReadbackY)
+			|| MeshSizeReadback->TryGetNumberField(TEXT("Y"), ReadbackY);
+		TestTrue(TEXT("Mesh SubUV readback exposes x"), bReadbackX);
+		TestTrue(TEXT("Mesh SubUV readback exposes y"), bReadbackY);
+		if (bReadbackX) TestEqual(TEXT("Mesh SubUV readback x matches"), ReadbackX, 4.0);
+		if (bReadbackY) TestEqual(TEXT("Mesh SubUV readback y matches"), ReadbackY, 2.0);
+	}
+	const FMCPToolResult MeshBlend = SetProperty(
+		Fixture.Mesh, TEXT("subImageBlend"), MakeShared<FJsonValueBoolean>(true));
+	if (!AssertAuthoredReceipt(TEXT("Mesh SubUV blend"), MeshBlend)) return false;
+	TestTrue(TEXT("Mesh SubUV blend reaches its native property"), Fixture.Mesh->bSubImageBlend != 0);
+	TestTrue(TEXT("Mesh SubUV blend is read back"), MeshBlend.Data->GetBoolField(TEXT("readback")));
+
+	const FMCPToolResult MeshSort = SetProperty(
+		Fixture.Mesh, TEXT("sortMode"), MakeShared<FJsonValueString>(TEXT("ViewDepth")));
+	if (!AssertAuthoredReceipt(TEXT("Mesh sorting"), MeshSort)) return false;
+	TestTrue(TEXT("Mesh sort mode reaches its native enum"), Fixture.Mesh->SortMode == ENiagaraSortMode::ViewDepth);
+
+	// Ribbon-only aliases must update the ribbon, including the dependent shape
+	// and tessellation settings needed to make the numeric fields editable.
+	const FMCPToolResult RibbonShape = SetProperty(
+		Fixture.Ribbon, TEXT("shape"), MakeShared<FJsonValueString>(TEXT("Tube")));
+	if (!AssertAuthoredReceipt(TEXT("Ribbon shape"), RibbonShape)) return false;
+	TestTrue(TEXT("Ribbon shape reaches its native enum"), Fixture.Ribbon->Shape == ENiagaraRibbonShapeMode::Tube);
+	const FMCPToolResult RibbonTube = SetProperty(
+		Fixture.Ribbon, TEXT("tubeSubdivisions"), MakeShared<FJsonValueNumber>(6));
+	if (!AssertAuthoredReceipt(TEXT("Ribbon tube subdivisions"), RibbonTube)) return false;
+	TestEqual(TEXT("Ribbon tube subdivisions reach the native property"), Fixture.Ribbon->TubeSubdivisions, 6);
+	TestEqual(TEXT("Ribbon tube subdivisions are read back"), RibbonTube.Data->GetIntegerField(TEXT("readback")), 6);
+	const FMCPToolResult RibbonMode = SetProperty(
+		Fixture.Ribbon, TEXT("tessellationMode"), MakeShared<FJsonValueString>(TEXT("Custom")));
+	if (!AssertAuthoredReceipt(TEXT("Ribbon tessellation mode"), RibbonMode)) return false;
+	TestTrue(TEXT("Ribbon tessellation mode reaches its native enum"),
+		Fixture.Ribbon->TessellationMode == ENiagaraRibbonTessellationMode::Custom);
+	const FMCPToolResult RibbonFactor = SetProperty(
+		Fixture.Ribbon, TEXT("tessellationFactor"), MakeShared<FJsonValueNumber>(4));
+	if (!AssertAuthoredReceipt(TEXT("Ribbon tessellation factor"), RibbonFactor)) return false;
+	TestEqual(TEXT("Ribbon tessellation factor reaches the native property"), Fixture.Ribbon->TessellationFactor, 4);
+	TestEqual(TEXT("Ribbon tessellation factor is read back"), RibbonFactor.Data->GetIntegerField(TEXT("readback")), 4);
+
+	// A repeated value is an authored no-op and must not queue another compile.
+	const FMCPToolResult MeshNoOp = SetProperty(
+		Fixture.Mesh, TEXT("subImageSize"), SubImageValue(4.0, 2.0));
+	if (!AssertAuthoredReceipt(TEXT("Repeated mesh SubUV size"), MeshNoOp)) return false;
+	TestFalse(TEXT("Repeated mesh SubUV size is a no-op"), MeshNoOp.Data->GetBoolField(TEXT("changed")));
+	TestFalse(TEXT("Repeated mesh SubUV size does not request compilation"),
+		MeshNoOp.Data->GetBoolField(TEXT("compileRequested")));
+
+	Fixture.System->WaitForCompilationComplete(false, false);
+	Fixture.Package->SetDirtyFlag(false);
+	const FMCPToolResult RibbonSubUV = SetProperty(
+		Fixture.Ribbon, TEXT("subImageSize"), SubImageValue(2.0, 2.0));
+	TestFalse(TEXT("SubUV rejects a ribbon renderer"), RibbonSubUV.bSuccess);
+	TestEqual(TEXT("SubUV on ribbon has a stable dispatch rejection"), RibbonSubUV.ErrorCode,
+		FString(TEXT("property_unsupported_for_renderer")));
+	const FMCPToolResult MeshTube = SetProperty(
+		Fixture.Mesh, TEXT("tubeSubdivisions"), MakeShared<FJsonValueNumber>(6));
+	TestFalse(TEXT("Ribbon tube subdivisions reject a mesh renderer"), MeshTube.bSuccess);
+	TestEqual(TEXT("Ribbon property on mesh has a stable dispatch rejection"), MeshTube.ErrorCode,
+		FString(TEXT("property_unsupported_for_renderer")));
+	const FMCPToolResult InvalidTube = SetProperty(
+		Fixture.Ribbon, TEXT("tubeSubdivisions"), MakeShared<FJsonValueNumber>(2));
+	TestFalse(TEXT("Ribbon tube subdivisions reject the value below their minimum"), InvalidTube.bSuccess);
+	TestEqual(TEXT("Ribbon tube range rejection is explicit"), InvalidTube.ErrorCode,
+		FString(TEXT("property_value_out_of_range")));
+	TestEqual(TEXT("Rejected tube range preserves the authored value"), Fixture.Ribbon->TubeSubdivisions, 6);
+	TestFalse(TEXT("Dispatch and range rejections leave the package clean"), Fixture.Package->IsDirty());
+	TestFalse(TEXT("Dispatch and range rejections do not queue compilation"),
+		Fixture.System->HasOutstandingCompilationRequests(false));
 	return true;
 }
 

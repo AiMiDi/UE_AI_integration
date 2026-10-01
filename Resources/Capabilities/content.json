@@ -1446,7 +1446,7 @@
         ],
         "transactionDomain": "asset",
         "deferCompile": true,
-        "risk": "safeWrite"
+        "risk": "confirmWrite"
       },
       "effects": {
         "asset": "write",
@@ -1613,6 +1613,26 @@
           "expectedPreviewId": {
             "type": "string",
             "description": "Required for preview writes. Read editor.context.get first; detects a closed/reopened editor."
+          },
+          "snapshotId": {
+            "type": "string",
+            "description": "Required for authored writes. Immutable graph snapshot used to create boundaryId."
+          },
+          "boundaryId": {
+            "type": "string",
+            "description": "Required for authored writes. Fresh graph.boundary.get proof for the selected node set."
+          },
+          "expectedProjectionHash": {
+            "type": "string",
+            "description": "Projection hash returned by the source graph snapshot; stale authored writes are rejected."
+          },
+          "confirmSharedNodeImpact": {
+            "type": "boolean",
+            "description": "Required when the boundary reports externally consumed shared nodes."
+          },
+          "expectedAfterProjectionHash": {
+            "type": "string",
+            "description": "Optional postcondition hash. A mismatch restores the deleted expression and all graph references."
           }
         },
         "required": [
@@ -2343,6 +2363,26 @@
           "expectedPreviewId": {
             "type": "string",
             "description": "Required for preview writes. Read editor.context.get first; detects a closed/reopened editor."
+          },
+          "snapshotId": {
+            "type": "string",
+            "description": "Required for authored writes. Immutable graph snapshot used to create boundaryId."
+          },
+          "boundaryId": {
+            "type": "string",
+            "description": "Required for authored writes. Fresh graph.boundary.get proof for the selected node set."
+          },
+          "expectedProjectionHash": {
+            "type": "string",
+            "description": "Projection hash returned by the source graph snapshot; stale authored writes are rejected."
+          },
+          "confirmSharedNodeImpact": {
+            "type": "boolean",
+            "description": "Required when the boundary reports externally consumed shared nodes."
+          },
+          "expectedAfterProjectionHash": {
+            "type": "string",
+            "description": "Optional postcondition hash. A mismatch rolls back connect graph links."
           }
         },
         "required": [
@@ -2368,7 +2408,7 @@
         ],
         "transactionDomain": "asset",
         "deferCompile": true,
-        "risk": "safeWrite"
+        "risk": "confirmWrite"
       },
       "effects": {
         "asset": "write",
@@ -2435,6 +2475,26 @@
               "output"
             ],
             "description": "Preview-only pin disambiguation for index:N. Requires targetContext=editorPreview."
+          },
+          "snapshotId": {
+            "type": "string",
+            "description": "Required for authored writes. Immutable graph snapshot used to create boundaryId."
+          },
+          "boundaryId": {
+            "type": "string",
+            "description": "Required for authored writes. Fresh graph.boundary.get proof for the selected node set."
+          },
+          "expectedProjectionHash": {
+            "type": "string",
+            "description": "Projection hash returned by the source graph snapshot; stale authored writes are rejected."
+          },
+          "confirmSharedNodeImpact": {
+            "type": "boolean",
+            "description": "Required when the boundary reports externally consumed shared nodes."
+          },
+          "expectedAfterProjectionHash": {
+            "type": "string",
+            "description": "Optional postcondition hash. A mismatch rolls back disconnect graph links."
           }
         },
         "required": [
@@ -11343,7 +11403,7 @@
       "id": "content.material.graph.execute_plan",
       "domain": "content",
       "kind": "command",
-      "description": "Execute a bounded GraphIR material plan against a fresh authored-asset snapshot. Supports move_node, connect, disconnect, Material-only duplicate_node, and MaterialFunction set_function_metadata with transaction rollback and postcondition readback; unsupported operations are rejected explicitly.",
+      "description": "Execute a bounded GraphIR material plan against a fresh authored-asset snapshot. Supports move_node, connect, disconnect, Material-only duplicate_node, and MaterialFunction set_function_metadata with transaction rollback and postcondition readback; connect/disconnect require a fresh writable boundary and explicit shared-node confirmation when applicable.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -14322,6 +14382,79 @@
       }
     },
     {
+      "id": "content.niagara.graph.dynamic_input.search",
+      "domain": "content",
+      "kind": "query",
+      "description": "Search Niagara Dynamic Input script assets through bounded Asset Registry metadata by name or object path; results identify whether each asset is already loaded.",
+      "requires": {
+        "features": ["Niagara"],
+        "plugins": ["Niagara"],
+        "modules": ["Niagara"]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string", "maxLength": 512},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 256, "default": 64}
+        },
+        "additionalProperties": false
+      },
+      "traits": {"destructive": false, "expensive": false},
+      "output": {"kind": "json"},
+      "dsl": {
+        "admission": "observeOnly",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {"asset": "read", "world": "none", "editorSession": "none", "external": "none"},
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "content.niagara.graph.dynamic_input.search"
+      }
+    },
+    {
+      "id": "content.niagara.graph.module.dynamic_input.remove",
+      "domain": "content",
+      "kind": "command",
+      "description": "Remove one mounted Niagara Dynamic Input node by GUID from a selected module graph, with compile/read-back verification.",
+      "requires": {
+        "features": ["Niagara"],
+        "plugins": ["Niagara"],
+        "modules": ["Niagara"]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {"type": "string", "minLength": 1},
+          "emitter": {"type": "string", "minLength": 1},
+          "graph": {"type": "string", "minLength": 1},
+          "outputNodePath": {"type": "string", "minLength": 1},
+          "moduleSelector": {"type": "string", "minLength": 1},
+          "dynamicInputGuid": {"type": "string", "minLength": 1}
+        },
+        "required": ["system", "emitter", "moduleSelector", "dynamicInputGuid"],
+        "additionalProperties": false
+      },
+      "traits": {"destructive": false, "expensive": true},
+      "output": {"kind": "json"},
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {"asset": "write", "world": "none", "editorSession": "write", "external": "none"},
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "content.niagara.graph.module.dynamic_input.remove"
+      }
+    },
+    {
       "id": "content.niagara.graph.module.dynamic_input.add.plan",
       "domain": "content",
       "kind": "command",
@@ -14624,6 +14757,11 @@
             "minLength": 1,
             "description": "Module input name, with or without the Module. prefix"
           },
+          "dynamicInputGuid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional mounted Dynamic Input node GUID; when provided, edit that nested node's input"
+          },
           "value": {
             "anyOf": [
               {
@@ -14728,6 +14866,11 @@
             "type": "string",
             "minLength": 1,
             "description": "Module input name, with or without the Module. prefix"
+          },
+          "dynamicInputGuid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional mounted Dynamic Input node GUID; when provided, edit that nested node's input"
           },
           "value": {
             "anyOf": [
@@ -15164,6 +15307,11 @@
             "minLength": 1,
             "description": "Module input name, with or without the Module. prefix"
           },
+          "dynamicInputGuid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional mounted Dynamic Input node GUID; when provided, edit that nested node's input"
+          },
           "parameter": {
             "type": "string",
             "minLength": 1,
@@ -15254,6 +15402,11 @@
             "minLength": 1,
             "description": "Module input name, with or without the Module. prefix"
           },
+          "dynamicInputGuid": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional mounted Dynamic Input node GUID; when provided, edit that nested node's input"
+          },
           "dynamicInput": {
             "type": "string",
             "minLength": 1,
@@ -15294,6 +15447,18 @@
         "since": "1.1.0",
         "canonicalId": "content.niagara.graph.module.input.di.set"
       }
+    },
+    {
+      "id": "content.niagara.simulation_stage.list",
+      "domain": "content",
+      "kind": "query",
+      "description": "List authored Niagara Simulation Stages with stable usage IDs, options, graph presence, and bounded paging.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {"type": "object", "properties": {"system": {"type": "string", "minLength": 1}, "emitter": {"type": "string", "minLength": 1}, "offset": {"type": "integer", "minimum": 0, "maximum": 65536}, "limit": {"type": "integer", "minimum": 1, "maximum": 128}}, "required": ["system", "emitter"], "additionalProperties": false},
+      "traits": {"destructive": false, "expensive": false}, "output": {"kind": "json"},
+      "dsl": {"admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly"},
+      "effects": {"asset": "read", "world": "none", "editorSession": "none", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.simulation_stage.list"}
     },
     {
       "id": "content.niagara.simulation_stage.add.plan",
@@ -15550,6 +15715,72 @@
         "since": "1.1.0",
         "canonicalId": "content.niagara.simulation_stage.add.rollback"
       }
+    },
+    {
+      "id": "content.niagara.simulation_stage.update.plan",
+      "domain": "content", "kind": "query",
+      "description": "Plan updating an existing Niagara Simulation Stage name, enabled state, or stack index.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {"type": "object", "properties": {"system": {"type": "string", "minLength": 1}, "emitter": {"type": "string", "minLength": 1}, "usageId": {"type": "string", "minLength": 1}, "stageClass": {"type": "string"}, "name": {"type": "string"}, "enabled": {"type": "boolean"}, "index": {"type": "integer", "minimum": 0, "maximum": 128}}, "required": ["system", "emitter", "usageId"], "additionalProperties": false},
+      "traits": {"destructive": false, "expensive": false}, "output": {"kind": "json"},
+      "dsl": {"admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly"},
+      "effects": {"asset": "read", "world": "none", "editorSession": "none", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.simulation_stage.update.plan"}
+    },
+    {
+      "id": "content.niagara.simulation_stage.update.apply",
+      "domain": "content", "kind": "command",
+      "description": "Apply an approved Simulation Stage update with compile/read-back verification and same-Editor rollback.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {"type": "object", "properties": {"system": {"type": "string", "minLength": 1}, "emitter": {"type": "string", "minLength": 1}, "usageId": {"type": "string", "minLength": 1}, "stageClass": {"type": "string"}, "name": {"type": "string"}, "enabled": {"type": "boolean"}, "index": {"type": "integer", "minimum": 0, "maximum": 128}, "requestId": {"type": "string", "minLength": 1}, "approvePlanDigest": {"type": "string", "minLength": 1}, "confirmWrite": {"type": "boolean", "const": true}}, "required": ["system", "emitter", "usageId", "requestId", "approvePlanDigest", "confirmWrite"], "additionalProperties": false},
+      "traits": {"destructive": false, "expensive": true}, "output": {"kind": "json"},
+      "dsl": {"admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "confirmWrite"},
+      "effects": {"asset": "write", "world": "none", "editorSession": "write", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.simulation_stage.update.apply"}
+    },
+    {
+      "id": "content.niagara.simulation_stage.update.rollback",
+      "domain": "content", "kind": "command",
+      "description": "Restore Simulation Stage fields captured by an update receipt when the emitter has not drifted.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {"type": "object", "properties": {"rollbackId": {"type": "string", "minLength": 1}, "requestId": {"type": "string", "minLength": 1}, "confirmWrite": {"type": "boolean", "const": true}}, "required": ["rollbackId", "requestId", "confirmWrite"], "additionalProperties": false},
+      "traits": {"destructive": false, "expensive": true}, "output": {"kind": "json"},
+      "dsl": {"admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "confirmWrite"},
+      "effects": {"asset": "write", "world": "none", "editorSession": "write", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.simulation_stage.update.rollback"}
+    },
+    {
+      "id": "content.niagara.simulation_stage.remove.plan",
+      "domain": "content", "kind": "query",
+      "description": "Plan removing an existing Niagara Simulation Stage and its authored graph output.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {"type": "object", "properties": {"system": {"type": "string", "minLength": 1}, "emitter": {"type": "string", "minLength": 1}, "usageId": {"type": "string", "minLength": 1}}, "required": ["system", "emitter", "usageId"], "additionalProperties": false},
+      "traits": {"destructive": false, "expensive": false}, "output": {"kind": "json"},
+      "dsl": {"admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly"},
+      "effects": {"asset": "read", "world": "none", "editorSession": "none", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.simulation_stage.remove.plan"}
+    },
+    {
+      "id": "content.niagara.simulation_stage.remove.apply",
+      "domain": "content", "kind": "command",
+      "description": "Apply an approved Simulation Stage removal with compile/read-back verification and same-Editor rollback.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {"type": "object", "properties": {"system": {"type": "string", "minLength": 1}, "emitter": {"type": "string", "minLength": 1}, "usageId": {"type": "string", "minLength": 1}, "requestId": {"type": "string", "minLength": 1}, "approvePlanDigest": {"type": "string", "minLength": 1}, "confirmWrite": {"type": "boolean", "const": true}}, "required": ["system", "emitter", "usageId", "requestId", "approvePlanDigest", "confirmWrite"], "additionalProperties": false},
+      "traits": {"destructive": false, "expensive": true}, "output": {"kind": "json"},
+      "dsl": {"admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "confirmWrite"},
+      "effects": {"asset": "write", "world": "none", "editorSession": "write", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.simulation_stage.remove.apply"}
+    },
+    {
+      "id": "content.niagara.simulation_stage.remove.rollback",
+      "domain": "content", "kind": "command",
+      "description": "Restore a Simulation Stage and graph output removed by an exact receipt when the emitter has not drifted.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {"type": "object", "properties": {"rollbackId": {"type": "string", "minLength": 1}, "requestId": {"type": "string", "minLength": 1}, "confirmWrite": {"type": "boolean", "const": true}}, "required": ["rollbackId", "requestId", "confirmWrite"], "additionalProperties": false},
+      "traits": {"destructive": false, "expensive": true}, "output": {"kind": "json"},
+      "dsl": {"admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "confirmWrite"},
+      "effects": {"asset": "write", "world": "none", "editorSession": "write", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.simulation_stage.remove.rollback"}
     },
     {
       "id": "content.niagara.event_handler.add.plan",
@@ -15857,6 +16088,99 @@
       }
     },
     {
+      "id": "content.niagara.event_handler.update.plan",
+      "domain": "content",
+      "kind": "query",
+      "description": "Plan updating the authored options of an existing Niagara Particle Event Handler.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {"type": "string", "minLength": 1},
+          "emitter": {"type": "string", "minLength": 1},
+          "usageId": {"type": "string", "minLength": 1},
+          "sourceEmitterId": {"type": "string"},
+          "sourceEventName": {"type": "string"},
+          "executionMode": {"type": "string", "enum": ["EveryParticle", "SpawnedParticles", "SingleParticle"]},
+          "spawnNumber": {"type": "integer", "minimum": 0},
+          "minSpawnNumber": {"type": "integer", "minimum": 0},
+          "maxEventsPerFrame": {"type": "integer", "minimum": 0},
+          "randomSpawnNumber": {"type": "boolean"},
+          "updateAttributeInitialValues": {"type": "boolean"}
+        },
+        "required": ["system", "emitter", "usageId"],
+        "additionalProperties": false
+      },
+      "traits": {"destructive": false, "expensive": false}, "output": {"kind": "json"},
+      "dsl": {"admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly"},
+      "effects": {"asset": "read", "world": "none", "editorSession": "none", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.event_handler.update.plan"}
+    },
+    {
+      "id": "content.niagara.event_handler.update.apply",
+      "domain": "content", "kind": "command",
+      "description": "Apply an approved Event Handler update with compile/read-back verification and a same-Editor rollback receipt.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {"type": "string", "minLength": 1}, "emitter": {"type": "string", "minLength": 1}, "usageId": {"type": "string", "minLength": 1},
+          "sourceEmitterId": {"type": "string"}, "sourceEventName": {"type": "string"},
+          "executionMode": {"type": "string", "enum": ["EveryParticle", "SpawnedParticles", "SingleParticle"]}, "spawnNumber": {"type": "integer", "minimum": 0}, "minSpawnNumber": {"type": "integer", "minimum": 0}, "maxEventsPerFrame": {"type": "integer", "minimum": 0}, "randomSpawnNumber": {"type": "boolean"}, "updateAttributeInitialValues": {"type": "boolean"},
+          "requestId": {"type": "string", "minLength": 1}, "approvePlanDigest": {"type": "string", "minLength": 1}, "confirmWrite": {"type": "boolean", "const": true}
+        },
+        "required": ["system", "emitter", "usageId", "requestId", "approvePlanDigest", "confirmWrite"], "additionalProperties": false
+      },
+      "traits": {"destructive": false, "expensive": true}, "output": {"kind": "json"},
+      "dsl": {"admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "confirmWrite"},
+      "effects": {"asset": "write", "world": "none", "editorSession": "write", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.event_handler.update.apply"}
+    },
+    {
+      "id": "content.niagara.event_handler.update.rollback",
+      "domain": "content", "kind": "command",
+      "description": "Restore the exact Event Handler options captured by an update receipt when the emitter has not drifted.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {"type": "object", "properties": {"rollbackId": {"type": "string", "minLength": 1}, "requestId": {"type": "string", "minLength": 1}, "confirmWrite": {"type": "boolean", "const": true}}, "required": ["rollbackId", "requestId", "confirmWrite"], "additionalProperties": false},
+      "traits": {"destructive": false, "expensive": true}, "output": {"kind": "json"},
+      "dsl": {"admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "confirmWrite"},
+      "effects": {"asset": "write", "world": "none", "editorSession": "write", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.event_handler.update.rollback"}
+    },
+    {
+      "id": "content.niagara.event_handler.remove.plan",
+      "domain": "content", "kind": "query",
+      "description": "Plan removing an existing Niagara Particle Event Handler and its authored graph output.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {"type": "object", "properties": {"system": {"type": "string", "minLength": 1}, "emitter": {"type": "string", "minLength": 1}, "usageId": {"type": "string", "minLength": 1}}, "required": ["system", "emitter", "usageId"], "additionalProperties": false},
+      "traits": {"destructive": false, "expensive": false}, "output": {"kind": "json"},
+      "dsl": {"admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly"},
+      "effects": {"asset": "read", "world": "none", "editorSession": "none", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.event_handler.remove.plan"}
+    },
+    {
+      "id": "content.niagara.event_handler.remove.apply",
+      "domain": "content", "kind": "command",
+      "description": "Apply an approved Event Handler removal with compile/read-back verification and a same-Editor rollback receipt.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {"type": "object", "properties": {"system": {"type": "string", "minLength": 1}, "emitter": {"type": "string", "minLength": 1}, "usageId": {"type": "string", "minLength": 1}, "requestId": {"type": "string", "minLength": 1}, "approvePlanDigest": {"type": "string", "minLength": 1}, "confirmWrite": {"type": "boolean", "const": true}}, "required": ["system", "emitter", "usageId", "requestId", "approvePlanDigest", "confirmWrite"], "additionalProperties": false},
+      "traits": {"destructive": false, "expensive": true}, "output": {"kind": "json"},
+      "dsl": {"admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "confirmWrite"},
+      "effects": {"asset": "write", "world": "none", "editorSession": "write", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.event_handler.remove.apply"}
+    },
+    {
+      "id": "content.niagara.event_handler.remove.rollback",
+      "domain": "content", "kind": "command",
+      "description": "Restore an Event Handler and graph output removed by an exact receipt when the emitter has not drifted.",
+      "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
+      "inputSchema": {"type": "object", "properties": {"rollbackId": {"type": "string", "minLength": 1}, "requestId": {"type": "string", "minLength": 1}, "confirmWrite": {"type": "boolean", "const": true}}, "required": ["rollbackId", "requestId", "confirmWrite"], "additionalProperties": false},
+      "traits": {"destructive": false, "expensive": true}, "output": {"kind": "json"},
+      "dsl": {"admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "confirmWrite"},
+      "effects": {"asset": "write", "world": "none", "editorSession": "write", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.1.0", "canonicalId": "content.niagara.event_handler.remove.rollback"}
+    },
+    {
       "id": "content.niagara.event_handler.list",
       "domain": "content",
       "kind": "query",
@@ -15988,6 +16312,58 @@
         "since": "1.1.0",
         "canonicalId": "content.niagara.system.spec.export"
       }
+    },
+    {
+      "id": "content.niagara.system.spec.round_trip",
+      "domain": "content",
+      "kind": "query",
+      "description": "Compare a previously exported Niagara System spec with the current authored emitter, renderer, stack and user-parameter structure and report an exact round-trip verdict.",
+      "requires": {
+        "features": ["Niagara"],
+        "plugins": ["Niagara"],
+        "modules": ["Niagara"]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {"type": "string", "minLength": 1, "maxLength": 2048},
+          "spec": {"type": "object"}
+        },
+        "required": ["system", "spec"],
+        "additionalProperties": false
+      },
+      "traits": {"destructive": false, "expensive": false},
+      "output": {"kind": "json"},
+      "dsl": {"admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly"},
+      "effects": {"asset": "read", "world": "none", "editorSession": "none", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.2.0", "canonicalId": "content.niagara.system.spec.round_trip"}
+    },
+    {
+      "id": "content.niagara.system.spec.import",
+      "domain": "content",
+      "kind": "command",
+      "description": "Import authored user-parameter defaults from a Niagara System spec after strict emitter/renderer/stack structure validation. The package is marked dirty and is never saved implicitly.",
+      "requires": {
+        "features": ["Niagara"],
+        "plugins": ["Niagara"],
+        "modules": ["Niagara"]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {"type": "string", "minLength": 1, "maxLength": 2048},
+          "spec": {"type": "object"},
+          "requestId": {"type": "string", "minLength": 1, "maxLength": 256},
+          "confirmWrite": {"type": "boolean", "const": true}
+        },
+        "required": ["system", "spec", "requestId", "confirmWrite"],
+        "additionalProperties": false
+      },
+      "traits": {"destructive": false, "expensive": true},
+      "output": {"kind": "json"},
+      "dsl": {"admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "confirmWrite"},
+      "effects": {"asset": "write", "world": "none", "editorSession": "write", "external": "none"},
+      "lifecycle": {"status": "active", "since": "1.2.0", "canonicalId": "content.niagara.system.spec.import"}
     }
   ],
   "tombstones": []

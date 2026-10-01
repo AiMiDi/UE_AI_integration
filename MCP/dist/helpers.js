@@ -81,11 +81,15 @@ export function formatCapabilityResponse(capability, data) {
     }
     if (typeof data.image_base64 !== "string" ||
         data.image_base64.length === 0) {
-        return formatErrorResponse(new UEApiError({
+        // Let the capability router wrap this failure in the common verification
+        // envelope. Returning an MCP error here would bypass that boundary because
+        // the router can no longer distinguish a malformed handler result from a
+        // transport response.
+        throw new UEApiError({
             code: "invalid_image_output",
             message: `Capability "${capability.id}" declared image output but returned no image_base64`,
             details: data,
-        }));
+        });
     }
     const mimeType = typeof data.mime_type === "string" && data.mime_type.length > 0
         ? data.mime_type

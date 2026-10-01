@@ -448,6 +448,71 @@ bool FNiagaraModuleInputDIContractTest::RunTest(const FString&)
 			&& DynamicInputNode->FunctionScript->GetUsage() == ENiagaraScriptUsage::DynamicInput;
 	}
 	TestTrue(TEXT("Override pin read-back is linked to a dynamic-input node"), bDIReadBack);
+
+	// The authored System Spec exporter must carry the mounted Dynamic Input
+	// tree, and importing that unchanged tree must preserve its node identity.
+	// This exercises the full spec path independently of the direct DI setter.
+	auto SpecExportParams = MakeShared<FJsonObject>();
+	SpecExportParams->SetStringField(TEXT("system"), Fixture.System->GetPathName());
+	const FMCPToolResult SpecExport = Registry.ExecuteTool(
+		TEXT("content.niagara.system.spec.export"), SpecExportParams);
+	if (TestTrue(TEXT("System spec export includes the mounted dynamic input"), SpecExport.bSuccess)
+		&& SpecExport.Data)
+	{
+		FString ExportedDynamicGuid;
+		FString ExportedTreeGuid;
+		bool bFoundDynamicTree = false;
+		const TArray<TSharedPtr<FJsonValue>>* Emitters = nullptr;
+		if (SpecExport.Data->TryGetArrayField(TEXT("emitters"), Emitters) && Emitters)
+		{
+			for (const TSharedPtr<FJsonValue>& EmitterValue : *Emitters)
+			{
+				const TSharedPtr<FJsonObject> Emitter = EmitterValue.IsValid() ? EmitterValue->AsObject() : nullptr;
+				const TArray<TSharedPtr<FJsonValue>>* Stacks = nullptr;
+				if (!Emitter.IsValid() || !Emitter->TryGetArrayField(TEXT("stacks"), Stacks) || !Stacks) continue;
+				for (const TSharedPtr<FJsonValue>& StackValue : *Stacks)
+				{
+					const TSharedPtr<FJsonObject> Stack = StackValue.IsValid() ? StackValue->AsObject() : nullptr;
+					const TArray<TSharedPtr<FJsonValue>>* Modules = nullptr;
+					if (!Stack.IsValid() || !Stack->TryGetArrayField(TEXT("modules"), Modules) || !Modules) continue;
+					for (const TSharedPtr<FJsonValue>& ModuleValue : *Modules)
+					{
+						const TSharedPtr<FJsonObject> Module = ModuleValue.IsValid() ? ModuleValue->AsObject() : nullptr;
+						const TArray<TSharedPtr<FJsonValue>>* Inputs = nullptr;
+						if (!Module.IsValid() || !Module->TryGetArrayField(TEXT("inputs"), Inputs) || !Inputs) continue;
+						for (const TSharedPtr<FJsonValue>& InputValue : *Inputs)
+						{
+							const TSharedPtr<FJsonObject> Input = InputValue.IsValid() ? InputValue->AsObject() : nullptr;
+							const TSharedPtr<FJsonObject>* Tree = nullptr;
+							if (!Input.IsValid() || !Input->TryGetObjectField(TEXT("dynamicInputTree"), Tree)
+								|| !Tree || !Tree->IsValid()) continue;
+							Input->TryGetStringField(TEXT("dynamicInputGuid"), ExportedDynamicGuid);
+							(*Tree)->TryGetStringField(TEXT("guid"), ExportedTreeGuid);
+							bFoundDynamicTree = !ExportedDynamicGuid.IsEmpty() && ExportedDynamicGuid == ExportedTreeGuid;
+							break;
+						}
+						if (bFoundDynamicTree) break;
+					}
+					if (bFoundDynamicTree) break;
+				}
+				if (bFoundDynamicTree) break;
+			}
+		}
+		TestTrue(TEXT("System spec preserves the dynamic input GUID in its tree root"), bFoundDynamicTree);
+		if (bFoundDynamicTree)
+		{
+			auto SpecImportParams = MakeShared<FJsonObject>();
+			SpecImportParams->SetStringField(TEXT("system"), Fixture.System->GetPathName());
+			SpecImportParams->SetObjectField(TEXT("spec"), SpecExport.Data);
+			SpecImportParams->SetStringField(TEXT("requestId"), TEXT("module-input-di-system-spec-round-trip"));
+			SpecImportParams->SetBoolField(TEXT("confirmWrite"), true);
+			const FMCPToolResult SpecImport = Registry.ExecuteTool(
+				TEXT("content.niagara.system.spec.import"), SpecImportParams);
+			TestTrue(TEXT("System spec imports a mounted dynamic input tree"), SpecImport.bSuccess);
+			if (SpecImport.Data)
+				TestTrue(TEXT("System spec dynamic tree import verifies readback"), SpecImport.Data->GetBoolField(TEXT("readbackVerified")));
+		}
+	}
 	return true;
 }
 

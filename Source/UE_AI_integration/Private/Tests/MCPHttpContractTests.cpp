@@ -264,6 +264,24 @@ bool FWaitForWorkflowHttpE2E::Update()
 			&& Receipt->IsValid());
 	if (Receipt && Receipt->IsValid())
 	{
+		const TSharedPtr<FJsonObject>* Verification = nullptr;
+		Test->TestTrue(
+			TEXT("HTTP workflow result exposes the common verification state"),
+			Response->GetObjectField(TEXT("data"))->TryGetObjectField(
+				TEXT("verificationState"),
+				Verification)
+				&& Verification
+				&& Verification->IsValid());
+		if (Verification && Verification->IsValid())
+		{
+			Test->TestEqual(
+				TEXT("Workflow verification identifies the transport capability"),
+				(*Verification)->GetStringField(TEXT("capability")),
+				FString(TEXT("workflow.execute")));
+			Test->TestTrue(
+				TEXT("Workflow verification records execution"),
+				(*Verification)->GetBoolField(TEXT("executed")));
+		}
 		FString Status;
 		Test->TestTrue(
 			TEXT("HTTP execute receipt is completed"),

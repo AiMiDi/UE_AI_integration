@@ -11,6 +11,9 @@ the MCP bridge, and the standalone `ue-cli <capability>` CLI:
 - `canonical-json-vectors.v1`: cross-runtime canonical JSON and SHA-256 golden
   vectors shared by the UE Infrastructure implementation and portable
   `UEWorkflowCore`.
+- `capability-verification.v1`: the transport-wide six-state execution proof
+  attached to capability results; nullable readback/runtime values remain
+  unknown until a handler supplies the corresponding evidence.
 
 The Editor owns execution and persistence. MCP forwards structured objects
 without reinterpreting them, and the CLI can export artifact payloads with

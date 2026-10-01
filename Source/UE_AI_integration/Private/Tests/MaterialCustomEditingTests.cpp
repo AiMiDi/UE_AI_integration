@@ -6,6 +6,7 @@
 #include "Infrastructure/MaterialAssetHelpers.h"
 #include "Infrastructure/MaterialGraphIdentity.h"
 #include "Infrastructure/MaterialCustomEditing.h"
+#include "Infrastructure/MaterialGraphSnapshot.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialFunction.h"
 #include "Materials/MaterialExpressionCustom.h"
@@ -57,6 +58,42 @@ FMCPToolResult Call(const TCHAR* Id, TSharedPtr<FJsonObject> Params)
 	// Internal handler tests inject trusted execution metadata. Public manifest
 	// validation is tested separately and rejects this reserved field.
 	return CustomRegistry()->FindTool(Id)->Execute(Params);
+}
+
+bool AttachFunctionBoundary(
+	UMaterialFunction* Function,
+	const TArray<FString>& NodeIds,
+	const TSharedPtr<FJsonObject>& Params)
+{
+	using namespace UEAIIntegration::MaterialQuery;
+	const FMCPToolResult Captured = Capture(Function);
+	if (!Captured.bSuccess || !Captured.Data.IsValid())
+	{
+		return false;
+	}
+	const FString SnapshotId = Captured.Data->GetStringField(TEXT("snapshotId"));
+	const FString ProjectionHash = Captured.Data->GetStringField(TEXT("projectionHash"));
+	TArray<TSharedPtr<FJsonValue>> NodeValues;
+	for (const FString& NodeId : NodeIds)
+	{
+		NodeValues.Add(MakeShared<FJsonValueString>(NodeId));
+	}
+	auto BoundaryParams = MakeShared<FJsonObject>();
+	BoundaryParams->SetStringField(TEXT("snapshotId"), SnapshotId);
+	BoundaryParams->SetArrayField(TEXT("nodeIds"), NodeValues);
+	BoundaryParams->SetStringField(TEXT("direction"), TEXT("upstream"));
+	BoundaryParams->SetNumberField(TEXT("depth"), 8);
+	BoundaryParams->SetNumberField(TEXT("maxNodes"), 32);
+	BoundaryParams->SetNumberField(TEXT("maxEdges"), 32);
+	const FMCPToolResult BoundaryResult = Boundary(BoundaryParams);
+	if (!BoundaryResult.bSuccess || !BoundaryResult.Data.IsValid())
+	{
+		return false;
+	}
+	Params->SetStringField(TEXT("snapshotId"), SnapshotId);
+	Params->SetStringField(TEXT("boundaryId"), BoundaryResult.Data->GetStringField(TEXT("boundaryId")));
+	Params->SetStringField(TEXT("expectedProjectionHash"), ProjectionHash);
+	return true;
 }
 }
 
@@ -150,6 +187,11 @@ bool FMaterialCustomFunctionParametersTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Missing input is diagnosed"), Read.Data->GetArrayField(TEXT("structuralDiagnostics")).Num(), 1);
 	P = EditParams(Function.Get()); P->SetStringField(TEXT("sourceNodeId"), ExpressionNodeId(Scalar)); P->SetStringField(TEXT("sourcePinName"), TEXT("Output"));
 	P->SetStringField(TEXT("targetNodeId"), ExpressionNodeId(Custom)); P->SetStringField(TEXT("targetPinName"), TEXT("Gain"));
+	TestEqual(TEXT("Function connect requires a graph boundary"),
+		Call(TEXT("content.material.pin.connect"), P).ErrorCode,
+		FString(TEXT("material_boundary_required_for_mutation")));
+	TestTrue(TEXT("Function connect boundary is attached"),
+		AttachFunctionBoundary(Function.Get(), {ExpressionNodeId(Scalar), ExpressionNodeId(Custom)}, P));
 	TestTrue(TEXT("Connect named function Custom input"), Call(TEXT("content.material.pin.connect"), P).bSuccess);
 	const FGuid Guid = Scalar->ExpressionGUID;
 	P = EditParams(Function.Get(), Scalar); P->SetStringField(TEXT("name"), TEXT("Intensity")); P->SetStringField(TEXT("group"), TEXT("Custom Controls")); P->SetNumberField(TEXT("defaultValue"), 0.75); P->SetNumberField(TEXT("sliderMax"), 2);
@@ -169,6 +211,8 @@ bool FMaterialCustomFunctionParametersTest::RunTest(const FString& Parameters)
 	P = EditParams(Function.Get()); P->SetStringField(TEXT("expressionClass"), TEXT("ScalarParameter"));
 	const auto Added = Call(TEXT("content.material.expression.add"), P); if (!TestTrue(TEXT("Parameter add uses existing operation"), Added.bSuccess)) return false;
 	P = EditParams(Function.Get()); P->SetStringField(TEXT("nodeId"), Added.Data->GetStringField(TEXT("nodeId")));
+	TestTrue(TEXT("Function delete boundary is attached"),
+		AttachFunctionBoundary(Function.Get(), {Added.Data->GetStringField(TEXT("nodeId"))}, P));
 	TestTrue(TEXT("Parameter delete uses existing operation"), Call(TEXT("content.material.expression.delete"), P).bSuccess);
 	P = EditParams(Function.Get(), Custom); P->SetArrayField(TEXT("defines"), {}); P->SetArrayField(TEXT("includePaths"), {});
 	TestTrue(TEXT("Clear optional lists"), Call(TEXT("content.material.custom.set"), P).bSuccess); TestEqual(TEXT("Defines removed"), Custom->AdditionalDefines.Num(), 0); TestEqual(TEXT("Includes removed"), Custom->IncludeFilePaths.Num(), 0);

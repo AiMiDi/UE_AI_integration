@@ -348,7 +348,7 @@
       "id": "blueprint.asset.references",
       "domain": "blueprint",
       "kind": "query",
-      "description": "Find all assets that reference a given asset path, categorized as Blueprint vs other references.",
+      "description": "Find all assets that reference a given asset path, categorized as Blueprint vs other references. The v2 response preserves the legacy package arrays and returns every object candidate for each referencer package with sourcePackagePath/sourceObjectPath/sourceClassPath/sourceIdentity, candidateCount, identityStatus, and ambiguity fields. The root identityStatus, referenceIdentityDigest, and identityComplete let callers detect incomplete or ambiguous Asset Registry resolution before following a cross-asset edit.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -421,6 +421,45 @@
         "status": "active",
         "since": "0.9.0",
         "canonicalId": "blueprint.asset.reload"
+      }
+    },
+    {
+      "id": "blueprint.asset.runtime.verify",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Verify that a compiled Actor Blueprint has a live instance in the current PIE or Game world. Compile success and asset persistence are reported separately; a generated class or CDO never counts as runtime evidence.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Blueprint asset package or object path."
+          }
+        },
+        "required": [
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "read",
+        "editorSession": "read",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.3.0",
+        "canonicalId": "blueprint.asset.runtime.verify"
       }
     },
     {
@@ -1532,6 +1571,33 @@
             "minLength": 1,
             "maxLength": 1024,
             "description": "Optional exact component-template object path."
+          },
+          "expectedTemplateIdentity": {
+            "type": "object",
+            "description": "Optional stable component-template identity returned by blueprint.component.get. The objectPath and classPath must match; stateHash, when supplied, detects an intervening template edit.",
+            "properties": {
+              "objectPath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "classPath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "stateHash": {
+                "type": "string",
+                "minLength": 71,
+                "maxLength": 71,
+                "pattern": "^sha256:[0-9A-Fa-f]{64}$"
+              }
+            },
+            "required": [
+              "objectPath",
+              "classPath"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [

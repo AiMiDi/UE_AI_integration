@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { loadCapabilityCatalog } from "../capability-catalog.js";
 import { locateShortCli, locateWorkflowCli, } from "../cli-locator.js";
-import { runDomainOperation } from "../domain-router.js";
+import { runDomainOperation, } from "../domain-router.js";
 import { createLocalShutdownHandler } from "../index.js";
 import { createMcpServer, handleCapabilities, handleContext, handleParameterContract, MCP_TOOL_NAMES, } from "../mcp-server.js";
 import { UEApiError, UEClient, } from "../ue-bridge.js";
@@ -536,6 +536,16 @@ test("rejects action-specific ue_workflow inputs before HTTP forwarding", async 
     }
     const payload = JSON.parse(response.content[0].text);
     assert.equal(payload.error.code, "invalid_workflow_request");
+    assert.deepEqual(payload.error.details.verificationState, {
+        schema: "ue.capability-verification.v1",
+        capability: "ue.workflow.request",
+        localDeclared: true,
+        handlerRegistered: false,
+        liveAvailable: false,
+        executed: false,
+        readbackVerified: null,
+        runtimeVerified: null,
+    });
 });
 test("forwards ue_workflow envelopes unchanged and maps structured responses", async () => {
     const calls = [];
@@ -577,6 +587,22 @@ test("forwards ue_workflow envelopes unchanged and maps structured responses", a
         runId: "run-1",
         status: "succeeded",
         diagnostics: [],
+        localDeclared: true,
+        handlerRegistered: true,
+        liveAvailable: true,
+        executed: true,
+        readbackVerified: null,
+        runtimeVerified: null,
+        verificationState: {
+            schema: "ue.capability-verification.v1",
+            capability: "ue.workflow.execute",
+            localDeclared: true,
+            handlerRegistered: true,
+            liveAvailable: true,
+            executed: true,
+            readbackVerified: null,
+            runtimeVerified: null,
+        },
     });
 });
 test("maps UE workflow API errors to canonical MCP errors", async () => {
@@ -608,6 +634,22 @@ test("maps UE workflow API errors to canonical MCP errors", async () => {
             details: {
                 expected: "sha256:new",
                 actual: "sha256:old",
+                localDeclared: true,
+                handlerRegistered: false,
+                liveAvailable: false,
+                executed: false,
+                readbackVerified: null,
+                runtimeVerified: null,
+                verificationState: {
+                    schema: "ue.capability-verification.v1",
+                    capability: "ue.workflow.status",
+                    localDeclared: true,
+                    handlerRegistered: false,
+                    liveAvailable: false,
+                    executed: false,
+                    readbackVerified: null,
+                    runtimeVerified: null,
+                },
             },
             status: 409,
         },
@@ -769,6 +811,24 @@ test("maps declared image output to native MCP image content", async () => {
     assert.equal(response.content[1]?.type, "text");
     const metadata = JSON.parse(response.content[1].text);
     assert.deepEqual(metadata, { width: 1280, height: 720 });
+});
+test("image handler failures retain the common verification state", async () => {
+    const catalog = loadCapabilityCatalog();
+    const operation = "scene.viewport.capture";
+    const response = await runDomainOperation(catalog, {
+        verificationAware: true,
+        execute: async () => ({ width: 1280, height: 720 }),
+    }, "scene", operation, {});
+    assert.equal(response.isError, true);
+    const firstContent = response.content[0];
+    assert.equal(firstContent?.type, "text");
+    if (!firstContent || firstContent.type !== "text") {
+        assert.fail("Expected JSON error result");
+    }
+    const payload = JSON.parse(firstContent.text);
+    assert.equal(payload.error?.details?.verificationState?.capability, operation);
+    assert.equal(payload.error?.details?.verificationState?.executed, true);
+    assert.equal(payload.error?.details?.verificationState?.readbackVerified, null);
 });
 test("maps scenario artifact output to native MCP image content", async () => {
     const catalog = loadCapabilityCatalog();

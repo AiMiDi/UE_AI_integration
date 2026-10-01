@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { formatErrorResponse, formatJsonResponse, } from "./helpers.js";
+import { attachCapabilityVerification, verificationErrorDetails, } from "./capability-verification.js";
 import { UEApiError, UE_WORKFLOW_ACTIONS, } from "./ue-bridge.js";
 const nonEmptyString = z
     .string()
@@ -135,10 +136,37 @@ export const UE_WORKFLOW_INPUT_SCHEMA = UE_WORKFLOW_TOOL_SCHEMA
 });
 export async function runWorkflowAction(executor, request, signal) {
     try {
-        return formatJsonResponse(await executor.workflow(request, signal));
+        const data = await executor.workflow(request, signal);
+        return formatJsonResponse(attachCapabilityVerification(`ue.workflow.${request.action}`, data, {
+            localDeclared: true,
+            handlerRegistered: true,
+            liveAvailable: true,
+            executed: true,
+        }));
     }
     catch (error) {
-        return formatErrorResponse(error);
+        if (error instanceof UEApiError) {
+            return formatErrorResponse(new UEApiError({
+                code: error.code,
+                message: error.message,
+                details: verificationErrorDetails(`ue.workflow.${request.action}`, error.details, {
+                    localDeclared: true,
+                    handlerRegistered: false,
+                    liveAvailable: false,
+                    executed: false,
+                }),
+            }, error.status));
+        }
+        return formatErrorResponse(new UEApiError({
+            code: "workflow_error",
+            message: error instanceof Error ? error.message : String(error),
+            details: verificationErrorDetails(`ue.workflow.${request.action}`, undefined, {
+                localDeclared: true,
+                handlerRegistered: false,
+                liveAvailable: false,
+                executed: false,
+            }),
+        }));
     }
 }
 export async function handleWorkflowInput(executor, value, signal) {
@@ -146,7 +174,28 @@ export async function handleWorkflowInput(executor, value, signal) {
         return await runWorkflowAction(executor, parseWorkflowInput(value), signal);
     }
     catch (error) {
-        return formatErrorResponse(error);
+        if (error instanceof UEApiError) {
+            return formatErrorResponse(new UEApiError({
+                code: error.code,
+                message: error.message,
+                details: verificationErrorDetails("ue.workflow.request", error.details, {
+                    localDeclared: true,
+                    handlerRegistered: false,
+                    liveAvailable: false,
+                    executed: false,
+                }),
+            }, error.status ?? 422));
+        }
+        return formatErrorResponse(new UEApiError({
+            code: "invalid_workflow_request",
+            message: error instanceof Error ? error.message : String(error),
+            details: verificationErrorDetails("ue.workflow.request", undefined, {
+                localDeclared: true,
+                handlerRegistered: false,
+                liveAvailable: false,
+                executed: false,
+            }),
+        }, 422));
     }
 }
 export function parseWorkflowInput(value) {
