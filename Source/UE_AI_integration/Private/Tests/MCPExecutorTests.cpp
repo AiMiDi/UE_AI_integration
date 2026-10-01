@@ -212,6 +212,37 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 			Unknown.Error.Details->GetBoolField(TEXT("executed")));
 	}
 
+	// Annotating a transport rejection cannot invent a registered Workflow
+	// handler, even when the caller reached the Workflow dispatcher.
+	for (const TCHAR* Capability : {TEXT("workflow.unknown"), TEXT("workflow.execute.extra")})
+	{
+		FMCPExecutionContext Context;
+		Context.Capability = Capability;
+		FMCPResult Rejection = FMCPResult::Fail(TEXT("invalid_params"), TEXT("Unknown action."), 422);
+		Executor.AnnotateVerification(Context, Rejection, true);
+		TestTrue(TEXT("Unknown Workflow action includes verification details"), Rejection.Error.Details.IsValid());
+		if (Rejection.Error.Details.IsValid())
+		{
+			for (const TCHAR* Field : {TEXT("localDeclared"), TEXT("handlerRegistered"), TEXT("liveAvailable"), TEXT("executed")})
+			{
+				TestFalse(FString::Printf(TEXT("%s does not claim %s"), Capability, Field),
+					Rejection.Error.Details->GetBoolField(Field));
+				TestFalse(TEXT("Nested verification agrees with unknown action rejection"),
+					Rejection.Error.Details->GetObjectField(TEXT("verificationState"))->GetBoolField(Field));
+			}
+		}
+	}
+	for (const TCHAR* Action : {TEXT("validate"), TEXT("plan"), TEXT("execute"), TEXT("resume"), TEXT("status"), TEXT("rollback")})
+	{
+		FMCPExecutionContext Context;
+		Context.Capability = FString(TEXT("workflow.")) + Action;
+		FMCPResult Rejection = FMCPResult::Fail(TEXT("client_session_expired"), TEXT("Rejected before dispatch."), 401);
+		Executor.AnnotateVerification(Context, Rejection, false);
+		TestTrue(TEXT("Supported Workflow action is declared"), Rejection.Error.Details->GetBoolField(TEXT("localDeclared")));
+		TestTrue(TEXT("Supported Workflow action has a handler"), Rejection.Error.Details->GetBoolField(TEXT("handlerRegistered")));
+		TestFalse(TEXT("Workflow preflight rejection does not execute its handler"), Rejection.Error.Details->GetBoolField(TEXT("executed")));
+	}
+
 	FMCPExecutionContext FirstIdempotentRequest;
 	FirstIdempotentRequest.Capability = TEXT("production.build.status");
 	FirstIdempotentRequest.Params = MakeShared<FJsonObject>();

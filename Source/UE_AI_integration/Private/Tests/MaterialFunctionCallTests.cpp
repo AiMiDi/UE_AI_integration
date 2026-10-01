@@ -6,6 +6,7 @@
 #include "Infrastructure/MaterialCustomEditing.h"
 #include "Infrastructure/MaterialFunctionDependencies.h"
 #include "Infrastructure/MaterialGraphIdentity.h"
+#include "Infrastructure/MaterialGraphSnapshot.h"
 #include "Materials/MaterialExpressionFunctionInput.h"
 #include "Materials/MaterialExpressionCustom.h"
 #include "Materials/MaterialExpressionConstant.h"
@@ -42,6 +43,24 @@ TSharedRef<FJsonObject> FunctionCallParams(UObject* Owner, UMaterialExpression* 
 	return P;
 }
 FMCPToolResult FunctionCallTool(const TCHAR* Id, TSharedPtr<FJsonObject> P) { return FunctionCallRegistry()->FindTool(Id)->Execute(P); }
+bool AttachFunctionCallWriteBoundary(UObject* Owner, UMaterialExpression* Expression, const TSharedPtr<FJsonObject>& Params)
+{
+	using namespace UEAIIntegration::MaterialQuery;
+	const FMCPToolResult Snapshot = Capture(Owner, FString(), FString(), nullptr, true);
+	if (!Snapshot.bSuccess || !Snapshot.Data) return false;
+	auto Query = MakeShared<FJsonObject>();
+	Query->SetStringField(TEXT("snapshotId"), Snapshot.Data->GetStringField(TEXT("snapshotId")));
+	Query->SetArrayField(TEXT("nodeIds"), {MakeShared<FJsonValueString>(MCPMaterialInfrastructure::ExpressionNodeId(Expression))});
+	Query->SetStringField(TEXT("direction"), TEXT("upstream"));
+	Query->SetNumberField(TEXT("depth"), 8);
+	const FMCPToolResult Proof = Boundary(Query);
+	if (!Proof.bSuccess || !Proof.Data) return false;
+	Params->SetStringField(TEXT("snapshotId"), Snapshot.Data->GetStringField(TEXT("snapshotId")));
+	Params->SetStringField(TEXT("boundaryId"), Proof.Data->GetStringField(TEXT("boundaryId")));
+	Params->SetStringField(TEXT("expectedProjectionHash"), Snapshot.Data->GetStringField(TEXT("projectionHash")));
+	Params->SetBoolField(TEXT("confirmSharedNodeImpact"), true);
+	return true;
+}
 void MakeFunctionInterface(UMaterialFunction* F, bool Reverse)
 {
 	for (int32 I = 0; I < 2; ++I)
@@ -70,6 +89,7 @@ bool FMaterialFunctionCallInterfaceTest::RunTest(const FString&)
 		if (Graph) M->MaterialGraph->LinkGraphNodesFromMaterial();
 		const auto Read = FunctionCallTool(TEXT("content.material.function.call.get"), FunctionCallParams(M.Get(), Call, false));
 		P->SetStringField(TEXT("expectedStateHash"), Read.Data->GetStringField(TEXT("stateHash"))); P->SetStringField(TEXT("function"), B->GetPathName()); P->SetBoolField(TEXT("dryRun"), true);
+		if (!TestTrue(TEXT("Shared function-call boundary is captured"), AttachFunctionCallWriteBoundary(M.Get(), Call, P))) return false;
 		TestTrue(TEXT("Dry run accepted"), FunctionCallTool(TEXT("content.material.function.call.set"), P).bSuccess); TestEqual(TEXT("Dry run preserves function"), Call->MaterialFunction.Get(), static_cast<UMaterialFunctionInterface*>(A.Get()));
 		P->SetBoolField(TEXT("dryRun"), false);
 		const auto Changed = FunctionCallTool(TEXT("content.material.function.call.set"), P);
@@ -79,12 +99,15 @@ bool FMaterialFunctionCallInterfaceTest::RunTest(const FString&)
 		TestEqual(TEXT("Consumer follows Glow"), Consumer->A.OutputIndex, 0); TestEqual(TEXT("Root follows Mask"), M->GetExpressionInputForProperty(MP_EmissiveColor)->OutputIndex, 1);
 		TestEqual(TEXT("Stale precondition rejected"), FunctionCallTool(TEXT("content.material.function.call.set"), P).ErrorCode, FString(TEXT("material_edit_conflict")));
 		P = FunctionCallParams(M.Get(), Call); P->SetStringField(TEXT("function"), B->GetPathName());
+		if (!TestTrue(TEXT("No-op function-call boundary is refreshed"), AttachFunctionCallWriteBoundary(M.Get(), Call, P))) return false;
 		TestFalse(TEXT("Identical assignment no-op"), FunctionCallTool(TEXT("content.material.function.call.set"), P).Data->GetBoolField(TEXT("changed")));
 		Call->FunctionInputs[1].ExpressionInput->InputName = TEXT("RenamedA"); Call->FunctionOutputs[1].ExpressionOutput->OutputName = TEXT("RenamedMask");
+		if (!TestTrue(TEXT("Changed-interface boundary is refreshed"), AttachFunctionCallWriteBoundary(M.Get(), Call, P))) return false;
 		TestTrue(TEXT("Refresh same function by GUID"), FunctionCallTool(TEXT("content.material.function.call.set"), P).bSuccess);
 		TestEqual(TEXT("Rename preserves source"), Call->FunctionInputs[1].Input.Expression, static_cast<UMaterialExpression*>(Source));
 		TestEqual(TEXT("Rename propagated to call"), Call->FunctionInputs[1].Input.InputName, FName(TEXT("RenamedA")));
 		P->SetStringField(TEXT("function"), TEXT(""));
+		if (!TestTrue(TEXT("Clear function-call boundary is refreshed"), AttachFunctionCallWriteBoundary(M.Get(), Call, P))) return false;
 		TestEqual(TEXT("Clear requires explicit disconnect"), FunctionCallTool(TEXT("content.material.function.call.set"), P).ErrorCode, FString(TEXT("connected_pin_removal")));
 		P->SetBoolField(TEXT("disconnectRemoved"), true); TestTrue(TEXT("Explicit clear accepted"), FunctionCallTool(TEXT("content.material.function.call.set"), P).bSuccess);
 		TestNull(TEXT("Consumer cleared"), Consumer->A.Expression); TestNull(TEXT("Root cleared"), M->GetExpressionInputForProperty(MP_EmissiveColor)->Expression);

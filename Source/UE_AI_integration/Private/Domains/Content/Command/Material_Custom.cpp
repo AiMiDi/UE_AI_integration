@@ -1,5 +1,6 @@
 #include "Infrastructure/MaterialCustomEditing.h"
 #include "Infrastructure/MaterialEditingTarget.h"
+#include "Infrastructure/MaterialSharedWriteProtection.h"
 #include "Infrastructure/MaterialAssetHelpers.h"
 #include "Infrastructure/MaterialFunctionMutation.h"
 #include "Infrastructure/MaterialFunctionDependencies.h"
@@ -36,6 +37,7 @@ namespace
 {
 using namespace MCPMaterialInfrastructure;
 constexpr int32 MaxCodeChars = 65536;
+
 struct FCompileSource
 {
 	TWeakObjectPtr<UMaterial> Material;
@@ -311,6 +313,9 @@ FMCPToolResult ConfigureFunctionCall(const TSharedPtr<FJsonObject>& Params)
 	auto After = FunctionCallState(Desired.Get()); After->SetStringField(TEXT("nodeId"), ExpressionNodeId(Call));
 	if (JsonBytes(After) > 240 * 1024) return Invalid(TEXT("Function interface exceeds 240 KiB."));
 	const bool bChanged = JsonHash(After) != BeforeHash;
+	FMaterialSharedWriteProof WriteProof;
+	const FMCPToolResult BoundaryResult = ValidateMaterialExpressionSharedWrite(Target, Call, Params, WriteProof);
+	if (!BoundaryResult.bSuccess) return BoundaryResult;
 	auto Result = MakeShared<FJsonObject>();
 	Result->SetBoolField(TEXT("changed"), bChanged); Result->SetBoolField(TEXT("dryRun"), bDryRun); Result->SetBoolField(TEXT("saved"), false);
 	Result->SetStringField(TEXT("nodeId"), ExpressionNodeId(Call)); Result->SetNumberField(TEXT("removedConnections"), Removed);
@@ -339,6 +344,7 @@ FMCPToolResult ConfigureFunctionCall(const TSharedPtr<FJsonObject>& Params)
 	}
 	Result->SetStringField(TEXT("function"), Call->MaterialFunction ? Call->MaterialFunction->GetPathName() : FString());
 	Result->SetStringField(TEXT("stateHash"), JsonHash(FunctionCallState(Call)));
+	DescribeMaterialExpressionSharedWrite(WriteProof, Result);
 	DescribeTarget(Target, Result);
 	return FMCPToolResult::Ok(Result);
 }
@@ -449,6 +455,9 @@ FMCPToolResult ConfigureCustom(const TSharedPtr<FJsonObject>& Params)
 	auto After = CustomState(Desired.Get()); After->SetStringField(TEXT("nodeId"), ExpressionNodeId(Custom));
 	if (JsonBytes(After) > 240 * 1024) return Invalid(TEXT("Combined Custom configuration exceeds 240 KiB UTF-8 JSON."), TEXT("custom_size_limit"));
 	const bool bChanged = JsonHash(After) != BeforeHash;
+	FMaterialSharedWriteProof WriteProof;
+	const FMCPToolResult BoundaryResult = ValidateMaterialExpressionSharedWrite(Target, Custom, Params, WriteProof);
+	if (!BoundaryResult.bSuccess) return BoundaryResult;
 	auto Result = MakeShared<FJsonObject>();
 	Result->SetBoolField(TEXT("success"), true); Result->SetBoolField(TEXT("changed"), bChanged);
 	Result->SetBoolField(TEXT("dryRun"), bDryRun); Result->SetBoolField(TEXT("saved"), false);
@@ -489,6 +498,7 @@ FMCPToolResult ConfigureCustom(const TSharedPtr<FJsonObject>& Params)
 		FinishEdit(Target, Custom, Params, Result);
 	}
 	Result->SetStringField(TEXT("stateHash"), JsonHash(CustomState(Custom)));
+	DescribeMaterialExpressionSharedWrite(WriteProof, Result);
 	DescribeTarget(Target, Result);
 	Result->SetBoolField(TEXT("hlslValidated"), false);
 	return FMCPToolResult::Ok(Result);
@@ -595,6 +605,9 @@ FMCPToolResult SetParameter(const TSharedPtr<FJsonObject>& Params)
 		|| (Scalar && (ScalarValue != Scalar->DefaultValue || Min != Scalar->SliderMin || Max != Scalar->SliderMax))
 		|| (Vector && VectorValue != Vector->DefaultValue) || (Bool && BoolValue != Bool->DefaultValue)
 		|| (Texture && (TextureValue != Texture->Texture || Sampler != Texture->SamplerType));
+	FMaterialSharedWriteProof WriteProof;
+	const FMCPToolResult BoundaryResult = ValidateMaterialExpressionSharedWrite(Target, Expression, Params, WriteProof);
+	if (!BoundaryResult.bSuccess) return BoundaryResult;
 	auto Result = MakeShared<FJsonObject>(); Result->SetBoolField(TEXT("success"), true); Result->SetBoolField(TEXT("changed"), bChanged);
 	Result->SetBoolField(TEXT("dryRun"), bDryRun); Result->SetBoolField(TEXT("saved"), false); Result->SetStringField(TEXT("nodeId"), ExpressionNodeId(Expression));
 	if (bChanged && !bDryRun)
@@ -610,6 +623,7 @@ FMCPToolResult SetParameter(const TSharedPtr<FJsonObject>& Params)
 	}
 	Result->SetStringField(TEXT("stateHash"), JsonHash(ParameterState(Expression)));
 	Result->SetStringField(TEXT("parameterGuid"), Expression->GetParameterExpressionId().ToString());
+	DescribeMaterialExpressionSharedWrite(WriteProof, Result);
 	DescribeTarget(Target, Result);
 	return FMCPToolResult::Ok(Result);
 }

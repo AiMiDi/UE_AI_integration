@@ -66,6 +66,10 @@ struct FGraphSnapshot
 	FString BlueprintPath;
 	FDateTime CreatedAt;
 	TMap<FString, FGraphSnapshotData> Graphs;
+	// Material authored checkpoints retain an independent bounded image cache.
+	// Keep its projection identity here after eviction so readers return 410
+	// instead of silently treating an expired checkpoint as topology-only.
+	bool bAuthoredMaterialCheckpoint = false;
 };
 
 /**

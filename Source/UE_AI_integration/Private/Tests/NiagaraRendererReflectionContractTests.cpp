@@ -10,14 +10,18 @@
 #include "NiagaraComponentRendererProperties.h"
 #include "NiagaraEditorUtilities.h"
 #include "NiagaraEmitter.h"
+#include "NiagaraEmitterFactoryNew.h"
+#include "NiagaraEmitterHandle.h"
 #include "NiagaraMeshRendererProperties.h"
 #include "NiagaraRibbonRendererProperties.h"
+#include "NiagaraScriptSource.h"
 #include "NiagaraSpriteRendererProperties.h"
 #include "NiagaraSystem.h"
 #include "NiagaraSystemFactoryNew.h"
 #include "Tools/MCPToolRegistry.h"
 #include "UObject/Package.h"
 #include "UObject/UnrealType.h"
+#include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 
 namespace UEAIIntegrationTools
 {
@@ -51,20 +55,41 @@ struct FRendererReflectionFixture
 		{
 			return false;
 		}
-		UNiagaraSystemFactoryNew::InitializeSystem(System, true);
-		FAssetRegistryModule::AssetCreated(System);
-
-		UNiagaraEmitter* Template = LoadObject<UNiagaraEmitter>(
-			nullptr,
-			TEXT("/Niagara/DefaultAssets/Templates/Emitters/SingleLoopingParticle.SingleLoopingParticle"));
-		if (!Test.TestNotNull(TEXT("Stock emitter template"), Template))
+		// Do not require the optional Niagara DefaultAssets module in an isolated
+		// HostProject. Renderer reflection only needs a valid authored system graph.
+		UNiagaraSystemFactoryNew::InitializeSystem(System, false);
+		UNiagaraScript* SystemSpawnScript = System->GetSystemSpawnScript();
+		UNiagaraScript* SystemUpdateScript = System->GetSystemUpdateScript();
+		UNiagaraScriptSource* SystemSource = SystemSpawnScript
+			? Cast<UNiagaraScriptSource>(SystemSpawnScript->GetLatestSource())
+			: nullptr;
+		if (!SystemSpawnScript || !SystemUpdateScript || !SystemSource || !SystemSource->NodeGraph
+			|| !FNiagaraStackGraphUtilities::ResetGraphForOutput(
+				*SystemSource->NodeGraph,
+				ENiagaraScriptUsage::SystemSpawnScript,
+				SystemSpawnScript->GetUsageId())
+			|| !FNiagaraStackGraphUtilities::ResetGraphForOutput(
+				*SystemSource->NodeGraph,
+				ENiagaraScriptUsage::SystemUpdateScript,
+				SystemUpdateScript->GetUsageId()))
 		{
 			return false;
 		}
-		FNiagaraEditorUtilities::AddEmitterToSystem(
-			*System,
-			*Template,
-			Template->GetExposedVersion().VersionGuid);
+		FAssetRegistryModule::AssetCreated(System);
+
+		// HostProject fixtures intentionally do not depend on the optional Niagara
+		// DefaultAssets content bundle.  Construct an owned emitter so this contract
+		// exercises the renderer reflection surface in every isolated editor.
+		UNiagaraEmitter* OwnedEmitter = NewObject<UNiagaraEmitter>(
+			System, TEXT("ReflectionEmitter"), RF_Transactional);
+		if (!Test.TestNotNull(TEXT("Owned emitter fixture"), OwnedEmitter))
+		{
+			return false;
+		}
+		UNiagaraEmitterFactoryNew::InitializeEmitter(OwnedEmitter, false);
+		const FGuid EmitterVersion = OwnedEmitter->GetExposedVersion().VersionGuid;
+		FNiagaraEmitterHandle OwnedHandle(*OwnedEmitter, EmitterVersion);
+		System->AddEmitterHandleDirect(OwnedHandle);
 		if (!Test.TestEqual(TEXT("Exactly one emitter is added"), System->GetEmitterHandles().Num(), 1))
 		{
 			return false;

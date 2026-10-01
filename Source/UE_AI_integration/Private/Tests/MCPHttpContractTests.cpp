@@ -6,6 +6,7 @@
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
+#include "Infrastructure/ClientActivityService.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/PackageName.h"
 #include "ObjectTools.h"
@@ -316,6 +317,87 @@ bool FWaitForWorkflowHttpE2E::Update()
 		CleanupBlueprintFixture(State->AssetPath));
 	return true;
 }
+
+struct FPreflightVerificationHttpState
+{
+	TWeakPtr<IHttpRequest, ESPMode::ThreadSafe> Request;
+	FString Capability;
+	FString ExpectedCode;
+	FString ResponseBody;
+	int32 ExpectedStatus = 401;
+	int32 ResponseStatus = 0;
+	int32 CompletionCount = 0;
+	bool bExpectedDeclared = false;
+	bool bExpectedLiveAvailable = false;
+	bool bCompleted = false;
+	bool bTransportSucceeded = false;
+};
+
+using FPreflightVerificationHttpStateRef =
+	TSharedRef<FPreflightVerificationHttpState, ESPMode::ThreadSafe>;
+
+class FWaitForPreflightVerificationHttp final : public IAutomationLatentCommand
+{
+public:
+	FWaitForPreflightVerificationHttp(
+		TArray<FPreflightVerificationHttpStateRef> InCases,
+		FAutomationTestBase& InTest)
+		: Cases(MoveTemp(InCases)), Test(InTest), Deadline(FPlatformTime::Seconds() + 10.0)
+	{
+	}
+
+	bool Update() override
+	{
+		for (const FPreflightVerificationHttpStateRef& State : Cases)
+		{
+			if (!State->bCompleted && FPlatformTime::Seconds() < Deadline) return false;
+		}
+		for (const FPreflightVerificationHttpStateRef& State : Cases)
+		{
+			if (!State->bCompleted)
+			{
+				if (const FHttpRequestPtr Request = State->Request.Pin()) Request->CancelRequest();
+				Test.AddError(TEXT("Timed out waiting for verification preflight HTTP response."));
+				continue;
+			}
+			Test.TestTrue(TEXT("Preflight loopback transport completed"), State->bTransportSucceeded);
+			Test.TestEqual(TEXT("Preflight HTTP completes exactly once"), State->CompletionCount, 1);
+			Test.TestEqual(TEXT("Preflight keeps its original HTTP status"), State->ResponseStatus, State->ExpectedStatus);
+			const TSharedPtr<FJsonObject> Envelope = ParseBody(State->ResponseBody);
+			const TSharedPtr<FJsonObject>* Error = nullptr;
+			const TSharedPtr<FJsonObject>* Details = nullptr;
+			const TSharedPtr<FJsonObject>* Verification = nullptr;
+			const bool bHasState = Envelope.IsValid()
+				&& Envelope->TryGetObjectField(TEXT("error"), Error) && Error && Error->IsValid()
+				&& (*Error)->TryGetObjectField(TEXT("details"), Details) && Details && Details->IsValid()
+				&& (*Details)->TryGetObjectField(TEXT("verificationState"), Verification)
+				&& Verification && Verification->IsValid();
+			Test.TestTrue(TEXT("Identified preflight rejection includes the complete verification state"), bHasState);
+			if (!bHasState) continue;
+			Test.TestEqual(TEXT("Preflight keeps its stable error code"), (*Error)->GetStringField(TEXT("code")), State->ExpectedCode);
+			Test.TestEqual(TEXT("Preflight identifies the requested capability"),
+				(*Verification)->GetStringField(TEXT("capability")), State->Capability);
+			for (const TSharedPtr<FJsonObject>& Target : {*Details, *Verification})
+			{
+				Test.TestEqual(TEXT("Declaration state is precise"), Target->GetBoolField(TEXT("localDeclared")), State->bExpectedDeclared);
+				Test.TestEqual(TEXT("Handler state is precise"), Target->GetBoolField(TEXT("handlerRegistered")), State->bExpectedDeclared);
+				Test.TestEqual(TEXT("Live availability does not invent a handler"), Target->GetBoolField(TEXT("liveAvailable")), State->bExpectedLiveAvailable);
+				Test.TestFalse(TEXT("Rejected preflight does not execute a handler"), Target->GetBoolField(TEXT("executed")));
+				for (const TCHAR* Field : {TEXT("readbackVerified"), TEXT("runtimeVerified")})
+				{
+					const TSharedPtr<FJsonValue> Value = Target->TryGetField(Field);
+					Test.TestTrue(TEXT("Unperformed readback/runtime verification stays unknown"), Value.IsValid() && Value->Type == EJson::Null);
+				}
+			}
+		}
+		return true;
+	}
+
+private:
+	TArray<FPreflightVerificationHttpStateRef> Cases;
+	FAutomationTestBase& Test;
+	double Deadline;
+};
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -503,6 +585,97 @@ bool FMCPWorkflowHttpRuntimeE2ETest::RunTest(const FString& Parameters)
 
 	ADD_LATENT_AUTOMATION_COMMAND(
 		FWaitForWorkflowHttpE2E(State, this));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMCPHttpPreflightVerificationTest,
+	"UE_AI_integration.Transport.PreflightVerificationState",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMCPHttpPreflightVerificationTest::RunTest(const FString& Parameters)
+{
+	UUEAIIntegrationSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UUEAIIntegrationSubsystem>() : nullptr;
+	FUEAIIntegrationServer* Server = Subsystem ? Subsystem->GetServer() : nullptr;
+	UEAIIntegration::Infrastructure::FClientActivityService* Clients = Subsystem ? Subsystem->GetClientActivityService() : nullptr;
+	FMCPToolRegistry* Registry = Subsystem ? Subsystem->GetRegistry() : nullptr;
+	if (!Server || !Server->IsRunning() || !Clients || !Registry)
+	{
+		AddError(TEXT("Verification HTTP preflight requires the loaded server, registry, and client service."));
+		return false;
+	}
+
+	// Retire only this fixture session. Reusing its real opaque id exercises
+	// the same unknown/expired branch without expiring any other caller.
+	UEAIIntegration::Infrastructure::FClientRegistration Registration;
+	Registration.ClientKind = TEXT("mcp");
+	Registration.Name = TEXT("Verification HTTP fixture");
+	Registration.Transport = TEXT("http");
+	Registration.InstanceId = TEXT("verification-") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	FString RetiredSession;
+	FString SessionError;
+	if (!Clients->RegisterClient(Registration, RetiredSession, SessionError)
+		|| !Clients->UnregisterClient(RetiredSession, SessionError))
+	{
+		AddError(TEXT("Could not retire the verification fixture session."));
+		return false;
+	}
+
+	struct FCase
+	{
+		const TCHAR* Capability;
+		const TCHAR* Action;
+		bool bUseRetiredSession;
+		bool bDeclared;
+	};
+	const FCase Inputs[] = {
+		{TEXT("production.module.loaded.get"), nullptr, true, true},
+		{TEXT("test.unknown.capability"), nullptr, true, false},
+		{TEXT("workflow.status"), TEXT("status"), true, true},
+		{TEXT("workflow.unknown"), TEXT("unknown"), true, false},
+		{TEXT("workflow.unknown"), TEXT("unknown"), false, false},
+	};
+	TArray<FPreflightVerificationHttpStateRef> Cases;
+	for (const FCase& Input : Inputs)
+	{
+		const FPreflightVerificationHttpStateRef State = MakeShared<FPreflightVerificationHttpState, ESPMode::ThreadSafe>();
+		State->Capability = Input.Capability;
+		State->bExpectedDeclared = Input.bDeclared;
+		State->bExpectedLiveAvailable = Input.bDeclared && Registry->IsReady();
+		State->ExpectedStatus = Input.bUseRetiredSession ? 401 : 422;
+		State->ExpectedCode = Input.bUseRetiredSession ? TEXT("client_session_expired") : TEXT("invalid_params");
+		Cases.Add(State);
+		auto Envelope = MakeShared<FJsonObject>();
+		if (Input.Action) Envelope->SetStringField(TEXT("action"), Input.Action);
+		else
+		{
+			Envelope->SetStringField(TEXT("capability"), Input.Capability);
+			Envelope->SetObjectField(TEXT("params"), MakeShared<FJsonObject>());
+		}
+		const FHttpRequestRef Request = FHttpModule::Get().CreateRequest();
+		State->Request = Request;
+		Request->SetURL(FString::Printf(TEXT("http://127.0.0.1:%d%s"), Server->GetPort(),
+			Input.Action ? TEXT("/api/v1/workflow") : TEXT("/api/execute")));
+		Request->SetVerb(TEXT("POST"));
+		Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+		if (Input.bUseRetiredSession) Request->SetHeader(TEXT("X-UEAI-Session-Id"), RetiredSession);
+		Request->SetContentAsString(SerializeBody(Envelope));
+		Request->OnProcessRequestComplete().BindLambda(
+			[State](FHttpRequestPtr, FHttpResponsePtr Response, bool bSucceeded)
+			{
+				++State->CompletionCount;
+				State->bTransportSucceeded = bSucceeded && Response.IsValid();
+				State->ResponseStatus = Response.IsValid() ? Response->GetResponseCode() : 0;
+				State->ResponseBody = Response.IsValid() ? Response->GetContentAsString() : FString();
+				State->bCompleted = true;
+			});
+		if (!Request->ProcessRequest())
+		{
+			AddError(TEXT("Could not start verification preflight loopback request."));
+			State->bCompleted = true;
+		}
+	}
+	ADD_LATENT_AUTOMATION_COMMAND(FWaitForPreflightVerificationHttp(MoveTemp(Cases), *this));
 	return true;
 }
 

@@ -113,6 +113,7 @@ Covered capability IDs:
 - `content.niagara.graph.module.inputs.list`
 - `content.niagara.graph.module.dynamic_inputs.list`
 - `content.niagara.graph.module.dynamic_inputs.tree`
+- `content.niagara.graph.module.dynamic_inputs.tree.set`
 - `content.niagara.graph.dynamic_input.inputs.get`
 - `content.niagara.graph.module.dynamic_input.value.get`
 - `content.niagara.graph.module.input.value.plan` / `.apply` / `.rollback`
@@ -135,6 +136,14 @@ function-call nodes. It accepts bounded `maxDepth` and `maxNodes` values and
 reports `treeTruncated` or `cycleDetected` when the authored graph cannot be
 represented within those limits; it remains read-only and does not compile,
 save, or claim runtime behavior.
+
+`module.dynamic_inputs.tree.set` edits one mounted Dynamic Input root using the
+complete, untruncated `dynamicInputTree` object returned by
+`system.spec.export`. The root GUID and script path must still match the live
+mounted node. The command rejects shared subtrees, applies every nested input
+in one transaction, compiles and compares a canonical read-back tree, and
+restores the graph and package dirty bit when any step fails. It leaves the
+package dirty and does not save or claim runtime behavior.
 
 `dynamic_input.inputs.get` inspects an unattached Dynamic Input script. It
 returns deterministic parameter input names, Niagara types, data-interface
@@ -197,3 +206,29 @@ compilation, and returns a same-Editor receipt. Rollback removes the
 receipt-owned stage and graph output only while the emitter ChangeID remains
 unchanged. This proves authored configuration and compile/readback state; GPU
 scheduling and runtime particle behavior require independent acceptance.
+
+## System spec export, import, and round-trip
+
+`content.niagara.system.spec.export` captures a bounded authored snapshot of
+user-parameter defaults, emitters, renderer properties, ordered stack modules,
+and module input value/binding/dynamic-input trees. Reject truncated or
+unrepresentable exports before using them for import; export is read-only and
+never compiles or saves.
+
+`content.niagara.system.spec.import` applies a spec to an existing System only
+after strict emitter, renderer, and stack structure validation. It writes
+supported user defaults, module input sources, and editable renderer properties.
+It does not create, delete, or reorder emitters, renderers, or stack modules.
+For an input present in the spec, omitting every source field clears its
+existing authored override. Omitting an entire input object is not a request to
+clear that input. Follow the live schema's supported source and renderer fields;
+Data Interface payloads and unsupported properties remain outside this boundary.
+
+Import requires a stable `requestId` and `confirmWrite:true`, requests compilation,
+and returns authored readback. Check compile completion separately from the
+request. The package remains dirty-only and is never saved implicitly.
+
+Use `content.niagara.system.spec.round_trip` with a fresh export to compare the
+current authored state with the intended spec. Exact authored comparison is
+separate from package persistence, runtime particle behavior, and visual
+acceptance; an equal spec proves none of those additional outcomes.

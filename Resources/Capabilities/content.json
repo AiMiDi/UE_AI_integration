@@ -2061,7 +2061,7 @@
       "id": "content.material.graph.restore",
       "domain": "content",
       "kind": "command",
-      "description": "Restore a material graph from a matching snapshot after a fresh current-state digest check. By default this does not restore the full graph: connectionsOnly adds missing links without breaking existing links; explicit fullGraph mode replaces the complete connection topology only with confirmation. Both modes are dirty-only and never save the package.",
+      "description": "Restore a matching material snapshot after a fresh digest check. connectionsOnly adds missing links; fullGraph replaces connection topology with the same node set. authoredGraph restores an independent authored checkpoint including nodes, properties, layout, comments and root inputs. Writes require explicit full-graph and shared-impact confirmation as applicable. All modes are dirty-only and never save or verify shader compilation.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2075,7 +2075,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Material graph snapshot ID whose missing connections may be restored."
+            "description": "Snapshot belonging to this exact material. authoredGraph mode requires a snapshot captured with captureMode=authoredGraph in this Editor process."
           },
           "expectedCurrentDigest": {
             "type": "string",
@@ -2087,7 +2087,7 @@
           "dryRun": {
             "type": "boolean",
             "default": false,
-            "description": "Preflight and report the missing additive connections without applying them."
+            "description": "Preflight the selected restore semantics and report current/snapshot digests without applying any writes."
           },
           "save": {
             "type": "boolean",
@@ -2098,15 +2098,25 @@
             "type": "string",
             "enum": [
               "connectionsOnly",
-              "fullGraph"
+              "fullGraph",
+              "authoredGraph"
             ],
             "default": "connectionsOnly",
-            "description": "Restore semantics. fullGraph requires an exact snapshot node set and confirmFullGraphRestore=true; it may remove links absent from the snapshot."
+            "description": "fullGraph restores topology only and requires the same node set. authoredGraph restores checkpoint nodes and authored property state, including removed expressions. Both require confirmFullGraphRestore for changes."
           },
           "confirmFullGraphRestore": {
             "type": "boolean",
             "const": true,
-            "description": "Explicit confirmation required for fullGraph mode because it can remove authored links."
+            "description": "Explicit confirmation required when fullGraph or authoredGraph may replace authored state."
+          },
+          "confirmSharedNodeImpact": {
+            "type": "boolean",
+            "description": "Explicitly accept restoration of shared expression state detected in the current or checkpoint graph. This is separate from full-graph confirmation."
+          },
+          "expectedAfterDigest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-fA-F]{64}$",
+            "description": "Optional authoredGraph postcondition. A mismatch restores and verifies the exact pre-attempt authored state."
           }
         },
         "required": [
@@ -2139,13 +2149,22 @@
       "id": "content.material.graph.snapshot",
       "domain": "content",
       "kind": "command",
-      "description": "Take a snapshot of the current material graph state for later diff/restore.",
+      "description": "Capture a material graph for diff/restore. The default captures connection topology; captureMode=authoredGraph retains an independently verified full authored in-memory checkpoint. Up to 32 full checkpoints are retained per Editor process; use Workflow for durable recovery.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "material": {
             "type": "string",
             "description": "Material name or path"
+          },
+          "captureMode": {
+            "type": "string",
+            "enum": [
+              "connectionsOnly",
+              "authoredGraph"
+            ],
+            "default": "connectionsOnly",
+            "description": "authoredGraph retains an independent image of expressions, comments, material/editor properties and root inputs and returns a digest covering that state."
           }
         },
         "required": [
@@ -8836,7 +8855,7 @@
       "id": "content.material.custom.set",
       "domain": "content",
       "kind": "command",
-      "description": "Atomically patch Custom code and interface. Arrays replace their respective lists; previousName retains wires during rename/reorder. Removed connected pins require disconnectRemoved. Workflow defers compile/save; no-op and dryRun do neither.",
+      "description": "Atomically patch Custom code and interface. Shared expressions require a fresh authored graph boundary and explicit confirmSharedNodeImpact; shared preview writes are rejected. Arrays replace their respective lists; previousName retains wires during rename/reorder. Removed connected pins require disconnectRemoved. Workflow defers compile/save; no-op and dryRun do neither.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -8855,6 +8874,22 @@
           "expectedStateHash": {
             "type": "string",
             "description": "Optional optimistic check from get/list; not a Workflow asset precondition."
+          },
+          "snapshotId": {
+            "type": "string",
+            "description": "Fresh authored GraphIR snapshot for a shared-node edit. Preview snapshots are rejected."
+          },
+          "boundaryId": {
+            "type": "string",
+            "description": "Boundary whose writable selection includes nodeId; required when the expression has multiple consumers."
+          },
+          "expectedProjectionHash": {
+            "type": "string",
+            "description": "Exact projectionHash of the boundary snapshot; changed live graphs are rejected before editing."
+          },
+          "confirmSharedNodeImpact": {
+            "type": "boolean",
+            "description": "Explicit true is required for shared expressions, including a boundary that selects all consumers."
           },
           "dryRun": {
             "type": "boolean"
@@ -10032,7 +10067,7 @@
       "id": "content.material.parameter.set",
       "domain": "content",
       "kind": "command",
-      "description": "Patch Scalar, Vector, StaticBool/StaticSwitch and Texture parameter defaults/name/group/sort/description while preserving parameter GUID. Create/delete via expression.add/delete. Workflow defers compile/save.",
+      "description": "Patch Scalar, Vector, StaticBool/StaticSwitch and Texture parameter defaults/name/group/sort/description while preserving parameter GUID. Shared expressions require a fresh authored graph boundary and explicit confirmSharedNodeImpact; shared preview writes are rejected. Create/delete via expression.add/delete. Workflow defers compile/save.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -10051,6 +10086,22 @@
           "expectedStateHash": {
             "type": "string",
             "description": "Optional optimistic check from get/list; not a Workflow asset precondition."
+          },
+          "snapshotId": {
+            "type": "string",
+            "description": "Fresh authored GraphIR snapshot for a shared-node edit. Preview snapshots are rejected."
+          },
+          "boundaryId": {
+            "type": "string",
+            "description": "Boundary whose writable selection includes nodeId; required when the expression has multiple consumers."
+          },
+          "expectedProjectionHash": {
+            "type": "string",
+            "description": "Exact projectionHash of the boundary snapshot; changed live graphs are rejected before editing."
+          },
+          "confirmSharedNodeImpact": {
+            "type": "boolean",
+            "description": "Explicit true is required for shared expressions, including a boundary that selects all consumers."
           },
           "dryRun": {
             "type": "boolean"
@@ -10221,7 +10272,7 @@
       "id": "content.material.function.call.set",
       "domain": "content",
       "kind": "command",
-      "description": "Assign, clear or refresh a regular MaterialFunction call. Preserve same-function interface GUID connections, match names across functions, and reject connected pin removal unless explicit. Workflow defers update/save.",
+      "description": "Assign, clear or refresh a regular MaterialFunction call. Shared expressions require a fresh authored graph boundary and explicit confirmSharedNodeImpact; shared preview writes are rejected. Preserve same-function interface GUID connections, match names across functions, and reject connected pin removal unless explicit. Workflow defers update/save.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -10240,6 +10291,22 @@
           "expectedStateHash": {
             "type": "string",
             "description": "Optional optimistic check from get/list; not a Workflow asset precondition."
+          },
+          "snapshotId": {
+            "type": "string",
+            "description": "Fresh authored GraphIR snapshot for a shared-node edit. Preview snapshots are rejected."
+          },
+          "boundaryId": {
+            "type": "string",
+            "description": "Boundary whose writable selection includes nodeId; required when the expression has multiple consumers."
+          },
+          "expectedProjectionHash": {
+            "type": "string",
+            "description": "Exact projectionHash of the boundary snapshot; changed live graphs are rejected before editing."
+          },
+          "confirmSharedNodeImpact": {
+            "type": "boolean",
+            "description": "Explicit true is required for shared expressions, including a boundary that selects all consumers."
           },
           "dryRun": {
             "type": "boolean"
@@ -11459,11 +11526,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Optional writable boundary proof. When supplied, all referenced expression nodes must be inside its writable node set."
+            "description": "Required for connect/disconnect. All referenced and replaced expression nodes must be inside its writable node set. The entire batch is checked before its first write."
           },
           "confirmSharedNodeImpact": {
             "type": "boolean",
-            "description": "Required when the optional boundary reports externally consumed nodes."
+            "description": "Required when an edited source, target or replaced input source has multiple native consumers, including consumers inside the selection and through named reroutes. Approval alone cannot provide this confirmation."
           },
           "expectedAfterProjectionHash": {
             "type": "string",
@@ -14262,6 +14329,49 @@
         "status": "active",
         "since": "1.1.0",
         "canonicalId": "content.niagara.graph.module.dynamic_inputs.tree"
+      }
+    },
+    {
+      "id": "content.niagara.graph.module.dynamic_inputs.tree.set",
+      "domain": "content",
+      "kind": "command",
+      "description": "Replace the complete authored Dynamic Input tree mounted below one Niagara stack module node. The supplied tree must be an untruncated system-spec dynamicInputTree with matching node GUID/script identity; the edit compiles and reads back canonically, then rolls back on failure. The package is left dirty and is not saved.",
+      "requires": {
+        "features": ["Niagara"],
+        "plugins": ["Niagara"],
+        "modules": ["Niagara"]
+      },
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "system": {"type": "string", "minLength": 1},
+          "emitter": {"type": "string", "minLength": 1},
+          "graph": {"type": "string", "minLength": 1},
+          "outputNodePath": {"type": "string", "minLength": 1},
+          "moduleSelector": {"type": "string", "minLength": 1},
+          "dynamicInputGuid": {"type": "string", "minLength": 1},
+          "dynamicInputTree": {
+            "type": "object",
+            "description": "Complete dynamic input tree returned by system.spec.export (including every input row and its dynamicInputTree children). Truncated trees are rejected."
+          }
+        },
+        "required": ["system", "emitter", "moduleSelector", "dynamicInputGuid", "dynamicInputTree"],
+        "additionalProperties": false
+      },
+      "traits": {"destructive": false, "expensive": true},
+      "output": {"kind": "json"},
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "confirmWrite"
+      },
+      "effects": {"asset": "write", "world": "none", "editorSession": "write", "external": "none"},
+      "lifecycle": {
+        "status": "active",
+        "since": "1.1.0",
+        "canonicalId": "content.niagara.graph.module.dynamic_inputs.tree.set"
       }
     },
     {

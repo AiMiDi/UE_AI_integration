@@ -9,6 +9,7 @@
 #include "UEAIIntegrationEditorSettings.h"
 #include "UEAIIntegrationServer.h"
 #include "HAL/PlatformMisc.h"
+#include "Modules/ModuleManager.h"
 
 void FMCPToolRegistryDeleter::operator()(FMCPToolRegistry* Registry) const
 {
@@ -133,6 +134,49 @@ void UUEAIIntegrationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		MakeShared<UEAIIntegration::Infrastructure::FProductionRuntimeController>(
 			*Registry,
 			*PIEController);
+	// Niagara authoring handlers depend on editor-only Niagara classes and
+	// content serializers.  Explicitly load the editor module before any
+	// Niagara asset can be resolved, including commandlet/NullRHI runs where
+	// the engine does not eagerly load optional editor modules.
+#if WITH_UEAI_NIAGARA
+	// Commandlet/NullRHI launches with -NoEnginePlugins do not eagerly load
+	// optional Niagara modules.  Load the complete dependency chain explicitly
+	// and retain an exact module result in the log so a fixture failure cannot be
+	// mistaken for an authoring semantic failure.
+	for (const FName ModuleName : {
+		FName(TEXT("NiagaraCore")),
+		FName(TEXT("Niagara")),
+		FName(TEXT("DataHierarchyEditor")),
+		FName(TEXT("NiagaraEditor")),
+		FName(TEXT("NiagaraEditorWidgets"))})
+	{
+		if (FModuleManager::Get().IsModuleLoaded(ModuleName))
+		{
+			UE_LOG(LogTemp, Verbose, TEXT("[UE_AI_integration] Niagara module already loaded: %s"), *ModuleName.ToString());
+			continue;
+		}
+		EModuleLoadResult FailureReason = EModuleLoadResult::Success;
+		IModuleInterface* LoadedModule = FModuleManager::Get().LoadModuleWithFailureReason(ModuleName, FailureReason);
+		if (LoadedModule)
+		{
+			UE_LOG(
+				LogTemp,
+				Verbose,
+				TEXT("[UE_AI_integration] Niagara module load succeeded: %s (reason=%d)"),
+				*ModuleName.ToString(),
+				static_cast<int32>(FailureReason));
+		}
+		else
+		{
+			UE_LOG(
+				LogTemp,
+				Error,
+				TEXT("[UE_AI_integration] Niagara module load failed: %s (reason=%d)"),
+				*ModuleName.ToString(),
+				static_cast<int32>(FailureReason));
+		}
+	}
+#endif
 
 	Registry->BeginDomainRegistration(TEXT("blueprint"));
 	UEAIIntegrationTools::RegisterBlueprintReadTools(*Registry);

@@ -8,6 +8,8 @@
 #include "Infrastructure/MaterialCustomEditing.h"
 #include "Infrastructure/MaterialFunctionDependencies.h"
 #include "Infrastructure/MaterialGraphSnapshot.h"
+#include "Infrastructure/MaterialAuthoredCheckpoint.h"
+#include "Infrastructure/MaterialSharedWriteProtection.h"
 #include "MaterialEditingLibrary.h"
 #include "Infrastructure/DeferredGraphMutation.h"
 #include "Infrastructure/MCPToolHelpers.h"
@@ -125,25 +127,27 @@ static FMCPToolResult RequireMaterialMutationBoundary(
 	const TSharedPtr<FJsonObject>& Params,
 	UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& OutValidation)
 {
-	const TSharedPtr<FJsonObject>* WorkflowContext = nullptr;
-	bool bApprovedPlan = false;
-	if (Params->TryGetObjectField(TEXT("__ueWorkflow"), WorkflowContext)
-		&& WorkflowContext && (*WorkflowContext).IsValid())
-	{
-		(*WorkflowContext)->TryGetBoolField(TEXT("approvedPlan"), bApprovedPlan);
-	}
 	if (!Params->HasField(TEXT("boundaryId")))
 	{
-		if (bApprovedPlan)
-		{
-			return FMCPToolResult::Ok(MakeShared<FJsonObject>());
-		}
 		return FMCPToolResult::Error(
 			TEXT("Authored material graph writes require boundaryId, snapshotId and expectedProjectionHash."),
 			TEXT("material_boundary_required_for_mutation"),
 			409);
 	}
 	return UEAIIntegration::MaterialQuery::ValidateBoundaryWrite(Asset, Params, OutValidation);
+}
+
+static FMCPToolResult RequireMaterialNodeSharedWrite(
+	UObject* Asset, UEdGraphNode* Node, const TSharedPtr<FJsonObject>& Params)
+{
+	const UMaterialGraphNode* MaterialNode = Cast<UMaterialGraphNode>(Node);
+	if (!MaterialNode || !MaterialNode->MaterialExpression)
+	{
+		return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+	}
+	UEAIIntegration::MaterialEditing::FMaterialSharedWriteProof Proof;
+	return UEAIIntegration::MaterialEditing::ValidateMaterialExpressionSharedWrite(
+		Asset, MaterialNode->MaterialExpression, Params, Proof);
 }
 
 static FString MaterialMutationNodeId(const UEdGraphNode* Node)
@@ -349,6 +353,51 @@ static void CaptureMaterialGraphLinks(
 	}
 }
 
+// Removing an expression clears its authored FExpressionInput references and
+// removes its graph node, but an editor graph can retain a transient pin link
+// until the next graph refresh.  The material schema rejects a connection when
+// the target pin still points at such an orphan.  Prune only links whose owning
+// node is no longer part of this graph; valid existing links remain available
+// for the schema's normal replacement semantics.
+static void PruneStaleMaterialGraphLinks(UEdGraph* Graph)
+{
+	if (!Graph)
+	{
+		return;
+	}
+	TSet<UEdGraphNode*> LiveNodes;
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		if (Node)
+		{
+			LiveNodes.Add(Node);
+		}
+	}
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		if (!Node)
+		{
+			continue;
+		}
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (!Pin)
+			{
+				continue;
+			}
+			TArray<UEdGraphPin*> Links = Pin->LinkedTo;
+			for (UEdGraphPin* Linked : Links)
+			{
+				if (!Linked || LiveNodes.Contains(Linked->GetOwningNode()))
+				{
+					continue;
+				}
+				Pin->BreakLinkTo(Linked);
+			}
+		}
+	}
+}
+
 static bool RestoreMaterialGraphLinks(
 	UEdGraph* Graph,
 	const TArray<FMaterialGraphLinkSnapshot>& Links)
@@ -540,7 +589,7 @@ static FMCPToolResult RollbackMaterialExpressionDelete(
 	{
 		Failure.Data = MakeShared<FJsonObject>();
 	}
-	Failure.Data->SetStringField(TEXT("attempt_status"), TEXT("rolled_back"));
+	Failure.Data->SetStringField(TEXT("attempt_status"), bVerified ? TEXT("rolled_back") : TEXT("failed"));
 	Failure.Data->SetStringField(TEXT("restore_status"), bVerified ? TEXT("restored") : TEXT("restore_failed"));
 	Failure.Data->SetBoolField(TEXT("rollbackVerified"), bVerified);
 	return Failure;
@@ -626,7 +675,7 @@ static FMCPToolResult RollbackMaterialMutation(
 	{
 		Failure.Data = MakeShared<FJsonObject>();
 	}
-	Failure.Data->SetStringField(TEXT("attempt_status"), TEXT("rolled_back"));
+	Failure.Data->SetStringField(TEXT("attempt_status"), bRestoredProjection ? TEXT("rolled_back") : TEXT("failed"));
 	Failure.Data->SetStringField(TEXT("restore_status"), bRestoredProjection ? TEXT("restored") : TEXT("restore_failed"));
 	Failure.Data->SetBoolField(TEXT("rollbackVerified"), bRestoredProjection);
 	return Failure;
@@ -1099,6 +1148,8 @@ public:
 
 		FString DeletedNodeTitle = TargetMatNode->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
 		FString DeletedExprClass = TargetMatNode->MaterialExpression->GetClass()->GetName();
+		BoundaryResult = RequireMaterialNodeSharedWrite(Asset, TargetMatNode, Params);
+		if (!BoundaryResult.bSuccess) return BoundaryResult;
 
 		UMaterialExpression* ExprToRemove = TargetMatNode->MaterialExpression;
 		TArray<FString> DeletedNodeConsumerIds;
@@ -1249,6 +1300,7 @@ public:
 		if (Material) EnsureMaterialGraph(Material);
 		UEdGraph* Graph = Material ? (UEdGraph*)Material->MaterialGraph : (MatFunc ? MatFunc->MaterialGraph : nullptr);
 		if (!Graph) return FMCPToolResult::Error(FString::Printf(TEXT("'%s' has no material graph"), *AssetDisplayName));
+		PruneStaleMaterialGraphLinks(Graph);
 
 		UEdGraphNode* SourceNode = nullptr;
 		UEdGraphNode* TargetNode = nullptr;
@@ -1292,6 +1344,10 @@ public:
 		if (!SourcePin) return FMCPToolResult::Error(FString::Printf(TEXT("Source pin '%s' not found"), *SourcePinName));
 		UEdGraphPin* TargetPin = TargetNode->FindPin(FName(*TargetPinName));
 		if (!TargetPin) return FMCPToolResult::Error(FString::Printf(TEXT("Target pin '%s' not found"), *TargetPinName));
+		BoundaryResult = RequireMaterialNodeSharedWrite(Asset, SourceNode, Params);
+		if (!BoundaryResult.bSuccess) return BoundaryResult;
+		BoundaryResult = RequireMaterialNodeSharedWrite(Asset, TargetNode, Params);
+		if (!BoundaryResult.bSuccess) return BoundaryResult;
 
 		const UEdGraphSchema* Schema = Graph->GetSchema();
 		if (!Schema) return FMCPToolResult::Error(TEXT("Material graph schema not found"));
@@ -1426,6 +1482,14 @@ public:
 
 		UEdGraphPin* Pin = TargetNode->FindPin(FName(*PinName));
 		if (!Pin) return FMCPToolResult::Error(FString::Printf(TEXT("Pin '%s' not found on node '%s'"), *PinName, *NodeId));
+		BoundaryResult = RequireMaterialNodeSharedWrite(Asset, TargetNode, Params);
+		if (!BoundaryResult.bSuccess) return BoundaryResult;
+		for (const UEdGraphPin* LinkedPin : Pin->LinkedTo)
+		{
+			if (!LinkedPin) continue;
+			BoundaryResult = RequireMaterialNodeSharedWrite(Asset, LinkedPin->GetOwningNode(), Params);
+			if (!BoundaryResult.bSuccess) return BoundaryResult;
+		}
 
 		TArray<FMaterialGraphLinkSnapshot> LinkSnapshot;
 		CaptureMaterialGraphLinks(Graph, LinkSnapshot);
@@ -1544,12 +1608,14 @@ public:
 		UObject* Asset = Material ? (UObject*)Material : (UObject*)MatFunc;
 		TArray<FString> ConsumerIds;
 		CollectMaterialExpressionConsumers(Material, MatFunc, Expr, ConsumerIds);
-		const bool bSharedNode = ConsumerIds.Num() > 1;
-		const bool bApprovedWorkflow =
-			UEAIIntegration::Workflow::IsApprovedWorkflowExecution(Params);
+		UEAIIntegration::MaterialEditing::FMaterialSharedWriteProof SharedProof;
+		FMCPToolResult SharedValidation = UEAIIntegration::MaterialEditing::ValidateMaterialExpressionSharedWrite(
+			Asset, Expr, Params, SharedProof);
+		if (!SharedValidation.bSuccess) return SharedValidation;
+		const bool bSharedNode = SharedProof.bShared;
 		UEAIIntegration::MaterialQuery::FBoundaryWriteValidation BoundaryValidation;
 		if (Params->HasField(TEXT("boundaryId"))
-			|| (bSharedNode && !bApprovedWorkflow))
+			|| bSharedNode)
 		{
 			FMCPToolResult BoundaryResult = RequireMaterialMutationBoundary(
 				Asset,
@@ -1561,18 +1627,53 @@ public:
 			}
 			if (BoundaryValidation.Boundary.IsValid())
 			{
-				if (!TargetMatNode)
+				// MaterialFunctions are valid authored targets even when their
+				// transient editor graph has never been constructed.  Their
+				// expression GUID is the durable node identity used by the
+				// boundary snapshot.  Materials continue to validate through the
+				// graph node so root/editor-only identities retain their existing
+				// semantics.
+				if (MatFunc)
 				{
-					return FMCPToolResult::Error(
-						TEXT("The edited expression has no stable material graph node identity for boundary validation."),
-						TEXT("material_boundary_node_identity_missing"),
-						409);
+					const FString ExpressionId =
+						MCPMaterialInfrastructure::ExpressionNodeId(Expr);
+					if (ExpressionId.IsEmpty())
+					{
+						return FMCPToolResult::Error(
+							TEXT("The edited expression has no stable material expression identity for boundary validation."),
+							TEXT("material_boundary_node_identity_missing"),
+							409);
+					}
+					if (!BoundaryValidation.Boundary->SelectedNodeIds.Contains(ExpressionId))
+					{
+						return FMCPToolResult::Error(
+							FString::Printf(TEXT("The edited node '%s' is outside the selected material boundary."), *ExpressionId),
+							TEXT("material_boundary_node_outside_selection"),
+							409);
+					}
+					if (!BoundaryValidation.Boundary->WritableNodeIds.Contains(ExpressionId))
+					{
+						return FMCPToolResult::Error(
+							FString::Printf(TEXT("The edited node '%s' is not writable in the selected material boundary."), *ExpressionId),
+							TEXT("material_boundary_node_not_writable"),
+							409);
+					}
 				}
-				BoundaryResult = RequireMaterialBoundaryNode(
-					BoundaryValidation,
-					TargetMatNode,
-					TEXT("edited"),
-					true);
+				else
+				{
+					if (!TargetMatNode)
+					{
+						return FMCPToolResult::Error(
+							TEXT("The edited expression has no stable material graph node identity for boundary validation."),
+							TEXT("material_boundary_node_identity_missing"),
+							409);
+					}
+					BoundaryResult = RequireMaterialBoundaryNode(
+						BoundaryValidation,
+						TargetMatNode,
+						TEXT("edited"),
+						true);
+				}
 				if (!BoundaryResult.bSuccess)
 				{
 					return BoundaryResult;
@@ -1693,8 +1794,8 @@ public:
 		AddMaterialBoundaryResultFields(
 			BoundaryValidation,
 			ConsumerIds,
-			Result,
-			bApprovedWorkflow);
+			Result);
+		UEAIIntegration::MaterialEditing::DescribeMaterialExpressionSharedWrite(SharedProof, Result);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -2114,6 +2215,20 @@ public:
 				500);
 		}
 		Snapshot.Graphs.Add(TEXT("MaterialGraph"), MoveTemp(GraphData));
+		FString CaptureMode = TEXT("connectionsOnly");
+		if (Params->HasField(TEXT("captureMode"))
+			&& (!Params->TryGetStringField(TEXT("captureMode"), CaptureMode)
+				|| (CaptureMode != TEXT("connectionsOnly") && CaptureMode != TEXT("authoredGraph"))))
+		{
+			return FMCPToolResult::Error(TEXT("captureMode must be connectionsOnly or authoredGraph."), TEXT("invalid_snapshot_request"), 422);
+		}
+		const bool bAuthoredCheckpoint = CaptureMode == TEXT("authoredGraph");
+		Snapshot.bAuthoredMaterialCheckpoint = bAuthoredCheckpoint;
+		if (bAuthoredCheckpoint)
+		{
+			const FMCPToolResult Checkpoint = UEAIIntegration::MaterialCheckpoint::Capture(Material, Snapshot.SnapshotId, StateDigest);
+			if (!Checkpoint.bSuccess) return Checkpoint;
+		}
 
 		MCPHelpers::GetMaterialSnapshots().Add(Snapshot.SnapshotId, Snapshot);
 
@@ -2123,10 +2238,12 @@ public:
 		Result->SetStringField(TEXT("assetPath"), Snapshot.BlueprintPath);
 		Result->SetStringField(TEXT("stateDigest"), StateDigest);
 		Result->SetStringField(
-			TEXT("projectionIdentity"), MaterialRestoreProjection);
+			TEXT("projectionIdentity"), bAuthoredCheckpoint
+				? UEAIIntegration::MaterialCheckpoint::ProjectionIdentity : MaterialRestoreProjection);
 		Result->SetStringField(
-			TEXT("restoreSemantics"), TEXT("missingConnectionsOnly"));
-		Result->SetBoolField(TEXT("fullGraphRestore"), false);
+			TEXT("restoreSemantics"), bAuthoredCheckpoint ? TEXT("authoredGraph") : TEXT("missingConnectionsOnly"));
+		Result->SetBoolField(TEXT("fullGraphRestore"), bAuthoredCheckpoint);
+		Result->SetStringField(TEXT("captureMode"), CaptureMode);
 		Result->SetNumberField(TEXT("nodeCount"), NodeCount);
 		Result->SetNumberField(TEXT("connectionCount"), ConnectionCount);
 		return FMCPToolResult::Ok(Result);
@@ -2241,11 +2358,22 @@ public:
 		}
 		Result->SetStringField(TEXT("snapshotStateDigest"), SnapshotStateDigest);
 		Result->SetStringField(TEXT("currentStateDigest"), CurrentStateDigest);
+		const bool bAuthoredCheckpoint = SnapshotPtr->bAuthoredMaterialCheckpoint;
+		if (bAuthoredCheckpoint)
+		{
+			if (!UEAIIntegration::MaterialCheckpoint::GetDigests(Material, SnapshotId, SnapshotStateDigest, CurrentStateDigest))
+			{
+				return FMCPToolResult::Error(TEXT("Authored checkpoint digest is unavailable."), TEXT("authored_checkpoint_unavailable"), 410);
+			}
+			Result->SetStringField(TEXT("snapshotStateDigest"), SnapshotStateDigest);
+			Result->SetStringField(TEXT("currentStateDigest"), CurrentStateDigest);
+		}
 		Result->SetStringField(
-			TEXT("projectionIdentity"), MaterialRestoreProjection);
+			TEXT("projectionIdentity"), bAuthoredCheckpoint
+				? UEAIIntegration::MaterialCheckpoint::ProjectionIdentity : MaterialRestoreProjection);
 		Result->SetStringField(
-			TEXT("restoreSemantics"), TEXT("missingConnectionsOnly"));
-		Result->SetBoolField(TEXT("fullGraphRestore"), false);
+			TEXT("restoreSemantics"), bAuthoredCheckpoint ? TEXT("authoredGraph") : TEXT("missingConnectionsOnly"));
+		Result->SetBoolField(TEXT("fullGraphRestore"), bAuthoredCheckpoint);
 		Result->SetArrayField(TEXT("severedConnections"), SeveredArr);
 		Result->SetArrayField(TEXT("newConnections"), NewConnsArr);
 		Result->SetArrayField(TEXT("missingNodes"), MissingNodesArr);
@@ -2296,10 +2424,10 @@ public:
 		bool bConfirmFullGraphRestore = false;
 		if (Params->HasField(TEXT("restoreMode"))
 			&& (!Params->TryGetStringField(TEXT("restoreMode"), RestoreMode)
-				|| (RestoreMode != TEXT("connectionsOnly") && RestoreMode != TEXT("fullGraph"))))
+				|| (RestoreMode != TEXT("connectionsOnly") && RestoreMode != TEXT("fullGraph") && RestoreMode != TEXT("authoredGraph"))))
 		{
 			return FMCPToolResult::Error(
-				TEXT("restoreMode must be 'connectionsOnly' or 'fullGraph'."),
+				TEXT("restoreMode must be 'connectionsOnly', 'fullGraph' or 'authoredGraph'."),
 				TEXT("invalid_restore_request"),
 				422);
 		}
@@ -2376,6 +2504,14 @@ public:
 				TEXT("Snapshot has no MaterialGraph projection."),
 				TEXT("snapshot_projection_mismatch"),
 				409);
+		}
+		if (RestoreMode == TEXT("authoredGraph"))
+		{
+			return UEAIIntegration::MaterialCheckpoint::Restore(Material, SnapshotId, Params);
+		}
+		if (SnapshotPtr->bAuthoredMaterialCheckpoint)
+		{
+			return FMCPToolResult::Error(TEXT("This snapshot fences authoredGraph properties; use restoreMode=authoredGraph."), TEXT("snapshot_projection_mismatch"), 409);
 		}
 
 		const FGraphSnapshotData BeforeData =

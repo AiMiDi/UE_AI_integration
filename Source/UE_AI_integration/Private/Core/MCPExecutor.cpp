@@ -318,11 +318,17 @@ void FMCPExecutor::AnnotateVerification(
 {
 	const TSharedPtr<FJsonObject>* Descriptor =
 		Registry.FindCapabilityDescriptor(Context.Capability);
-	// Workflow actions are a transport-level capability family rather than
-	// manifest entries.  They still have a registered native handler and must
-	// expose the same verification contract when reached through the HTTP
-	// workflow route.
-	const bool bWorkflowAction = Context.Capability.StartsWith(TEXT("workflow."));
+	// These exact actions have handlers in FWorkflowRuntime::HandleRequest.
+	// The workflow prefix alone cannot prove that an unknown action exists.
+	static const TSet<FString> WorkflowCapabilities = {
+		TEXT("workflow.validate"),
+		TEXT("workflow.plan"),
+		TEXT("workflow.execute"),
+		TEXT("workflow.resume"),
+		TEXT("workflow.status"),
+		TEXT("workflow.rollback"),
+	};
+	const bool bWorkflowAction = WorkflowCapabilities.Contains(Context.Capability);
 	const bool bLocalDeclared = bWorkflowAction || (Descriptor && Descriptor->IsValid());
 	const bool bHandlerRegistered = bWorkflowAction
 		? true
@@ -338,6 +344,7 @@ void FMCPExecutor::AnnotateVerification(
 		&& bHandlerRegistered
 		&& Registry.IsReady()
 		&& AvailabilityReasons.IsEmpty();
+	const bool bHandlerExecuted = bExecuted && bHandlerRegistered;
 
 	TSharedPtr<FJsonObject> Target;
 	if (Result.bOk)
@@ -372,7 +379,7 @@ void FMCPExecutor::AnnotateVerification(
 	Target->SetBoolField(TEXT("localDeclared"), bLocalDeclared);
 	Target->SetBoolField(TEXT("handlerRegistered"), bHandlerRegistered);
 	Target->SetBoolField(TEXT("liveAvailable"), bLiveAvailable);
-	Target->SetBoolField(TEXT("executed"), bExecuted);
+	Target->SetBoolField(TEXT("executed"), bHandlerExecuted);
 	if (bHasReadbackVerified)
 	{
 		Target->SetBoolField(TEXT("readbackVerified"), bReadbackVerified);
@@ -396,7 +403,7 @@ void FMCPExecutor::AnnotateVerification(
 	State->SetBoolField(TEXT("localDeclared"), bLocalDeclared);
 	State->SetBoolField(TEXT("handlerRegistered"), bHandlerRegistered);
 	State->SetBoolField(TEXT("liveAvailable"), bLiveAvailable);
-	State->SetBoolField(TEXT("executed"), bExecuted);
+	State->SetBoolField(TEXT("executed"), bHandlerExecuted);
 	if (bHasReadbackVerified)
 	{
 		State->SetBoolField(TEXT("readbackVerified"), bReadbackVerified);

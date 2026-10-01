@@ -80,6 +80,7 @@
       "content.niagara.graph.module.inputs.list",
       "content.niagara.graph.module.dynamic_inputs.list",
       "content.niagara.graph.module.dynamic_inputs.tree",
+      "content.niagara.graph.module.dynamic_inputs.tree.set",
       "content.niagara.graph.dynamic_input.inputs.get",
       "content.niagara.graph.module.dynamic_input.value.get",
       "content.niagara.graph.dynamic_input.search",

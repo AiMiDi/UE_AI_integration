@@ -61,12 +61,12 @@ FMCPToolResult Call(const TCHAR* Id, TSharedPtr<FJsonObject> Params)
 }
 
 bool AttachFunctionBoundary(
-	UMaterialFunction* Function,
+	UObject* Asset,
 	const TArray<FString>& NodeIds,
 	const TSharedPtr<FJsonObject>& Params)
 {
 	using namespace UEAIIntegration::MaterialQuery;
-	const FMCPToolResult Captured = Capture(Function);
+	const FMCPToolResult Captured = Capture(Asset, FString(), FString(), nullptr, true);
 	if (!Captured.bSuccess || !Captured.Data.IsValid())
 	{
 		return false;
@@ -126,6 +126,9 @@ bool FMaterialCustomInterfaceTest::RunTest(const FString& Parameters)
 		P->SetArrayField(TEXT("inputs"), {Pin(TEXT("B")), Pin(TEXT("Strength"), TEXT("A"))});
 		P->SetArrayField(TEXT("additionalOutputs"), {Pin(TEXT("Glow"), nullptr, TEXT("Float1")), Pin(TEXT("Mask"), nullptr, TEXT("Float1"))});
 		P->SetBoolField(TEXT("dryRun"), true);
+		if (!TestTrue(TEXT("Shared Custom boundary is captured"),
+			AttachFunctionBoundary(Material.Get(), {Id}, P))) return false;
+		P->SetBoolField(TEXT("confirmSharedNodeImpact"), true);
 		TestTrue(TEXT("Dry-run validated"), Call(TEXT("content.material.custom.set"), P).bSuccess);
 		TestFalse(TEXT("Dry-run does not dirty"), Material->GetOutermost()->IsDirty());
 		TestEqual(TEXT("Dry-run keeps names"), Custom->Inputs[0].InputName, FName(TEXT("A")));
@@ -149,6 +152,9 @@ bool FMaterialCustomInterfaceTest::RunTest(const FString& Parameters)
 		}
 		TestEqual(TEXT("Stale hash rejected"), Call(TEXT("content.material.custom.set"), P).ErrorCode, FString(TEXT("material_edit_conflict")));
 		P = EditParams(Material.Get(), Custom); P->SetStringField(TEXT("code"), Custom->Code);
+		if (!TestTrue(TEXT("No-op Custom boundary is refreshed"),
+			AttachFunctionBoundary(Material.Get(), {Id}, P))) return false;
+		P->SetBoolField(TEXT("confirmSharedNodeImpact"), true);
 		Material->GetOutermost()->SetDirtyFlag(false);
 		TestFalse(TEXT("Identical code is a no-op"), Call(TEXT("content.material.custom.set"), P).Data->GetBoolField(TEXT("changed")));
 		TestFalse(TEXT("No-op leaves package clean"), Material->GetOutermost()->IsDirty());
@@ -158,6 +164,9 @@ bool FMaterialCustomInterfaceTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("Rejected edit does not dirty"), Material->GetOutermost()->IsDirty());
 		TestNotEqual(TEXT("Invalid interface did not partly write code"), Custom->Code, P->GetStringField(TEXT("code")));
 		P = EditParams(Material.Get(), Custom); P->SetArrayField(TEXT("additionalOutputs"), {Pin(TEXT("Glow"), nullptr, TEXT("Float1"))});
+		if (!TestTrue(TEXT("Output-removal Custom boundary is refreshed"),
+			AttachFunctionBoundary(Material.Get(), {Id}, P))) return false;
+		P->SetBoolField(TEXT("confirmSharedNodeImpact"), true);
 		TestEqual(TEXT("Connected removal needs explicit disconnect"), Call(TEXT("content.material.custom.set"), P).ErrorCode, FString(TEXT("connected_pin_removal")));
 		P->SetBoolField(TEXT("disconnectRemoved"), true);
 		TestTrue(TEXT("Explicit removal succeeds"), Call(TEXT("content.material.custom.set"), P).bSuccess);

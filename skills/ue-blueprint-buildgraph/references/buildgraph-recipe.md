@@ -28,6 +28,19 @@ append `blueprint.component.property.set` or equivalent direct component
 mutations to the generated Workflow. Plan them as a separate authorized asset
 edit if the user requests them.
 
+Named behavior templates are discovered with `blueprint.template.list` and planned with
+`blueprint.template.apply`. The latter shares the compact spec normalizer and
+returns `applied=false`, `normalizedDefinition`, the Workflow, and its current
+Editor-bound digest. Execute that exact Workflow through the normal approval
+contract. It does not turn template discovery or planning into an asset write.
+Version 2 templates generate connected health clamp, guarded interaction, and
+start/stop timer behavior on an Actor event graph. Health events have no
+arguments and read editable amount members; timer delay is at least 0.001
+seconds, repeated Start resets one timer, and Stop/EndPlay clear it. The
+interaction component retains engine defaults and rejects unsupported radius
+parameters. Discovery or planning does not verify runtime behavior. Existing declaration conflicts must be
+reviewed instead of bypassed with a duplicate or overwrite request.
+
 ## Execution and recovery
 
 Execute through `blueprint.graph.build.execute` with the exact definition that
@@ -52,6 +65,9 @@ After execution:
   tuples; an incomplete entry scan is not negative reachability evidence;
 - verify unmanaged nodes were preserved;
 - run layout validation;
+- for a named template, exercise its generated actor: health damage/heal and
+  clamp limits, timer repeat/restart/stop/EndPlay, and interaction with true and
+  false guards. Retain instance identity separately from these state changes;
 - capture and compare the Graph only when a rendered Graph Editor is present.
 
 An idempotent replay should produce no additional nodes, connections, or

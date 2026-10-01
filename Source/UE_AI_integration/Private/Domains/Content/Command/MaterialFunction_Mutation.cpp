@@ -4,6 +4,7 @@
 #include "Infrastructure/MaterialCustomEditing.h"
 #include "Infrastructure/MaterialFunctionDependencies.h"
 #include "Infrastructure/MaterialGraphSnapshot.h"
+#include "Infrastructure/MaterialSharedWriteProtection.h"
 #include "Workflow/UEWorkflowExecutionContext.h"
 #include "Tools/MCPToolRegistry.h"
 #include "MaterialEditingLibrary.h"
@@ -24,6 +25,7 @@
 #include "Materials/MaterialExpressionStaticSwitchParameter.h"
 #include "Materials/MaterialFunctionMaterialLayer.h"
 #include "Materials/MaterialFunctionMaterialLayerBlend.h"
+#include "MaterialShared.h"
 #include "Engine/Texture.h"
 #include "Factories/MaterialFunctionMaterialLayerFactory.h"
 #include "Factories/MaterialFunctionMaterialLayerBlendFactory.h"
@@ -37,24 +39,72 @@ namespace MCPMaterialInfrastructure
 			return FMCPToolResult::Error(Message, TEXT("invalid_material_function_edit"), 400);
 		}
 
+		/**
+		 * Validate a function connection with the same value-type rules used by
+		 * UMaterialGraphSchema. Material functions store authored links directly
+		 * in FExpressionInput, so there is no graph-schema call at the mutation
+		 * site. Keep this check before the first Connect() to avoid persisting an
+		 * invalid link that only fails during a later compile.
+		 */
+		FMCPToolResult ValidateFunctionConnectionTypes(
+			UMaterialExpression* Source,
+			int32 OutputIndex,
+			UMaterialExpression* Target,
+			int32 InputIndex)
+		{
+			if (!Source || !Target)
+			{
+				return FMCPToolResult::Error(
+					TEXT("Source or target expression is unavailable."),
+					TEXT("material_pin_type_unavailable"),
+					409);
+			}
+
+			const uint32 InputType = Target->GetInputType(InputIndex);
+			const uint32 OutputType = Source->GetOutputType(OutputIndex);
+			if (CanConnectMaterialValueTypes(InputType, OutputType))
+			{
+				return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+			}
+
+			TArray<FText> InputDescriptions;
+			TArray<FText> OutputDescriptions;
+			GetMaterialValueTypeDescriptions(InputType, InputDescriptions);
+			GetMaterialValueTypeDescriptions(OutputType, OutputDescriptions);
+			FString InputDescription;
+			for (const FText& Description : InputDescriptions)
+			{
+				if (!InputDescription.IsEmpty())
+				{
+					InputDescription += TEXT(", ");
+				}
+				InputDescription += Description.ToString();
+			}
+			FString OutputDescription;
+			for (const FText& Description : OutputDescriptions)
+			{
+				if (!OutputDescription.IsEmpty())
+				{
+					OutputDescription += TEXT(", ");
+				}
+				OutputDescription += Description.ToString();
+			}
+			return FMCPToolResult::Error(
+				FString::Printf(
+					TEXT("Material function pin types are incompatible (output=%s, input=%s)."),
+					*OutputDescription,
+					*InputDescription),
+				TEXT("material_pin_type_incompatible"),
+				422);
+		}
+
 		FMCPToolResult RequireFunctionMutationBoundary(
 			UMaterialFunction* Function,
 			const TSharedPtr<FJsonObject>& Params,
 			UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& OutValidation)
 		{
-			const TSharedPtr<FJsonObject>* WorkflowContext = nullptr;
-			bool bApprovedPlan = false;
-			if (Params->TryGetObjectField(TEXT("__ueWorkflow"), WorkflowContext)
-				&& WorkflowContext && (*WorkflowContext).IsValid())
-			{
-				(*WorkflowContext)->TryGetBoolField(TEXT("approvedPlan"), bApprovedPlan);
-			}
 			if (!Params->HasField(TEXT("boundaryId")))
 			{
-				if (bApprovedPlan)
-				{
-					return FMCPToolResult::Ok(MakeShared<FJsonObject>());
-				}
 				return FMCPToolResult::Error(
 					TEXT("Authored material function graph writes require boundaryId, snapshotId and expectedProjectionHash."),
 					TEXT("material_boundary_required_for_mutation"),
@@ -94,6 +144,39 @@ namespace MCPMaterialInfrastructure
 					TEXT("material_boundary_node_not_writable"),
 					409);
 			}
+			return FMCPToolResult::Ok(MakeShared<FJsonObject>());
+		}
+
+		FMCPToolResult RequireFunctionSharedWrites(
+			UMaterialFunction* Function,
+			const TArray<UMaterialExpression*>& Expressions,
+			const TSharedPtr<FJsonObject>& Params,
+			const TSharedRef<FJsonObject>& Result)
+		{
+			TSet<UMaterialExpression*> Checked;
+			TArray<TSharedPtr<FJsonValue>> ProtectedNodes;
+			bool bSharedImpactDetected = false;
+			bool bSharedImpactConfirmed = false;
+			for (UMaterialExpression* Expression : Expressions)
+			{
+				if (!Expression || Checked.Contains(Expression)) continue;
+				Checked.Add(Expression);
+				UEAIIntegration::MaterialEditing::FMaterialSharedWriteProof Proof;
+				const FMCPToolResult Validation = UEAIIntegration::MaterialEditing::ValidateMaterialExpressionSharedWrite(
+					Function, Expression, Params, Proof);
+				if (!Validation.bSuccess) return Validation;
+				auto NodeProof = MakeShared<FJsonObject>();
+				NodeProof->SetStringField(TEXT("nodeId"), ExpressionNodeId(Expression));
+				UEAIIntegration::MaterialEditing::DescribeMaterialExpressionSharedWrite(Proof, NodeProof);
+				bSharedImpactDetected |= NodeProof->GetBoolField(TEXT("sharedNodeImpactDetected"));
+				bSharedImpactConfirmed |= NodeProof->GetBoolField(TEXT("sharedNodeImpactConfirmed"));
+				ProtectedNodes.Add(MakeShared<FJsonValueObject>(NodeProof));
+			}
+			Result->SetArrayField(TEXT("sharedWriteProtectedNodes"), ProtectedNodes);
+			Result->SetBoolField(TEXT("sharedNodeImpactDetected"), bSharedImpactDetected);
+			Result->SetBoolField(TEXT("sharedNodeImpactConfirmed"), bSharedImpactConfirmed);
+			Result->SetBoolField(TEXT("writeBoundaryVerified"), true);
+			Result->SetBoolField(TEXT("freshLiveProjectionVerified"), true);
 			return FMCPToolResult::Ok(MakeShared<FJsonObject>());
 		}
 
@@ -903,6 +986,15 @@ namespace MCPMaterialInfrastructure
 			{
 				return BoundaryResult;
 			}
+			BoundaryResult = ValidateFunctionConnectionTypes(Source, OutputIndex, Target, InputIndex);
+			if (!BoundaryResult.bSuccess)
+			{
+				return BoundaryResult;
+			}
+			// Replacing a target input also changes the old source's fan-out.
+			BoundaryResult = RequireFunctionSharedWrites(Function,
+				{Source, Target, Target->GetInput(InputIndex)->Expression}, Params, Result);
+			if (!BoundaryResult.bSuccess) return BoundaryResult;
 			TArray<FFunctionConnectionSnapshot> ConnectionSnapshot;
 			CaptureFunctionConnections(Function, ConnectionSnapshot);
 			Function->Modify();
@@ -944,6 +1036,8 @@ namespace MCPMaterialInfrastructure
 			{
 				return BoundaryResult;
 			}
+			BoundaryResult = RequireFunctionSharedWrites(Function, {Expression}, Params, Result);
+			if (!BoundaryResult.bSuccess) return BoundaryResult;
 			const FFunctionExpressionDeleteSnapshot DeleteSnapshot =
 				CaptureFunctionExpressionDeleteSnapshot(Function, Expression);
 			if (BoundaryValidation.Boundary.IsValid())
@@ -1019,6 +1113,10 @@ namespace MCPMaterialInfrastructure
 			{
 				return BoundaryResult;
 			}
+			const FExpressionInput* DisconnectedInput = InputIndex != INDEX_NONE ? Expression->GetInput(InputIndex) : nullptr;
+			BoundaryResult = RequireFunctionSharedWrites(Function,
+				{Expression, DisconnectedInput ? DisconnectedInput->Expression : nullptr}, Params, Result);
+			if (!BoundaryResult.bSuccess) return BoundaryResult;
 			TArray<FFunctionConnectionSnapshot> ConnectionSnapshot;
 			CaptureFunctionConnections(Function, ConnectionSnapshot);
 			Function->Modify();

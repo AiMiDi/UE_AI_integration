@@ -3065,6 +3065,115 @@
       }
     },
     {
+      "id": "blueprint.template.list",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Discover three minimal Blueprint behavior templates with exact parameter schemas and lifecycle contracts: clamped health events, one start/stop timer with an observable counter, and guarded interaction. Discovery does not verify a runtime instance.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "none",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.3.0",
+        "canonicalId": "blueprint.template.list"
+      }
+    },
+    {
+      "id": "blueprint.template.apply",
+      "domain": "blueprint",
+      "kind": "query",
+      "description": "Plan application of a named behavior template to an existing Actor Blueprint event graph through the spec normalizer and managed BuildGraph Workflow. Returns applied=false, normalizedDefinition, Workflow, and planDigest; performs no asset writes. Execute the reviewed Workflow separately with approvePlanDigest and confirmWrite, then verify the generated behavior on an actual instance.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "templateName": {
+            "type": "string",
+            "enum": [
+              "health_system",
+              "timer_loop",
+              "interactable_actor"
+            ],
+            "description": "Named minimal behavior template from blueprint.template.list."
+          },
+          "blueprint": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 1024,
+            "pattern": "^/.+$",
+            "description": "Explicit existing Blueprint asset path; short names are rejected."
+          },
+          "graph": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "default": "EventGraph"
+          },
+          "buildId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,128}$",
+            "description": "Managed ownership ID; defaults to template- followed by templateName."
+          },
+          "parameters": {
+            "type": "object",
+            "maxProperties": 3,
+            "description": "Exact discovered template values: health_system accepts finite nonnegative maxHealth, damageAmount, healAmount; its no-argument events read editable DamageAmount/HealAmount members. timer_loop accepts delay >= 0.001 seconds and an ASCII callback eventName distinct from StartTimer/StopTimer/ReceiveEndPlay. interactable_actor accepts boolean initiallyInteractable. Unknown fields and wrong types are rejected."
+          }
+        },
+        "required": [
+          "templateName",
+          "blueprint"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "asset",
+        "deferCompile": false,
+        "risk": "notOpen"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.3.0",
+        "canonicalId": "blueprint.template.apply"
+      }
+    },
+    {
       "id": "blueprint.build.from_spec",
       "domain": "blueprint",
       "kind": "command",

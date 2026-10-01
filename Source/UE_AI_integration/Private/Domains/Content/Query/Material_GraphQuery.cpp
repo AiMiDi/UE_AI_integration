@@ -3,6 +3,7 @@
 #include "Infrastructure/MaterialEditingTarget.h"
 #include "Infrastructure/MaterialAssetHelpers.h"
 #include "Infrastructure/MaterialCustomEditing.h"
+#include "Infrastructure/MaterialSharedWriteProtection.h"
 #include "Infrastructure/DeferredGraphMutation.h"
 #include "Infrastructure/EngineeringContractUtils.h"
 #include "Infrastructure/Sha256.h"
@@ -1362,6 +1363,91 @@ namespace UEAIIntegration::MaterialQuery
 		Result->SetBoolField(
 			TEXT("sharedNodeImpactConfirmed"),
 			OutValidation.bSharedNodeImpactConfirmed);
+		return FMCPToolResult::Ok(Result);
+	}
+
+	FMCPToolResult PrepareAssetScopeWriteBoundary(
+		UObject* Asset,
+		const TSharedPtr<FJsonObject>& Params,
+		FString& OutSnapshotId)
+	{
+		check(IsInGameThread());
+		OutSnapshotId.Reset();
+		if (!Asset || (!Asset->IsA<UMaterial>() && !Asset->IsA<UMaterialFunction>()) || !Params.IsValid())
+		{
+			return FMCPToolResult::Error(TEXT("An approved Material or MaterialFunction asset scope is required."),
+				TEXT("invalid_material_boundary_write"), 422);
+		}
+		if (Params->HasField(TEXT("boundaryId")) || Params->HasField(TEXT("snapshotId"))
+			|| Params->HasField(TEXT("expectedProjectionHash")))
+		{
+			return FMCPToolResult::Error(TEXT("An explicit material boundary must be validated without replacement."),
+				TEXT("invalid_material_boundary_write"), 422);
+		}
+
+		TSharedPtr<const FSnapshot> Snapshot;
+		const FMCPToolResult Captured = Capture(Asset, Asset->GetPathName(), FString(), nullptr, true, &Snapshot);
+		if (!Captured.bSuccess || !Snapshot)
+		{
+			return Captured.bSuccess
+				? FMCPToolResult::Error(TEXT("Fresh scoped graph capture returned no snapshot."),
+					TEXT("material_boundary_capture_failed"), 500)
+				: Captured;
+		}
+		TArray<FString> WritableIds;
+		TArray<FString> SelectedIds;
+		for (const FNode& Node : Snapshot->Nodes)
+		{
+			SelectedIds.Add(Node.Id);
+			if (Node.Id != TEXT("root")) WritableIds.Add(Node.Id);
+		}
+		WritableIds.Sort();
+		SelectedIds.Sort();
+		if (WritableIds.IsEmpty())
+		{
+			Release(Snapshot->Id);
+			return FMCPToolResult::Error(TEXT("The scoped asset has no writable material expressions."),
+				TEXT("invalid_material_boundary_write"), 422);
+		}
+
+		// An approved asset scope already covers the full authored member set.
+		// Construct that native proof directly rather than silently increasing the
+		// public traversal's seed/node limits. Root remains read-only. Native
+		// writers still validate each identity, fresh hash and shared confirmation.
+		auto Identity = MakeShared<FJsonObject>();
+		Identity->SetStringField(TEXT("schema"), TEXT("ue.material.graph-boundary/1"));
+		Identity->SetStringField(TEXT("snapshotId"), Snapshot->Id);
+		Identity->SetStringField(TEXT("projectionHash"), Snapshot->ProjectionHash);
+		Identity->SetStringField(TEXT("assetPath"), Snapshot->AssetPath);
+		TArray<TSharedPtr<FJsonValue>> NodeValues;
+		for (const FString& Id : WritableIds) NodeValues.Add(MakeShared<FJsonValueString>(Id));
+		Identity->SetArrayField(TEXT("nodeIds"), NodeValues);
+		Identity->SetArrayField(TEXT("boundaryEdges"), TArray<TSharedPtr<FJsonValue>>());
+		const FString BoundaryDigest = Digest(JsonText(Identity));
+		if (BoundaryDigest.IsEmpty())
+		{
+			Release(Snapshot->Id);
+			return FMCPToolResult::Error(TEXT("Boundary hashing is unavailable."), TEXT("graph_hash_unavailable"), 500);
+		}
+		auto Proof = MakeShared<FBoundaryProof>();
+		Proof->BoundaryId = TEXT("boundary:") + BoundaryDigest;
+		Proof->SnapshotId = Snapshot->Id;
+		Proof->AssetPath = Snapshot->AssetPath;
+		Proof->ProjectionHash = Snapshot->ProjectionHash;
+		Proof->CreatedSeconds = FPlatformTime::Seconds();
+		Proof->SelectedNodeIds = MoveTemp(SelectedIds);
+		Proof->WritableNodeIds = MoveTemp(WritableIds);
+		Expire();
+		while (BoundaryProofs.Num() >= MaxBoundaryProofs) BoundaryProofs.RemoveAt(0);
+		BoundaryProofs.Add(Proof);
+		Params->SetStringField(TEXT("boundaryId"), Proof->BoundaryId);
+		Params->SetStringField(TEXT("snapshotId"), Snapshot->Id);
+		Params->SetStringField(TEXT("expectedProjectionHash"), Snapshot->ProjectionHash);
+		OutSnapshotId = Snapshot->Id;
+		auto Result = MakeShared<FJsonObject>();
+		Result->SetStringField(TEXT("boundaryId"), Proof->BoundaryId);
+		Result->SetStringField(TEXT("snapshotId"), Snapshot->Id);
+		Result->SetStringField(TEXT("projectionHash"), Snapshot->ProjectionHash);
 		return FMCPToolResult::Ok(Result);
 	}
 
@@ -2766,6 +2852,11 @@ namespace UEAIIntegration::MaterialQuery
 		};
 		TArray<FPlanOperation> Plan;
 		Plan.Reserve(OperationValues->Num());
+		TSet<UMaterialExpression*> SharedWriteValidatedExpressions;
+		bool bSharedNodeImpactDetected = bHasBoundary
+			&& BoundaryValidation.Boundary->bRequiresSharedNodeConfirmation;
+		bool bSharedNodeImpactConfirmed = bSharedNodeImpactDetected
+			&& BoundaryValidation.bSharedNodeImpactConfirmed;
 		TMap<FString, int32> DeclaredResultOperations;
 		for (int32 OperationIndex = 0; OperationIndex < OperationValues->Num(); ++OperationIndex)
 		{
@@ -3187,6 +3278,15 @@ namespace UEAIIntegration::MaterialQuery
 				const auto IsWritable = [&](const FString& Id)
 				{
 					if (Id.IsEmpty()) return true;
+					// The Material root is a valid connection endpoint.  It is a
+					// read-only projection node, so it must not be required in the
+					// writable expression set when a plan reconnects a material
+					// property.  The authored source expression remains subject to
+					// the exact boundary proof below.
+					if (Id == TEXT("root") && (Name == TEXT("connect") || Name == TEXT("disconnect")))
+					{
+						return true;
+					}
 					if (WritableIds.Contains(Id)) return true;
 					if (DeclaredResultOperations.Contains(Id)
 						&& DeclaredResultOperations.FindRef(Id) < OperationIndex)
@@ -3208,6 +3308,34 @@ namespace UEAIIntegration::MaterialQuery
 					return FMCPToolResult::Error(
 						TEXT("The plan references a node outside the writable boundary."),
 						TEXT("material_boundary_node_outside_selection"), 409);
+				}
+			}
+			if (Name == TEXT("connect") || Name == TEXT("disconnect"))
+			{
+				// Validate the whole batch before its first write. Revalidating the
+				// original hash inside the apply loop would reject the second edit.
+				// Native fan-out includes consumers inside the selection and named
+				// reroutes, which the boundary's external-consumer check cannot see.
+				TArray<UEdGraphNode*> AffectedNodes;
+				AffectedNodes.Add(NodesById.FindRef(Parsed.SourceNodeId));
+				AffectedNodes.Add(NodesById.FindRef(Parsed.TargetNodeId));
+				for (const UEdGraphPin* LinkedPin : Parsed.TargetPin->LinkedTo)
+				{
+					if (LinkedPin) AffectedNodes.Add(LinkedPin->GetOwningNode());
+				}
+				for (UEdGraphNode* AffectedNode : AffectedNodes)
+				{
+					const UMaterialGraphNode* MaterialNode = Cast<UMaterialGraphNode>(AffectedNode);
+					UMaterialExpression* Expression = MaterialNode ? MaterialNode->MaterialExpression : nullptr;
+					if (!Expression || SharedWriteValidatedExpressions.Contains(Expression)) continue;
+					UEAIIntegration::MaterialEditing::FMaterialSharedWriteProof Proof;
+					const FMCPToolResult SharedValidation =
+						UEAIIntegration::MaterialEditing::ValidateMaterialExpressionSharedWrite(
+							Asset, Expression, Params, Proof);
+					if (!SharedValidation.bSuccess) return SharedValidation;
+					SharedWriteValidatedExpressions.Add(Expression);
+					bSharedNodeImpactDetected |= Proof.bShared;
+					bSharedNodeImpactConfirmed |= Proof.bShared && Proof.Validation.bSharedNodeImpactConfirmed;
 				}
 			}
 			Plan.Add(MoveTemp(Parsed));
@@ -3672,8 +3800,8 @@ namespace UEAIIntegration::MaterialQuery
 			Error->SetBoolField(TEXT("rollbackAttempted"), true);
 			Error->SetBoolField(TEXT("rollbackVerified"), bRollbackVerified);
 			Error->SetStringField(
-				TEXT("attempt_status"), bRollbackVerified ? TEXT("rolled_back") : TEXT("rollback_failed"));
-			Error->SetStringField(TEXT("restore_status"), bRollbackVerified ? TEXT("restored") : TEXT("unverified"));
+				TEXT("attempt_status"), bRollbackVerified ? TEXT("rolled_back") : TEXT("failed"));
+			Error->SetStringField(TEXT("restore_status"), bRollbackVerified ? TEXT("restored") : TEXT("restore_failed"));
 			FMCPToolResult Failure = FMCPToolResult::Error(
 				bRollbackVerified
 					? TEXT("Material graph plan failed and was rolled back.")
@@ -3692,6 +3820,9 @@ namespace UEAIIntegration::MaterialQuery
 		Result->SetArrayField(TEXT("operationResults"), OperationResults);
 		Result->SetBoolField(TEXT("postconditionChecked"), true);
 		Result->SetBoolField(TEXT("postconditionVerified"), true);
+		Result->SetBoolField(TEXT("writeBoundaryVerified"), bHasBoundary);
+		Result->SetBoolField(TEXT("sharedNodeImpactDetected"), bSharedNodeImpactDetected);
+		Result->SetBoolField(TEXT("sharedNodeImpactConfirmed"), bSharedNodeImpactConfirmed);
 		Result->SetBoolField(TEXT("functionMetadataReadbackVerified"), bFunctionMetadataVerified);
 		Result->SetBoolField(TEXT("rollbackAttempted"), false);
 		Result->SetBoolField(TEXT("rollbackVerified"), false);

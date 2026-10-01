@@ -820,6 +820,30 @@ FMCPToolResult FProductionRuntimeController::GetLoadedModule(
 		TEXT("matchesLatestBuildArtifact"),
 		bFoundLatest && bLatestArtifactPathMatchesLoaded
 		&& !LoadedHash.IsEmpty() && LoadedHash == LatestHash);
+	// Publish one immutable identity tuple so an isolated harness can verify
+	// that every provenance field came from the same loaded process/module
+	// observation.  The legacy top-level fields remain for compatibility, but
+	// callers must be able to bind the proof without joining fields themselves.
+	TSharedPtr<FJsonObject> LoadedModuleIdentity = MakeShared<FJsonObject>();
+	LoadedModuleIdentity->SetStringField(
+		TEXT("schema"), TEXT("ue.loaded-module-identity.v1"));
+	LoadedModuleIdentity->SetStringField(TEXT("plugin"), TEXT("UE_AI_integration"));
+	LoadedModuleIdentity->SetStringField(TEXT("module"), TEXT("UE_AI_integration"));
+	LoadedModuleIdentity->SetNumberField(
+		TEXT("processId"),
+		static_cast<double>(FPlatformProcess::GetCurrentProcessId()));
+	LoadedModuleIdentity->SetStringField(TEXT("modulePath"), ModulePath);
+	LoadedModuleIdentity->SetStringField(TEXT("moduleSha256"), LoadedHash);
+	LoadedModuleIdentity->SetStringField(TEXT("pdbPath"), PdbPath);
+	LoadedModuleIdentity->SetStringField(
+		TEXT("pdbSha256"), ComputeFileSha256(PdbPath));
+	LoadedModuleIdentity->SetStringField(
+		TEXT("latestBuildArtifactPath"), LatestPath);
+	LoadedModuleIdentity->SetStringField(
+		TEXT("latestBuildArtifactSha256"), LatestHash);
+	LoadedModuleIdentity->SetStringField(
+		TEXT("editorStartedAtUtc"), GetEditorStartTimeUtc());
+	Data->SetObjectField(TEXT("loadedModuleIdentity"), LoadedModuleIdentity);
 
 	TSharedPtr<FJsonObject> LiveCoding = MakeShared<FJsonObject>();
 #if WITH_LIVE_CODING

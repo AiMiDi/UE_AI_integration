@@ -207,6 +207,12 @@ private:
 		bool bDeferCompile,
 		TSharedPtr<FJsonObject>& OutResult,
 		FMCPResult& OutFailure) const;
+	bool PrepareMaterialOperationBoundary(
+		const FString& CapabilityId,
+		const TSharedPtr<FJsonObject>& Scope,
+		const TSharedPtr<FJsonObject>& Params,
+		FString& OutSnapshotId,
+		FMCPResult& OutFailure) const;
 	bool ExecuteFinalizer(
 		const TSharedPtr<FJsonObject>& Finalizer,
 		const TSharedPtr<FJsonObject>& Scope,

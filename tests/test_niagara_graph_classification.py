@@ -28,6 +28,7 @@ GRAPH_SOURCE = (
 AUDIT_SOURCE = GRAPH_SOURCE.with_name("Niagara_Graph_Audit.cpp")
 ADVANCED_SOURCE = GRAPH_SOURCE.with_name("Niagara_Graph_Advanced.cpp")
 MODULE_SOURCE = GRAPH_SOURCE.with_name("Niagara_Graph_Module.cpp")
+EDIT_SOURCE = GRAPH_SOURCE.with_name("Niagara_Graph_Edit.cpp")
 PROJECT_AUDIT_SOURCE = GRAPH_SOURCE.with_name(
     "Niagara_CollisionProjectAudit.cpp"
 )
@@ -47,6 +48,7 @@ class NiagaraGraphClassificationSourceTest(unittest.TestCase):
         cls.audit = AUDIT_SOURCE.read_text(encoding="utf-8")
         cls.advanced = ADVANCED_SOURCE.read_text(encoding="utf-8")
         cls.module = MODULE_SOURCE.read_text(encoding="utf-8")
+        cls.edit = EDIT_SOURCE.read_text(encoding="utf-8")
         cls.project_audit = PROJECT_AUDIT_SOURCE.read_text(encoding="utf-8")
         cls.graph_classifier = section(
             cls.graph,
@@ -943,7 +945,7 @@ class NiagaraGraphClassificationSourceTest(unittest.TestCase):
             self.audit,
         )
 
-    def test_niagara_manifest_and_registrars_cover_same_seventeen_capabilities(self) -> None:
+    def test_niagara_manifest_and_registrars_cover_same_graph_capabilities(self) -> None:
         manifest = json.loads(CAPABILITY_MANIFEST.read_text(encoding="utf-8"))
         manifest_ids = {
             capability["id"]
@@ -960,31 +962,58 @@ class NiagaraGraphClassificationSourceTest(unittest.TestCase):
         def registered_ids(source: str, function_name: str) -> set[str]:
             active = active_source(source)
             registration = re.search(
-                rf"void {re.escape(function_name)}\(.*?\n\}}\n\}}",
+                rf"void {re.escape(function_name)}\([^)]*\)\s*\{{(?P<body>.*?)\n[ \t]*\}}",
                 active,
                 flags=re.DOTALL,
             )
             self.assertIsNotNone(registration)
             class_names = re.findall(
-                r"Registry\.Register\(MakeShared<(FTool_[A-Za-z0-9_]+)>",
-                registration.group(0),
+                r"\bRegistry\s*\.\s*Register\s*\(\s*MakeShared\s*<\s*"
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*>",
+                registration.group("body"),
             )
+            self.assertTrue(class_names, function_name)
             ids: set[str] = set()
             for class_name in class_names:
                 class_block = re.search(
-                    rf"class {re.escape(class_name)}\b.*?\n\}};",
+                    # A forward declaration ends in ';', so it must not
+                    # capture a later, unrelated class's capability body.
+                    rf"\bclass\s+{re.escape(class_name)}\b[^;{{]*\{{"
+                    rf".*?\n[ \t]*\}};",
                     active,
                     flags=re.DOTALL,
                 )
                 self.assertIsNotNone(class_block, class_name)
                 capability = re.search(
-                    r'GetCapabilityId\(\).*?TEXT\("(content\.niagara\.graph\.[^"]+)"\)',
+                    r'GetCapabilityId\(\).*?TEXT\("(content\.niagara\.[^"]+)"\)',
                     class_block.group(0),
                     flags=re.DOTALL,
                 )
                 self.assertIsNotNone(capability, class_name)
-                ids.add(capability.group(1))
+                if capability.group(1).startswith("content.niagara.graph."):
+                    ids.add(capability.group(1))
             return ids
+
+        # Graph-edit tools use names such as FPlan rather than FTool_*. Keep
+        # both that naming freedom and declaration/definition boundaries in
+        # the scanner contract without relaxing manifest equality below.
+        scanner_fixture = '''
+void RegisterFixtureTools(FMCPToolRegistry& Registry);
+class FPlan;
+class FPlan final : public FMCPToolBase
+{
+    FString GetCapabilityId() const override
+    { return TEXT("content.niagara.graph.edit.plan"); }
+};
+void RegisterFixtureTools(FMCPToolRegistry& Registry)
+{
+    Registry.Register(MakeShared<FPlan>());
+}
+'''
+        self.assertEqual(
+            registered_ids(scanner_fixture, "RegisterFixtureTools"),
+            {"content.niagara.graph.edit.plan"},
+        )
 
         registered = set()
         registered.update(
@@ -995,6 +1024,12 @@ class NiagaraGraphClassificationSourceTest(unittest.TestCase):
         )
         registered.update(
             registered_ids(self.module, "RegisterNiagaraGraphModuleTools")
+        )
+        registered.update(
+            registered_ids(self.module, "RegisterNiagaraDynamicInputTools")
+        )
+        registered.update(
+            registered_ids(self.edit, "RegisterNiagaraGraphEditTools")
         )
         self.assertEqual(manifest_ids, registered)
 

@@ -81,10 +81,31 @@ Unsupported operations are rejected before any mutation.
 
 The legacy `content.material.graph.snapshot` / `graph.diff` /
 `graph.restore` path is separate from immutable GraphIR query snapshots.
-Restore requires a fresh `expectedCurrentDigest`, adds only missing connections,
-and rejects any connection that would break or convert existing wiring. It is
-not a node/property restore or a full graph restore. It is dirty-only and rejects
-`save:true`; persist through an approved Workflow with a durable checkpoint.
+Its default `connectionsOnly` restore requires a fresh `expectedCurrentDigest`,
+adds only missing connections, and rejects rewiring existing inputs. Explicit
+`fullGraph` restores connection topology only, with the same snapshot node set.
+To restore expression membership, persistent properties, positions, comments and
+material root inputs, capture with `captureMode:"authoredGraph"` and restore with
+`restoreMode:"authoredGraph"`. Read a fresh `graph.diff` for that snapshot's
+authored digest before restore; topology digests do not fence property changes.
+Use a dry run to preflight identities and names. Applying changed full state
+requires `confirmFullGraphRestore:true`; detected shared expression state also
+requires `confirmSharedNodeImpact:true`. Approval of a Workflow plan does not
+bypass a writer's shared-node boundary or confirmation checks. These checkpoints
+retain up to 32 independent images in one Editor process and do not survive a
+restart. All direct restore modes remain dirty-only, reject `save:true`, and do
+not verify compilation. Persist through Workflow with a durable checkpoint.
+Transient editor graph objects and derived shader/lightmass cache identities
+are outside the authored digest. A successful apply creates one native Undo
+transaction. A verified automatic rollback cancels it; an unverified rollback
+retains Undo and reports `restore_status:"restore_failed"` explicitly.
+
+Specialized Custom, parameter and function-call writers also require a fresh
+authored GraphIR boundary for shared nodes and explicit `confirmSharedNodeImpact`.
+Shared detection counts individual inputs, including multiple material root
+inputs and consumers reached through named reroutes. Include named reroutes in
+the source snapshot (`includeNamedReroutes:true`) before planning those writes.
+Shared preview writes are rejected until a matching preview boundary is supported.
 
 Keep the asset/preview identity and relevant state hashes with the result.
 On timeout or an unknown write outcome, read the current state and recover the

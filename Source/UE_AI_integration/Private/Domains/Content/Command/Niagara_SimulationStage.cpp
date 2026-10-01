@@ -13,6 +13,8 @@
 
 #if WITH_UEAI_NIAGARA && WITH_EDITORONLY_DATA
 
+#include "Infrastructure/NiagaraGraphNotifications.h"
+
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphUtilities.h"
@@ -34,6 +36,7 @@
 #include "Misc/SecureHash.h"
 #include "ScopedTransaction.h"
 #include "UObject/Package.h"
+#include "UObject/StrongObjectPtr.h"
 #include "UObject/UnrealType.h"
 
 namespace UEAINiagaraSimulationStagePrivate
@@ -46,6 +49,15 @@ namespace UEAINiagaraSimulationStagePrivate
 	constexpr int32 MaxStageNameCharacters = 128;
 	constexpr int32 MaxStageIndex = 128;
 	const TCHAR* GenericStageClassPath = TEXT("/Script/Niagara.NiagaraSimulationStageGeneric");
+
+#if WITH_DEV_AUTOMATION_TESTS
+	static bool bFailNextUpdateAfterPropertiesForTests = false;
+	void SetUpdatePropertyFailureForTests(bool bEnabled)
+	{
+		check(IsInGameThread());
+		bFailNextUpdateAfterPropertiesForTests = bEnabled;
+	}
+#endif
 
 	struct FStageRequest
 	{
@@ -86,6 +98,8 @@ namespace UEAINiagaraSimulationStagePrivate
 		TArray<FString> Warnings;
 	};
 
+	struct FGraphSnapshot;
+
 	struct FStageReceipt
 	{
 		FString ReceiptId;
@@ -97,10 +111,8 @@ namespace UEAINiagaraSimulationStagePrivate
 		FString GraphPath;
 		FString StagePath;
 		FString StageClassPath;
-		FString BeforeGraphExport;
+		TSharedPtr<FGraphSnapshot> BeforeGraphSnapshot;
 		FString GraphAfterDigest;
-		int32 BeforeGraphNodeCount = 0;
-		bool bHasGraphSnapshot = false;
 		FString EmitterChangeIdAfter;
 		FGuid EmitterVersion;
 		FGuid UsageId;
@@ -120,10 +132,28 @@ namespace UEAINiagaraSimulationStagePrivate
 		bool bCompiled = false;
 		FString CompileStatus = TEXT("notRequired");
 		bool bRolledBack = false;
+		bool bFullGraphRestored = false;
 	};
 
 	struct FGraphSnapshot
 	{
+		struct FNodeState
+		{
+			TStrongObjectPtr<UEdGraphNode> Node;
+			TArray<UEdGraphPin*> Pins;
+		};
+		struct FPinState
+		{
+			UEdGraphPin* Pin = nullptr;
+			TArray<UEdGraphPin*> Links;
+			FString DefaultValue;
+			TStrongObjectPtr<UObject> DefaultObject;
+			FText DefaultTextValue;
+		};
+		TWeakObjectPtr<UNiagaraGraph> Graph;
+		TStrongObjectPtr<UNiagaraSimulationStageBase> RetainedStage;
+		TArray<FNodeState> Nodes;
+		TArray<FPinState> Pins;
 		FString Export;
 		FString Digest;
 		int32 NodeCount = 0;
@@ -146,67 +176,152 @@ namespace UEAINiagaraSimulationStagePrivate
 			return false;
 		}
 		TSet<UObject*> Nodes;
-		const TArray<UEdGraphNode*> PartialNodes = Graph->Nodes;
-		for (UEdGraphNode* Node : PartialNodes)
+		TSet<UEdGraphPin*> Pins;
+		OutSnapshot.Graph = Graph;
+		for (UEdGraphNode* Node : Graph->Nodes)
 		{
-			if (Node)
+			if (!IsValid(Node) || Node->GetGraph() != Graph || Nodes.Contains(Node))
 			{
-				Nodes.Add(Node);
+				return false;
+			}
+			Nodes.Add(Node);
+			FGraphSnapshot::FNodeState& NodeState = OutSnapshot.Nodes.AddDefaulted_GetRef();
+			NodeState.Node.Reset(Node);
+			NodeState.Pins = Node->Pins;
+			for (UEdGraphPin* Pin : Node->Pins)
+			{
+				if (!Pin || Pin->GetOwningNode() != Node || Pins.Contains(Pin))
+				{
+					return false;
+				}
+				Pins.Add(Pin);
+				FGraphSnapshot::FPinState& PinState = OutSnapshot.Pins.AddDefaulted_GetRef();
+				PinState.Pin = Pin;
+				PinState.Links = Pin->LinkedTo;
+				PinState.DefaultValue = Pin->DefaultValue;
+				PinState.DefaultObject.Reset(Pin->DefaultObject.Get());
+				PinState.DefaultTextValue = Pin->DefaultTextValue;
+			}
+		}
+		for (const FGraphSnapshot::FPinState& State : OutSnapshot.Pins)
+		{
+			for (UEdGraphPin* LinkedPin : State.Links)
+			{
+				if (!Pins.Contains(LinkedPin) || !LinkedPin->LinkedTo.Contains(State.Pin))
+				{
+					return false;
+				}
 			}
 		}
 		FEdGraphUtilities::ExportNodesToText(Nodes, OutSnapshot.Export);
+		if (!Nodes.IsEmpty() && OutSnapshot.Export.IsEmpty())
+		{
+			return false;
+		}
 		OutSnapshot.Digest = GraphSnapshotDigest(OutSnapshot.Export);
 		OutSnapshot.NodeCount = Nodes.Num();
 		OutSnapshot.bCaptured = true;
 		return true;
 	}
 
+	bool SnapshotPinsSurvive(UNiagaraGraph* Graph, const FGraphSnapshot& Snapshot)
+	{
+		if (!Graph || !Snapshot.bCaptured || Snapshot.Graph.Get() != Graph
+			|| Snapshot.Nodes.Num() != Snapshot.NodeCount)
+		{
+			return false;
+		}
+		// Strong UObject references retain removed nodes, but not reconstructed
+		// UEdGraphPins. Check membership before dereferencing any saved pin.
+		for (const FGraphSnapshot::FNodeState& State : Snapshot.Nodes)
+		{
+			if (!IsValid(State.Node.Get()) || State.Node->GetGraph() != Graph || State.Node->Pins != State.Pins)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool GraphSnapshotMatches(UNiagaraGraph* Graph, const FGraphSnapshot& Snapshot)
+	{
+		if (!SnapshotPinsSurvive(Graph, Snapshot) || Graph->Nodes.Num() != Snapshot.NodeCount)
+		{
+			return false;
+		}
+		for (int32 Index = 0; Index < Snapshot.Nodes.Num(); ++Index)
+		{
+			if (Graph->Nodes[Index] != Snapshot.Nodes[Index].Node.Get())
+			{
+				return false;
+			}
+		}
+		FGraphSnapshot ReadBack;
+		return CaptureGraphSnapshot(Graph, ReadBack) && ReadBack.Digest == Snapshot.Digest
+			&& ReadBack.NodeCount == Snapshot.NodeCount;
+	}
+
+	void ApplyRetainedGraphSnapshot(UNiagaraGraph* Graph, const FGraphSnapshot& Snapshot)
+	{
+		Graph->Modify();
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			Node->Modify();
+			Node->BreakAllNodeLinks();
+		}
+		Graph->Nodes.Reset(Snapshot.NodeCount);
+		for (const FGraphSnapshot::FNodeState& State : Snapshot.Nodes)
+		{
+			UEdGraphNode* Node = State.Node.Get();
+			Node->Modify();
+			Node->BreakAllNodeLinks();
+			Graph->Nodes.Add(Node);
+		}
+		for (const FGraphSnapshot::FPinState& State : Snapshot.Pins)
+		{
+			State.Pin->DefaultValue = State.DefaultValue;
+			State.Pin->DefaultObject = State.DefaultObject.Get();
+			State.Pin->DefaultTextValue = State.DefaultTextValue;
+			for (UEdGraphPin* Link : State.Links)
+			{
+				State.Pin->MakeLinkTo(Link);
+			}
+		}
+		UEAIIntegration::NiagaraEditing::NotifyRestoredGraph(Graph);
+	}
+
 	bool RestoreGraphSnapshot(UNiagaraGraph* Graph, const FGraphSnapshot& Snapshot)
 	{
-		if (!Graph || !Snapshot.bCaptured)
+		if (!SnapshotPinsSurvive(Graph, Snapshot))
 		{
 			return false;
 		}
-		const bool bEmptySnapshot = Snapshot.NodeCount == 0 && Snapshot.Export.IsEmpty();
-		if (!bEmptySnapshot && !FEdGraphUtilities::CanImportNodesFromText(Graph, Snapshot.Export))
+		FGraphSnapshot CurrentGraph;
+		if (!CaptureGraphSnapshot(Graph, CurrentGraph))
 		{
 			return false;
 		}
-		Graph->Modify();
-		const TArray<UEdGraphNode*> ExistingNodes = Graph->Nodes;
-		for (UEdGraphNode* Node : ExistingNodes)
+		// Removal only changes membership and links. An unexpected new node is
+		// graph drift, not permission to replace the emitter's other graphs.
+		for (const FGraphSnapshot::FNodeState& State : CurrentGraph.Nodes)
 		{
-			if (Node)
+			if (!Snapshot.Nodes.ContainsByPredicate([&State](const FGraphSnapshot::FNodeState& Before)
+				{ return Before.Node.Get() == State.Node.Get(); }))
 			{
-				Node->Modify();
-				Node->DestroyNode();
+				return false;
 			}
 		}
-		if (bEmptySnapshot)
-		{
-			Graph->NotifyGraphChanged();
-			return true;
-		}
-		TSet<UEdGraphNode*> ImportedNodes;
-		FEdGraphUtilities::ImportNodesFromText(Graph, Snapshot.Export, ImportedNodes);
-		Graph->NotifyGraphChanged();
-		if (ImportedNodes.Num() == Snapshot.NodeCount)
+		ApplyRetainedGraphSnapshot(Graph, Snapshot);
+		if (GraphSnapshotMatches(Graph, Snapshot))
 		{
 			return true;
 		}
-		// Import can create a partial set before rejecting an unsupported
-		// Niagara node class (notably output nodes).  Clear that partial graph
-		// before the caller attempts the explicit stage-output recovery path.
-		const TArray<UEdGraphNode*> PartialNodes = Graph->Nodes;
-		for (UEdGraphNode* Node : PartialNodes)
+		// A node property or listener may prevent full restoration. Put the
+		// current graph back, return failure, and retain the transaction for Undo.
+		if (SnapshotPinsSurvive(Graph, CurrentGraph))
 		{
-			if (Node)
-			{
-				Node->Modify();
-				Node->DestroyNode();
-			}
+			ApplyRetainedGraphSnapshot(Graph, CurrentGraph);
 		}
-		Graph->NotifyGraphChanged();
 		return false;
 	}
 
@@ -717,6 +832,14 @@ namespace UEAINiagaraSimulationStagePrivate
 
 	UClass* ResolveStageClass(const FString& ClassPath)
 	{
+		// The generic stage class is part of the loaded Niagara module, while a
+		// HostProject may not have a reflected object path for it in its asset
+		// registry.  Prefer the native class identity for the default and retain
+		// path loading for explicitly requested custom stage classes.
+		if (ClassPath.IsEmpty() || ClassPath == GenericStageClassPath)
+		{
+			return UNiagaraSimulationStageGeneric::StaticClass();
+		}
 		UClass* Class = LoadObject<UClass>(nullptr, *ClassPath, nullptr, LOAD_NoWarn);
 		return Class && Class->IsChildOf(UNiagaraSimulationStageBase::StaticClass()) && !Class->
 		       HasAnyClassFlags(CLASS_Abstract)
@@ -809,6 +932,26 @@ namespace UEAINiagaraSimulationStagePrivate
 		return Graph && Graph->FindEquivalentOutputNode(ENiagaraScriptUsage::ParticleSimulationStageScript, UsageId) != nullptr;
 	}
 
+	void CollectUpstreamNodes(UEdGraphNode* Node, UNiagaraGraph* Graph, TSet<UEdGraphNode*>& OutNodes)
+	{
+		if (!Node || !Graph->Nodes.Contains(Node) || OutNodes.Contains(Node))
+		{
+			return;
+		}
+		OutNodes.Add(Node);
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (!Pin || Pin->Direction != EGPD_Input)
+			{
+				continue;
+			}
+			for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
+			{
+				CollectUpstreamNodes(LinkedPin ? LinkedPin->GetOwningNode() : nullptr, Graph, OutNodes);
+			}
+		}
+	}
+
 	bool RemoveStageOutput(UNiagaraGraph* Graph, const FGuid& UsageId)
 	{
 		if (!Graph)
@@ -820,12 +963,43 @@ namespace UEAINiagaraSimulationStagePrivate
 		{
 			return true;
 		}
-		// Removing a stage output must not delete the authored nodes feeding it.
-		// The complete graph snapshot held by the receipt is the rollback boundary;
-		// leaving upstream nodes in place also preserves shared-node ownership.
-		Output->Modify();
-		Output->BreakAllNodeLinks();
-		Output->DestroyNode();
+		TSet<UEdGraphNode*> Candidates;
+		CollectUpstreamNodes(Output, Graph, Candidates);
+		TSet<UEdGraphNode*> ProtectedNodes;
+		for (UEdGraphNode* Node : Candidates)
+		{
+			if (Node == Output)
+			{
+				continue;
+			}
+			bool bShared = Cast<UNiagaraNodeOutput>(Node) != nullptr;
+			for (UEdGraphPin* Pin : Node->Pins)
+			{
+				if (!Pin || Pin->Direction != EGPD_Output)
+				{
+					continue;
+				}
+				for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
+				{
+					bShared |= LinkedPin && !Candidates.Contains(LinkedPin->GetOwningNode());
+				}
+			}
+			if (bShared)
+			{
+				// Preserve shared consumers even when their branch is not connected
+				// to another output, and preserve all dependencies of that branch.
+				CollectUpstreamNodes(Node, Graph, ProtectedNodes);
+			}
+		}
+		const TArray<UEdGraphNode*> OriginalNodes = Graph->Nodes;
+		for (UEdGraphNode* Node : OriginalNodes)
+		{
+			if (Candidates.Contains(Node) && !ProtectedNodes.Contains(Node))
+			{
+				Node->Modify();
+				Node->DestroyNode();
+			}
+		}
 		Graph->NotifyGraphChanged();
 		return Graph->FindEquivalentOutputNode(ENiagaraScriptUsage::ParticleSimulationStageScript, UsageId) == nullptr;
 	}
@@ -1040,6 +1214,7 @@ namespace UEAINiagaraSimulationStagePrivate
 		Result->SetBoolField(TEXT("compiled"), Receipt.bCompiled);
 		Result->SetStringField(TEXT("compileStatus"), Receipt.CompileStatus);
 		Result->SetBoolField(TEXT("rolledBack"), Receipt.bRolledBack);
+		Result->SetBoolField(TEXT("fullGraphRestored"), Receipt.bFullGraphRestored);
 		Result->SetBoolField(TEXT("idempotentReplay"), bReplay);
 		if (Receipt.BeforeProperties.IsValid())
 		{
@@ -1309,9 +1484,6 @@ namespace UEAINiagaraSimulationStagePrivate
 			{
 				return ErrorResult(TEXT("The simulation stage disappeared before apply."), TEXT("stage_not_found"), 404);
 			}
-			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Update Niagara Simulation Stage")));
-			Data.Target.System->Modify();
-			Data.Target.Emitter->Modify();
 			FStageReceipt Receipt;
 			Receipt.BeforeStageName = Stage->SimulationStageName;
 			Receipt.bBeforeEnabled = Stage->bEnabled;
@@ -1326,13 +1498,69 @@ namespace UEAINiagaraSimulationStagePrivate
 				Receipt.bHasBeforeNumIterations = true;
 			}
 			Receipt.bHasBeforeState = true;
+			TMap<UPackage*, bool> PackageDirtyBefore;
+			for (UObject* Object : {static_cast<UObject*>(Data.Target.System), static_cast<UObject*>(Data.Target.Emitter),
+				static_cast<UObject*>(Data.Target.Graph), static_cast<UObject*>(Stage), static_cast<UObject*>(Stage->Script)})
+			{
+				if (Object) PackageDirtyBefore.FindOrAdd(Object->GetOutermost(), Object->GetOutermost()->IsDirty());
+			}
+			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Update Niagara Simulation Stage")));
+			Data.Target.System->Modify();
+			Data.Target.Emitter->Modify();
+			auto RestoreBeforeState = [&](bool bRecompile, FString& RestoreError)
+			{
+				Stage->SimulationStageName = Receipt.BeforeStageName;
+				Stage->bEnabled = Receipt.bBeforeEnabled;
+				if (!RestoreCapturedStageProperties(Stage, Receipt.BeforeProperties,
+					&Receipt.BeforeNumIterations, Receipt.bHasBeforeNumIterations, RestoreError)) return false;
+				if (Receipt.BeforeIndex != INDEX_NONE)
+				{
+					Data.Target.Emitter->MoveSimulationStageToIndex(Stage, Receipt.BeforeIndex, Data.Target.EmitterVersion);
+				}
+				const UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage);
+				const bool bCompiled = !bRecompile || CompileStage(Data.Target.System, Stage->Script).bCompiled;
+				const bool bRestored = bCompiled && FindStage(Data.Target.Data, Data.Request.UsageId) == Stage
+					&& Stage->SimulationStageName == Receipt.BeforeStageName && Stage->bEnabled == Receipt.bBeforeEnabled
+					&& FindStageIndex(Data.Target.Data, Stage) == Receipt.BeforeIndex
+					&& (!Receipt.bHasBeforeNumIterations || (Generic && Generic->NumIterations == Receipt.BeforeNumIterations))
+					&& GenericStagePropertiesMatch(Stage, Receipt.BeforeProperties);
+				if (!bRestored)
+				{
+					RestoreError = TEXT("The original simulation-stage properties, order or compilation were not restored completely.");
+					return false;
+				}
+				Transaction.Cancel();
+				for (const auto& PackageState : PackageDirtyBefore) PackageState.Key->SetDirtyFlag(PackageState.Value);
+				return true;
+			};
+			auto FailAndRestore = [&](const FString& Message, const TCHAR* Code, int32 Status, bool bRecompile)
+			{
+				FString RestoreError;
+				const bool bRestored = RestoreBeforeState(bRecompile, RestoreError);
+				const FString FailureMessage = bRestored
+					? Message + TEXT(" The original authored state was restored and verified.")
+					: Message + TEXT(" Restoration was not verified; the transaction was retained for Editor Undo. ") + RestoreError;
+				FMCPToolResult Failure = ErrorResult(FailureMessage,
+					bRestored ? Code : TEXT("restore_failed"), bRestored ? Status : 500);
+				Failure.Data = MakeShared<FJsonObject>();
+				Failure.Data->SetBoolField(TEXT("restorationVerified"), bRestored);
+				return Failure;
+			};
 			Stage->Modify();
 			Stage->SimulationStageName = FName(*Data.Request.StageName);
 			Stage->bEnabled = Data.Request.bEnabled;
-			if (!ApplyStageRequestProperties(Stage, Data.Request, Error))
+			bool bPropertiesApplied = ApplyStageRequestProperties(Stage, Data.Request, Error);
+#if WITH_DEV_AUTOMATION_TESTS
+			if (bFailNextUpdateAfterPropertiesForTests)
 			{
-				Transaction.Cancel();
-				return ErrorResult(Error, TEXT("property_invalid"), 422);
+				bFailNextUpdateAfterPropertiesForTests = false;
+				bPropertiesApplied = false;
+				Error = TEXT("Injected property failure after applying the complete requested stage state.");
+			}
+#endif
+			if (!bPropertiesApplied)
+			{
+				return FailAndRestore(Error, TEXT("property_invalid"), 422, false);
 			}
 			if (Data.Request.TargetIndex != INDEX_NONE)
 			{
@@ -1342,26 +1570,8 @@ namespace UEAINiagaraSimulationStagePrivate
 			const bool bReadBack = ReadBackMatches(Data.Target, Data.Request);
 			if (!bReadBack || !Compile.bCompiled)
 			{
-				Stage->SimulationStageName = Receipt.BeforeStageName;
-				Stage->bEnabled = Receipt.bBeforeEnabled;
-				FString RestoreError;
-				const bool bRestoredProperties = RestoreCapturedStageProperties(
-					Stage,
-					Receipt.BeforeProperties,
-					&Receipt.BeforeNumIterations,
-					Receipt.bHasBeforeNumIterations,
-					RestoreError);
-				if (!bRestoredProperties)
-				{
-					Transaction.Cancel();
-					return ErrorResult(RestoreError, TEXT("restore_failed"), 500);
-				}
-				if (Receipt.BeforeIndex != INDEX_NONE)
-				{
-					Data.Target.Emitter->MoveSimulationStageToIndex(Stage, Receipt.BeforeIndex, Data.Target.EmitterVersion);
-				}
-				Transaction.Cancel();
-				return ErrorResult(FString::Printf(TEXT("Simulation-stage update read-back or compilation failed (status=%s)."), *Compile.Status), !bReadBack ? TEXT("verification_failed") : TEXT("compile_failed"), 500);
+				return FailAndRestore(FString::Printf(TEXT("Simulation-stage update read-back or compilation failed (status=%s)."),
+					*Compile.Status), !bReadBack ? TEXT("verification_failed") : TEXT("compile_failed"), 500, true);
 			}
 			Receipt.ReceiptId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
 			Receipt.RequestId = RequestId;
@@ -1551,6 +1761,7 @@ namespace UEAINiagaraSimulationStagePrivate
 			{
 				return ErrorResult(TEXT("The simulation-stage graph could not be snapshotted safely."), TEXT("graph_snapshot_failed"), 500);
 			}
+			BeforeGraph.RetainedStage.Reset(Stage);
 			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Remove Niagara Simulation Stage")));
 			Data.Target.System->Modify();
 			Data.Target.Emitter->Modify();
@@ -1560,50 +1771,45 @@ namespace UEAINiagaraSimulationStagePrivate
 			Receipt.bBeforeEnabled = Stage->bEnabled;
 			Receipt.BeforeIndex = FindStageIndex(Data.Target.Data, Stage);
 			Receipt.bHasBeforeState = true;
+			const auto RestoreBeforeRemoval = [&]()
+			{
+				if (!RestoreGraphSnapshot(Data.Target.Graph, BeforeGraph))
+				{
+					return false;
+				}
+				Data.Target.Data = Data.Target.Emitter->GetEmitterData(Data.Target.EmitterVersion);
+				if (!FindStage(Data.Target.Data, Data.Request.UsageId))
+				{
+					Data.Target.Emitter->AddSimulationStage(Stage, Data.Target.EmitterVersion);
+				}
+				if (Receipt.BeforeIndex != INDEX_NONE)
+				{
+					Data.Target.Emitter->MoveSimulationStageToIndex(Stage, Receipt.BeforeIndex, Data.Target.EmitterVersion);
+				}
+				Data.Target.Data = Data.Target.Emitter->GetEmitterData(Data.Target.EmitterVersion);
+				const FCompileSummary RestoreCompile = CompileStage(Data.Target.System, Stage->Script);
+				return FindStage(Data.Target.Data, Data.Request.UsageId) == Stage
+					&& FindStageIndex(Data.Target.Data, Stage) == Receipt.BeforeIndex
+					&& HasStageOutput(Data.Target.Graph, Data.Request.UsageId)
+					&& RestoreCompile.bCompiled && GraphSnapshotMatches(Data.Target.Graph, BeforeGraph);
+			};
 			const bool bGraphRemoved = RemoveStageOutput(Data.Target.Graph, Data.Request.UsageId);
 			Data.Target.Emitter->RemoveSimulationStage(Stage, Data.Target.EmitterVersion);
 			const FCompileSummary Compile = CompileSystem(Data.Target.System);
 			const bool bReadBack = bGraphRemoved && FindStage(Data.Target.Data, Data.Request.UsageId) == nullptr;
 			if (!bReadBack || !Compile.bCompiled)
 			{
-				bool bGraphRestored = RestoreGraphSnapshot(Data.Target.Graph, BeforeGraph);
-				if (!bGraphRestored || !HasStageOutput(Data.Target.Graph, Data.Request.UsageId))
-				{
-					bGraphRestored = CreateStageOutput(Data.Target.Graph, Data.Request.UsageId) != nullptr;
-				}
-				if (!FindStage(Data.Target.Data, Data.Request.UsageId))
-				{
-					Data.Target.Emitter->AddSimulationStage(Stage, Data.Target.EmitterVersion);
-					if (Receipt.BeforeIndex != INDEX_NONE)
-					{
-						Data.Target.Emitter->MoveSimulationStageToIndex(Stage, Receipt.BeforeIndex, Data.Target.EmitterVersion);
-					}
-				}
-				Data.Target.Data = Data.Target.Emitter->GetEmitterData(Data.Target.EmitterVersion);
-				UNiagaraSimulationStageBase* Restored = FindStage(Data.Target.Data, Data.Request.UsageId);
-				const FCompileSummary RestoreCompile = CompileStage(Data.Target.System, Restored ? Restored->Script : nullptr);
+				if (!RestoreBeforeRemoval())
+					return ErrorResult(TEXT("Simulation-stage removal failed and full restoration was not verified; the transaction was retained for Editor Undo."), TEXT("restore_verification_failed"), 500);
 				Transaction.Cancel();
-				if (!bGraphRestored || !HasStageOutput(Data.Target.Graph, Data.Request.UsageId) || !Restored || !RestoreCompile.bCompiled)
-					return ErrorResult(TEXT("Simulation-stage removal read-back or compilation failed and restoration was not verified."), TEXT("restore_verification_failed"), 500);
 				return ErrorResult(TEXT("Simulation-stage removal read-back or compilation failed; the graph was restored."), TEXT("verification_failed"), 500);
 			}
 			FGraphSnapshot AfterGraph;
 			if (!CaptureGraphSnapshot(Data.Target.Graph, AfterGraph))
 			{
-				bool bGraphRestored = RestoreGraphSnapshot(Data.Target.Graph, BeforeGraph);
-				if (!bGraphRestored || !HasStageOutput(Data.Target.Graph, Data.Request.UsageId))
-					bGraphRestored = CreateStageOutput(Data.Target.Graph, Data.Request.UsageId) != nullptr;
-				Data.Target.Emitter->AddSimulationStage(Stage, Data.Target.EmitterVersion);
-				if (Receipt.BeforeIndex != INDEX_NONE)
-				{
-					Data.Target.Emitter->MoveSimulationStageToIndex(Stage, Receipt.BeforeIndex, Data.Target.EmitterVersion);
-				}
-				Data.Target.Data = Data.Target.Emitter->GetEmitterData(Data.Target.EmitterVersion);
-				UNiagaraSimulationStageBase* Restored = FindStage(Data.Target.Data, Data.Request.UsageId);
-				const FCompileSummary RestoreCompile = CompileStage(Data.Target.System, Restored ? Restored->Script : nullptr);
+				if (!RestoreBeforeRemoval())
+					return ErrorResult(TEXT("The simulation-stage removal result could not be snapshotted and full restoration was not verified; the transaction was retained for Editor Undo."), TEXT("restore_verification_failed"), 500);
 				Transaction.Cancel();
-				if (!bGraphRestored || !HasStageOutput(Data.Target.Graph, Data.Request.UsageId) || !Restored || !RestoreCompile.bCompiled)
-					return ErrorResult(TEXT("The simulation-stage removal result could not be snapshotted safely and restoration was not verified."), TEXT("restore_verification_failed"), 500);
 				return ErrorResult(TEXT("The simulation-stage removal result could not be snapshotted safely; the graph was restored."), TEXT("graph_snapshot_failed"), 500);
 			}
 			Receipt.ReceiptId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
@@ -1621,10 +1827,8 @@ namespace UEAINiagaraSimulationStagePrivate
 			Receipt.Emitter = Data.Target.Emitter;
 			Receipt.Graph = Data.Target.Graph;
 			Receipt.Stage = Stage;
-			Receipt.BeforeGraphExport = MoveTemp(BeforeGraph.Export);
+			Receipt.BeforeGraphSnapshot = MakeShared<FGraphSnapshot>(MoveTemp(BeforeGraph));
 			Receipt.GraphAfterDigest = AfterGraph.Digest;
-			Receipt.BeforeGraphNodeCount = BeforeGraph.NodeCount;
-			Receipt.bHasGraphSnapshot = true;
 			Receipt.EmitterChangeIdAfter = Data.Target.Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower);
 			Receipt.Operation = TEXT("remove");
 			Receipt.bChanged = true;
@@ -1654,7 +1858,7 @@ namespace UEAINiagaraSimulationStagePrivate
 				return ErrorResult(TEXT("rollbackId, requestId and confirmWrite=true are required."), TEXT("write_confirmation_required"));
 			}
 			FStageReceipt* Receipt = Receipts().Find(ReceiptId);
-			if (!Receipt || Receipt->Operation != TEXT("remove") || !Receipt->bHasBeforeState || !Receipt->bHasGraphSnapshot)
+			if (!Receipt || Receipt->Operation != TEXT("remove") || !Receipt->bHasBeforeState || !Receipt->BeforeGraphSnapshot.IsValid())
 			{
 				return ErrorResult(TEXT("The simulation-stage removal receipt is unknown."), TEXT("receipt_not_found"), 404);
 			}
@@ -1681,40 +1885,42 @@ namespace UEAINiagaraSimulationStagePrivate
 				return ErrorResult(TEXT("The simulation-stage graph changed after removal; rollback was refused."), TEXT("rollback_conflict"), 409);
 			}
 			FVersionedNiagaraEmitterData* Data = Emitter->GetEmitterData(Receipt->EmitterVersion);
+			if (!Data)
+			{
+				return ErrorResult(TEXT("The simulation-stage emitter version no longer exists."), TEXT("rollback_conflict"), 409);
+			}
 			if (FindStage(Data, Receipt->UsageId) || HasStageOutput(Graph, Receipt->UsageId))
 			{
 				return ErrorResult(TEXT("The removed simulation-stage identity is already in use."), TEXT("rollback_conflict"), 409);
 			}
-			FGraphSnapshot BeforeGraph;
-			BeforeGraph.Export = Receipt->BeforeGraphExport;
-			BeforeGraph.Digest = GraphSnapshotDigest(BeforeGraph.Export);
-			BeforeGraph.NodeCount = Receipt->BeforeGraphNodeCount;
-			BeforeGraph.bCaptured = true;
+			const FGraphSnapshot& BeforeGraph = *Receipt->BeforeGraphSnapshot;
 			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Rollback Niagara Simulation Stage Removal")));
 			System->Modify();
 			Emitter->Modify();
 			Graph->Modify();
+			if (!RestoreGraphSnapshot(Graph, BeforeGraph))
+			{
+				return ErrorResult(TEXT("Full simulation-stage graph restoration was refused or failed; the transaction was retained for Editor Undo."), TEXT("rollback_verification_failed"), 500);
+			}
 			Emitter->AddSimulationStage(Stage, Receipt->EmitterVersion);
 			Data = Emitter->GetEmitterData(Receipt->EmitterVersion);
 			if (Receipt->BeforeIndex != INDEX_NONE)
 			{
 				Emitter->MoveSimulationStageToIndex(Stage, Receipt->BeforeIndex, Receipt->EmitterVersion);
 			}
-			bool bGraphRestored = RestoreGraphSnapshot(Graph, BeforeGraph);
-			// Niagara's generic graph text importer is not available for every
-			// commandlet-only node class.  Recreate the stable simulation-stage
-			// output if the snapshot could not produce a usable output node;
-			// the full snapshot remains the preferred restoration path.
-			if (!bGraphRestored || !HasStageOutput(Graph, Receipt->UsageId))
-			{
-				bGraphRestored = CreateStageOutput(Graph, Receipt->UsageId) != nullptr;
-			}
 			const FCompileSummary Compile = CompileStage(System, Stage->Script);
+			const bool bGraphRestored = GraphSnapshotMatches(Graph, BeforeGraph);
 			const bool bReadBack = FindStage(Data, Receipt->UsageId) == Stage && bGraphRestored
+				&& FindStageIndex(Data, Stage) == Receipt->BeforeIndex
 				&& HasStageOutput(Graph, Receipt->UsageId);
 			if (!bReadBack || !Compile.bCompiled)
 			{
-				return ErrorResult(FString::Printf(TEXT("Simulation-stage removal rollback verification failed (stageIdentity=%s graphRestored=%s graphPresent=%s compiled=%s exportChars=%d nodes=%d)."),
+				Emitter->RemoveSimulationStage(Stage, Receipt->EmitterVersion);
+				if (SnapshotPinsSurvive(Graph, CurrentGraph))
+				{
+					ApplyRetainedGraphSnapshot(Graph, CurrentGraph);
+				}
+				return ErrorResult(FString::Printf(TEXT("Simulation-stage removal rollback verification failed; the transaction was retained for Editor Undo (stageIdentity=%s graphRestored=%s graphPresent=%s compiled=%s exportChars=%d nodes=%d)."),
 					FindStage(Data, Receipt->UsageId) == Stage ? TEXT("true") : TEXT("false"),
 					bGraphRestored ? TEXT("true") : TEXT("false"),
 					HasStageOutput(Graph, Receipt->UsageId) ? TEXT("true") : TEXT("false"),
@@ -1722,6 +1928,7 @@ namespace UEAINiagaraSimulationStagePrivate
 			}
 			System->MarkPackageDirty();
 			Receipt->bRolledBack = true;
+			Receipt->bFullGraphRestored = true;
 			Receipt->bCompiled = Compile.bCompiled;
 			Receipt->CompileStatus = Compile.Status;
 			return FMCPToolResult::Ok(MakeResult(*Receipt, false));

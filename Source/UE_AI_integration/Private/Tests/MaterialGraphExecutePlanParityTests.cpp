@@ -159,13 +159,16 @@ namespace
 
 	TSharedRef<FJsonObject> BoundaryParams(
 		const FString& SnapshotId,
-		const FString& NodeId)
+		const TArray<FString>& NodeIds)
 	{
 		TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
 		Params->SetStringField(TEXT("snapshotId"), SnapshotId);
-		Params->SetArrayField(
-			TEXT("nodeIds"),
-			{MakeShared<FJsonValueString>(NodeId)});
+		TArray<TSharedPtr<FJsonValue>> NodeValues;
+		for (const FString& NodeId : NodeIds)
+		{
+			NodeValues.Add(MakeShared<FJsonValueString>(NodeId));
+		}
+		Params->SetArrayField(TEXT("nodeIds"), NodeValues);
 		Params->SetStringField(TEXT("direction"), TEXT("upstream"));
 		Params->SetNumberField(TEXT("depth"), 8);
 		Params->SetNumberField(TEXT("maxNodes"), 16);
@@ -374,7 +377,7 @@ bool FMaterialGraphSharedBoundaryWriterContractTest::RunTest(const FString&)
 	const FString TargetNodeId = MCPMaterialInfrastructure::ExpressionNodeId(Fixture.Target);
 
 	const FMCPToolResult Boundary = BoundaryTool->Execute(
-		BoundaryParams(SnapshotId, TargetNodeId));
+		BoundaryParams(SnapshotId, {TargetNodeId}));
 	if (!TestTrue(TEXT("Shared-node boundary capture succeeds"), Boundary.bSuccess)
 		|| !TestNotNull(TEXT("Shared-node boundary returns data"), Boundary.Data.Get()))
 	{
@@ -468,6 +471,108 @@ bool FMaterialGraphSharedBoundaryWriterContractTest::RunTest(const FString&)
 		Fixture.SharedConsumer->A.Expression == Fixture.Source);
 	TestTrue(TEXT("Confirmed disconnect verifies its postcondition"),
 		ConfirmedDisconnect.Data->GetBoolField(TEXT("postconditionVerified")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMaterialGraphSharedAtomicBatchContractTest,
+	"UE_AI_integration.MaterialGraphExecutePlan.SharedAtomicBatchContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMaterialGraphSharedAtomicBatchContractTest::RunTest(const FString&)
+{
+	using namespace UEAIIntegration::MaterialQuery;
+	FMCPToolRegistry Registry;
+	Registry.BeginDomainRegistration(TEXT("content"));
+	UEAIIntegrationTools::RegisterMaterialGraphQueryTools(Registry);
+	Registry.EndDomainRegistration();
+	FMCPToolBase* ExecutePlanTool = Registry.FindTool(TEXT("content.material.graph.execute_plan"));
+	FMCPToolBase* BoundaryTool = Registry.FindTool(TEXT("content.material.graph.boundary.get"));
+	if (!TestNotNull(TEXT("Atomic batch writer is registered"), ExecutePlanTool)
+		|| !TestNotNull(TEXT("Atomic batch boundary query is registered"), BoundaryTool)) return false;
+
+	FExecutePlanFixture Fixture = CreateFixture();
+	FString SnapshotId;
+	ON_SCOPE_EXIT
+	{
+		if (!SnapshotId.IsEmpty()) Release(SnapshotId);
+		CleanupFixture(Fixture);
+	};
+	if (!TestNotNull(TEXT("Atomic batch fixture exists"), Fixture.Material)
+		|| !Fixture.Material->MaterialGraph || !Fixture.Source || !Fixture.Target || !Fixture.SharedConsumer)
+	{
+		return false;
+	}
+
+	// Source has two consumer expressions. Target itself feeds two root inputs.
+	// Select every consumer to prove that native sharing, rather than only an
+	// external-boundary edge, still requires the caller's explicit confirmation.
+	Fixture.Material->GetExpressionInputForProperty(MP_BaseColor)->Connect(0, Fixture.Target);
+	Fixture.Material->MaterialGraph->RebuildGraph();
+	Fixture.Material->PostEditChange();
+	Fixture.Package->SetDirtyFlag(false);
+	const FMCPToolResult Captured = Capture(Fixture.Material);
+	if (!TestTrue(TEXT("Atomic batch source snapshot succeeds"), Captured.bSuccess)
+		|| !Captured.Data.IsValid()) return false;
+	SnapshotId = Captured.Data->GetStringField(TEXT("snapshotId"));
+	const FString ProjectionHash = Captured.Data->GetStringField(TEXT("projectionHash"));
+	const FString SourceId = MCPMaterialInfrastructure::ExpressionNodeId(Fixture.Source);
+	const FString TargetId = MCPMaterialInfrastructure::ExpressionNodeId(Fixture.Target);
+	const FString ConsumerId = MCPMaterialInfrastructure::ExpressionNodeId(Fixture.SharedConsumer);
+	const FMCPToolResult Boundary = BoundaryTool->Execute(
+		BoundaryParams(SnapshotId, {SourceId, TargetId, ConsumerId, TEXT("root")}));
+	if (!TestTrue(TEXT("Whole-selection boundary succeeds"), Boundary.bSuccess)
+		|| !Boundary.Data.IsValid()) return false;
+	TestFalse(TEXT("Whole selection has no external consumers"),
+		Boundary.Data->GetBoolField(TEXT("hasExternallyConsumedNodes")));
+
+	const TArray<TSharedPtr<FJsonValue>> Operations{
+		DisconnectOperation(SourceId, TargetId, TEXT("A")),
+		DisconnectOperation(SourceId, ConsumerId, TEXT("A"))};
+	TSharedRef<FJsonObject> Params = MakePlanParams(Fixture, SnapshotId, ProjectionHash, Operations);
+	Params->SetStringField(TEXT("boundaryId"), Boundary.Data->GetStringField(TEXT("boundaryId")));
+	TSharedRef<FJsonObject> WorkflowContext = MakeShared<FJsonObject>();
+	WorkflowContext->SetBoolField(TEXT("approvedPlan"), true);
+	Params->SetObjectField(TEXT("__ueWorkflow"), WorkflowContext);
+	const FMCPToolResult Unconfirmed = ExecutePlanTool->Execute(Params);
+	TestFalse(TEXT("Approval cannot bypass selection-internal shared confirmation"), Unconfirmed.bSuccess);
+	TestEqual(TEXT("Native fan-out rejection uses the shared protection code"), Unconfirmed.ErrorCode,
+		FString(TEXT("material_boundary_shared_node_confirmation_required")));
+	TestTrue(TEXT("Preflight rejection preserves both edges"),
+		Fixture.Target->A.Expression == Fixture.Source && Fixture.SharedConsumer->A.Expression == Fixture.Source);
+	TestFalse(TEXT("Preflight rejection leaves the package clean"), Fixture.Package->IsDirty());
+
+	Params->SetBoolField(TEXT("confirmSharedNodeImpact"), true);
+	Params->SetStringField(TEXT("expectedAfterProjectionHash"), ProjectionHash);
+	const FMCPToolResult RolledBack = ExecutePlanTool->Execute(Params);
+	TestFalse(TEXT("Both actual writes are rolled back on a wrong final hash"), RolledBack.bSuccess);
+	if (!TestNotNull(TEXT("Atomic rollback publishes its receipt"), RolledBack.Data.Get())) return false;
+	const TArray<TSharedPtr<FJsonValue>>& RollbackOperations = RolledBack.Data->GetArrayField(TEXT("operationResults"));
+	TestEqual(TEXT("Rollback occurs after both operation attempts"), RollbackOperations.Num(), 2);
+	for (const TSharedPtr<FJsonValue>& Value : RollbackOperations)
+	{
+		TestTrue(TEXT("Each pre-rollback disconnect actually succeeds"), Value->AsObject()->GetBoolField(TEXT("success")));
+	}
+	TestTrue(TEXT("Batch rollback is verified"), RolledBack.Data->GetBoolField(TEXT("rollbackVerified")));
+	TestTrue(TEXT("Batch rollback restores both authored edges"),
+		Fixture.Target->A.Expression == Fixture.Source && Fixture.SharedConsumer->A.Expression == Fixture.Source);
+	TestFalse(TEXT("Verified batch rollback restores the clean package"), Fixture.Package->IsDirty());
+
+	Params->RemoveField(TEXT("expectedAfterProjectionHash"));
+	const FMCPToolResult Applied = ExecutePlanTool->Execute(Params);
+	if (!TestTrue(TEXT("Confirmed two-step batch commits with one fresh source boundary"), Applied.bSuccess)
+		|| !TestNotNull(TEXT("Confirmed atomic batch publishes a receipt"), Applied.Data.Get())) return false;
+	TestNull(TEXT("First operation removes the target edge"), Fixture.Target->A.Expression);
+	TestNull(TEXT("Second operation removes the other edge from the same source"), Fixture.SharedConsumer->A.Expression);
+	TestTrue(TEXT("Both root consumers of the edited target remain intact"),
+		Fixture.Material->GetExpressionInputForProperty(MP_BaseColor)->Expression == Fixture.Target
+		&& Fixture.Material->GetExpressionInputForProperty(MP_EmissiveColor)->Expression == Fixture.Target);
+	TestEqual(TEXT("Committed batch reports both operations"), Applied.Data->GetArrayField(TEXT("operationResults")).Num(), 2);
+	TestTrue(TEXT("Committed batch verifies the shared boundary"), Applied.Data->GetBoolField(TEXT("writeBoundaryVerified")));
+	TestTrue(TEXT("Committed batch reports native sharing"), Applied.Data->GetBoolField(TEXT("sharedNodeImpactDetected")));
+	TestTrue(TEXT("Committed batch reports explicit shared confirmation"), Applied.Data->GetBoolField(TEXT("sharedNodeImpactConfirmed")));
+	TestTrue(TEXT("Committed batch verifies its final projection"), Applied.Data->GetBoolField(TEXT("postconditionVerified")));
+	TestFalse(TEXT("Atomic graph batch remains unsaved"), Applied.Data->GetBoolField(TEXT("saved")));
 	return true;
 }
 

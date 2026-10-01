@@ -56,7 +56,72 @@ The Workflow owns deferred compile/save and final rollback. A direct graph or
 component mutation response is not a substitute for the approved Workflow run
 and finalizer evidence.
 
+## Named behavior templates
+
+Use the `plan-named-template` recipe to discover `health_system`, `timer_loop`,
+and `interactable_actor` through `blueprint.template.list`. Read each returned
+`parameterSchema` and `limitations` before selecting it. Version 2 templates
+author the execution and value links for a minimal runtime behavior on an
+existing Actor Blueprint event graph:
+
+- `health_system`: no-argument `TakeDamage` and `Heal` read editable
+  `DamageAmount` and `HealAmount` members. Each event treats negative amounts
+  as zero and clamps `Health` into `[0, max(MaxHealth, 0)]`. Parameters are
+  finite nonnegative `maxHealth`, `damageAmount`, and `healAmount`.
+- `timer_loop`: `StartTimer` sets one looping timer for the named callback;
+  repeated starts reset its interval. The guarded callback increments
+  cumulative `LoopCount`, at most once per frame. `StopTimer` and actual
+  `EndPlay` clear the timer and `bTimerRunning`; `bTimerEnded` prevents later
+  Start calls from reactivating that ended instance. It starts explicitly, and
+  `delay` must be at least 0.001 seconds. The callback name cannot conflict
+  with generated lifecycle events or inherited functions.
+- `interactable_actor`: no-argument `Interact` increments `InteractionCount`
+  only while `bIsInteractable` is true. `initiallyInteractable` is a boolean.
+  `InteractionSphere` retains engine defaults; `radius`, overlaps, input
+  bindings, replication and project gameplay integration are outside the
+  template contract.
+
+`blueprint.template.apply` is a read-only planning query. Pass an explicit
+existing Blueprint asset path, the discovered `templateName`, and the exact
+typed `parameters` object. The handler shares `blueprint.build.from_spec`'s
+normalizer and managed BuildGraph planner. It returns `applied=false`, the
+normalized definition, a Workflow, and an Editor-bound `planDigest`; it does
+not write or approve the asset edit. Variable/component/event name conflicts
+and existing authored state still need normal planning review. Do not assume
+that a repeated request can overwrite existing declarations.
+
+Review and approve the returned Workflow, then execute that unmodified
+Workflow through `ue-workflow-cli execute --file <workflow.json>
+--approve-plan <planDigest> --confirm-write --receipt <receipt.json>`.
+Add `--save-on-success` only when persistence is requested. Retain the receipt
+and `runId` for read-back, recovery, and rollback. Changing the target, template
+parameters, Workflow, or asset baseline requires a new plan and approval.
+
+After execution, read the managed definition and graph, compile status, and
+save/read-back evidence. Then exercise the authored events on a current
+PIE/Game instance. Check health subtraction, healing and both clamp limits;
+timer repeated ticks, repeated Start without duplicate callbacks, Stop and
+EndPlay cleanup; interaction with both guard values. Use
+`blueprint.asset.runtime.verify` for the instance identity boundary and retain
+the separate event/state evidence. Discovery, planning, compilation and a CDO
+do not establish this runtime behavior.
+
 ## Evidence
+
+For native persistence acceptance after changing reference or lifecycle code,
+run `tests/hostproject/run-blueprint-persistence.ps1` against an already built,
+source-bound isolated HostProject package. It launches three sequential Editor
+processes to save a parent/child Blueprint pair, rename the referenced parent,
+and verify the saved reference and old-path redirector in a fresh process.
+The final phase spawns a Game actor and executes an inherited authored event;
+it checks the actor property change and `blueprint.asset.runtime.verify`
+instance identity. The receipt requires three distinct PIDs and each phase's
+exact loaded module proof. This is isolated native fixture acceptance, not
+acceptance of a user's project asset or of template gameplay. The template
+native contract independently authors each template through its approved
+Workflow, saves and reloads it, exercises its generated Game actor and verifies
+rollback. Ordinary suite
+runs without the phase environment produce no cross-process evidence.
 
 Report the build ID, mode, before/after graph hashes, Workflow run ID and
 digest, ref-to-GUID mapping, created/updated/removed managed refs, compile and

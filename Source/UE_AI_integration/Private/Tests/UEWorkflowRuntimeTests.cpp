@@ -375,6 +375,23 @@ bool AllSucceededStepsReportDeferredAndUnsaved(
 	return SucceededCount > 0;
 }
 
+int32 CountSucceededOperations(const TSharedPtr<FJsonObject>& Receipt)
+{
+	const TArray<TSharedPtr<FJsonValue>>* Operations = nullptr;
+	if (!Receipt.IsValid() || !TryGetResultArray(Receipt, TEXT("operations"), Operations) || !Operations)
+	{
+		return INDEX_NONE;
+	}
+	int32 Count = 0;
+	for (const TSharedPtr<FJsonValue>& Value : *Operations)
+	{
+		if (!Value.IsValid() || Value->Type != EJson::Object) continue;
+		FString Status;
+		if (Value->AsObject()->TryGetStringField(TEXT("status"), Status) && Status == TEXT("succeeded")) ++Count;
+	}
+	return Count;
+}
+
 bool AllExecutableFinalizersReportSucceededWithoutOutput(const TSharedPtr<FJsonObject>& Receipt)
 {
 	const TArray<TSharedPtr<FJsonValue>>* Finalizers = nullptr;
@@ -2055,7 +2072,7 @@ bool FUEWorkflowMaterialDestructiveBatchTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Baseline package hash available"), HashAssetPackage(MaterialPath, BaselineFileHash));
 		UEAIIntegration::Workflow::FWorkflowRuntime Runtime(Registry);
 
-		auto MakeBatch = [&](bool bFail)
+		auto MakeBatch = [&](bool bFail, bool bConfirmShared)
 		{
 			TArray<TSharedPtr<FJsonValue>> Operations;
 			auto AddOperation = [&](const FString& Id, const FString& Type, const TSharedPtr<FJsonObject>& Params)
@@ -2068,9 +2085,11 @@ bool FUEWorkflowMaterialDestructiveBatchTest::RunTest(const FString& Parameters)
 			TSharedPtr<FJsonObject> Disconnect = MakeShared<FJsonObject>();
 			Disconnect->SetStringField(TEXT("nodeId"), SumId);
 			Disconnect->SetStringField(TEXT("pinName"), TEXT("A"));
+			if (bConfirmShared) Disconnect->SetBoolField(TEXT("confirmSharedNodeImpact"), true);
 			AddOperation(TEXT("disconnect"), TEXT("content.material.pin.disconnect"), Disconnect);
 			TSharedPtr<FJsonObject> Delete = MakeShared<FJsonObject>();
 			Delete->SetStringField(TEXT("nodeId"), OldId);
+			if (bConfirmShared) Delete->SetBoolField(TEXT("confirmSharedNodeImpact"), true);
 			AddOperation(TEXT("delete"), TEXT("content.material.expression.delete"), Delete);
 			if (bFail)
 			{
@@ -2095,6 +2114,14 @@ bool FUEWorkflowMaterialDestructiveBatchTest::RunTest(const FString& Parameters)
 				TSharedPtr<FJsonObject> Bindings = MakeShared<FJsonObject>();
 				Bindings->SetObjectField(TEXT("/sourceNodeId"), Binding);
 				Operation->SetObjectField(TEXT("bindings"), Bindings);
+				// A selected root is a valid connection endpoint, while only the
+				// authored expression remains writable in the generated proof.
+				TSharedPtr<FJsonObject> RootConnect = MakeShared<FJsonObject>();
+				RootConnect->SetStringField(TEXT("sourceNodeId"), SumId);
+				RootConnect->SetStringField(TEXT("sourcePinName"), TEXT("Output"));
+				RootConnect->SetStringField(TEXT("targetNodeId"), TEXT("root"));
+				RootConnect->SetStringField(TEXT("targetPinName"), TEXT("Emissive Color"));
+				AddOperation(TEXT("connectRoot"), TEXT("content.material.pin.connect"), RootConnect);
 			}
 			return bV2
 				? MakeWorkflowV2(TEXT("material-destructive-v2"), {{TEXT("material"), MakeScope(TEXT("material"), MaterialPath, false)}}, Operations)
@@ -2129,7 +2156,44 @@ bool FUEWorkflowMaterialDestructiveBatchTest::RunTest(const FString& Parameters)
 			}
 		};
 
-		const TSharedPtr<FJsonObject> FailureWorkflow = MakeBatch(true);
+		const TSharedPtr<FJsonObject> NoConsentWorkflow = MakeBatch(true, false);
+		FString NoConsentDigest;
+		if (!GetPlanDigest(PlanWorkflow(Runtime, NoConsentWorkflow), NoConsentDigest))
+		{
+			AddError(TEXT("Shared material workflow without per-step consent did not plan."));
+			CleanupAsset(MaterialPath);
+			return false;
+		}
+		const FMCPResult NoConsent = ExecuteWorkflow(Runtime, NoConsentWorkflow, NoConsentDigest, false, TEXT("full"), FString(), true);
+		TestFalse(TEXT("Global write confirmation does not authorize shared-node impact"), NoConsent.bOk);
+		TestEqual(TEXT("Missing per-step shared consent produces zero successful edits"), CountSucceededOperations(NoConsent.Error.Details), 0);
+		TestTrue(TEXT("Refusal is specifically the missing shared-node consent"), NoConsent.Error.Details.IsValid()
+			&& NoConsent.Error.Details->GetStringField(TEXT("causeCode")) == TEXT("material_boundary_shared_node_confirmation_required"));
+		CheckBaseline();
+
+		const TSharedPtr<FJsonObject> PartialProofWorkflow = MakeBatch(true, true);
+		const TArray<TSharedPtr<FJsonValue>>* PartialProofOperations = nullptr;
+		if (PartialProofWorkflow->TryGetArrayField(TEXT("operations"), PartialProofOperations) && PartialProofOperations && !PartialProofOperations->IsEmpty())
+		{
+			(*PartialProofOperations)[0]->AsObject()->GetObjectField(TEXT("params"))->SetStringField(
+				TEXT("expectedProjectionHash"), TEXT("caller-supplied-incomplete-proof"));
+		}
+		FString PartialProofDigest;
+		if (!GetPlanDigest(PlanWorkflow(Runtime, PartialProofWorkflow), PartialProofDigest))
+		{
+			AddError(TEXT("Partial boundary proof workflow did not plan."));
+			CleanupAsset(MaterialPath);
+			return false;
+		}
+		const FMCPResult PartialProof = ExecuteWorkflow(Runtime, PartialProofWorkflow, PartialProofDigest, false, TEXT("full"), FString(), true);
+		TestFalse(TEXT("Workflow does not replace a caller-supplied partial boundary proof"), PartialProof.bOk);
+		TestEqual(TEXT("Partial boundary proof produces zero successful edits"), CountSucceededOperations(PartialProof.Error.Details), 0);
+		FString ReplacedPartialProof;
+		TestFalse(TEXT("Partial caller proof is not replaced by a generated snapshot"),
+			GetOperationString(PartialProof.Error.Details, TEXT("disconnect"), TEXT("workflowWriteBoundarySnapshotId"), ReplacedPartialProof));
+		CheckBaseline();
+
+		const TSharedPtr<FJsonObject> FailureWorkflow = MakeBatch(true, true);
 		FString FailureDigest;
 		if (!GetPlanDigest(PlanWorkflow(Runtime, FailureWorkflow), FailureDigest))
 		{
@@ -2144,9 +2208,26 @@ bool FUEWorkflowMaterialDestructiveBatchTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("Injected missing node fails after deletion"), Failure.bOk);
 		TestTrue(TEXT("Failed destructive batch reports verified rollback"),
 			Failure.Error.Details.IsValid() && Failure.Error.Details->GetBoolField(TEXT("rollbackVerified")));
+		TestEqual(TEXT("Injected failure follows two successful material edits"), CountSucceededOperations(Failure.Error.Details), 2);
+		TestTrue(TEXT("Disconnect actually executes before failure"), OperationReportsVerificationState(
+			Failure.Error.Details, TEXT("disconnect"), TEXT("content.material.pin.disconnect"), TEXT("succeeded"), true));
+		TestTrue(TEXT("Delete actually executes before failure"), OperationReportsVerificationState(
+			Failure.Error.Details, TEXT("delete"), TEXT("content.material.expression.delete"), TEXT("succeeded"), true));
+		FString DisconnectSnapshot, DeleteSnapshot, FailureSnapshot;
+		FString BeforeDisconnect, BeforeDelete, BeforeFailure;
+		TestTrue(TEXT("Each material step receives a distinct fresh boundary snapshot"),
+			GetOperationString(Failure.Error.Details, TEXT("disconnect"), TEXT("workflowWriteBoundarySnapshotId"), DisconnectSnapshot)
+			&& GetOperationString(Failure.Error.Details, TEXT("delete"), TEXT("workflowWriteBoundarySnapshotId"), DeleteSnapshot)
+			&& GetOperationString(Failure.Error.Details, TEXT("fail"), TEXT("workflowWriteBoundarySnapshotId"), FailureSnapshot)
+			&& DisconnectSnapshot != DeleteSnapshot && DeleteSnapshot != FailureSnapshot && DisconnectSnapshot != FailureSnapshot);
+		TestTrue(TEXT("Fresh projections prove both disconnect and delete changed the graph"),
+			GetOperationString(Failure.Error.Details, TEXT("disconnect"), TEXT("workflowWriteBoundaryProjectionHash"), BeforeDisconnect)
+			&& GetOperationString(Failure.Error.Details, TEXT("delete"), TEXT("workflowWriteBoundaryProjectionHash"), BeforeDelete)
+			&& GetOperationString(Failure.Error.Details, TEXT("fail"), TEXT("workflowWriteBoundaryProjectionHash"), BeforeFailure)
+			&& BeforeDisconnect != BeforeDelete && BeforeDelete != BeforeFailure);
 		CheckBaseline();
 
-		const TSharedPtr<FJsonObject> Workflow = MakeBatch(false);
+		const TSharedPtr<FJsonObject> Workflow = MakeBatch(false, true);
 		FString Digest;
 		const FMCPResult RewirePlan = PlanWorkflow(Runtime, Workflow);
 		if (!GetPlanDigest(RewirePlan, Digest))
@@ -2176,7 +2257,10 @@ bool FUEWorkflowMaterialDestructiveBatchTest::RunTest(const FString& Parameters)
 			for (UMaterialExpression* Expression : Material->GetExpressions())
 				if (UMaterialExpressionAdd* Add = Cast<UMaterialExpressionAdd>(Expression)) EditedSum = Add;
 			TestTrue(TEXT("A is reconnected while B stays disconnected"), EditedSum && EditedSum->A.Expression && !EditedSum->B.Expression);
-			TestNull(TEXT("Deleted expression is cleared from root output"), Material->GetExpressionInputForProperty(MP_EmissiveColor)->Expression);
+			TestTrue(TEXT("Selected root endpoint reconnects to the surviving consumer"),
+				EditedSum && Material->GetExpressionInputForProperty(MP_EmissiveColor)->Expression == EditedSum);
+			TestTrue(TEXT("Root connection uses a generated asset boundary"),
+				OperationReportsBool(Result.Data, TEXT("connectRoot"), TEXT("workflowWriteBoundaryGenerated"), true));
 			bool bOldNodeRemains = false;
 			for (UEdGraphNode* Node : Material->MaterialGraph->Nodes)
 				bOldNodeRemains |= Node && Node->NodeGuid.ToString() == OldId;
@@ -2332,6 +2416,17 @@ bool FUEWorkflowMaterialFunctionBatchTest::RunTest(const FString& Parameters)
 			{
 				TestFalse(TEXT("Function missing-node edit fails"), Result.bOk);
 				TestTrue(TEXT("Function failure rollback verified"), Result.Error.Details && Result.Error.Details->GetBoolField(TEXT("rollbackVerified")));
+				TestEqual(TEXT("Function failure follows six actual successful operations"), CountSucceededOperations(Result.Error.Details), 6);
+				FString BeforeValue, BeforeDisconnect, BeforeDelete;
+				TestTrue(TEXT("Function fresh boundaries observe the value and disconnect edits"),
+					GetOperationString(Result.Error.Details, TEXT("value"), TEXT("workflowWriteBoundaryProjectionHash"), BeforeValue)
+					&& GetOperationString(Result.Error.Details, TEXT("disconnect"), TEXT("workflowWriteBoundaryProjectionHash"), BeforeDisconnect)
+					&& GetOperationString(Result.Error.Details, TEXT("delete"), TEXT("workflowWriteBoundaryProjectionHash"), BeforeDelete)
+					&& BeforeValue != BeforeDisconnect && BeforeDisconnect != BeforeDelete);
+				TestTrue(TEXT("Unshared function value edit executes without shared confirmation"), OperationReportsVerificationState(
+					Result.Error.Details, TEXT("value"), TEXT("content.material.expression.value.set"), TEXT("succeeded"), true));
+				TestTrue(TEXT("New function expressions are covered by the next fresh scoped boundary"),
+					OperationReportsBool(Result.Error.Details, TEXT("newValue"), TEXT("workflowWriteBoundaryGenerated"), true));
 			}
 			else
 			{
@@ -2341,6 +2436,8 @@ bool FUEWorkflowMaterialFunctionBatchTest::RunTest(const FString& Parameters)
 				if (Result.bOk)
 				{
 					TestTrue(TEXT("Function steps defer compile and save"), AllSucceededStepsReportDeferredAndUnsaved(Result.Data));
+					TestTrue(TEXT("Function connection receives a fresh generated boundary without shared confirmation"),
+						OperationReportsBool(Result.Data, TEXT("connect"), TEXT("workflowWriteBoundaryGenerated"), true));
 					Function = CastChecked<UMaterialFunction>(UEditorAssetLibrary::LoadAsset(Path));
 					TestNull(TEXT("Function batch does not need editor graph"), Function->MaterialGraph);
 					TestEqual(TEXT("Function final persistence policy"), Function->GetOutermost()->IsDirty(), !bV2);

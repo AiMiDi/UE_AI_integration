@@ -3,6 +3,7 @@
 
 #include "Editor.h"
 #include "Engine/Blueprint.h"
+#include "GameFramework/Actor.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "Infrastructure/MCPToolHelpers.h"
@@ -614,7 +615,6 @@ namespace
 					Operation->SetStringField(TEXT("scope"), TEXT("primary"));
 					Operation->SetStringField(TEXT("type"), TEXT("blueprint.variable.add"));
 					TSharedRef<FJsonObject> OpParams = MakeShared<FJsonObject>();
-					OpParams->SetStringField(TEXT("blueprint"), BlueprintPath);
 					for (const TCHAR* Field : {
 						     TEXT("variableName"), TEXT("variableType"), TEXT("category"), TEXT("defaultValue")
 					     })
@@ -643,7 +643,6 @@ namespace
 					Operation->SetStringField(TEXT("scope"), TEXT("primary"));
 					Operation->SetStringField(TEXT("type"), TEXT("blueprint.component.add"));
 					TSharedRef<FJsonObject> OpParams = MakeShared<FJsonObject>();
-					OpParams->SetStringField(TEXT("blueprint"), BlueprintPath);
 					for (const TCHAR* Field : {TEXT("componentClass"), TEXT("name"), TEXT("parentComponent")})
 					{
 						if (Component->HasField(Field))
@@ -1109,6 +1108,21 @@ namespace
 
 		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 		{
+			return NormalizeAndDispatch(Params, false);
+		}
+
+		// Named templates share the spec normalizer, but planning never enters
+		// the write path or manufactures approval for the generated Workflow.
+		FMCPToolResult Plan(const TSharedPtr<FJsonObject>& Params)
+		{
+			return NormalizeAndDispatch(Params, true);
+		}
+
+	private:
+		FMCPToolResult NormalizeAndDispatch(
+			const TSharedPtr<FJsonObject>& Params,
+			const bool bPlanOnly)
+		{
 			if (!Params.IsValid())
 			{
 				return FMCPToolResult::Error(TEXT("parameters are required."), TEXT("invalid_params"), 422);
@@ -1257,6 +1271,16 @@ namespace
 			}
 			TSharedRef<FJsonObject> ExecuteParams = MakeShared<FJsonObject>();
 			ExecuteParams->SetObjectField(TEXT("definition"), Definition);
+			if (bPlanOnly)
+			{
+				FBuildGraphPlanTool Planner;
+				FMCPToolResult Result = Planner.Execute(ExecuteParams);
+				if (Result.Data.IsValid())
+				{
+					Result.Data->SetObjectField(TEXT("normalizedDefinition"), Definition);
+				}
+				return Result;
+			}
 			bool bConfirmWrite = true;
 			Params->TryGetBoolField(TEXT("confirmWrite"), bConfirmWrite);
 			ExecuteParams->SetBoolField(TEXT("confirmWrite"), bConfirmWrite);
@@ -1272,6 +1296,505 @@ namespace
 			return Result;
 		}
 	};
+
+	struct FBlueprintBehaviorTemplate
+	{
+		FString Name;
+		FString Description;
+		TArray<FString> Limitations;
+	};
+
+	const TArray<FBlueprintBehaviorTemplate>& BlueprintBehaviorTemplates()
+	{
+		static const TArray<FBlueprintBehaviorTemplate> Templates = {
+			{
+				TEXT("health_system"),
+				TEXT("Create no-argument TakeDamage/Heal events that read DamageAmount/HealAmount members and clamp Health into [0, MaxHealth]."),
+				{
+					TEXT("Events have no arguments. Set the authored DamageAmount/HealAmount members before calling them; negative runtime amounts are treated as zero."),
+					TEXT("No replication, death event, damage-source attribution or gameplay integration is generated. Runtime acceptance is separate from planning.")
+				}
+			},
+			{
+				TEXT("timer_loop"),
+				TEXT("Create StartTimer/StopTimer events, a named guarded callback and LoopCount. Repeated starts reset one looping timer; StopTimer and EndPlay clear it."),
+				{
+					TEXT("The timer starts only when StartTimer is invoked. delay must be at least 0.001 seconds; callback has no arguments and LoopCount is cumulative across restarts."),
+					TEXT("No gameplay callback beyond the observable counter is generated; the timer is limited to at most one callback per frame.")
+				}
+			},
+			{
+				TEXT("interactable_actor"),
+				TEXT("Create InteractionSphere and an Interact event that increments InteractionCount only while bIsInteractable is true."),
+				{
+					TEXT("Interaction is invoked explicitly through the no-argument Interact event; overlap, input binding and network replication are not generated."),
+					TEXT("Component properties retain engine defaults; requested property edits use the separate local-SCS contract.")
+				}
+			}
+		};
+		return Templates;
+	}
+
+	const FBlueprintBehaviorTemplate* FindBlueprintBehaviorTemplate(const FString& Name)
+	{
+		return BlueprintBehaviorTemplates().FindByPredicate(
+			[&Name](const FBlueprintBehaviorTemplate& Template)
+			{
+				return Template.Name == Name;
+			});
+	}
+
+	TSharedRef<FJsonObject> BlueprintTemplateParameterSchema(const FString& Name)
+	{
+		TSharedRef<FJsonObject> Schema = MakeShared<FJsonObject>();
+		Schema->SetStringField(TEXT("type"), TEXT("object"));
+		Schema->SetBoolField(TEXT("additionalProperties"), false);
+		TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
+		auto AddNumber = [&Properties](const TCHAR* Field, const double Default, const double Maximum, const double Minimum = 0.0)
+		{
+			TSharedRef<FJsonObject> Property = MakeShared<FJsonObject>();
+			Property->SetStringField(TEXT("type"), TEXT("number"));
+			Property->SetNumberField(TEXT("minimum"), Minimum);
+			Property->SetNumberField(TEXT("maximum"), Maximum);
+			Property->SetNumberField(TEXT("default"), Default);
+			Properties->SetObjectField(Field, Property);
+		};
+		if (Name == TEXT("health_system"))
+		{
+			AddNumber(TEXT("maxHealth"), 100.0, 1.0e9);
+			AddNumber(TEXT("damageAmount"), 10.0, 1.0e9);
+			AddNumber(TEXT("healAmount"), 10.0, 1.0e9);
+		}
+		else if (Name == TEXT("timer_loop"))
+		{
+			AddNumber(TEXT("delay"), 1.0, 1.0e6, 0.001);
+			TSharedRef<FJsonObject> EventName = MakeShared<FJsonObject>();
+			EventName->SetStringField(TEXT("type"), TEXT("string"));
+			EventName->SetStringField(TEXT("pattern"), TEXT("^[A-Za-z_][A-Za-z0-9_]{0,63}$"));
+			EventName->SetStringField(TEXT("default"), TEXT("TimerLoop"));
+			Properties->SetObjectField(TEXT("eventName"), EventName);
+		}
+		else if (Name == TEXT("interactable_actor"))
+		{
+			auto Enabled = MakeShared<FJsonObject>();
+			Enabled->SetStringField(TEXT("type"), TEXT("boolean"));
+			Enabled->SetBoolField(TEXT("default"), true);
+			Properties->SetObjectField(TEXT("initiallyInteractable"), Enabled);
+		}
+		Schema->SetObjectField(TEXT("properties"), Properties);
+		return Schema;
+	}
+
+	TSharedRef<FJsonObject> BlueprintTemplateDescriptor(const FBlueprintBehaviorTemplate& Template)
+	{
+		TSharedRef<FJsonObject> Descriptor = MakeShared<FJsonObject>();
+		Descriptor->SetStringField(TEXT("name"), Template.Name);
+		Descriptor->SetStringField(TEXT("version"), TEXT("2.0"));
+		Descriptor->SetStringField(TEXT("scope"), TEXT("minimal_runtime_behavior"));
+		Descriptor->SetStringField(TEXT("description"), Template.Description);
+		Descriptor->SetObjectField(TEXT("parameterSchema"), BlueprintTemplateParameterSchema(Template.Name));
+		TArray<TSharedPtr<FJsonValue>> Limitations;
+		for (const FString& Limitation : Template.Limitations)
+		{
+			Limitations.Add(MakeShared<FJsonValueString>(Limitation));
+		}
+		Descriptor->SetArrayField(TEXT("limitations"), Limitations);
+		return Descriptor;
+	}
+
+	bool ResolveBlueprintTemplateParameters(
+		const FBlueprintBehaviorTemplate& Template,
+		const TSharedPtr<FJsonObject>& Input,
+		const TSharedRef<FJsonObject>& Resolved,
+		FString& OutError)
+	{
+		const TSharedPtr<FJsonObject> Properties =
+			BlueprintTemplateParameterSchema(Template.Name)->GetObjectField(TEXT("properties"));
+		if (Input.IsValid())
+		{
+			for (const auto& Pair : Input->Values)
+			{
+				if (!Properties->HasField(Pair.Key))
+				{
+					OutError = FString::Printf(
+						TEXT("Unknown parameter '%s' for template '%s'. Read blueprint.template.list for its parameterSchema."),
+						*Pair.Key, *Template.Name);
+					return false;
+				}
+			}
+		}
+		for (const auto& Pair : Properties->Values)
+		{
+			const TSharedPtr<FJsonObject> Property = Pair.Value->AsObject();
+			const TSharedPtr<FJsonValue> Value = Input.IsValid() && Input->HasField(Pair.Key)
+				? Input->TryGetField(Pair.Key)
+				: Property->TryGetField(TEXT("default"));
+			if (Property->GetStringField(TEXT("type")) == TEXT("number"))
+			{
+				const double Number = Value.IsValid() && Value->Type == EJson::Number
+					? Value->AsNumber()
+					: -1.0;
+				if (!FMath::IsFinite(Number) || Number < Property->GetNumberField(TEXT("minimum"))
+					|| Number > Property->GetNumberField(TEXT("maximum")))
+				{
+					OutError = FString::Printf(TEXT("parameters.%s must be a finite number in the declared range."), *Pair.Key);
+					return false;
+				}
+				Resolved->SetNumberField(Pair.Key, Number);
+			}
+			else if (Property->GetStringField(TEXT("type")) == TEXT("boolean"))
+			{
+				if (!Value.IsValid() || Value->Type != EJson::Boolean)
+				{
+					OutError = FString::Printf(TEXT("parameters.%s must be a boolean."), *Pair.Key);
+					return false;
+				}
+				Resolved->SetBoolField(Pair.Key, Value->AsBool());
+			}
+			else
+			{
+				const FString Name = Value.IsValid() && Value->Type == EJson::String
+					? Value->AsString()
+					: FString();
+				// Match the ASCII identifier schema exactly; generic BuildGraph
+				// tokens also permit punctuation that custom event names forbid.
+				bool bIdentifier = !Name.IsEmpty() && Name.Len() <= 64;
+				for (int32 Index = 0; Index < Name.Len(); ++Index)
+				{
+					const TCHAR Character = Name[Index];
+					bIdentifier &= (Character >= TEXT('A') && Character <= TEXT('Z'))
+						|| (Character >= TEXT('a') && Character <= TEXT('z'))
+						|| Character == TEXT('_')
+						|| (Index > 0 && Character >= TEXT('0') && Character <= TEXT('9'));
+				}
+				if (!bIdentifier)
+				{
+					OutError = TEXT("parameters.eventName must be an ASCII identifier of 1 to 64 characters.");
+					return false;
+				}
+				if (Name.Equals(TEXT("StartTimer"), ESearchCase::IgnoreCase)
+					|| Name.Equals(TEXT("StopTimer"), ESearchCase::IgnoreCase)
+					|| Name.Equals(TEXT("ReceiveEndPlay"), ESearchCase::IgnoreCase)
+					|| Name.Equals(TEXT("LoopCount"), ESearchCase::IgnoreCase)
+					|| Name.Equals(TEXT("bTimerRunning"), ESearchCase::IgnoreCase)
+					|| Name.Equals(TEXT("bTimerEnded"), ESearchCase::IgnoreCase)
+					|| Name.Equals(TEXT("None"), ESearchCase::IgnoreCase))
+				{
+					OutError = TEXT("parameters.eventName conflicts with a generated timer declaration or the reserved None name.");
+					return false;
+				}
+				Resolved->SetStringField(Pair.Key, Name);
+			}
+		}
+		return true;
+	}
+
+	TSharedRef<FJsonObject> MakeBlueprintTemplateNode(
+		const TCHAR* Ref, const TCHAR* NodeType, const int32 X, const int32 Y)
+	{
+		TSharedRef<FJsonObject> Node = MakeShared<FJsonObject>();
+		Node->SetStringField(TEXT("ref"), Ref);
+		Node->SetStringField(TEXT("nodeType"), NodeType);
+		Node->SetArrayField(TEXT("position"), {
+			MakeShared<FJsonValueNumber>(X), MakeShared<FJsonValueNumber>(Y)});
+		return Node;
+	}
+
+	TSharedRef<FJsonObject> MakeBlueprintTemplateSpec(
+		const FBlueprintBehaviorTemplate& Template,
+		const TSharedPtr<FJsonObject>& Input,
+		const TSharedRef<FJsonObject>& Parameters)
+	{
+		TSharedRef<FJsonObject> Spec = MakeShared<FJsonObject>();
+		Spec->SetStringField(TEXT("blueprint"), BuildString(Input, TEXT("blueprint")));
+		Spec->SetStringField(TEXT("graph"), Input->HasField(TEXT("graph"))
+			? BuildString(Input, TEXT("graph")) : TEXT("EventGraph"));
+		Spec->SetStringField(TEXT("buildId"), Input->HasField(TEXT("buildId"))
+			? BuildString(Input, TEXT("buildId")) : TEXT("template-") + Template.Name);
+		Spec->SetStringField(TEXT("mode"), TEXT("merge"));
+		TArray<TSharedPtr<FJsonValue>> Nodes;
+		TArray<TSharedPtr<FJsonValue>> Variables;
+		TArray<TSharedPtr<FJsonValue>> Connections;
+		auto AddVariable = [&Variables](const TCHAR* Name, const TCHAR* Type, const FString& Default, const TCHAR* Category)
+		{
+			TSharedRef<FJsonObject> Variable = MakeShared<FJsonObject>();
+			Variable->SetStringField(TEXT("name"), Name);
+			Variable->SetStringField(TEXT("type"), Type);
+			Variable->SetStringField(TEXT("defaultValue"), Default);
+			Variable->SetStringField(TEXT("category"), Category);
+			Variables.Add(MakeShared<FJsonValueObject>(Variable));
+		};
+		auto AddVariableNode = [&Nodes](const TCHAR* Ref, const TCHAR* Type, const TCHAR* Variable, const int32 X, const int32 Y)
+		{
+			TSharedRef<FJsonObject> Node = MakeBlueprintTemplateNode(Ref, Type, X, Y);
+			Node->SetStringField(TEXT("variableName"), Variable);
+			Nodes.Add(MakeShared<FJsonValueObject>(Node));
+		};
+		auto AddEvent = [&Nodes](const TCHAR* Ref, const FString& Name, int32 Y)
+		{
+			auto Node = MakeBlueprintTemplateNode(Ref, TEXT("CustomEvent"), 0, Y);
+			Node->SetStringField(TEXT("eventName"), Name);
+			Nodes.Add(MakeShared<FJsonValueObject>(Node));
+		};
+		auto AddCall = [&Nodes](const TCHAR* Ref, const TCHAR* Function, const TCHAR* Class, int32 X, int32 Y,
+			const TSharedPtr<FJsonObject>& Defaults = nullptr)
+		{
+			auto Node = MakeBlueprintTemplateNode(Ref, TEXT("CallFunction"), X, Y);
+			Node->SetStringField(TEXT("functionName"), Function);
+			Node->SetStringField(TEXT("className"), Class);
+			if (Defaults) Node->SetObjectField(TEXT("pinDefaults"), Defaults);
+			Nodes.Add(MakeShared<FJsonValueObject>(Node));
+		};
+		auto Link = [&Connections](const TCHAR* Source, const TCHAR* SourcePin, const TCHAR* Target, const TCHAR* TargetPin)
+		{
+			auto Connection = MakeShared<FJsonObject>();
+			Connection->SetStringField(TEXT("sourceRef"), Source);
+			Connection->SetStringField(TEXT("sourcePin"), SourcePin);
+			Connection->SetStringField(TEXT("targetRef"), Target);
+			Connection->SetStringField(TEXT("targetPin"), TargetPin);
+			Connections.Add(MakeShared<FJsonValueObject>(Connection));
+		};
+		const TCHAR* MathLibrary = TEXT("/Script/Engine.KismetMathLibrary");
+		const TCHAR* SystemLibrary = TEXT("/Script/Engine.KismetSystemLibrary");
+		if (Template.Name == TEXT("health_system"))
+		{
+			const FString Health = FString::SanitizeFloat(Parameters->GetNumberField(TEXT("maxHealth")));
+			AddVariable(TEXT("MaxHealth"), TEXT("float"), Health, TEXT("Health"));
+			AddVariable(TEXT("Health"), TEXT("float"), Health, TEXT("Health"));
+			AddVariable(TEXT("DamageAmount"), TEXT("float"), FString::SanitizeFloat(Parameters->GetNumberField(TEXT("damageAmount"))), TEXT("Health"));
+			AddVariable(TEXT("HealAmount"), TEXT("float"), FString::SanitizeFloat(Parameters->GetNumberField(TEXT("healAmount"))), TEXT("Health"));
+			for (int32 Operation = 0; Operation < 2; ++Operation)
+			{
+				const FString Prefix = Operation == 0 ? TEXT("damage") : TEXT("heal");
+				const TCHAR* Event = Operation == 0 ? TEXT("TakeDamage") : TEXT("Heal");
+				const TCHAR* Amount = Operation == 0 ? TEXT("DamageAmount") : TEXT("HealAmount");
+				const int32 Y = Operation * 500;
+				AddEvent(Event, Event, Y);
+				AddVariableNode(*(Prefix + TEXT("-health")), TEXT("VariableGet"), TEXT("Health"), 200, Y + 100);
+				AddVariableNode(*(Prefix + TEXT("-amount")), TEXT("VariableGet"), Amount, 0, Y + 200);
+				AddVariableNode(*(Prefix + TEXT("-maximum")), TEXT("VariableGet"), TEXT("MaxHealth"), 400, Y + 300);
+				auto ZeroB = MakeShared<FJsonObject>(); ZeroB->SetStringField(TEXT("B"), TEXT("0"));
+				AddCall(*(Prefix + TEXT("-positive-amount")), TEXT("FMax"), MathLibrary, 200, Y + 200, ZeroB);
+				AddCall(*(Prefix + TEXT("-positive-maximum")), TEXT("FMax"), MathLibrary, 600, Y + 300, ZeroB);
+				AddCall(*(Prefix + TEXT("-arithmetic")), Operation == 0 ? TEXT("Subtract_DoubleDouble") : TEXT("Add_DoubleDouble"), MathLibrary, 400, Y + 100);
+				auto Minimum = MakeShared<FJsonObject>(); Minimum->SetStringField(TEXT("Min"), TEXT("0"));
+				AddCall(*(Prefix + TEXT("-clamp")), TEXT("FClamp"), MathLibrary, 800, Y + 100, Minimum);
+				AddVariableNode(*(Prefix + TEXT("-set")), TEXT("VariableSet"), TEXT("Health"), 1100, Y);
+				Link(Event, TEXT("then"), *(Prefix + TEXT("-set")), TEXT("execute"));
+				Link(*(Prefix + TEXT("-amount")), Amount, *(Prefix + TEXT("-positive-amount")), TEXT("A"));
+				Link(*(Prefix + TEXT("-health")), TEXT("Health"), *(Prefix + TEXT("-arithmetic")), TEXT("A"));
+				Link(*(Prefix + TEXT("-positive-amount")), TEXT("ReturnValue"), *(Prefix + TEXT("-arithmetic")), TEXT("B"));
+				Link(*(Prefix + TEXT("-maximum")), TEXT("MaxHealth"), *(Prefix + TEXT("-positive-maximum")), TEXT("A"));
+				Link(*(Prefix + TEXT("-positive-maximum")), TEXT("ReturnValue"), *(Prefix + TEXT("-clamp")), TEXT("Max"));
+				Link(*(Prefix + TEXT("-arithmetic")), TEXT("ReturnValue"), *(Prefix + TEXT("-clamp")), TEXT("Value"));
+				Link(*(Prefix + TEXT("-clamp")), TEXT("ReturnValue"), *(Prefix + TEXT("-set")), TEXT("Health"));
+			}
+		}
+		else if (Template.Name == TEXT("timer_loop"))
+		{
+			AddVariable(TEXT("LoopCount"), TEXT("int"), TEXT("0"), TEXT("Timer"));
+			AddVariable(TEXT("bTimerRunning"), TEXT("bool"), TEXT("false"), TEXT("Timer"));
+			AddVariable(TEXT("bTimerEnded"), TEXT("bool"), TEXT("false"), TEXT("Timer"));
+			AddEvent(TEXT("start"), TEXT("StartTimer"), 0);
+			AddEvent(TEXT("stop"), TEXT("StopTimer"), 400);
+			AddEvent(TEXT("callback"), Parameters->GetStringField(TEXT("eventName")), 800);
+			auto StartDefaults = MakeShared<FJsonObject>();
+			StartDefaults->SetStringField(TEXT("FunctionName"), Parameters->GetStringField(TEXT("eventName")));
+			StartDefaults->SetStringField(TEXT("Time"), FString::SanitizeFloat(Parameters->GetNumberField(TEXT("delay"))));
+			StartDefaults->SetStringField(TEXT("bLooping"), TEXT("true"));
+			StartDefaults->SetStringField(TEXT("bMaxOncePerFrame"), TEXT("true"));
+			AddVariableNode(TEXT("ended-get"), TEXT("VariableGet"), TEXT("bTimerEnded"), 0, 200);
+			AddCall(TEXT("not-ended"), TEXT("Not_PreBool"), MathLibrary, 200, 200);
+			Nodes.Add(MakeShared<FJsonValueObject>(MakeBlueprintTemplateNode(TEXT("start-guard"), TEXT("Branch"), 300, 0)));
+			AddCall(TEXT("set-timer"), TEXT("K2_SetTimer"), SystemLibrary, 550, 0, StartDefaults);
+			AddVariableNode(TEXT("running-start"), TEXT("VariableSet"), TEXT("bTimerRunning"), 900, 0);
+			auto Started = MakeShared<FJsonObject>();
+			Started->SetStringField(TEXT("bTimerRunning"), TEXT("true"));
+			Nodes.Last()->AsObject()->SetObjectField(TEXT("pinDefaults"), Started);
+			Link(TEXT("start"), TEXT("then"), TEXT("start-guard"), TEXT("execute"));
+			Link(TEXT("ended-get"), TEXT("bTimerEnded"), TEXT("not-ended"), TEXT("A"));
+			Link(TEXT("not-ended"), TEXT("ReturnValue"), TEXT("start-guard"), TEXT("Condition"));
+			Link(TEXT("start-guard"), TEXT("then"), TEXT("set-timer"), TEXT("execute"));
+			Link(TEXT("set-timer"), TEXT("then"), TEXT("running-start"), TEXT("execute"));
+			for (int32 Lifecycle = 0; Lifecycle < 2; ++Lifecycle)
+			{
+				const TCHAR* Entry = Lifecycle == 0 ? TEXT("stop") : TEXT("end-play");
+				const TCHAR* Clear = Lifecycle == 0 ? TEXT("clear-stop") : TEXT("clear-end");
+				const TCHAR* Running = Lifecycle == 0 ? TEXT("running-stop") : TEXT("running-end");
+				const int32 Y = Lifecycle == 0 ? 400 : 1200;
+				if (Lifecycle == 1)
+				{
+					auto EndPlay = MakeBlueprintTemplateNode(Entry, TEXT("OverrideEvent"), 0, Y);
+					EndPlay->SetStringField(TEXT("functionName"), TEXT("ReceiveEndPlay"));
+					EndPlay->SetStringField(TEXT("className"), TEXT("/Script/Engine.Actor"));
+					Nodes.Add(MakeShared<FJsonValueObject>(EndPlay));
+				}
+				auto ClearDefaults = MakeShared<FJsonObject>();
+				ClearDefaults->SetStringField(TEXT("FunctionName"), Parameters->GetStringField(TEXT("eventName")));
+				AddCall(Clear, TEXT("K2_ClearTimer"), SystemLibrary, 300, Y, ClearDefaults);
+				AddVariableNode(Running, TEXT("VariableSet"), TEXT("bTimerRunning"), 650, Y);
+				auto Stopped = MakeShared<FJsonObject>(); Stopped->SetStringField(TEXT("bTimerRunning"), TEXT("false"));
+				Nodes.Last()->AsObject()->SetObjectField(TEXT("pinDefaults"), Stopped);
+				Link(Entry, TEXT("then"), Clear, TEXT("execute"));
+				Link(Clear, TEXT("then"), Running, TEXT("execute"));
+				if (Lifecycle == 1)
+				{
+					AddVariableNode(TEXT("ended-set"), TEXT("VariableSet"), TEXT("bTimerEnded"), 900, Y);
+					auto Ended = MakeShared<FJsonObject>();
+					Ended->SetStringField(TEXT("bTimerEnded"), TEXT("true"));
+					Nodes.Last()->AsObject()->SetObjectField(TEXT("pinDefaults"), Ended);
+					Link(Running, TEXT("then"), TEXT("ended-set"), TEXT("execute"));
+				}
+			}
+			AddVariableNode(TEXT("running-get"), TEXT("VariableGet"), TEXT("bTimerRunning"), 0, 1000);
+			Nodes.Add(MakeShared<FJsonValueObject>(MakeBlueprintTemplateNode(TEXT("running-guard"), TEXT("Branch"), 300, 800)));
+			AddVariableNode(TEXT("count-get"), TEXT("VariableGet"), TEXT("LoopCount"), 300, 1000);
+			AddCall(TEXT("increment"), TEXT("Add_IntInt"), MathLibrary, 550, 1000);
+			AddVariableNode(TEXT("count-set"), TEXT("VariableSet"), TEXT("LoopCount"), 800, 800);
+			Link(TEXT("callback"), TEXT("then"), TEXT("running-guard"), TEXT("execute"));
+			Link(TEXT("running-get"), TEXT("bTimerRunning"), TEXT("running-guard"), TEXT("Condition"));
+			Link(TEXT("running-guard"), TEXT("then"), TEXT("count-set"), TEXT("execute"));
+			Link(TEXT("count-get"), TEXT("LoopCount"), TEXT("increment"), TEXT("A"));
+			Link(TEXT("increment"), TEXT("ReturnValue"), TEXT("count-set"), TEXT("LoopCount"));
+		}
+		else
+		{
+			AddVariable(TEXT("bIsInteractable"), TEXT("bool"), Parameters->GetBoolField(TEXT("initiallyInteractable")) ? TEXT("true") : TEXT("false"), TEXT("Interaction"));
+			AddVariable(TEXT("InteractionCount"), TEXT("int"), TEXT("0"), TEXT("Interaction"));
+			TSharedRef<FJsonObject> Component = MakeShared<FJsonObject>();
+			Component->SetStringField(TEXT("name"), TEXT("InteractionSphere"));
+			Component->SetStringField(TEXT("componentClass"), TEXT("/Script/Engine.SphereComponent"));
+			Spec->SetArrayField(TEXT("components"), {MakeShared<FJsonValueObject>(Component)});
+			AddEvent(TEXT("interact"), TEXT("Interact"), 0);
+			AddVariableNode(TEXT("interactable-get"), TEXT("VariableGet"), TEXT("bIsInteractable"), 200, 150);
+			Nodes.Add(MakeShared<FJsonValueObject>(
+				MakeBlueprintTemplateNode(TEXT("branch"), TEXT("Branch"), 400, 0)));
+			AddVariableNode(TEXT("interaction-count-get"), TEXT("VariableGet"), TEXT("InteractionCount"), 400, 250);
+			AddCall(TEXT("interaction-increment"), TEXT("Add_IntInt"), MathLibrary, 600, 250);
+			AddVariableNode(TEXT("interaction-count-set"), TEXT("VariableSet"), TEXT("InteractionCount"), 850, 0);
+			Link(TEXT("interact"), TEXT("then"), TEXT("branch"), TEXT("execute"));
+			Link(TEXT("interactable-get"), TEXT("bIsInteractable"), TEXT("branch"), TEXT("Condition"));
+			Link(TEXT("branch"), TEXT("then"), TEXT("interaction-count-set"), TEXT("execute"));
+			Link(TEXT("interaction-count-get"), TEXT("InteractionCount"), TEXT("interaction-increment"), TEXT("A"));
+			Link(TEXT("interaction-increment"), TEXT("ReturnValue"), TEXT("interaction-count-set"), TEXT("InteractionCount"));
+		}
+		Spec->SetArrayField(TEXT("variables"), Variables);
+		Spec->SetArrayField(TEXT("nodes"), Nodes);
+		Spec->SetArrayField(TEXT("connections"), Connections);
+		return Spec;
+	}
+
+	class FBlueprintTemplateListTool final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("blueprint.template.list"); }
+
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			if (!Params.IsValid() || !Params->Values.IsEmpty())
+			{
+				return FMCPToolResult::Error(TEXT("blueprint.template.list requires an empty parameter object."), TEXT("invalid_params"), 422);
+			}
+			TArray<TSharedPtr<FJsonValue>> Templates;
+			for (const FBlueprintBehaviorTemplate& Template : BlueprintBehaviorTemplates())
+			{
+				Templates.Add(MakeShared<FJsonValueObject>(BlueprintTemplateDescriptor(Template)));
+			}
+			TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+			Result->SetStringField(TEXT("schema"), TEXT("ue.blueprint-template-catalog.v1"));
+			Result->SetArrayField(TEXT("templates"), Templates);
+			Result->SetNumberField(TEXT("count"), Templates.Num());
+			Result->SetBoolField(TEXT("runtimeVerified"), false);
+			return FMCPToolResult::Ok(Result);
+		}
+	};
+
+	class FBlueprintTemplateApplyTool final : public FMCPToolBase
+	{
+	public:
+		FString GetCapabilityId() const override { return TEXT("blueprint.template.apply"); }
+
+		FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+		{
+			if (!Params.IsValid())
+			{
+				return FMCPToolResult::Error(TEXT("parameters are required."), TEXT("invalid_params"), 422);
+			}
+			const TSet<FString> Allowed = {TEXT("templateName"), TEXT("blueprint"), TEXT("graph"), TEXT("buildId"), TEXT("parameters")};
+			for (const auto& Pair : Params->Values)
+			{
+				if (!Allowed.Contains(Pair.Key))
+				{
+					return FMCPToolResult::Error(TEXT("Unknown template application field: ") + Pair.Key, TEXT("invalid_params"), 422);
+				}
+			}
+			const FString TemplateName = BuildString(Params, TEXT("templateName"));
+			if (TemplateName.IsEmpty())
+			{
+				return FMCPToolResult::Error(TEXT("templateName must be a non-empty string."), TEXT("invalid_params"), 422);
+			}
+			const FBlueprintBehaviorTemplate* Template = FindBlueprintBehaviorTemplate(TemplateName);
+			if (!Template)
+			{
+				return FMCPToolResult::Error(TEXT("Unknown template. Discover names through blueprint.template.list."), TEXT("template_not_found"), 404);
+			}
+			const FString Blueprint = BuildString(Params, TEXT("blueprint"));
+			if (!Blueprint.StartsWith(TEXT("/")) || Blueprint.Len() < 2 || Blueprint.Len() > 1024)
+			{
+				return FMCPToolResult::Error(TEXT("blueprint must be an explicit asset path of at most 1024 characters."), TEXT("invalid_params"), 422);
+			}
+			if (Params->HasField(TEXT("graph"))
+				&& (BuildString(Params, TEXT("graph")).IsEmpty() || BuildString(Params, TEXT("graph")).Len() > 128))
+			{
+				return FMCPToolResult::Error(TEXT("graph must be a non-empty string of at most 128 characters."), TEXT("invalid_params"), 422);
+			}
+			if (Params->HasField(TEXT("buildId")) && !IsSafeBuildToken(BuildString(Params, TEXT("buildId"))))
+			{
+				return FMCPToolResult::Error(TEXT("buildId must be a safe BuildGraph token of 1 to 128 characters."), TEXT("invalid_params"), 422);
+			}
+			const TSharedPtr<FJsonObject>* InputParameters = nullptr;
+			if (Params->HasField(TEXT("parameters"))
+				&& (!Params->TryGetObjectField(TEXT("parameters"), InputParameters) || !InputParameters || !InputParameters->IsValid()))
+			{
+				return FMCPToolResult::Error(TEXT("parameters must be an object."), TEXT("invalid_params"), 422);
+			}
+			TSharedRef<FJsonObject> Resolved = MakeShared<FJsonObject>();
+			FString Error;
+			if (!ResolveBlueprintTemplateParameters(*Template, InputParameters ? *InputParameters : nullptr, Resolved, Error))
+			{
+				return FMCPToolResult::Error(Error, TEXT("invalid_params"), 422);
+			}
+			UBlueprint* Target = LoadBuildBlueprint(Blueprint, Error);
+			if (!Target) return FMCPToolResult::Error(Error, TEXT("asset_not_found"), 404);
+			const FString GraphName = Params->HasField(TEXT("graph")) ? BuildString(Params, TEXT("graph")) : TEXT("EventGraph");
+			if (!Target->ParentClass || !Target->ParentClass->IsChildOf(AActor::StaticClass())
+				|| !Target->UbergraphPages.ContainsByPredicate([&GraphName](const UEdGraph* Graph)
+					{ return Graph && Graph->GetName() == GraphName; }))
+			{
+				return FMCPToolResult::Error(TEXT("Behavior templates require an Actor Blueprint and an existing event graph."), TEXT("invalid_params"), 422);
+			}
+			if (TemplateName == TEXT("timer_loop")
+				&& Target->ParentClass->FindFunctionByName(FName(*Resolved->GetStringField(TEXT("eventName")))))
+			{
+				return FMCPToolResult::Error(TEXT("The timer callback name conflicts with an inherited function."), TEXT("invalid_params"), 422);
+			}
+			const TSharedRef<FJsonObject> Spec = MakeBlueprintTemplateSpec(*Template, Params, Resolved);
+			FBuildBlueprintFromSpecTool SpecBuilder;
+			FMCPToolResult Result = SpecBuilder.Plan(Spec);
+			if (Result.bSuccess && Result.Data.IsValid())
+			{
+				Result.Data->SetStringField(TEXT("schema"), TEXT("ue.blueprint-template-application-plan.v1"));
+				Result.Data->SetObjectField(TEXT("template"), BlueprintTemplateDescriptor(*Template));
+				Result.Data->SetObjectField(TEXT("parameters"), Resolved);
+				Result.Data->SetObjectField(TEXT("spec"), Spec);
+				Result.Data->SetBoolField(TEXT("applied"), false);
+				Result.Data->SetBoolField(TEXT("executionRequired"), true);
+				Result.Data->SetBoolField(TEXT("runtimeVerified"), false);
+				Result.Data->SetStringField(TEXT("nextAction"), TEXT("Review the returned Workflow, then execute it through ue-workflow-cli with approvePlanDigest and confirmWrite. Retain runId for read-back or rollback."));
+			}
+			return Result;
+		}
+	};
 }
 
 namespace UEAIIntegrationTools
@@ -1282,6 +1805,8 @@ namespace UEAIIntegrationTools
 		Registry.Register(MakeShared<FBuildGraphPlanTool>());
 		Registry.Register(MakeShared<FBuildGraphExecuteTool>());
 		Registry.Register(MakeShared<FBuildBlueprintFromSpecTool>());
+		Registry.Register(MakeShared<FBlueprintTemplateListTool>());
+		Registry.Register(MakeShared<FBlueprintTemplateApplyTool>());
 		Registry.Register(MakeShared<FBuildGraphDefinitionGetTool>());
 		Registry.Register(MakeShared<FBuildGraphMetadataSetTool>());
 	}

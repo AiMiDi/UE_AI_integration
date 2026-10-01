@@ -401,6 +401,29 @@ bool BlueprintDebugPIEExpectPausedRouteLocked(
 			TEXT("Paused mutating route returned the wrong error contract.");
 		return false;
 	}
+	const TSharedPtr<FJsonObject>* Details = nullptr;
+	const TSharedPtr<FJsonObject>* Verification = nullptr;
+	bool bExecuted = true;
+	FString VerificationCapability;
+	if (!Error->TryGetObjectField(TEXT("details"), Details)
+		|| !Details
+		|| !Details->IsValid()
+		|| !(*Details)->TryGetObjectField(
+			TEXT("verificationState"),
+			Verification)
+		|| !Verification
+		|| !Verification->IsValid()
+		|| !(*Verification)->TryGetStringField(
+			TEXT("capability"),
+			VerificationCapability)
+		|| VerificationCapability != TEXT("scene.actor.spawn")
+		|| !(*Verification)->TryGetBoolField(TEXT("executed"), bExecuted)
+		|| bExecuted)
+	{
+		OutError =
+			TEXT("Paused mutating route omitted its unexecuted capability verification state.");
+		return false;
+	}
 	return true;
 }
 

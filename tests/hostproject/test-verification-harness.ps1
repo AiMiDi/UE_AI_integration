@@ -82,6 +82,8 @@ foreach ($needle in @(
         'latestBuildArtifactSha256',
         'latestBuildArtifactPathMatches',
         'latestBuildArtifactHashMatches',
+        'loadedModuleIdentity',
+        'loadedModuleIdentityMatches',
         'verificationFailures',
         'failureClass',
         'lastFailureMessage',
@@ -104,7 +106,10 @@ foreach ($needle in @(
         'latestBuildArtifactExists',
         'latestBuildArtifactTimestampUtc',
         'latestBuildArtifactPathMatchesLoaded',
-        'matchesLatestBuildArtifact')) {
+        'matchesLatestBuildArtifact',
+        'ue.loaded-module-identity.v1',
+        'moduleSha256',
+        'pdbSha256')) {
     Assert-Contains -Text $productionText -Needle $needle -Path $productionController
 }
 
@@ -129,6 +134,7 @@ $nonNullRhiTests = @(
     @{ Path = 'Source/UE_AI_integration/Private/Tests/MaterialSourceFingerprintTests.cpp'; Test = 'UE_AI_integration.MaterialSource.IncludeCompilerCorrection' },
     @{ Path = 'Source/UE_AI_integration/Private/Tests/BlueprintEditorLayoutTests.cpp'; Test = 'UE_AI_integration.Blueprint.EditorLayout.NativeCommandLoop' },
     @{ Path = 'Source/UE_AI_integration/Private/Tests/BlueprintDebugPIEHttpTests.cpp'; Test = 'UE_AI_integration.BlueprintDebug.RealPIEHttpStepWatchContinue' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/ProjectAssetReplicaAcceptanceTests.cpp'; Test = 'UE_AI_integration.ProjectReplica.RealAssetsWriteRestoreReferencesAndRuntime' },
     @{ Path = 'Source/UE_AI_integration/Private/Tests/RuntimeSessionTests.cpp'; Test = 'UE_AI_integration.Runtime.Viewport.RealPIECapture' }
 )
 foreach ($test in $nonNullRhiTests) {

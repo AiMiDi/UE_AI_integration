@@ -38,6 +38,7 @@
 #include "Materials/MaterialFunction.h"
 #include "MaterialEditingLibrary.h"
 #include "Infrastructure/MaterialGraphIdentity.h"
+#include "Infrastructure/MaterialGraphSnapshot.h"
 #include "Core/MCPExecutor.h"
 #include "UObject/UnrealType.h"
 #include "Materials/MaterialExpression.h"
@@ -51,6 +52,7 @@
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"
+#include "Misc/ScopeExit.h"
 #include "ObjectTools.h"
 #include "PackageTools.h"
 #include "ScopedTransaction.h"
@@ -5511,6 +5513,55 @@ FMCPResult FWorkflowRuntime::ContinueWorkflowV2(
 	return FMCPResult::Ok(Record.ToResultJson(Options));
 }
 
+bool FWorkflowRuntime::PrepareMaterialOperationBoundary(
+	const FString& CapabilityId,
+	const TSharedPtr<FJsonObject>& Scope,
+	const TSharedPtr<FJsonObject>& Params,
+	FString& OutSnapshotId,
+	FMCPResult& OutFailure) const
+{
+	OutSnapshotId.Reset();
+	static const TSet<FString> BoundaryWriters = {
+		TEXT("content.material.expression.delete"),
+		TEXT("content.material.expression.value.set"),
+		TEXT("content.material.pin.connect"),
+		TEXT("content.material.pin.disconnect"),
+		TEXT("content.material.custom.set"),
+		TEXT("content.material.parameter.set"),
+		TEXT("content.material.function.call.set")
+	};
+	if (!BoundaryWriters.Contains(CapabilityId)) return true;
+	const FString ScopeKind = GetStringField(Scope, TEXT("kind"));
+	const FString ScopeAsset = GetStringField(Scope, TEXT("asset"));
+	UObject* Asset = LoadAssetWithoutLogging(ScopeAsset);
+	const bool bFunctionScope = ScopeKind == TEXT("materialFunction");
+	const TCHAR* TargetField = bFunctionScope ? TEXT("materialFunction") : TEXT("material");
+	if ((ScopeKind != TEXT("material") && !bFunctionScope)
+		|| !Asset || (bFunctionScope ? !Asset->IsA<UMaterialFunction>() : !Asset->IsA<UMaterial>())
+		|| GetStringField(Params, TargetField) != ScopeAsset
+		|| Params->HasField(TEXT("editorId")))
+	{
+		OutFailure = FMCPResult::Fail(TEXT("workflow_scope_mismatch"),
+			TEXT("Material Workflow boundaries can authorize only the exact approved authored asset and asset kind."), 409);
+		return false;
+	}
+	// A caller-authored proof retains its expiry and stale-state semantics. Never
+	// silently replace a partial or stale proof with a broader Workflow boundary.
+	if (Params->HasField(TEXT("boundaryId")) || Params->HasField(TEXT("snapshotId"))
+		|| Params->HasField(TEXT("expectedProjectionHash"))) return true;
+	// The approved Workflow scope owns this asset closure, including nodes made
+	// by earlier approved operations. Generate a fresh proof for this step only;
+	// confirmSharedNodeImpact stays exactly as supplied by the approved step.
+	const FMCPToolResult Prepared = MaterialQuery::PrepareAssetScopeWriteBoundary(Asset, Params, OutSnapshotId);
+	if (!Prepared.bSuccess)
+	{
+		OutFailure = FMCPResult::Fail(Prepared.ErrorCode.IsEmpty() ? TEXT("material_boundary_unavailable") : Prepared.ErrorCode,
+			Prepared.ErrorMessage, Prepared.HttpStatus >= 400 ? Prepared.HttpStatus : 409, Prepared.Data);
+		return false;
+	}
+	return true;
+}
+
 bool FWorkflowRuntime::ExecuteOperation(
 	const TSharedPtr<FJsonObject>& Operation,
 	const TSharedPtr<FJsonObject>& Scope,
@@ -5682,13 +5733,33 @@ bool FWorkflowRuntime::ExecuteOperation(
 	}
 
 	TSharedPtr<FJsonObject> InternalParams = CloneObject(Params);
+	FString GeneratedMaterialSnapshotId;
+	ON_SCOPE_EXIT
+	{
+		if (!GeneratedMaterialSnapshotId.IsEmpty()) MaterialQuery::Release(GeneratedMaterialSnapshotId);
+	};
+	if (!PrepareMaterialOperationBoundary(CapabilityId, Scope, InternalParams, GeneratedMaterialSnapshotId, OutFailure))
+	{
+		VerificationParams = InternalParams;
+		AnnotateOperation(OutFailure, false);
+		return false;
+	}
+	auto AnnotateGeneratedMaterialBoundary = [&](const TSharedPtr<FJsonObject>& Data)
+	{
+		if (Data.IsValid() && !GeneratedMaterialSnapshotId.IsEmpty())
+		{
+			Data->SetBoolField(TEXT("workflowWriteBoundaryGenerated"), true);
+			Data->SetStringField(TEXT("workflowWriteBoundarySnapshotId"), GeneratedMaterialSnapshotId);
+			Data->SetStringField(TEXT("workflowWriteBoundaryProjectionHash"), GetStringField(InternalParams, TEXT("expectedProjectionHash")));
+		}
+	};
 	TSharedPtr<FJsonObject> ExecutionContext = MakeShared<FJsonObject>();
 	ExecutionContext->SetBoolField(TEXT("deferCompile"), bDeferCompile);
 	ExecutionContext->SetBoolField(TEXT("saveOnSuccess"), bSaveOnSuccess);
 	// This reserved object is injected only after public parameter validation.
 	// ExecuteOperation is reached only after the Editor-prepared plan digest and
-	// its asset preconditions have been verified, so domain handlers may use
-	// this flag as an unspoofable equivalent approval contract.
+	// its asset preconditions have been verified. This conveys Workflow ownership;
+	// material writers still require a fresh boundary and explicit shared consent.
 	ExecutionContext->SetBoolField(TEXT("approvedPlan"), true);
 	InternalParams->SetObjectField(TEXT("__ueWorkflow"), ExecutionContext);
 
@@ -5707,6 +5778,7 @@ bool FWorkflowRuntime::ExecuteOperation(
 			ToolResult.Data);
 		VerificationParams = InternalParams;
 		AnnotateOperation(OutFailure, true);
+		AnnotateGeneratedMaterialBoundary(OutFailure.Error.Details);
 		return false;
 	}
 
@@ -5714,6 +5786,7 @@ bool FWorkflowRuntime::ExecuteOperation(
 	VerificationParams = InternalParams;
 	AnnotateOperation(HandlerResult, true);
 	OutResult = HandlerResult.Data;
+	AnnotateGeneratedMaterialBoundary(OutResult);
 	bool bSemanticSuccess = true;
 	if (OutResult->TryGetBoolField(TEXT("success"), bSemanticSuccess)
 		&& !bSemanticSuccess)
@@ -5727,6 +5800,19 @@ bool FWorkflowRuntime::ExecuteOperation(
 			OutResult);
 		AnnotateOperation(OutFailure, true);
 		return false;
+	}
+	// Deferred graph handlers edit native pins without running PostEditChange.
+	// Persist those links into the exact approved asset's authored inputs before
+	// the next step captures its boundary; otherwise a new snapshot would still
+	// describe the old topology. This performs no notification, compile or save.
+	if (CapabilityId == TEXT("content.material.pin.connect")
+		|| CapabilityId == TEXT("content.material.pin.disconnect"))
+	{
+		UObject* ScopedAsset = LoadAssetWithoutLogging(GetStringField(Scope, TEXT("asset")));
+		UMaterialGraph* Graph = nullptr;
+		if (UMaterial* Material = Cast<UMaterial>(ScopedAsset)) Graph = Material->MaterialGraph.Get();
+		else if (UMaterialFunction* Function = Cast<UMaterialFunction>(ScopedAsset)) Graph = Function->MaterialGraph;
+		if (Graph) Graph->LinkMaterialExpressionsFromGraph();
 	}
 	// Keep execution-phase metadata explicit even for legacy handlers that do
 	// not expose it themselves.

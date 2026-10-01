@@ -2,15 +2,17 @@
   "schema": "ue.agent-skill.v1",
   "schemaVersion": 1,
   "id": "ue-blueprint-buildgraph",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "title": "UE Blueprint BuildGraph",
   "description": "Validate and compile a declarative managed Blueprint Graph definition into an approved, recoverable Workflow v2 execution.",
   "domains": ["blueprint"],
-  "risk": "confirmWrite",
+  "risk": "mixed",
   "triggers": [
     "blueprint buildgraph",
     "declarative blueprint graph",
     "generate blueprint graph",
+    "blueprint template",
+    "蓝图模板",
     "reconcile blueprint nodes",
     "声明式蓝图",
     "批量构建蓝图图表"
@@ -31,12 +33,51 @@
       "blueprint.asset.validate"
     ],
     "optionalCapabilities": [
+      "blueprint.template.list",
+      "blueprint.template.apply",
+      "blueprint.asset.runtime.verify",
       "blueprint.graph.describe",
       "blueprint.graph.capture",
       "blueprint.graph.visual.compare"
     ]
   },
   "recipes": [
+    {
+      "id": "plan-named-template",
+      "title": "Discover and plan one named Blueprint behavior template",
+      "description": "Read exact template parameters and limits, then produce a read-only managed Workflow plan for separately approved execution. Version 2 templates generate connected minimal health, timer and interaction behavior; actual instance behavior requires runtime verification.",
+      "risk": "readOnly",
+      "inputs": [
+        { "name": "templateName", "type": "string", "required": true, "description": "Name from blueprint.template.list." },
+        { "name": "blueprint", "type": "string", "required": true, "description": "Explicit existing Blueprint asset path." },
+        { "name": "parameters", "type": "object", "required": false, "description": "Typed values allowed by the discovered template parameterSchema." }
+      ],
+      "steps": [
+        {
+          "id": "discover-template",
+          "phase": "discover",
+          "purpose": "Read template scope, exact parameter schema and lifecycle limits before selecting a behavior template.",
+          "operations": ["blueprint.template.list"]
+        },
+        {
+          "id": "plan-template",
+          "phase": "execute",
+          "purpose": "Produce a read-only spec-normalized Workflow and Editor-bound digest without applying or approving writes.",
+          "operations": ["blueprint.template.apply"]
+        },
+        {
+          "id": "verify-definition",
+          "phase": "verify",
+          "purpose": "Validate the returned normalizedDefinition; review the Workflow and approve its exact digest separately before executing through ue-workflow-cli.",
+          "operations": ["blueprint.graph.build.validate"]
+        }
+      ],
+      "result": {
+        "summary": "A behavior-template application plan requiring separate Workflow approval, execution and runtime verification.",
+        "evidence": ["template parameter schema and limitations", "resolved parameters and normalizedDefinition", "Workflow and Editor-bound planDigest", "applied=false and executionRequired=true"],
+        "success": ["the template and typed parameters were discovered and validated", "the returned Workflow was planned against the current clean asset", "no asset write or runtime verification was inferred from planning"]
+      }
+    },
     {
       "id": "build-and-verify",
       "title": "Build and verify one managed Blueprint Graph",

@@ -7,16 +7,21 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "EditorAssetLibrary.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/Material.h"
 #include "Misc/Guid.h"
 #include "Misc/PackageName.h"
 #include "Misc/ScopeExit.h"
 #include "NiagaraEditorUtilities.h"
 #include "NiagaraEmitter.h"
+#include "NiagaraEmitterFactoryNew.h"
+#include "NiagaraEmitterHandle.h"
 #include "NiagaraMeshRendererProperties.h"
+#include "NiagaraScriptSource.h"
 #include "NiagaraSpriteRendererProperties.h"
 #include "NiagaraSystem.h"
 #include "NiagaraSystemFactoryNew.h"
 #include "UObject/Package.h"
+#include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 #endif
 
 namespace UEAIIntegrationTools
@@ -174,22 +179,43 @@ bool FNiagaraRendererMaterialSemanticContractTest::RunTest(const FString&)
 	{
 		return false;
 	}
-	UNiagaraSystemFactoryNew::InitializeSystem(System, true);
-	FAssetRegistryModule::AssetCreated(System);
-
-	UNiagaraEmitter* Template = LoadObject<UNiagaraEmitter>(
-		nullptr,
-		TEXT("/Niagara/DefaultAssets/Templates/Emitters/SingleLoopingParticle.SingleLoopingParticle"));
-	UMaterialInterface* Material = LoadObject<UMaterialInterface>(
-		nullptr,
-		TEXT("/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial"));
-	if (!TestNotNull(TEXT("Stock emitter template"), Template)
-		|| !TestNotNull(TEXT("Stock material fixture"), Material))
+	// Keep this fixture independent of optional Niagara DefaultAssets content.
+	UNiagaraSystemFactoryNew::InitializeSystem(System, false);
+	UNiagaraScript* SystemSpawnScript = System->GetSystemSpawnScript();
+	UNiagaraScript* SystemUpdateScript = System->GetSystemUpdateScript();
+	UNiagaraScriptSource* SystemSource = SystemSpawnScript
+		? Cast<UNiagaraScriptSource>(SystemSpawnScript->GetLatestSource())
+		: nullptr;
+	if (!SystemSpawnScript || !SystemUpdateScript || !SystemSource || !SystemSource->NodeGraph
+		|| !FNiagaraStackGraphUtilities::ResetGraphForOutput(
+			*SystemSource->NodeGraph,
+			ENiagaraScriptUsage::SystemSpawnScript,
+			SystemSpawnScript->GetUsageId())
+		|| !FNiagaraStackGraphUtilities::ResetGraphForOutput(
+			*SystemSource->NodeGraph,
+			ENiagaraScriptUsage::SystemUpdateScript,
+			SystemUpdateScript->GetUsageId()))
 	{
 		return false;
 	}
-	FNiagaraEditorUtilities::AddEmitterToSystem(
-		*System, *Template, Template->GetExposedVersion().VersionGuid);
+	FAssetRegistryModule::AssetCreated(System);
+
+	// Keep this fixture self-contained.  Isolated HostProjects do not mount the
+	// optional Niagara DefaultAssets bundle, and renderer material authoring only
+	// needs an owned material interface to exercise slot/rollback semantics.
+	UNiagaraEmitter* EmitterFixture = NewObject<UNiagaraEmitter>(
+		System, TEXT("MaterialEmitter"), RF_Transactional);
+	UMaterial* MaterialFixture = NewObject<UMaterial>(
+		Package, TEXT("MaterialFixture"), RF_Transactional);
+	if (!TestNotNull(TEXT("Owned emitter fixture"), EmitterFixture)
+		|| !TestNotNull(TEXT("Owned material fixture"), MaterialFixture))
+	{
+		return false;
+	}
+	UNiagaraEmitterFactoryNew::InitializeEmitter(EmitterFixture, false);
+	const FGuid EmitterVersion = EmitterFixture->GetExposedVersion().VersionGuid;
+	FNiagaraEmitterHandle EmitterHandle(*EmitterFixture, EmitterVersion);
+	System->AddEmitterHandleDirect(EmitterHandle);
 	if (!TestEqual(TEXT("One owned emitter is added"),
 		System->GetEmitterHandles().Num(), 1))
 	{
@@ -227,7 +253,7 @@ bool FNiagaraRendererMaterialSemanticContractTest::RunTest(const FString&)
 	const FString MeshRequest = TEXT("mesh-")
 		+ FGuid::NewGuid().ToString(EGuidFormats::Digits);
 	auto MeshParams = MakeRendererMaterialParams(
-		System, Handle, Mesh, Material->GetPathName(), true);
+		System, Handle, Mesh, MaterialFixture->GetPathName(), true);
 	const FMCPToolResult MeshPlan = PlanAndApproveRendererMaterial(
 		Registry, MeshParams, MeshRequest);
 	if (!TestTrue(TEXT("Empty mesh slot plans"), MeshPlan.bSuccess)
@@ -271,7 +297,7 @@ bool FNiagaraRendererMaterialSemanticContractTest::RunTest(const FString&)
 	TestEqual(TEXT("Apply creates exactly one mesh slot"),
 		Mesh->OverrideMaterials.Num(), 1);
 	TestEqual(TEXT("Created slot stores explicit material"),
-		Mesh->OverrideMaterials[0].ExplicitMat.Get(), Material);
+		Mesh->OverrideMaterials[0].ExplicitMat.Get(), MaterialFixture);
 	TestTrue(TEXT("Apply enables mesh overrides"), Mesh->bOverrideMaterials != 0);
 	TestTrue(TEXT("Receipt records async compile request"),
 		MeshApplied.Data->GetBoolField(TEXT("compileRequested")));
@@ -413,7 +439,7 @@ bool FNiagaraRendererMaterialSemanticContractTest::RunTest(const FString&)
 	const FString SpriteRequest = TEXT("sprite-")
 		+ FGuid::NewGuid().ToString(EGuidFormats::Digits);
 	auto SpriteParams = MakeRendererMaterialParams(
-		System, Handle, Sprite, Material->GetPathName());
+		System, Handle, Sprite, MaterialFixture->GetPathName());
 	const FMCPToolResult SpritePlan = PlanAndApproveRendererMaterial(
 		Registry, SpriteParams, SpriteRequest);
 	if (!TestTrue(TEXT("Sprite material plan succeeds"), SpritePlan.bSuccess))
@@ -428,7 +454,7 @@ bool FNiagaraRendererMaterialSemanticContractTest::RunTest(const FString&)
 		return false;
 	}
 	TestEqual(TEXT("Sprite explicit material read-back"),
-		Sprite->Material.Get(), Material);
+		Sprite->Material.Get(), MaterialFixture);
 	TestTrue(TEXT("Sprite mutation requests compile"),
 		SpriteApplied.Data->GetBoolField(TEXT("compileRequested")));
 	TestTrue(TEXT("Sprite binding is preserved after apply"),

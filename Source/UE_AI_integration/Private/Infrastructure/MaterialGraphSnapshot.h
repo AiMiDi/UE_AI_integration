@@ -114,6 +114,14 @@ namespace UEAIIntegration::MaterialQuery
 		UObject* Asset,
 		const TSharedPtr<FJsonObject>& Params,
 		FBoundaryWriteValidation& OutValidation);
+	// Internal Workflow factory. The caller must first verify its approved exact
+	// asset scope. It supplies a fresh whole-asset proof without changing public
+	// traversal limits, replacing explicit proofs or granting shared confirmation.
+	// Release OutSnapshotId after the single operation finishes.
+	FMCPToolResult PrepareAssetScopeWriteBoundary(
+		UObject* Asset,
+		const TSharedPtr<FJsonObject>& Params,
+		FString& OutSnapshotId);
 	FMCPToolResult ListDefinitions(const TSharedPtr<FJsonObject>& Params);
 	FMCPToolResult ResolveNodeSource(const TSharedPtr<FJsonObject>& Params);
 	FMCPToolResult Diff(const TSharedPtr<FJsonObject>& Params);

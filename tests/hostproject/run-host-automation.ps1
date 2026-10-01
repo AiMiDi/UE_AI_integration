@@ -35,6 +35,9 @@ param(
 
     [string[]] $TestFilter = @(),
 
+    # Passed only to the isolated child Editor, never to the user's process.
+    [hashtable] $EditorEnvironment = @{},
+
     [ValidateSet('isolated-nullrhi', 'nonnullrhi-editor')]
     [string] $VerificationLane = 'isolated-nullrhi',
 
@@ -263,6 +266,15 @@ function Get-ProductionModuleLoadedProof {
     while (-not $Process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
         $attemptCount++
         try {
+            $schemaEndpoint = "http://127.0.0.1:$Port/api/capabilities?operation=production.module.loaded.get&detail=full"
+            $catalog = Invoke-RestMethod -Uri $schemaEndpoint -Method Get `
+                -TimeoutSec 3 -ErrorAction Stop
+            $descriptors = @($catalog.data.capabilities)
+            if ($catalog.ok -ne $true -or $descriptors.Count -ne 1 `
+                -or $descriptors[0].id -ne 'production.module.loaded.get' `
+                -or $descriptors[0].available -ne $true) {
+                throw 'The isolated Editor does not expose an available exact module-proof schema.'
+            }
             $request = [ordered]@{
                 capability = 'production.module.loaded.get'
                 params = [ordered]@{}
@@ -273,10 +285,18 @@ function Get-ProductionModuleLoadedProof {
                 -ErrorAction Stop
             if ($response.ok -eq $true -and $null -ne $response.data) {
                 $data = $response.data
+                $identity = $data.loadedModuleIdentity
                 $dll = $data.dll
                 $pdb = $data.pdb
                 $observedModulePath = [string]$data.modulePath
                 $observedProcessId = if ($null -ne $data.processId) { [int64]$data.processId } else { $null }
+                $identityProcessId = if ($identity -and $null -ne $identity.processId) { [int64]$identity.processId } else { $null }
+                $identityModulePath = if ($identity) { [string]$identity.modulePath } else { '' }
+                $identityModuleHash = if ($identity) { [string]$identity.moduleSha256 } else { '' }
+                $identityPdbPath = if ($identity) { [string]$identity.pdbPath } else { '' }
+                $identityPdbHash = if ($identity) { [string]$identity.pdbSha256 } else { '' }
+                $identityLatestPath = if ($identity) { [string]$identity.latestBuildArtifactPath } else { '' }
+                $identityLatestHash = if ($identity) { [string]$identity.latestBuildArtifactSha256 } else { '' }
                 $observedDllPath = if ($dll) { [string]$dll.path } else { '' }
                 $observedDllHash = if ($dll) { [string]$dll.sha256 } else { '' }
                 $observedPdbPath = if ($pdb) { [string]$pdb.path } else { '' }
@@ -287,6 +307,9 @@ function Get-ProductionModuleLoadedProof {
                 $resolvedObservedModulePath = & $resolveObservedPath $observedModulePath
                 $resolvedObservedPdbPath = & $resolveObservedPath $observedPdbPath
                 $resolvedObservedLatestBuildArtifactPath = & $resolveObservedPath $observedLatestBuildArtifactPath
+                $resolvedIdentityModulePath = & $resolveObservedPath $identityModulePath
+                $resolvedIdentityPdbPath = & $resolveObservedPath $identityPdbPath
+                $resolvedIdentityLatestPath = & $resolveObservedPath $identityLatestPath
                 $pathMatches = $false
                 if ($expectedDll.present -and $observedDllPath -and $observedModulePath) {
                     $pathMatches =
@@ -322,6 +345,18 @@ function Get-ProductionModuleLoadedProof {
                 $latestBuildArtifactHashMatches = [bool]($expectedDll.present -and
                     $observedLatestBuildArtifactHash -and
                     $observedLatestBuildArtifactHash.ToLowerInvariant() -eq $expectedDll.sha256)
+                $identityMatches = [bool]($identity -and
+                    $identity.schema -eq 'ue.loaded-module-identity.v1' -and
+                    $identity.plugin -eq 'UE_AI_integration' -and
+                    $identity.module -eq 'UE_AI_integration' -and
+                    $identityProcessId -eq [int64]$Process.Id -and
+                    $resolvedIdentityModulePath.Equals([IO.Path]::GetFullPath($expectedDll.path), [StringComparison]::OrdinalIgnoreCase) -and
+                    $identityModuleHash.ToLowerInvariant() -eq $expectedDll.sha256 -and
+                    $resolvedIdentityPdbPath.Equals([IO.Path]::GetFullPath($expectedPdb.path), [StringComparison]::OrdinalIgnoreCase) -and
+                    $identityPdbHash.ToLowerInvariant() -eq $expectedPdb.sha256 -and
+                    $resolvedIdentityLatestPath.Equals([IO.Path]::GetFullPath($expectedDll.path), [StringComparison]::OrdinalIgnoreCase) -and
+                    $identityLatestHash.ToLowerInvariant() -eq $expectedDll.sha256 -and
+                    [string]$identity.editorStartedAtUtc -eq [string]$data.editorStartedAtUtc)
                 $loaded = [bool]$data.loaded
                 $matchesLatestBuildArtifact = [bool]$data.matchesLatestBuildArtifact
                 $verificationFailures = @()
@@ -333,13 +368,16 @@ function Get-ProductionModuleLoadedProof {
                 if (-not $matchesLatestBuildArtifact) { $verificationFailures += 'latest_artifact_mismatch' }
                 if (-not $latestBuildArtifactPathMatches) { $verificationFailures += 'latest_artifact_path_mismatch' }
                 if (-not $latestBuildArtifactHashMatches) { $verificationFailures += 'latest_artifact_hash_mismatch' }
+                if (-not $identityMatches) { $verificationFailures += 'loaded_module_identity_mismatch' }
                 $verified = $loaded -and $processMatches -and $pathMatches -and
                     $hashMatches -and $pdbMatches -and $matchesLatestBuildArtifact -and
-                    $latestBuildArtifactPathMatches -and $latestBuildArtifactHashMatches
+                    $latestBuildArtifactPathMatches -and $latestBuildArtifactHashMatches -and $identityMatches
                 return [ordered]@{
                     status = if ($verified) { 'verified' } else { 'mismatch' }
                     capability = 'production.module.loaded.get'
                     endpoint = $endpoint
+                    schemaEndpoint = $schemaEndpoint
+                    liveSchemaVerified = $true
                     requestId = $requestId
                     attempts = $attemptCount
                     processId = $Process.Id
@@ -359,6 +397,8 @@ function Get-ProductionModuleLoadedProof {
                     latestBuildArtifactSha256 = $observedLatestBuildArtifactHash
                     latestBuildArtifactPathMatches = $latestBuildArtifactPathMatches
                     latestBuildArtifactHashMatches = $latestBuildArtifactHashMatches
+                    loadedModuleIdentity = $identity
+                    loadedModuleIdentityMatches = $identityMatches
                     verificationFailures = $verificationFailures
                 }
             }
@@ -650,6 +690,12 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
     # Editor.  Query production.module.loaded.get while the packaged DLL is
     # resident so the report proves the exact loaded module identity.
     $startInfo.Environment['UE_PORT'] = [string]$serverPort
+    foreach ($entry in $EditorEnvironment.GetEnumerator()) {
+        if ([string]$entry.Key -notmatch '^UEAI_[A-Z0-9_]+$') {
+            throw 'Isolated Editor environment keys must use the UEAI_ namespace.'
+        }
+        $startInfo.Environment[[string]$entry.Key] = [string]$entry.Value
+    }
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     if (-not $process.Start()) {

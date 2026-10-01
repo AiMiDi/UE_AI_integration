@@ -452,6 +452,41 @@ namespace
 		return FJsonSerializer::Deserialize(Reader, OutObject)
 			&& OutObject.IsValid();
 	}
+
+	FMCPResult MakeClientSessionRejection(
+		FMCPExecutor& Executor,
+		const FHttpServerRequest& Request,
+		EUEAIIntegrationRequestKind Kind,
+		const FString& CallerError)
+	{
+		FMCPResult Result = FMCPResult::Fail(
+			TEXT("client_session_expired"), CallerError, 401);
+		TSharedPtr<FJsonObject> Envelope;
+		if (!DeserializeRequestObject(Request, Envelope)) return Result;
+
+		FMCPExecutionContext Context;
+		// HttpServer makes RelativePath relative to the bound route; dispatch
+		// identity must come from the route owner rather than that trimmed path.
+		if (Kind == EUEAIIntegrationRequestKind::LegacyExecute)
+		{
+			Envelope->TryGetStringField(TEXT("capability"), Context.Capability);
+		}
+		else if (Kind == EUEAIIntegrationRequestKind::WorkflowAction)
+		{
+			FString Action;
+			if (Envelope->TryGetStringField(TEXT("action"), Action) && !Action.IsEmpty())
+			{
+				Context.Capability = TEXT("workflow.") + Action;
+			}
+		}
+		if (!Context.Capability.IsEmpty())
+		{
+			// Parse identity only. Authentication failure must not dispatch the
+			// request or infer readback/runtime success from its payload.
+			Executor.AnnotateVerification(Context, Result, false);
+		}
+		return Result;
+	}
 } // namespace
 
 FUEAIIntegrationServer::FUEAIIntegrationServer(
@@ -1610,11 +1645,14 @@ bool FUEAIIntegrationServer::HandleExecute(
 			Caller,
 			CallerError))
 		{
+			const FMCPResult Result = MakeClientSessionRejection(
+				Executor, Request, EUEAIIntegrationRequestKind::LegacyExecute, CallerError);
 			SendError(
 				OnComplete,
-				401,
-				TEXT("client_session_expired"),
-				CallerError);
+				Result.Error.HttpStatus,
+				Result.Error.Code,
+				Result.Error.Message,
+				Result.Error.Details);
 			return true;
 		}
 		const FString ActivityId = ClientActivityService.BeginActivity(
@@ -1826,13 +1864,40 @@ bool FUEAIIntegrationServer::HandleExecute(
 				false);
 			return true;
 		}
-		SendError(
-			EffectiveOnComplete,
-			423,
-			TEXT("debug_session_paused"),
-			TEXT(
-				"Only Blueprint debug snapshot queries and POD control commands "
-				"are available while Kismet is paused."));
+		FString PausedCapability;
+		if (RequestObject->TryGetStringField(
+			TEXT("capability"),
+			PausedCapability)
+			&& !PausedCapability.IsEmpty())
+		{
+			FMCPExecutionContext Context;
+			Context.Capability = PausedCapability;
+			Context.Params = MakeShared<FJsonObject>();
+			Context.CallerSessionId = Caller.SessionId;
+			FMCPResult Result = FMCPResult::Fail(
+				TEXT("debug_session_paused"),
+				TEXT(
+					"Only Blueprint debug snapshot queries and POD control commands "
+					"are available while Kismet is paused."),
+				423);
+			Executor.AnnotateVerification(Context, Result, false);
+			SendError(
+				EffectiveOnComplete,
+				Result.Error.HttpStatus,
+				Result.Error.Code,
+				Result.Error.Message,
+				Result.Error.Details);
+		}
+		else
+		{
+			SendError(
+				EffectiveOnComplete,
+				423,
+				TEXT("debug_session_paused"),
+				TEXT(
+					"Only Blueprint debug snapshot queries and POD control commands "
+					"are available while Kismet is paused."));
+		}
 		return true;
 	}
 	return QueueRequest(
@@ -1890,11 +1955,14 @@ bool FUEAIIntegrationServer::HandleWorkflow(
 		FString CallerError;
 		if (!ClientActivityService.BeginRequest(Caller, CallerError))
 		{
+			const FMCPResult Result = MakeClientSessionRejection(
+				Executor, Request, EUEAIIntegrationRequestKind::WorkflowAction, CallerError);
 			SendError(
 				OnComplete,
-				401,
-				TEXT("client_session_expired"),
-				CallerError);
+				Result.Error.HttpStatus,
+				Result.Error.Code,
+				Result.Error.Message,
+				Result.Error.Details);
 			return true;
 		}
 		const FString ActivityId = ClientActivityService.BeginActivity(
@@ -2199,11 +2267,13 @@ bool FUEAIIntegrationServer::QueueRequest(
 		*Pending->Caller,
 		CallerError))
 	{
+		const FMCPResult Result = MakeClientSessionRejection(Executor, Request, Kind, CallerError);
 		SendError(
 			OnComplete,
-			401,
-			TEXT("client_session_expired"),
-			CallerError);
+			Result.Error.HttpStatus,
+			Result.Error.Code,
+			Result.Error.Message,
+			Result.Error.Details);
 		return true;
 	}
 

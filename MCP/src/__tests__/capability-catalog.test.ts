@@ -432,7 +432,7 @@ test("publishes bounded Blueprint read and local-SCS component contracts", () =>
   assert.match(String(componentSet.description), /save/i);
 });
 
-test("publishes missing-connection-only material restore semantics", () => {
+test("publishes distinct connection and authored material restore semantics", () => {
   const catalog = loadCapabilityCatalog();
   const restore = catalog.get("content.material.graph.restore");
   assert.ok(restore);
@@ -460,8 +460,29 @@ test("publishes missing-connection-only material restore semantics", () => {
   assert.equal(properties.save.type, "boolean");
   assert.equal(properties.save.default, false);
   assert.match(String(properties.save.description), /true.*reject|not supported/i);
-  assert.match(String(restore.description), /missing.*connection/i);
-  assert.match(String(restore.description), /not.*full|does not.*full/i);
+  assert.deepEqual(properties.restoreMode.enum, [
+    "connectionsOnly", "fullGraph", "authoredGraph",
+  ]);
+  assert.equal(properties.restoreMode.default, "connectionsOnly");
+  assert.equal(properties.confirmFullGraphRestore.type, "boolean");
+  assert.equal(properties.confirmFullGraphRestore.const, true);
+  assert.equal(properties.confirmSharedNodeImpact.type, "boolean");
+  assert.equal(properties.expectedAfterDigest.type, "string");
+  assert.match(String(properties.expectedAfterDigest.pattern), /sha256/i);
+  assert.match(String(restore.description), /connectionsOnly.*missing.*links/i);
+  assert.match(String(restore.description), /fullGraph.*topology.*same node set/i);
+  assert.match(String(restore.description), /authoredGraph.*independent.*nodes.*properties.*layout.*comments.*root inputs/i);
+  assert.match(String(restore.description), /never save.*shader compilation/i);
+  const snapshot = catalog.get("content.material.graph.snapshot");
+  assert.ok(snapshot);
+  const captureProperties = snapshot.inputSchema.properties as Record<
+    string, Record<string, unknown>
+  >;
+  assert.deepEqual(captureProperties.captureMode.enum, [
+    "connectionsOnly", "authoredGraph",
+  ]);
+  assert.equal(captureProperties.captureMode.default, "connectionsOnly");
+  assert.match(String(snapshot.description), /32.*checkpoints.*Editor process/i);
   assert.match(String(restore.description), /dirty.?only/i);
   assert.equal(restore.traits.destructive, true);
   assert.equal(restore.effects.asset, "write");

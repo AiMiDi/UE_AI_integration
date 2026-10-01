@@ -13,6 +13,8 @@
 
 #if WITH_UEAI_NIAGARA && WITH_EDITORONLY_DATA
 
+#include "Infrastructure/NiagaraGraphNotifications.h"
+
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphUtilities.h"
@@ -30,6 +32,7 @@
 #include "ScopedTransaction.h"
 #include "Misc/SecureHash.h"
 #include "UObject/Package.h"
+#include "UObject/StrongObjectPtr.h"
 
 namespace UEAINiagaraEventHandlerPrivate
 {
@@ -42,6 +45,19 @@ namespace UEAINiagaraEventHandlerPrivate
 	constexpr uint32 MaxSpawnCount = 1000000;
 	constexpr int32 MaxPageOffset = 65536;
 	constexpr int32 MaxPageSize = 128;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	// Verdict injection is internal to native tests, after real authoring and
+	// compilation. It never changes the public request or approval contract.
+	static bool bFailNextUpdateCompileForTests = false;
+	static bool bFailNextUpdateReadbackForTests = false;
+	void SetUpdateFailureForTests(bool bCompileFailure, bool bReadbackFailure)
+	{
+		check(IsInGameThread());
+		bFailNextUpdateCompileForTests = bCompileFailure;
+		bFailNextUpdateReadbackForTests = bReadbackFailure;
+	}
+#endif
 
 	struct FEventHandlerRequest
 	{
@@ -81,6 +97,8 @@ namespace UEAINiagaraEventHandlerPrivate
 		TArray<FString> Warnings;
 	};
 
+	struct FGraphSnapshot;
+
 	struct FEventHandlerReceipt
 	{
 		FString ReceiptId;
@@ -98,10 +116,9 @@ namespace UEAINiagaraEventHandlerPrivate
 		TWeakObjectPtr<UNiagaraEmitter> Emitter;
 		TWeakObjectPtr<UNiagaraGraph> Graph;
 		FNiagaraEventScriptProperties BeforeProperties;
-		FString BeforeGraphExport;
+		TSharedPtr<FGraphSnapshot> BeforeGraphSnapshot;
+		TStrongObjectPtr<UNiagaraScript> BeforeScript;
 		FString GraphAfterDigest;
-		int32 BeforeGraphNodeCount = 0;
-		bool bHasGraphSnapshot = false;
 		bool bHasBeforeProperties = false;
 		FString Operation = TEXT("add");
 		bool bChanged = false;
@@ -110,12 +127,26 @@ namespace UEAINiagaraEventHandlerPrivate
 		bool bRolledBack = false;
 	};
 
+	struct FGraphPinSnapshot
+	{
+		UEdGraphPin* Pin = nullptr;
+		TArray<UEdGraphPin*> LinkedTo;
+	};
+
+	struct FGraphNodeSnapshot
+	{
+		TStrongObjectPtr<UEdGraphNode> Node;
+		TArray<FGraphPinSnapshot> Pins;
+	};
+
 	struct FGraphSnapshot
 	{
 		FString Export;
 		FString Digest;
 		int32 NodeCount = 0;
 		bool bCaptured = false;
+		TWeakObjectPtr<UNiagaraGraph> Graph;
+		TArray<FGraphNodeSnapshot> Nodes;
 	};
 
 	FString GraphSnapshotDigest(const FString& Export)
@@ -134,12 +165,23 @@ namespace UEAINiagaraEventHandlerPrivate
 			return false;
 		}
 		TSet<UObject*> Nodes;
-		const TArray<UEdGraphNode*> PartialNodes = Graph->Nodes;
-		for (UEdGraphNode* Node : PartialNodes)
+		OutSnapshot.Graph = Graph;
+		for (UEdGraphNode* Node : Graph->Nodes)
 		{
-			if (Node)
+			if (!IsValid(Node) || Node->GetGraph() != Graph || Nodes.Contains(Node))
 			{
-				Nodes.Add(Node);
+				return false;
+			}
+			Nodes.Add(Node);
+			FGraphNodeSnapshot& NodeSnapshot = OutSnapshot.Nodes.AddDefaulted_GetRef();
+			NodeSnapshot.Node.Reset(Node);
+			for (UEdGraphPin* Pin : Node->Pins)
+			{
+				if (!Pin)
+				{
+					return false;
+				}
+				NodeSnapshot.Pins.Add({Pin, Pin->LinkedTo});
 			}
 		}
 		FEdGraphUtilities::ExportNodesToText(Nodes, OutSnapshot.Export);
@@ -149,53 +191,106 @@ namespace UEAINiagaraEventHandlerPrivate
 		return true;
 	}
 
+	bool CanRestoreGraphSnapshot(UNiagaraGraph* Graph, const FGraphSnapshot& Snapshot)
+	{
+		if (!Graph || !Snapshot.bCaptured || Snapshot.Graph.Get() != Graph
+			|| Snapshot.Nodes.Num() != Snapshot.NodeCount)
+		{
+			return false;
+		}
+		TSet<UEdGraphNode*> OriginalNodes;
+		TSet<UEdGraphPin*> OriginalPins;
+		for (const FGraphNodeSnapshot& NodeSnapshot : Snapshot.Nodes)
+		{
+			UEdGraphNode* Node = NodeSnapshot.Node.Get();
+			if (!IsValid(Node) || Node->GetGraph() != Graph || OriginalNodes.Contains(Node)
+				|| Node->Pins.Num() != NodeSnapshot.Pins.Num())
+			{
+				return false;
+			}
+			OriginalNodes.Add(Node);
+			for (int32 Index = 0; Index < NodeSnapshot.Pins.Num(); ++Index)
+			{
+				UEdGraphPin* Pin = NodeSnapshot.Pins[Index].Pin;
+				// Strong node references do not protect pins from reconstruction.
+				// Check membership before ever dereferencing a recorded pin.
+				if (!Pin || Node->Pins[Index] != Pin || OriginalPins.Contains(Pin))
+				{
+					return false;
+				}
+				OriginalPins.Add(Pin);
+			}
+		}
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (!OriginalNodes.Contains(Node))
+			{
+				return false;
+			}
+		}
+		for (const FGraphNodeSnapshot& NodeSnapshot : Snapshot.Nodes)
+		{
+			for (const FGraphPinSnapshot& PinSnapshot : NodeSnapshot.Pins)
+			{
+				for (UEdGraphPin* LinkedPin : PinSnapshot.LinkedTo)
+				{
+					if (!OriginalPins.Contains(LinkedPin))
+					{
+						return false;
+					}
+				}
+				for (UEdGraphPin* LinkedPin : PinSnapshot.Pin->LinkedTo)
+				{
+					if (!OriginalPins.Contains(LinkedPin)
+						|| !LinkedPin->LinkedTo.Contains(PinSnapshot.Pin))
+					{
+						return false;
+					}
+				}
+			}
+		}
+		return true;
+	}
+
 	bool RestoreGraphSnapshot(UNiagaraGraph* Graph, const FGraphSnapshot& Snapshot)
 	{
-		if (!Graph || !Snapshot.bCaptured)
+		if (!CanRestoreGraphSnapshot(Graph, Snapshot))
 		{
 			return false;
 		}
-		const bool bEmptySnapshot = Snapshot.NodeCount == 0 && Snapshot.Export.IsEmpty();
-		if (!bEmptySnapshot && !FEdGraphUtilities::CanImportNodesFromText(Graph, Snapshot.Export))
-		{
-			return false;
-		}
+		// Removal receipts live in this editor session. Restore the retained
+		// original nodes and connections directly: Niagara output nodes cannot
+		// reliably round-trip through the generic clipboard text importer.
 		Graph->Modify();
-		const TArray<UEdGraphNode*> ExistingNodes = Graph->Nodes;
-		for (UEdGraphNode* Node : ExistingNodes)
+		Graph->Nodes.Reset();
+		for (const FGraphNodeSnapshot& NodeSnapshot : Snapshot.Nodes)
 		{
-			if (Node)
+			UEdGraphNode* Node = NodeSnapshot.Node.Get();
+			Node->Modify();
+			Graph->Nodes.Add(Node);
+			for (const FGraphPinSnapshot& PinSnapshot : NodeSnapshot.Pins)
 			{
-				Node->Modify();
-				Node->DestroyNode();
+				PinSnapshot.Pin->Modify();
+				PinSnapshot.Pin->LinkedTo = PinSnapshot.LinkedTo;
 			}
 		}
-		if (bEmptySnapshot)
+		UEAIIntegration::NiagaraEditing::NotifyRestoredGraph(Graph);
+		if (!CanRestoreGraphSnapshot(Graph, Snapshot) || Graph->Nodes.Num() != Snapshot.NodeCount)
 		{
-			Graph->NotifyGraphChanged();
-			return true;
+			return false;
 		}
-		TSet<UEdGraphNode*> ImportedNodes;
-		FEdGraphUtilities::ImportNodesFromText(Graph, Snapshot.Export, ImportedNodes);
-		Graph->NotifyGraphChanged();
-		if (ImportedNodes.Num() == Snapshot.NodeCount)
+		for (const FGraphNodeSnapshot& NodeSnapshot : Snapshot.Nodes)
 		{
-			return true;
-		}
-		// Import can create a partial set before rejecting an unsupported
-		// Niagara node class (notably output nodes).  Do not leave that partial
-		// graph behind for a caller's recovery path to mistake for a restore.
-		const TArray<UEdGraphNode*> PartialNodes = Graph->Nodes;
-		for (UEdGraphNode* Node : PartialNodes)
-		{
-			if (Node)
+			for (const FGraphPinSnapshot& PinSnapshot : NodeSnapshot.Pins)
 			{
-				Node->Modify();
-				Node->DestroyNode();
+				if (PinSnapshot.Pin->LinkedTo != PinSnapshot.LinkedTo)
+				{
+					return false;
+				}
 			}
 		}
-		Graph->NotifyGraphChanged();
-		return false;
+		FGraphSnapshot Restored;
+		return CaptureGraphSnapshot(Graph, Restored) && Restored.Digest == Snapshot.Digest;
 	}
 
 	TMap<FString, FEventHandlerReceipt>& Receipts()
@@ -309,11 +404,33 @@ namespace UEAINiagaraEventHandlerPrivate
 		return StaticEnum<EScriptExecutionMode>()->GetNameStringByValue(static_cast<int64>(Mode));
 	}
 
+	bool ValidateRequestOptions(
+		const FEventHandlerRequest& Request,
+		FString& OutErrorCode,
+		FString& OutError)
+	{
+		if (Request.MinSpawnNumber > Request.SpawnNumber)
+		{
+			OutErrorCode = TEXT("spawn_range_invalid");
+			OutError = TEXT("minSpawnNumber cannot exceed spawnNumber.");
+			return false;
+		}
+		if (Request.ExecutionMode != EScriptExecutionMode::SpawnedParticles
+			&& (Request.SpawnNumber != 0 || Request.MinSpawnNumber != 0 || Request.bRandomSpawnNumber))
+		{
+			OutErrorCode = TEXT("spawn_options_invalid");
+			OutError = TEXT("spawnNumber, minSpawnNumber, and randomSpawnNumber apply only to SpawnedParticles.");
+			return false;
+		}
+		return true;
+	}
+
 	bool ParseRequest(
 		const TSharedPtr<FJsonObject>& Params,
 		FEventHandlerRequest& OutRequest,
 		FString& OutErrorCode,
-		FString& OutError)
+		FString& OutError,
+		const bool bValidateCompleteOptions = true)
 	{
 		OutRequest = FEventHandlerRequest();
 		OutErrorCode.Reset();
@@ -401,12 +518,6 @@ namespace UEAINiagaraEventHandlerPrivate
 				MaxSpawnCount);
 			return false;
 		}
-		if (OutRequest.MinSpawnNumber > OutRequest.SpawnNumber)
-		{
-			OutErrorCode = TEXT("spawn_range_invalid");
-			OutError = TEXT("minSpawnNumber cannot exceed spawnNumber.");
-			return false;
-		}
 		if (Params->HasField(TEXT("randomSpawnNumber"))
 			&& !Params->TryGetBoolField(TEXT("randomSpawnNumber"), OutRequest.bRandomSpawnNumber))
 		{
@@ -421,14 +532,7 @@ namespace UEAINiagaraEventHandlerPrivate
 			OutError = TEXT("updateAttributeInitialValues must be a boolean.");
 			return false;
 		}
-		if (OutRequest.ExecutionMode != EScriptExecutionMode::SpawnedParticles
-			&& (OutRequest.SpawnNumber != 0 || OutRequest.MinSpawnNumber != 0 || OutRequest.bRandomSpawnNumber))
-		{
-			OutErrorCode = TEXT("spawn_options_invalid");
-			OutError = TEXT("spawnNumber, minSpawnNumber, and randomSpawnNumber apply only to SpawnedParticles.");
-			return false;
-		}
-		return true;
+		return !bValidateCompleteOptions || ValidateRequestOptions(OutRequest, OutErrorCode, OutError);
 	}
 
 	bool ResolveTarget(
@@ -643,7 +747,24 @@ namespace UEAINiagaraEventHandlerPrivate
 			if (Node && !SharedNodes.Contains(Node))
 			{
 				Node->Modify();
-				Node->DestroyNode();
+				for (UEdGraphPin* Pin : Node->Pins)
+				{
+					if (!Pin)
+					{
+						continue;
+					}
+					for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
+					{
+						if (LinkedPin)
+						{
+							LinkedPin->GetOwningNode()->Modify();
+						}
+					}
+					// Avoid reconstruction callbacks removing orphaned pins which
+					// the session receipt must retain for an exact graph restore.
+					Pin->BreakAllPinLinks(false);
+				}
+				Graph->RemoveNode(Node, false);
 			}
 		}
 		Graph->NotifyGraphChanged();
@@ -1266,7 +1387,7 @@ namespace UEAINiagaraEventHandlerPrivate
 		FString& OutError)
 	{
 		OutData = FEventHandlerPlanData();
-		if (!ParseRequest(Params, OutData.Request, OutErrorCode, OutError)
+		if (!ParseRequest(Params, OutData.Request, OutErrorCode, OutError, false)
 			|| !ResolveTarget(OutData.Request, OutData.Target, OutErrorCode, OutError))
 		{
 			return false;
@@ -1289,6 +1410,10 @@ namespace UEAINiagaraEventHandlerPrivate
 		if (!Params->HasField(TEXT("maxEventsPerFrame"))) OutData.Request.MaxEventsPerFrame = Existing->MaxEventsPerFrame;
 		if (!Params->HasField(TEXT("randomSpawnNumber"))) OutData.Request.bRandomSpawnNumber = Existing->bRandomSpawnNumber;
 		if (!Params->HasField(TEXT("updateAttributeInitialValues"))) OutData.Request.bUpdateAttributeInitialValues = Existing->UpdateAttributeInitialValues;
+		if (!ValidateRequestOptions(OutData.Request, OutErrorCode, OutError))
+		{
+			return false;
+		}
 		const UPackage* Package = OutData.Target.System->GetOutermost();
 		OutData.bBlocked = !Package || !Package->GetName().StartsWith(TEXT("/Game/"))
 			|| OutData.Target.Emitter->GetOutermost() != Package;
@@ -1385,19 +1510,54 @@ namespace UEAINiagaraEventHandlerPrivate
 			if (Data.Target.Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower) != Data.Target.EmitterChangeId) return ErrorResult(TEXT("The Niagara emitter changed after the plan was created; re-plan before applying."), TEXT("plan_digest_mismatch"), 409);
 			FNiagaraEventScriptProperties* Handler = FindHandler(Data.Target.Data, Data.Request.UsageId);
 			if (!Handler || !Handler->Script) return ErrorResult(TEXT("The event handler disappeared before apply."), TEXT("handler_not_found"), 404);
+			TMap<UPackage*, bool> PackageDirtyBefore;
+			for (UObject* Object : {static_cast<UObject*>(Data.Target.System), static_cast<UObject*>(Data.Target.Emitter),
+				static_cast<UObject*>(Data.Target.Graph), static_cast<UObject*>(Handler->Script)})
+			{
+				if (Object) PackageDirtyBefore.FindOrAdd(Object->GetOutermost(), Object->GetOutermost()->IsDirty());
+			}
 			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Update Niagara Event Handler")));
 			Data.Target.System->Modify(); Data.Target.Emitter->Modify();
 			FEventHandlerReceipt Receipt;
 			Receipt.BeforeProperties = *Handler;
 			Receipt.bHasBeforeProperties = true;
 			SetHandlerProperties(*Handler, Data.Request);
-			const FCompileSummary Compile = CompileHandler(Data.Target.System, Handler->Script);
-			const bool bReadBack = ReadBackMatches(Data.Target, Data.Request);
+			FCompileSummary Compile = CompileHandler(Data.Target.System, Handler->Script);
+			bool bReadBack = ReadBackMatches(Data.Target, Data.Request);
+#if WITH_DEV_AUTOMATION_TESTS
+			if (bFailNextUpdateCompileForTests)
+			{
+				Compile.bCompiled = false;
+				Compile.Status = TEXT("injectedUpdateCompileFailure");
+			}
+			if (bFailNextUpdateReadbackForTests) bReadBack = false;
+			bFailNextUpdateCompileForTests = false;
+			bFailNextUpdateReadbackForTests = false;
+#endif
 			if (!bReadBack || !Compile.bCompiled)
 			{
 				*Handler = Receipt.BeforeProperties;
-				Transaction.Cancel();
-				return ErrorResult(FString::Printf(TEXT("Event-handler update read-back or compilation failed (status=%s)."), *Compile.Status), !bReadBack ? TEXT("verification_failed") : TEXT("compile_failed"), 500);
+				const FCompileSummary RestoreCompile = CompileHandler(Data.Target.System, Receipt.BeforeProperties.Script);
+				const FEventHandlerRequest BeforeRequest = RequestFromProperties(Data.Target.System->GetPathName(),
+					Data.Target.EmitterName, Data.Request.UsageId, Receipt.BeforeProperties);
+				const FNiagaraEventScriptProperties* RestoredHandler = FindHandler(Data.Target.Data, Data.Request.UsageId);
+				const bool bRestored = RestoreCompile.bCompiled && RestoredHandler
+					&& RestoredHandler->Script == Receipt.BeforeProperties.Script
+					&& ReadBackMatches(Data.Target, BeforeRequest);
+				if (bRestored)
+				{
+					Transaction.Cancel();
+					for (const auto& PackageState : PackageDirtyBefore) PackageState.Key->SetDirtyFlag(PackageState.Value);
+				}
+				FMCPToolResult Failure = ErrorResult(FString::Printf(
+					TEXT("Event-handler update read-back or compilation failed (status=%s); %s"), *Compile.Status,
+					bRestored ? TEXT("the original properties and compilation were restored and verified.")
+						: TEXT("restoration was not verified; the transaction was retained for Editor Undo.")),
+					bRestored ? (!bReadBack ? TEXT("verification_failed") : TEXT("compile_failed")) : TEXT("restore_verification_failed"), 500);
+				Failure.Data = MakeShared<FJsonObject>();
+				Failure.Data->SetBoolField(TEXT("restorationVerified"), bRestored);
+				Failure.Data->SetBoolField(TEXT("restorationCompiled"), RestoreCompile.bCompiled);
+				return Failure;
 			}
 			Receipt.ReceiptId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
 			Receipt.RequestId = RequestId; Receipt.PlanDigest = Digest; Receipt.SystemPath = Data.Target.System->GetPathName();
@@ -1484,12 +1644,14 @@ namespace UEAINiagaraEventHandlerPrivate
 			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Remove Niagara Event Handler")));
 			Data.Target.System->Modify(); Data.Target.Emitter->Modify(); Data.Target.Graph->Modify();
 			FGraphSnapshot BeforeGraph;
-			if (!CaptureGraphSnapshot(Data.Target.Graph, BeforeGraph))
+			if (!CaptureGraphSnapshot(Data.Target.Graph, BeforeGraph)
+				|| !CanRestoreGraphSnapshot(Data.Target.Graph, BeforeGraph))
 			{
 				return ErrorResult(TEXT("The event-handler graph could not be snapshotted safely."), TEXT("graph_snapshot_failed"), 500);
 			}
 			FEventHandlerReceipt Receipt;
 			Receipt.BeforeProperties = *Handler; Receipt.bHasBeforeProperties = true;
+			Receipt.BeforeScript.Reset(Handler->Script);
 			const FString ScriptPath = Handler->Script->GetPathName();
 			const bool bGraphRemoved = RemoveEventGraph(Data.Target.Graph, Data.Request.UsageId);
 			Data.Target.Emitter->RemoveEventHandlerByUsageId(Data.Request.UsageId, Data.Target.EmitterVersion);
@@ -1497,10 +1659,10 @@ namespace UEAINiagaraEventHandlerPrivate
 			const bool bReadBack = bGraphRemoved && FindHandler(Data.Target.Data, Data.Request.UsageId) == nullptr;
 			if (!bReadBack || !Compile.bCompiled)
 			{
-				bool bGraphRestored = RestoreGraphSnapshot(Data.Target.Graph, BeforeGraph);
+				const bool bGraphRestored = RestoreGraphSnapshot(Data.Target.Graph, BeforeGraph);
 				if (!bGraphRestored || !HasEventGraph(Data.Target.Graph, Data.Request.UsageId))
 				{
-					bGraphRestored = CreateEventGraphOutput(Data.Target.Graph, Data.Request.UsageId) != nullptr;
+					return ErrorResult(TEXT("Event-handler removal failed and the original graph could not be restored; the transaction was retained for Editor Undo."), TEXT("restore_verification_failed"), 500);
 				}
 				if (!FindHandler(Data.Target.Data, Data.Request.UsageId))
 				{
@@ -1509,35 +1671,36 @@ namespace UEAINiagaraEventHandlerPrivate
 				Data.Target.Data = Data.Target.Emitter->GetEmitterData(Data.Target.EmitterVersion);
 				const FNiagaraEventScriptProperties* Restored = FindHandler(Data.Target.Data, Data.Request.UsageId);
 				const FCompileSummary RestoreCompile = CompileHandler(Data.Target.System, Restored ? Restored->Script : nullptr);
-				Transaction.Cancel();
 				if (!bGraphRestored || !HasEventGraph(Data.Target.Graph, Data.Request.UsageId) || !Restored || !RestoreCompile.bCompiled)
 				{
 					return ErrorResult(FString::Printf(TEXT("Event-handler removal read-back or compilation failed and restoration was not verified (status=%s)."), *Compile.Status), TEXT("restore_verification_failed"), 500);
 				}
+				Transaction.Cancel();
 				return ErrorResult(FString::Printf(TEXT("Event-handler removal read-back or compilation failed (status=%s); the graph was restored."), *Compile.Status), !bReadBack ? TEXT("verification_failed") : TEXT("compile_failed"), 500);
 			}
 			FGraphSnapshot AfterGraph;
 			if (!CaptureGraphSnapshot(Data.Target.Graph, AfterGraph))
 			{
-				bool bGraphRestored = RestoreGraphSnapshot(Data.Target.Graph, BeforeGraph);
+				const bool bGraphRestored = RestoreGraphSnapshot(Data.Target.Graph, BeforeGraph);
 				if (!bGraphRestored || !HasEventGraph(Data.Target.Graph, Data.Request.UsageId))
 				{
-					bGraphRestored = CreateEventGraphOutput(Data.Target.Graph, Data.Request.UsageId) != nullptr;
+					return ErrorResult(TEXT("The removal result could not be snapshotted and the original graph could not be restored; the transaction was retained for Editor Undo."), TEXT("restore_verification_failed"), 500);
 				}
 				Data.Target.Emitter->AddEventHandler(Receipt.BeforeProperties, Data.Target.EmitterVersion);
 				Data.Target.Data = Data.Target.Emitter->GetEmitterData(Data.Target.EmitterVersion);
 				const FNiagaraEventScriptProperties* Restored = FindHandler(Data.Target.Data, Data.Request.UsageId);
 				const FCompileSummary RestoreCompile = CompileHandler(Data.Target.System, Restored ? Restored->Script : nullptr);
-				Transaction.Cancel();
 				if (!bGraphRestored || !HasEventGraph(Data.Target.Graph, Data.Request.UsageId) || !Restored || !RestoreCompile.bCompiled)
 					return ErrorResult(TEXT("The event-handler removal result could not be snapshotted safely and restoration was not verified."), TEXT("restore_verification_failed"), 500);
+				Transaction.Cancel();
 				return ErrorResult(TEXT("The event-handler removal result could not be snapshotted safely; the graph was restored."), TEXT("graph_snapshot_failed"), 500);
 			}
 			Receipt.ReceiptId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower); Receipt.RequestId = RequestId; Receipt.PlanDigest = Digest;
 			Receipt.SystemPath = Data.Target.System->GetPathName(); Receipt.EmitterName = Data.Target.EmitterName; Receipt.EmitterPath = Data.Target.EmitterPath; Receipt.GraphPath = Data.Target.GraphPath;
 			Receipt.ScriptPath = ScriptPath; Receipt.EmitterVersion = Data.Target.EmitterVersion; Receipt.UsageId = Data.Request.UsageId;
 			Receipt.System = Data.Target.System; Receipt.Emitter = Data.Target.Emitter; Receipt.Graph = Data.Target.Graph; Receipt.EmitterChangeIdAfter = Data.Target.Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower);
-			Receipt.BeforeGraphExport = MoveTemp(BeforeGraph.Export); Receipt.GraphAfterDigest = AfterGraph.Digest; Receipt.BeforeGraphNodeCount = BeforeGraph.NodeCount; Receipt.bHasGraphSnapshot = true;
+			Receipt.BeforeGraphSnapshot = MakeShared<FGraphSnapshot>(MoveTemp(BeforeGraph));
+			Receipt.GraphAfterDigest = AfterGraph.Digest;
 			Receipt.Operation = TEXT("remove"); Receipt.bChanged = true; Receipt.bCompiled = Compile.bCompiled; Receipt.CompileStatus = Compile.Status;
 			Data.Target.System->MarkPackageDirty(); Receipts().Add(Receipt.ReceiptId, Receipt); RemoveRequestReceiptIds().Add(RequestId, Receipt.ReceiptId);
 			return FMCPToolResult::Ok(MakeResult(Receipt, false));
@@ -1560,37 +1723,31 @@ namespace UEAINiagaraEventHandlerPrivate
 			if (!System || !Emitter || !Graph || Emitter->GetChangeId().ToString(EGuidFormats::DigitsWithHyphensLower) != Receipt->EmitterChangeIdAfter) return ErrorResult(TEXT("The emitter changed after removal; rollback was refused."), TEXT("rollback_conflict"), 409);
 			FVersionedNiagaraEmitterData* Data = Emitter->GetEmitterData(Receipt->EmitterVersion);
 			if (FindHandler(Data, Receipt->UsageId) || HasEventGraph(Graph, Receipt->UsageId)) return ErrorResult(TEXT("The removed event handler identity is already in use."), TEXT("rollback_conflict"), 409);
-			if (!Receipt->bHasGraphSnapshot) return ErrorResult(TEXT("The event-handler removal receipt has no graph snapshot."), TEXT("rollback_conflict"), 409);
+			if (!Receipt->BeforeGraphSnapshot.IsValid()) return ErrorResult(TEXT("The event-handler removal receipt has no graph snapshot."), TEXT("rollback_conflict"), 409);
 			FGraphSnapshot CurrentGraph;
 			if (!CaptureGraphSnapshot(Graph, CurrentGraph) || CurrentGraph.Digest != Receipt->GraphAfterDigest)
 			{
 				return ErrorResult(TEXT("The event-handler graph changed after removal; rollback was refused."), TEXT("rollback_conflict"), 409);
 			}
-			FGraphSnapshot BeforeGraph;
-			BeforeGraph.Export = Receipt->BeforeGraphExport;
-			BeforeGraph.Digest = GraphSnapshotDigest(BeforeGraph.Export);
-			BeforeGraph.NodeCount = Receipt->BeforeGraphNodeCount;
-			BeforeGraph.bCaptured = true;
+			const FGraphSnapshot& BeforeGraph = *Receipt->BeforeGraphSnapshot;
+			if (!CanRestoreGraphSnapshot(Graph, BeforeGraph)
+				|| Receipt->BeforeScript.Get() != Receipt->BeforeProperties.Script)
+			{
+				return ErrorResult(TEXT("The retained event-handler nodes, pins, or script changed; rollback left the current graph and handler list unchanged."), TEXT("rollback_snapshot_invalid"), 409);
+			}
 			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Rollback Niagara Event Handler Removal")));
 			System->Modify(); Emitter->Modify(); Graph->Modify();
-			Emitter->AddEventHandler(Receipt->BeforeProperties, Receipt->EmitterVersion);
-			Data = Emitter->GetEmitterData(Receipt->EmitterVersion);
-			bool bGraphCreated = RestoreGraphSnapshot(Graph, BeforeGraph);
-			// Some Niagara graph node classes cannot be reconstructed by the
-			// generic text importer in a commandlet.  The event output is the
-			// stable authored boundary, so recreate it when the full snapshot
-			// importer leaves no usable event graph.  This keeps rollback
-			// deterministic while preserving the graph snapshot as the primary
-			// restoration path for editor-backed graphs.
+			const bool bGraphCreated = RestoreGraphSnapshot(Graph, BeforeGraph);
 			if (!bGraphCreated || !HasEventGraph(Graph, Receipt->UsageId))
 			{
-				bGraphCreated = CreateEventGraphOutput(Graph, Receipt->UsageId) != nullptr;
+				return ErrorResult(TEXT("The original event-handler graph was not restored completely; the transaction was retained for Editor Undo."), TEXT("rollback_verification_failed"), 500);
 			}
+			Emitter->AddEventHandler(Receipt->BeforeProperties, Receipt->EmitterVersion);
+			Data = Emitter->GetEmitterData(Receipt->EmitterVersion);
 			const FNiagaraEventScriptProperties* Restored = FindHandler(Data, Receipt->UsageId);
 			const FCompileSummary Compile = CompileHandler(System, Restored ? Restored->Script : nullptr);
 			if (!bGraphCreated || !HasEventGraph(Graph, Receipt->UsageId) || !Restored || !Compile.bCompiled)
 			{
-				Transaction.Cancel();
 				return ErrorResult(FString::Printf(TEXT("Event-handler removal rollback verification failed (graphRestored=%s graphPresent=%s handlerPresent=%s compiled=%s exportChars=%d nodes=%d)."),
 					bGraphCreated ? TEXT("true") : TEXT("false"),
 					HasEventGraph(Graph, Receipt->UsageId) ? TEXT("true") : TEXT("false"),
@@ -1598,6 +1755,8 @@ namespace UEAINiagaraEventHandlerPrivate
 					Compile.bCompiled ? TEXT("true") : TEXT("false"), BeforeGraph.Export.Len(), BeforeGraph.NodeCount), TEXT("rollback_verification_failed"), 500);
 			}
 			System->MarkPackageDirty(); Receipt->bRolledBack = true; Receipt->bCompiled = Compile.bCompiled; Receipt->CompileStatus = Compile.Status;
+			Receipt->BeforeGraphSnapshot.Reset();
+			Receipt->BeforeScript.Reset();
 			return FMCPToolResult::Ok(MakeResult(*Receipt, false));
 		}
 	};

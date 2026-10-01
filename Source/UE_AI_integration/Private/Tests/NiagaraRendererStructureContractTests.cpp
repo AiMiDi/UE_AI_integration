@@ -12,10 +12,12 @@
 #include "NiagaraEmitter.h"
 #include "NiagaraEmitterFactoryNew.h"
 #include "NiagaraRendererProperties.h"
+#include "NiagaraScriptSource.h"
 #include "NiagaraSpriteRendererProperties.h"
 #include "NiagaraSystem.h"
 #include "NiagaraSystemFactoryNew.h"
 #include "UObject/Package.h"
+#include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 #endif
 
 namespace UEAIIntegrationTools
@@ -118,7 +120,26 @@ bool FNiagaraRendererStructureContractTest::RunTest(const FString&)
 	{
 		return false;
 	}
-	UNiagaraSystemFactoryNew::InitializeSystem(System, true);
+	// Keep the renderer structure fixture self-contained; the optional Niagara
+	// DefaultAssets module is not mounted in the isolated HostProject.
+	UNiagaraSystemFactoryNew::InitializeSystem(System, false);
+	UNiagaraScript* SystemSpawnScript = System->GetSystemSpawnScript();
+	UNiagaraScript* SystemUpdateScript = System->GetSystemUpdateScript();
+	UNiagaraScriptSource* SystemSource = SystemSpawnScript
+		? Cast<UNiagaraScriptSource>(SystemSpawnScript->GetLatestSource())
+		: nullptr;
+	if (!SystemSpawnScript || !SystemUpdateScript || !SystemSource || !SystemSource->NodeGraph
+		|| !FNiagaraStackGraphUtilities::ResetGraphForOutput(
+			*SystemSource->NodeGraph,
+			ENiagaraScriptUsage::SystemSpawnScript,
+			SystemSpawnScript->GetUsageId())
+		|| !FNiagaraStackGraphUtilities::ResetGraphForOutput(
+			*SystemSource->NodeGraph,
+			ENiagaraScriptUsage::SystemUpdateScript,
+			SystemUpdateScript->GetUsageId()))
+	{
+		return false;
+	}
 	FAssetRegistryModule::AssetCreated(System);
 
 	UNiagaraEmitter* Emitter = NewObject<UNiagaraEmitter>(System);

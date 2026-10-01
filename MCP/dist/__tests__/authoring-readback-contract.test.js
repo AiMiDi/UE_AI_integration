@@ -300,4 +300,37 @@ test("keeps canonical handlers discoverable for the minimum Monolith parity fami
         }
     }
 });
+test("keeps Niagara spec help aligned with authored import and persistence boundaries", () => {
+    const { capabilities: catalog } = loadCatalogs();
+    for (const operation of ["export", "round_trip"]) {
+        const descriptor = catalog.get(`content.niagara.system.spec.${operation}`);
+        assert.ok(descriptor, `missing System spec ${operation}`);
+        assert.equal(capabilityIsReadOnly(descriptor), true);
+        assert.equal(descriptor.inputSchema.additionalProperties, false);
+        assert.ok(descriptor.inputSchema.properties.system);
+    }
+    const importer = catalog.get("content.niagara.system.spec.import");
+    assert.ok(importer);
+    assert.equal(capabilityIsReadOnly(importer), false);
+    assert.equal(importer.effects.asset, "write");
+    assert.deepEqual(importer.inputSchema.required, [
+        "system", "spec", "requestId", "confirmWrite",
+    ]);
+    const importProperties = importer.inputSchema.properties;
+    assert.equal(importProperties.confirmWrite.const, true);
+    assert.match(importer.description, /module input value\/binding\/dynamic-input trees/i);
+    assert.match(importer.description, /renderer properties/i);
+    assert.match(importer.description, /structure validation/i);
+    assert.match(importer.description, /omitted module sources clear/i);
+    assert.match(importer.description, /never saved implicitly/i);
+    const help = readFileSync(join(SKILL_ROOT, "ue-niagara-authoring", "SKILL.md"), "utf8");
+    for (const operation of ["export", "import", "round_trip"]) {
+        assert.ok(help.includes(`content.niagara.system.spec.${operation}`));
+    }
+    assert.match(help, /does not create, delete, or reorder emitters, renderers, or stack modules/i);
+    assert.match(help, /omitting every source field clears/i);
+    assert.match(help, /Omitting an entire input object is not a request to\s+clear/i);
+    assert.match(help, /never saved implicitly/i);
+    assert.match(help, /separate from package persistence, runtime particle behavior, and visual\s+acceptance/i);
+});
 //# sourceMappingURL=authoring-readback-contract.test.js.map
