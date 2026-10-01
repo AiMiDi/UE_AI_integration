@@ -26,11 +26,15 @@
 #include "NiagaraScript.h"
 #include "NiagaraScriptSource.h"
 #include "NiagaraSimulationStageBase.h"
+#include "NiagaraParameterBinding.h"
+#include "NiagaraScriptBase.h"
 #include "NiagaraSystem.h"
+#include "JsonObjectConverter.h"
 #include "Misc/PackageName.h"
 #include "Misc/SecureHash.h"
 #include "ScopedTransaction.h"
 #include "UObject/Package.h"
+#include "UObject/UnrealType.h"
 
 namespace UEAINiagaraSimulationStagePrivate
 {
@@ -52,6 +56,10 @@ namespace UEAINiagaraSimulationStagePrivate
 		FString StageName;
 		bool bEnabled = true;
 		int32 TargetIndex = INDEX_NONE;
+		TSharedPtr<FJsonObject> Properties;
+		TOptional<int32> NumIterations;
+		FString NumIterationsBinding;
+		bool bHasNumIterationsBinding = false;
 	};
 
 	struct FStageTarget
@@ -104,6 +112,9 @@ namespace UEAINiagaraSimulationStagePrivate
 		FName BeforeStageName;
 		bool bBeforeEnabled = true;
 		int32 BeforeIndex = INDEX_NONE;
+		TSharedPtr<FJsonObject> BeforeProperties;
+		FNiagaraParameterBindingWithValue BeforeNumIterations;
+		bool bHasBeforeNumIterations = false;
 		bool bHasBeforeState = false;
 		bool bChanged = false;
 		bool bCompiled = false;
@@ -255,6 +266,307 @@ namespace UEAINiagaraSimulationStagePrivate
 		return true;
 	}
 
+	const TSet<FName>& EditableGenericStageProperties()
+	{
+		static const TSet<FName> Names = {
+			TEXT("IterationSource"),
+			TEXT("ExecuteBehavior"),
+			TEXT("bDisablePartialParticleUpdate"),
+			TEXT("bParticleIterationStateEnabled"),
+			TEXT("ParticleIterationStateBinding"),
+			TEXT("ParticleIterationStateRange"),
+			TEXT("bGpuDispatchForceLinear"),
+			TEXT("bOverrideGpuDispatchNumThreads"),
+			TEXT("DirectDispatchType"),
+			TEXT("DirectDispatchElementType"),
+			TEXT("OverrideGpuDispatchNumThreadsX"),
+			TEXT("OverrideGpuDispatchNumThreadsY"),
+			TEXT("OverrideGpuDispatchNumThreadsZ"),
+			TEXT("ElementCountX"),
+			TEXT("ElementCountY"),
+			TEXT("ElementCountZ"),
+			TEXT("DataInterface")
+		};
+		return Names;
+	}
+
+	FName ResolveGenericStagePropertyName(const FString& JsonName)
+	{
+		static const TMap<FString, FName> Names = {
+			{TEXT("iterationSource"), TEXT("IterationSource")},
+			{TEXT("executeBehavior"), TEXT("ExecuteBehavior")},
+			{TEXT("disablePartialParticleUpdate"), TEXT("bDisablePartialParticleUpdate")},
+			{TEXT("particleIterationStateEnabled"), TEXT("bParticleIterationStateEnabled")},
+			{TEXT("particleIterationStateBinding"), TEXT("ParticleIterationStateBinding")},
+			{TEXT("particleIterationStateRange"), TEXT("ParticleIterationStateRange")},
+			{TEXT("gpuDispatchForceLinear"), TEXT("bGpuDispatchForceLinear")},
+			{TEXT("overrideGpuDispatchNumThreads"), TEXT("bOverrideGpuDispatchNumThreads")},
+			{TEXT("directDispatchType"), TEXT("DirectDispatchType")},
+			{TEXT("directDispatchElementType"), TEXT("DirectDispatchElementType")},
+			{TEXT("overrideGpuDispatchNumThreadsX"), TEXT("OverrideGpuDispatchNumThreadsX")},
+			{TEXT("overrideGpuDispatchNumThreadsY"), TEXT("OverrideGpuDispatchNumThreadsY")},
+			{TEXT("overrideGpuDispatchNumThreadsZ"), TEXT("OverrideGpuDispatchNumThreadsZ")},
+			{TEXT("elementCountX"), TEXT("ElementCountX")},
+			{TEXT("elementCountY"), TEXT("ElementCountY")},
+			{TEXT("elementCountZ"), TEXT("ElementCountZ")},
+			{TEXT("dataInterface"), TEXT("DataInterface")}
+		};
+		if (const FName* Name = Names.Find(JsonName)) return *Name;
+		return NAME_None;
+	}
+
+	FString GenericStagePropertyJsonKey(const FName& PropertyName)
+	{
+		for (const TPair<FString, FName>& Pair : {
+			TPair<FString, FName>(TEXT("iterationSource"), TEXT("IterationSource")),
+			TPair<FString, FName>(TEXT("executeBehavior"), TEXT("ExecuteBehavior")),
+			TPair<FString, FName>(TEXT("disablePartialParticleUpdate"), TEXT("bDisablePartialParticleUpdate")),
+			TPair<FString, FName>(TEXT("particleIterationStateEnabled"), TEXT("bParticleIterationStateEnabled")),
+			TPair<FString, FName>(TEXT("particleIterationStateBinding"), TEXT("ParticleIterationStateBinding")),
+			TPair<FString, FName>(TEXT("particleIterationStateRange"), TEXT("ParticleIterationStateRange")),
+			TPair<FString, FName>(TEXT("gpuDispatchForceLinear"), TEXT("bGpuDispatchForceLinear")),
+			TPair<FString, FName>(TEXT("overrideGpuDispatchNumThreads"), TEXT("bOverrideGpuDispatchNumThreads")),
+			TPair<FString, FName>(TEXT("directDispatchType"), TEXT("DirectDispatchType")),
+			TPair<FString, FName>(TEXT("directDispatchElementType"), TEXT("DirectDispatchElementType")),
+			TPair<FString, FName>(TEXT("overrideGpuDispatchNumThreadsX"), TEXT("OverrideGpuDispatchNumThreadsX")),
+			TPair<FString, FName>(TEXT("overrideGpuDispatchNumThreadsY"), TEXT("OverrideGpuDispatchNumThreadsY")),
+			TPair<FString, FName>(TEXT("overrideGpuDispatchNumThreadsZ"), TEXT("OverrideGpuDispatchNumThreadsZ")),
+			TPair<FString, FName>(TEXT("elementCountX"), TEXT("ElementCountX")),
+			TPair<FString, FName>(TEXT("elementCountY"), TEXT("ElementCountY")),
+			TPair<FString, FName>(TEXT("elementCountZ"), TEXT("ElementCountZ")),
+			TPair<FString, FName>(TEXT("dataInterface"), TEXT("DataInterface"))})
+		{
+			if (Pair.Value == PropertyName) return Pair.Key;
+		}
+		return PropertyName.ToString();
+	}
+
+	bool CaptureGenericStageProperties(
+		UNiagaraSimulationStageBase* Stage,
+		TSharedPtr<FJsonObject>& OutProperties)
+	{
+		OutProperties.Reset();
+		UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage);
+		if (!Generic)
+		{
+			return true;
+		}
+		OutProperties = MakeShared<FJsonObject>();
+		for (const FName& Name : EditableGenericStageProperties())
+		{
+			FProperty* Property = Generic->GetClass()->FindPropertyByName(Name);
+			if (!Property)
+			{
+				return false;
+			}
+			void* Value = Property->ContainerPtrToValuePtr<void>(Generic);
+			TSharedPtr<FJsonValue> JsonValue = FJsonObjectConverter::UPropertyToJsonValue(Property, Value);
+			if (!JsonValue.IsValid())
+			{
+				return false;
+			}
+			OutProperties->SetField(GenericStagePropertyJsonKey(Name), JsonValue);
+		}
+		return true;
+	}
+
+	bool GenericStagePropertiesMatch(
+		UNiagaraSimulationStageBase* Stage,
+		const TSharedPtr<FJsonObject>& Expected)
+	{
+		if (!Expected.IsValid())
+		{
+			return true;
+		}
+		TSharedPtr<FJsonObject> Actual;
+		if (!CaptureGenericStageProperties(Stage, Actual) || !Actual.IsValid())
+		{
+			return false;
+		}
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Entry : Expected->Values)
+		{
+			const TSharedPtr<FJsonValue>* ActualValue = Actual->Values.Find(Entry.Key);
+			if (!ActualValue || !Entry.Value.IsValid() || !(*ActualValue).IsValid())
+			{
+				return false;
+			}
+			TSharedRef<FJsonObject> ExpectedObject = MakeShared<FJsonObject>();
+			TSharedRef<FJsonObject> ActualObject = MakeShared<FJsonObject>();
+			ExpectedObject->SetField(TEXT("value"), Entry.Value);
+			ActualObject->SetField(TEXT("value"), *ActualValue);
+			FString ExpectedDigest;
+			FString ActualDigest;
+			if (!TryDigestJson(ExpectedObject, ExpectedDigest) || !TryDigestJson(ActualObject, ActualDigest)
+				|| ExpectedDigest != ActualDigest)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool ApplyGenericStageProperties(
+		UNiagaraSimulationStageBase* Stage,
+		const TSharedPtr<FJsonObject>& Properties,
+		FString& OutError)
+	{
+		if (!Properties.IsValid())
+		{
+			return true;
+		}
+		UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage);
+		if (!Generic)
+		{
+			OutError = TEXT("properties are only supported for NiagaraSimulationStageGeneric.");
+			return false;
+		}
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Entry : Properties->Values)
+		{
+			const FName PropertyName = ResolveGenericStagePropertyName(Entry.Key);
+			if (!EditableGenericStageProperties().Contains(PropertyName))
+			{
+				OutError = FString::Printf(TEXT("Simulation-stage property '%s' is not editable."), *Entry.Key);
+				return false;
+			}
+			FProperty* Property = Generic->GetClass()->FindPropertyByName(PropertyName);
+			if (!Property || !Entry.Value.IsValid())
+			{
+				OutError = FString::Printf(TEXT("Simulation-stage property '%s' is invalid."), *Entry.Key);
+				return false;
+			}
+			void* Value = Property->ContainerPtrToValuePtr<void>(Generic);
+			if (!FJsonObjectConverter::JsonValueToUProperty(Entry.Value, Property, Value, 0, 0))
+			{
+				OutError = FString::Printf(TEXT("Simulation-stage property '%s' has an invalid value."), *Entry.Key);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool ApplyStageRequestProperties(
+		UNiagaraSimulationStageBase* Stage,
+		const FStageRequest& Request,
+		FString& OutError)
+	{
+		if (!ApplyGenericStageProperties(Stage, Request.Properties, OutError))
+		{
+			return false;
+		}
+		UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage);
+		if (!Generic)
+		{
+			if (Request.NumIterations.IsSet() || Request.bHasNumIterationsBinding)
+			{
+				OutError = TEXT("numIterations and numIterationsBinding require NiagaraSimulationStageGeneric.");
+				return false;
+			}
+			return true;
+		}
+		if (Request.NumIterations.IsSet() || Request.bHasNumIterationsBinding)
+		{
+			int32 DefaultIterations = 1;
+			if (Generic->NumIterations.GetDefaultValueArray().Num() == sizeof(int32))
+			{
+				DefaultIterations = Generic->NumIterations.GetDefaultValue<int32>();
+			}
+			if (Request.NumIterations.IsSet())
+			{
+				DefaultIterations = Request.NumIterations.GetValue();
+			}
+			const FNiagaraTypeDefinition IntType = FNiagaraTypeDefinition::GetIntDef();
+			const FName BindingName = Request.bHasNumIterationsBinding
+				? FName(*Request.NumIterationsBinding)
+				: Generic->NumIterations.ResolvedParameter.GetName();
+			if (BindingName.IsNone())
+			{
+				Generic->NumIterations.SetDefaultParameter(IntType, DefaultIterations);
+			}
+			else
+			{
+				Generic->NumIterations.SetDefaultParameter(BindingName, IntType, DefaultIterations);
+			}
+		}
+		return true;
+	}
+
+	bool RestoreCapturedStageProperties(
+		UNiagaraSimulationStageBase* Stage,
+		const TSharedPtr<FJsonObject>& Properties,
+		const FNiagaraParameterBindingWithValue* BeforeNumIterations,
+		bool bHasBeforeNumIterations,
+		FString& OutError)
+	{
+		if (!ApplyGenericStageProperties(Stage, Properties, OutError))
+		{
+			return false;
+		}
+		if (bHasBeforeNumIterations)
+		{
+			UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage);
+			if (!Generic || !BeforeNumIterations)
+			{
+				OutError = TEXT("The captured NumIterations state is incompatible with the current simulation stage class.");
+				return false;
+			}
+			Generic->NumIterations = *BeforeNumIterations;
+		}
+		return true;
+	}
+
+	bool ParseGenericStageProperties(
+		const TSharedPtr<FJsonObject>& Params,
+		FStageRequest& Request,
+		FString& OutCode,
+		FString& OutError)
+	{
+		if (Params->HasField(TEXT("properties")))
+		{
+			const TSharedPtr<FJsonObject>* Properties = nullptr;
+			if (!Params->TryGetObjectField(TEXT("properties"), Properties) || !Properties || !Properties->IsValid())
+			{
+				OutCode = TEXT("properties_invalid");
+				OutError = TEXT("properties must be an object of supported Generic Simulation Stage fields.");
+				return false;
+			}
+			Request.Properties = *Properties;
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Entry : Request.Properties->Values)
+			{
+				if (!EditableGenericStageProperties().Contains(ResolveGenericStagePropertyName(Entry.Key)))
+				{
+					OutCode = TEXT("property_unsupported");
+					OutError = FString::Printf(TEXT("Simulation-stage property '%s' is not editable."), *Entry.Key);
+					return false;
+				}
+			}
+		}
+		if (Params->HasField(TEXT("numIterations")))
+		{
+			double Number = 0.0;
+			if (!Params->TryGetNumberField(TEXT("numIterations"), Number)
+				|| !FMath::IsFinite(Number) || Number < 0.0 || Number > 65535.0
+				|| Number != FMath::FloorToDouble(Number))
+			{
+				OutCode = TEXT("num_iterations_invalid");
+				OutError = TEXT("numIterations must be an integer from 0 to 65535.");
+				return false;
+			}
+			Request.NumIterations = static_cast<int32>(Number);
+		}
+		if (Params->HasField(TEXT("numIterationsBinding")))
+		{
+			if (!Params->TryGetStringField(TEXT("numIterationsBinding"), Request.NumIterationsBinding)
+				|| Request.NumIterationsBinding.Len() > MaxPathCharacters)
+			{
+				OutCode = TEXT("num_iterations_binding_invalid");
+				OutError = TEXT("numIterationsBinding must be a bounded parameter name.");
+				return false;
+			}
+			Request.bHasNumIterationsBinding = true;
+		}
+		return true;
+	}
+
 	bool ParseRequest(const TSharedPtr<FJsonObject>& Params, FStageRequest& OutRequest, FString& OutCode,
 	                  FString& OutError)
 	{
@@ -327,6 +639,10 @@ namespace UEAINiagaraSimulationStagePrivate
 		{
 			OutCode = TEXT("index_invalid");
 			OutError = FString::Printf(TEXT("index must be an integer from 0 to %d."), MaxStageIndex);
+			return false;
+		}
+		if (!ParseGenericStageProperties(Params, OutRequest, OutCode, OutError))
+		{
 			return false;
 		}
 		return true;
@@ -583,12 +899,35 @@ namespace UEAINiagaraSimulationStagePrivate
 	bool ReadBackMatches(const FStageTarget& Target, const FStageRequest& Request)
 	{
 		UNiagaraSimulationStageBase* Stage = FindStage(Target.Data, Request.UsageId);
-		return Stage && Stage->Script && Stage->Script->GetUsage() == ENiagaraScriptUsage::ParticleSimulationStageScript
-			&& Stage->SimulationStageName == FName(*Request.StageName)
-			&& Stage->bEnabled == Request.bEnabled
-			&& Stage->GetClass()->GetPathName() == Request.StageClassPath
-			&& (Request.TargetIndex == INDEX_NONE || FindStageIndex(Target.Data, Stage) == Request.TargetIndex)
-			&& HasStageOutput(Target.Graph, Request.UsageId);
+		if (!Stage || !Stage->Script || Stage->Script->GetUsage() != ENiagaraScriptUsage::ParticleSimulationStageScript)
+		{
+			return false;
+		}
+		if (Stage->SimulationStageName != FName(*Request.StageName)
+			|| Stage->bEnabled != Request.bEnabled
+			|| Stage->GetClass()->GetPathName() != Request.StageClassPath
+			|| (Request.TargetIndex != INDEX_NONE && FindStageIndex(Target.Data, Stage) != Request.TargetIndex)
+			|| !HasStageOutput(Target.Graph, Request.UsageId))
+		{
+			return false;
+		}
+		const UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage);
+		if (Request.NumIterations.IsSet()
+			&& (!Generic || Generic->NumIterations.GetDefaultValueArray().Num() != sizeof(int32)
+				|| Generic->NumIterations.GetDefaultValue<int32>() != Request.NumIterations.GetValue()))
+		{
+			return false;
+		}
+		if (Request.bHasNumIterationsBinding
+			&& (!Generic || Generic->NumIterations.ResolvedParameter.GetName() != FName(*Request.NumIterationsBinding)))
+		{
+			return false;
+		}
+		if (!GenericStagePropertiesMatch(const_cast<UNiagaraSimulationStageBase*>(Stage), Request.Properties))
+		{
+			return false;
+		}
+		return true;
 	}
 
 	TSharedRef<FJsonObject> BuildPlanJson(const FStagePlanData& Data)
@@ -611,6 +950,9 @@ namespace UEAINiagaraSimulationStagePrivate
 		Plan->SetStringField(TEXT("name"), Request.StageName);
 		Plan->SetBoolField(TEXT("enabled"), Request.bEnabled);
 		Plan->SetNumberField(TEXT("index"), Request.TargetIndex == INDEX_NONE ? -1 : Request.TargetIndex);
+		if (Request.Properties.IsValid()) Plan->SetObjectField(TEXT("properties"), Request.Properties);
+		if (Request.NumIterations.IsSet()) Plan->SetNumberField(TEXT("numIterations"), Request.NumIterations.GetValue());
+		if (Request.bHasNumIterationsBinding) Plan->SetStringField(TEXT("numIterationsBinding"), Request.NumIterationsBinding);
 		Plan->SetBoolField(TEXT("editable"), !Data.bBlocked);
 		Plan->SetBoolField(TEXT("blocked"), Data.bBlocked);
 		Plan->SetBoolField(TEXT("changesState"), !Data.bBlocked);
@@ -699,6 +1041,33 @@ namespace UEAINiagaraSimulationStagePrivate
 		Result->SetStringField(TEXT("compileStatus"), Receipt.CompileStatus);
 		Result->SetBoolField(TEXT("rolledBack"), Receipt.bRolledBack);
 		Result->SetBoolField(TEXT("idempotentReplay"), bReplay);
+		if (Receipt.BeforeProperties.IsValid())
+		{
+			Result->SetObjectField(TEXT("beforeProperties"), Receipt.BeforeProperties);
+		}
+		if (Receipt.bHasBeforeNumIterations
+			&& Receipt.BeforeNumIterations.GetDefaultValueArray().Num() == sizeof(int32))
+		{
+			Result->SetNumberField(TEXT("beforeNumIterations"), Receipt.BeforeNumIterations.GetDefaultValue<int32>());
+			Result->SetStringField(TEXT("beforeNumIterationsBinding"), Receipt.BeforeNumIterations.ResolvedParameter.GetName().ToString());
+		}
+		if (const UNiagaraSimulationStageBase* Stage = Receipt.Stage.Get())
+		{
+			TSharedPtr<FJsonObject> CurrentProperties;
+			if (CaptureGenericStageProperties(const_cast<UNiagaraSimulationStageBase*>(Stage), CurrentProperties)
+				&& CurrentProperties.IsValid())
+			{
+				Result->SetObjectField(TEXT("properties"), CurrentProperties);
+			}
+			if (const UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage))
+			{
+				if (Generic->NumIterations.GetDefaultValueArray().Num() == sizeof(int32))
+				{
+					Result->SetNumberField(TEXT("numIterations"), Generic->NumIterations.GetDefaultValue<int32>());
+				}
+				Result->SetStringField(TEXT("numIterationsBinding"), Generic->NumIterations.ResolvedParameter.GetName().ToString());
+			}
+		}
 		Result->SetStringField(TEXT("rollbackDurability"), TEXT("session"));
 		Result->SetStringField(
 			TEXT("scope"), TEXT("authored simulation stage; GPU execution and runtime behavior unverified"));
@@ -762,6 +1131,19 @@ namespace UEAINiagaraSimulationStagePrivate
 				Before->SetStringField(TEXT("name"), Existing->SimulationStageName.ToString());
 				Before->SetBoolField(TEXT("enabled"), Existing->bEnabled);
 				Before->SetNumberField(TEXT("index"), FindStageIndex(Data.Target.Data, Existing));
+				TSharedPtr<FJsonObject> ExistingProperties;
+				if (CaptureGenericStageProperties(Existing, ExistingProperties) && ExistingProperties.IsValid())
+				{
+					Before->SetObjectField(TEXT("properties"), ExistingProperties);
+				}
+				if (const UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Existing))
+				{
+					if (Generic->NumIterations.GetDefaultValueArray().Num() == sizeof(int32))
+					{
+						Before->SetNumberField(TEXT("numIterations"), Generic->NumIterations.GetDefaultValue<int32>());
+					}
+					Before->SetStringField(TEXT("numIterationsBinding"), Generic->NumIterations.ResolvedParameter.GetName().ToString());
+				}
 			}
 			if (After.IsValid() && !FString(Action).Equals(TEXT("Remove")))
 			{
@@ -769,6 +1151,18 @@ namespace UEAINiagaraSimulationStagePrivate
 				After->SetStringField(TEXT("name"), Data.Request.StageName);
 				After->SetBoolField(TEXT("enabled"), Data.Request.bEnabled);
 				After->SetNumberField(TEXT("index"), Data.Request.TargetIndex);
+				if (Data.Request.Properties.IsValid())
+				{
+					After->SetObjectField(TEXT("properties"), Data.Request.Properties);
+				}
+				if (Data.Request.NumIterations.IsSet())
+				{
+					After->SetNumberField(TEXT("numIterations"), Data.Request.NumIterations.GetValue());
+				}
+				if (Data.Request.bHasNumIterationsBinding)
+				{
+					After->SetStringField(TEXT("numIterationsBinding"), Data.Request.NumIterationsBinding);
+				}
 			}
 		}
 		return Plan;
@@ -803,6 +1197,19 @@ namespace UEAINiagaraSimulationStagePrivate
 				Row->SetStringField(TEXT("script"), Stage->Script->GetPathName());
 				Row->SetBoolField(TEXT("graphPresent"), HasStageOutput(Target.Graph, Stage->Script->GetUsageId()));
 				Row->SetNumberField(TEXT("index"), Index);
+				if (const UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage))
+				{
+					if (Generic->NumIterations.GetDefaultValueArray().Num() == sizeof(int32))
+					{
+						Row->SetNumberField(TEXT("numIterations"), Generic->NumIterations.GetDefaultValue<int32>());
+					}
+					Row->SetStringField(TEXT("numIterationsBinding"), Generic->NumIterations.ResolvedParameter.GetName().ToString());
+					TSharedPtr<FJsonObject> Properties;
+					if (CaptureGenericStageProperties(Stage, Properties) && Properties.IsValid())
+					{
+						Row->SetObjectField(TEXT("properties"), Properties);
+					}
+				}
 				Rows.Add(MakeShared<FJsonValueObject>(Row));
 			}
 			TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
@@ -909,10 +1316,24 @@ namespace UEAINiagaraSimulationStagePrivate
 			Receipt.BeforeStageName = Stage->SimulationStageName;
 			Receipt.bBeforeEnabled = Stage->bEnabled;
 			Receipt.BeforeIndex = FindStageIndex(Data.Target.Data, Stage);
+			if (!CaptureGenericStageProperties(Stage, Receipt.BeforeProperties))
+			{
+				return ErrorResult(TEXT("The simulation-stage properties could not be snapshotted."), TEXT("snapshot_failed"), 500);
+			}
+			if (const UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage))
+			{
+				Receipt.BeforeNumIterations = Generic->NumIterations;
+				Receipt.bHasBeforeNumIterations = true;
+			}
 			Receipt.bHasBeforeState = true;
 			Stage->Modify();
 			Stage->SimulationStageName = FName(*Data.Request.StageName);
 			Stage->bEnabled = Data.Request.bEnabled;
+			if (!ApplyStageRequestProperties(Stage, Data.Request, Error))
+			{
+				Transaction.Cancel();
+				return ErrorResult(Error, TEXT("property_invalid"), 422);
+			}
 			if (Data.Request.TargetIndex != INDEX_NONE)
 			{
 				Data.Target.Emitter->MoveSimulationStageToIndex(Stage, Data.Request.TargetIndex, Data.Target.EmitterVersion);
@@ -923,6 +1344,18 @@ namespace UEAINiagaraSimulationStagePrivate
 			{
 				Stage->SimulationStageName = Receipt.BeforeStageName;
 				Stage->bEnabled = Receipt.bBeforeEnabled;
+				FString RestoreError;
+				const bool bRestoredProperties = RestoreCapturedStageProperties(
+					Stage,
+					Receipt.BeforeProperties,
+					&Receipt.BeforeNumIterations,
+					Receipt.bHasBeforeNumIterations,
+					RestoreError);
+				if (!bRestoredProperties)
+				{
+					Transaction.Cancel();
+					return ErrorResult(RestoreError, TEXT("restore_failed"), 500);
+				}
 				if (Receipt.BeforeIndex != INDEX_NONE)
 				{
 					Data.Target.Emitter->MoveSimulationStageToIndex(Stage, Receipt.BeforeIndex, Data.Target.EmitterVersion);
@@ -1000,16 +1433,30 @@ namespace UEAINiagaraSimulationStagePrivate
 			Stage->Modify();
 			Stage->SimulationStageName = Receipt->BeforeStageName;
 			Stage->bEnabled = Receipt->bBeforeEnabled;
+		FString RestoreError;
+		if (!RestoreCapturedStageProperties(
+			Stage,
+			Receipt->BeforeProperties,
+			&Receipt->BeforeNumIterations,
+			Receipt->bHasBeforeNumIterations,
+			RestoreError))
+		{
+			return ErrorResult(RestoreError, TEXT("rollback_restore_failed"), 500);
+		}
 			if (Receipt->BeforeIndex != INDEX_NONE)
 			{
 				Emitter->MoveSimulationStageToIndex(Stage, Receipt->BeforeIndex, Receipt->EmitterVersion);
 			}
 			const FCompileSummary Compile = CompileStage(System, Stage->Script);
 			FVersionedNiagaraEmitterData* Data = Emitter->GetEmitterData(Receipt->EmitterVersion);
+			const UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage);
 			const bool bReadBack = FindStage(Data, Receipt->UsageId) == Stage
 				&& Stage->SimulationStageName == Receipt->BeforeStageName
 				&& Stage->bEnabled == Receipt->bBeforeEnabled
-				&& FindStageIndex(Data, Stage) == Receipt->BeforeIndex;
+				&& FindStageIndex(Data, Stage) == Receipt->BeforeIndex
+				&& (!Receipt->bHasBeforeNumIterations
+					|| (Generic && Generic->NumIterations == Receipt->BeforeNumIterations))
+				&& GenericStagePropertiesMatch(Stage, Receipt->BeforeProperties);
 			if (!bReadBack || !Compile.bCompiled)
 			{
 				return ErrorResult(TEXT("Simulation-stage update rollback verification failed."), TEXT("rollback_verification_failed"), 500);
@@ -1362,6 +1809,11 @@ namespace UEAINiagaraSimulationStagePrivate
 			Stage->Script->SetUsage(ENiagaraScriptUsage::ParticleSimulationStageScript);
 			Stage->Script->SetUsageId(Data.Request.UsageId);
 			Stage->Script->SetLatestSource(Data.Target.Source);
+			if (!ApplyStageRequestProperties(Stage, Data.Request, Error))
+			{
+				Transaction.Cancel();
+				return ErrorResult(Error, TEXT("property_invalid"), 422);
+			}
 			Data.Target.Emitter->AddSimulationStage(Stage, Data.Target.EmitterVersion);
 			if (Data.Request.TargetIndex != INDEX_NONE)
 				Data.Target.Emitter->MoveSimulationStageToIndex(

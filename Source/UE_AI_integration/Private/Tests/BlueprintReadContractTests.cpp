@@ -879,6 +879,15 @@ bool FBlueprintAssetReferencesAmbiguityContractTest::RunTest(const FString&)
 	TestEqual(TEXT("Object-path input is normalized to the target package"),
 		Result.Data->GetStringField(TEXT("targetPackagePath")),
 		Fixture.TargetPackageName);
+	TestEqual(TEXT("Object-path input retains an exact target identity"),
+		Result.Data->GetStringField(TEXT("targetIdentity")),
+		FAssetIdentifier::FromString(Fixture.TargetPrimary->GetPathName()).ToString());
+	TestTrue(TEXT("Object-path input attempts exact object resolution"),
+		Result.Data->GetBoolField(TEXT("exactObjectQueryAttempted")));
+	TestTrue(TEXT("Exact object referencer evidence is available"),
+		Result.Data->GetBoolField(TEXT("exactObjectReferenceAvailable")));
+	TestTrue(TEXT("Exact object referencer list is present"),
+		Result.Data->HasField(TEXT("exactObjectReferencers")));
 	TestEqual(TEXT("Exactly one source package references the target package"),
 		Result.Data->GetIntegerField(TEXT("totalReferencers")), 1);
 	TestEqual(TEXT("One source package is classified as a Blueprint referencer"),
@@ -928,6 +937,10 @@ bool FBlueprintAssetReferencesAmbiguityContractTest::RunTest(const FString&)
 			Record->GetStringField(TEXT("sourceObjectPath")).IsEmpty());
 		TestFalse(TEXT("Candidate source identity is present"),
 			Record->GetStringField(TEXT("sourceIdentity")).IsEmpty());
+		TestFalse(TEXT("Candidate Asset Registry identity is present"),
+			Record->GetStringField(TEXT("sourceAssetIdentifier")).IsEmpty());
+		TestTrue(TEXT("Candidate reports exact-object matching state"),
+			Record->HasField(TEXT("sourceObjectReferenceExact")));
 		CandidateObjectPaths.Add(
 			Record->GetStringField(TEXT("sourceObjectPath")));
 	}
@@ -986,9 +999,13 @@ bool FBlueprintRuntimeAcceptanceContractTest::RunTest(const FString&)
 		Result.Data->GetBoolField(TEXT("compiled")));
 	TestFalse(TEXT("A non-PIE fixture never claims runtime verification"),
 		Result.Data->GetBoolField(TEXT("runtimeVerified")));
-	TestEqual(TEXT("No runtime instance has a stable reason"),
+	TestEqual(TEXT("No runtime world has a stable reason"),
 		Result.Data->GetStringField(TEXT("runtimeVerificationReason")),
-		FString(TEXT("no_pie_instance_observed")));
+		FString(TEXT("no_runtime_world")));
+	TestEqual(TEXT("No runtime world is counted"),
+		Result.Data->GetIntegerField(TEXT("runtimeWorldCount")), 0);
+	TestFalse(TEXT("No runtime instance has complete identity"),
+		Result.Data->GetBoolField(TEXT("instanceIdentityComplete")));
 	return true;
 }
 
@@ -1079,9 +1096,19 @@ bool FBlueprintRuntimeInstanceAcceptanceContractTest::RunTest(const FString&)
 		Result.Data->GetBoolField(TEXT("runtimeVerified")));
 	TestEqual(TEXT("Runtime-instance query counts the spawned actor"),
 		Result.Data->GetIntegerField(TEXT("instanceCount")), 1);
-	TestEqual(TEXT("Runtime-instance query reports a PIE-compatible reason"),
+	TestEqual(TEXT("Runtime-instance query reports a runtime reason"),
 		Result.Data->GetStringField(TEXT("runtimeVerificationReason")),
-		FString(TEXT("pie_instance_observed")));
+		FString(TEXT("runtime_instance_observed")));
+	TestEqual(TEXT("Runtime-instance query counts the isolated game world"),
+		Result.Data->GetIntegerField(TEXT("runtimeWorldCount")), 1);
+	TestEqual(TEXT("Runtime-instance query identifies the game world"),
+		Result.Data->GetStringField(TEXT("worldType")),
+		FString(TEXT("game")));
+	TestEqual(TEXT("Runtime-instance query reports the instance class"),
+		Result.Data->GetStringField(TEXT("instanceClass")),
+		SpawnedActor->GetClass()->GetPathName());
+	TestTrue(TEXT("Runtime-instance query reports complete instance identity"),
+		Result.Data->GetBoolField(TEXT("instanceIdentityComplete")));
 	TestEqual(TEXT("Runtime-instance query reports the generated actor"),
 		Result.Data->GetStringField(TEXT("instance")),
 		SpawnedActor->GetPathName());

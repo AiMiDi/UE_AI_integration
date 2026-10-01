@@ -3,6 +3,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "EditorAssetLibrary.h"
 #include "Infrastructure/MaterialAssetHelpers.h"
+#include "Infrastructure/MaterialGraphIdentity.h"
 #include "Infrastructure/MCPToolHelpers.h"
 #include "Infrastructure/Sha256.h"
 #include "MaterialGraph/MaterialGraph.h"
@@ -146,7 +147,9 @@ TSharedRef<FJsonObject> MaterialRestoreParams(
 	const FString& SnapshotId,
 	const FString& ExpectedCurrentDigest,
 	const bool bDryRun,
-	const TOptional<bool>& Save = TOptional<bool>())
+	const TOptional<bool>& Save = TOptional<bool>(),
+	const TOptional<FString>& RestoreMode = TOptional<FString>(),
+	const bool bConfirmFullGraphRestore = false)
 {
 	auto Params = MaterialDiffParams(Material, SnapshotId);
 	Params->SetStringField(
@@ -155,6 +158,14 @@ TSharedRef<FJsonObject> MaterialRestoreParams(
 	if (Save.IsSet())
 	{
 		Params->SetBoolField(TEXT("save"), Save.GetValue());
+	}
+	if (RestoreMode.IsSet())
+	{
+		Params->SetStringField(TEXT("restoreMode"), RestoreMode.GetValue());
+	}
+	if (bConfirmFullGraphRestore)
+	{
+		Params->SetBoolField(TEXT("confirmFullGraphRestore"), true);
 	}
 	return Params;
 }
@@ -310,9 +321,9 @@ bool FMaterialGraphRestoreContractTest::RunTest(const FString&)
 	{
 		return false;
 	}
-	const FString SourceAId = Primary.SourceA->GraphNode->NodeGuid.ToString();
-	const FString SourceBId = Primary.SourceB->GraphNode->NodeGuid.ToString();
-	const FString SumId = Primary.Sum->GraphNode->NodeGuid.ToString();
+	const FString SourceAId = MCPMaterialInfrastructure::ExpressionNodeId(Primary.SourceA);
+	const FString SourceBId = MCPMaterialInfrastructure::ExpressionNodeId(Primary.SourceB);
+	const FString SumId = MCPMaterialInfrastructure::ExpressionNodeId(Primary.Sum);
 	const FPinConnectionRecord* SourceAToSumAPtr = FindRestoreConnection(
 		*StoredData, SourceAId, SumId, TEXT("A"));
 	const FPinConnectionRecord* SourceBToSumBPtr = FindRestoreConnection(
@@ -607,6 +618,38 @@ bool FMaterialGraphRestoreContractTest::RunTest(const FString&)
 			Replay.Data->GetBoolField(TEXT("postconditionVerified")));
 		TestFalse(TEXT("Restore replay does not request compilation"),
 			Replay.Data->GetBoolField(TEXT("compileRequested")));
+	}
+
+	// Explicit full-graph mode is the opt-in escape from additive semantics. It
+	// must remove the unrelated side edge, preserve every snapshot edge, and
+	// publish the stronger restore boundary in its read-back result.
+	const FString FullGraphDigest = AfterDiff.Data
+		? AfterDiff.Data->GetStringField(TEXT("currentStateDigest"))
+		: Applied.Data->GetStringField(TEXT("afterStateDigest"));
+	const FMCPToolResult FullGraph = Registry.ExecuteTool(
+		TEXT("content.material.graph.restore"),
+		MaterialRestoreParams(
+			Primary.PackageName,
+			SnapshotId,
+			FullGraphDigest,
+			false,
+			TOptional<bool>(),
+			TOptional<FString>(FString(TEXT("fullGraph"))),
+			true));
+	if (TestTrue(TEXT("Explicit full-graph restore succeeds"), FullGraph.bSuccess)
+		&& FullGraph.Data)
+	{
+		TestTrue(TEXT("Full-graph result identifies full semantics"),
+			FullGraph.Data->GetBoolField(TEXT("fullGraphRestore")));
+		TestEqual(TEXT("Full-graph result reports its restore mode"),
+			FullGraph.Data->GetStringField(TEXT("restoreSemantics")),
+			FString(TEXT("fullGraph")));
+		TestTrue(TEXT("Full-graph postcondition is verified"),
+			FullGraph.Data->GetBoolField(TEXT("postconditionVerified")));
+		TestTrue(TEXT("Full-graph removes the unrelated current edge"),
+			Primary.SideConsumer->A.Expression == nullptr);
+		TestTrue(TEXT("Full-graph preserves the snapshot edge"),
+			Primary.Sum->A.Expression == Primary.SourceA);
 	}
 	return true;
 }

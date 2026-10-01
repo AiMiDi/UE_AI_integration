@@ -1349,6 +1349,8 @@ namespace UEAIIntegration::MaterialQuery
 		OutValidation.SourceSnapshot = Source;
 		OutValidation.FreshSnapshot = Fresh;
 		OutValidation.Boundary = Proof;
+		OutValidation.bSharedNodeImpactConfirmed =
+			!Proof->bRequiresSharedNodeConfirmation || bConfirmSharedNodeImpact;
 		auto Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("boundaryId"), Proof->BoundaryId);
 		Result->SetStringField(TEXT("snapshotId"), Source->Id);
@@ -1359,7 +1361,7 @@ namespace UEAIIntegration::MaterialQuery
 		Result->SetBoolField(TEXT("freshLiveProjectionVerified"), true);
 		Result->SetBoolField(
 			TEXT("sharedNodeImpactConfirmed"),
-			!Proof->bRequiresSharedNodeConfirmation || bConfirmSharedNodeImpact);
+			OutValidation.bSharedNodeImpactConfirmed);
 		return FMCPToolResult::Ok(Result);
 	}
 

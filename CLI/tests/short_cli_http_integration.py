@@ -1464,6 +1464,27 @@ def main() -> int:
                     "(first validation error)\n"
                 )
 
+            verification_failure = run(
+                [
+                    "test.error.422",
+                    "--endpoint",
+                    endpoint,
+                    "--json",
+                ]
+            )
+            assert verification_failure.returncode == 5
+            verification_failure_json = json.loads(verification_failure.stdout)
+            failure_state = verification_failure_json["error"]["details"][
+                "verificationState"
+            ]
+            assert failure_state["capability"] == "test.error.422"
+            assert failure_state["localDeclared"] is True
+            assert failure_state["handlerRegistered"] is False
+            assert failure_state["liveAvailable"] is False
+            assert failure_state["executed"] is False
+            assert failure_state["readbackVerified"] is None
+            assert failure_state["runtimeVerified"] is None
+
             timeout_result = run(
                 [
                     "test.timeout",
@@ -1477,6 +1498,29 @@ def main() -> int:
             assert timeout_result.stderr.startswith(
                 "ERROR editor_unreachable:"
             )
+
+            timeout_json = run(
+                [
+                    "test.timeout",
+                    "--endpoint",
+                    endpoint,
+                    "--timeout-ms",
+                    "30",
+                    "--json",
+                ]
+            )
+            assert timeout_json.returncode == 4
+            timeout_payload = json.loads(timeout_json.stdout)
+            timeout_state = timeout_payload["error"]["details"][
+                "verificationState"
+            ]
+            assert timeout_state["capability"] == "test.timeout"
+            assert timeout_state["localDeclared"] is True
+            assert timeout_state["handlerRegistered"] is False
+            assert timeout_state["liveAvailable"] is False
+            assert timeout_state["executed"] is False
+            assert timeout_state["readbackVerified"] is None
+            assert timeout_state["runtimeVerified"] is None
 
             output_path = temporary_path / "蓝图截图-📷.bin"
             exported = run(
@@ -1514,6 +1558,29 @@ def main() -> int:
             ]
             assert offsets == sorted(offsets)
             assert offsets[0] == 0
+
+            export_failure = run(
+                [
+                    "test.artifact",
+                    "--endpoint",
+                    endpoint,
+                    "--output",
+                    str(temporary_path),
+                    "--json",
+                ]
+            )
+            assert export_failure.returncode == 5
+            export_failure_json = json.loads(export_failure.stdout)
+            export_state = export_failure_json["error"]["details"][
+                "verificationState"
+            ]
+            assert export_state["capability"] == "test.artifact"
+            assert export_state["localDeclared"] is True
+            assert export_state["handlerRegistered"] is True
+            assert export_state["liveAvailable"] is True
+            assert export_state["executed"] is True
+            assert export_state["readbackVerified"] is None
+            assert export_state["runtimeVerified"] is None
 
             query_count = len(queries)
             capabilities = run(
@@ -1809,10 +1876,21 @@ def main() -> int:
                 "--asset-path",
                 "/Game/Offline",
                 "--enabled",
+                "--json",
             ]
         )
         assert unreachable.returncode == 4
-        assert unreachable.stderr.startswith("ERROR editor_unreachable:")
+        unreachable_payload = json.loads(unreachable.stdout)
+        unreachable_state = unreachable_payload["error"]["details"][
+            "verificationState"
+        ]
+        assert unreachable_state["capability"] == "test.typed"
+        assert unreachable_state["localDeclared"] is True
+        assert unreachable_state["handlerRegistered"] is False
+        assert unreachable_state["liveAvailable"] is False
+        assert unreachable_state["executed"] is False
+        assert unreachable_state["readbackVerified"] is None
+        assert unreachable_state["runtimeVerified"] is None
 
     return 0
 

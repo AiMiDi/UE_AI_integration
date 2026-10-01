@@ -110,6 +110,7 @@ def main() -> int:
             "runtimeVerified",
         ):
             assert field in verification, (field, first)
+            assert first.get(field) == verification[field], (field, first)
         assert verification.get("capability") == "production.module.loaded.get", first
         replay = client.execute(
             "production.module.loaded.get", request_id=request_id
@@ -124,6 +125,10 @@ def main() -> int:
         except MCPApiError as error:
             assert error.status == 409, error
             assert error.code == "idempotency_conflict", error
+            conflict_state = (error.details or {}).get("verificationState")
+            assert isinstance(conflict_state, dict), error
+            assert conflict_state.get("capability") == "production.module.loaded.get", error
+            assert conflict_state.get("executed") is False, error
         else:
             raise AssertionError("requestId conflict was accepted")
         return "identical payload replayed; changed payload rejected with 409"

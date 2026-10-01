@@ -92,6 +92,10 @@ namespace UEAIIntegration::MaterialQuery
 		TSharedPtr<const FSnapshot> SourceSnapshot;
 		TSharedPtr<const FSnapshot> FreshSnapshot;
 		TSharedPtr<const FBoundaryProof> Boundary;
+		// Set only after ValidateBoundaryWrite has checked the caller's explicit
+		// confirmation.  Writers expose this in read-back so a successful result
+		// cannot be mistaken for an unconfirmed shared-node edit.
+		bool bSharedNodeImpactConfirmed = false;
 	};
 
 	// Exposed internally for deterministic contract tests as well as the tool adapter.

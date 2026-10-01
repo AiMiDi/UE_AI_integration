@@ -348,7 +348,7 @@
       "id": "blueprint.asset.references",
       "domain": "blueprint",
       "kind": "query",
-      "description": "Find all assets that reference a given asset path, categorized as Blueprint vs other references. The v2 response preserves the legacy package arrays and returns every object candidate for each referencer package with sourcePackagePath/sourceObjectPath/sourceClassPath/sourceIdentity, candidateCount, identityStatus, and ambiguity fields. The root identityStatus, referenceIdentityDigest, and identityComplete let callers detect incomplete or ambiguous Asset Registry resolution before following a cross-asset edit.",
+      "description": "Find all assets that reference a given asset path, categorized as Blueprint vs other references. The v2 response preserves the legacy package arrays and returns every object candidate for each referencer package with sourcePackagePath/sourceObjectPath/sourceClassPath/sourceIdentity, candidateCount, identityStatus, and ambiguity fields. For an object path it also performs an Asset Registry object-identifier query and returns targetIdentity, exactObjectReferencers, sourceAssetIdentifier, and sourceObjectReferenceExact so callers can distinguish package fallback from exact object evidence. The root identityStatus, referenceIdentityDigest, and identityComplete let callers detect incomplete or ambiguous Asset Registry resolution before following a cross-asset edit.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -427,7 +427,7 @@
       "id": "blueprint.asset.runtime.verify",
       "domain": "blueprint",
       "kind": "query",
-      "description": "Verify that a compiled Actor Blueprint has a live instance in the current PIE or Game world. Compile success and asset persistence are reported separately; a generated class or CDO never counts as runtime evidence.",
+      "description": "Verify that a compiled Actor Blueprint has a live instance in the current PIE or Game world. Compile success and asset persistence are reported separately; a generated class or CDO never counts as runtime evidence. The result identifies the observed world type and instance class and reports no-runtime-world separately from an empty runtime world.",
       "inputSchema": {
         "type": "object",
         "properties": {

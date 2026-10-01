@@ -1660,10 +1660,12 @@ namespace UEAINiagaraRendererMaterial
 			return
 				ERendererPropertyKey::FacingMode;
 		if (Normalized == TEXT("alignment")) return ERendererPropertyKey::Alignment;
-		if (Normalized == TEXT("subimagesize") || Normalized == TEXT("sub_image_size"))
+		if (Normalized == TEXT("subimagesize") || Normalized == TEXT("sub_image_size")
+			|| Normalized == TEXT("subuvsize") || Normalized == TEXT("sub_uv_size"))
 			return
 				ERendererPropertyKey::SubImageSize;
-		if (Normalized == TEXT("subimageblend") || Normalized == TEXT("sub_image_blend"))
+		if (Normalized == TEXT("subimageblend") || Normalized == TEXT("sub_image_blend")
+			|| Normalized == TEXT("subuvblend") || Normalized == TEXT("sub_uv_blend"))
 			return
 				ERendererPropertyKey::SubImageBlend;
 		if (Normalized == TEXT("shape")) return ERendererPropertyKey::Shape;
@@ -1682,7 +1684,7 @@ namespace UEAINiagaraRendererMaterial
 	FString SupportedRendererProperties()
 	{
 		return TEXT(
-			"enabled, sortOrderHint, sortMode, facingMode, alignment, subImageSize, subImageBlend, shape, tessellationMode, tessellationFactor, tubeSubdivisions");
+			"enabled, sortOrderHint, sortMode, facingMode, alignment, subImageSize/subUVSize, subImageBlend/subUVBlend, shape, tessellationMode, tessellationFactor, tubeSubdivisions");
 	}
 
 	bool ReadBoolValue(const TSharedPtr<FJsonValue>& Value, bool& Out)

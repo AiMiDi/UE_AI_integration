@@ -32,6 +32,9 @@
 #include "K2Node_EditablePinBase.h"
 #include "K2Node_BreakStruct.h"
 #include "K2Node_MakeStruct.h"
+#include "MaterialGraph/MaterialGraphNode.h"
+#include "MaterialGraph/MaterialGraphNode_Root.h"
+#include "Materials/MaterialExpression.h"
 
 // Snapshot data structures
 struct FPinConnectionRecord
@@ -644,16 +647,41 @@ namespace MCPHelpers
 		return FString::Printf(TEXT("%s_%s_%s"), *CleanName, *Timestamp, *FGuid::NewGuid().ToString().Left(8));
 	}
 
-	inline FGraphSnapshotData CaptureGraphSnapshot(UEdGraph* Graph)
+	inline FGraphSnapshotData CaptureGraphSnapshot(
+		UEdGraph* Graph,
+		const bool bUseStableMaterialNodeIds = false)
 	{
 		FGraphSnapshotData Data;
 		if (!Graph) return Data;
+		auto GetNodeIdentity = [bUseStableMaterialNodeIds](const UEdGraphNode* Node)
+		{
+			if (!Node)
+			{
+				return FString();
+			}
+			if (bUseStableMaterialNodeIds)
+			{
+				if (Node->IsA<UMaterialGraphNode_Root>())
+				{
+					return FString(TEXT("root"));
+				}
+				if (const UMaterialGraphNode* MaterialNode = Cast<UMaterialGraphNode>(Node))
+				{
+					if (MaterialNode->MaterialExpression)
+					{
+						return FString(TEXT("expr:"))
+							+ MaterialNode->MaterialExpression->GetName();
+					}
+				}
+			}
+			return Node->NodeGuid.ToString();
+		};
 
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
 			if (!Node) continue;
 			FNodeRecord Record;
-			Record.NodeGuid = Node->NodeGuid.ToString();
+			Record.NodeGuid = GetNodeIdentity(Node);
 			Record.NodeClass = Node->GetClass()->GetName();
 			Record.NodeTitle = Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
 			if (UK2Node_BreakStruct* BreakNode = Cast<UK2Node_BreakStruct>(Node))
@@ -669,9 +697,9 @@ namespace MCPHelpers
 				{
 					if (!Linked || !Linked->GetOwningNode()) continue;
 					FPinConnectionRecord ConnRecord;
-					ConnRecord.SourceNodeGuid = Node->NodeGuid.ToString();
+					ConnRecord.SourceNodeGuid = GetNodeIdentity(Node);
 					ConnRecord.SourcePinName = Pin->PinName.ToString();
-					ConnRecord.TargetNodeGuid = Linked->GetOwningNode()->NodeGuid.ToString();
+					ConnRecord.TargetNodeGuid = GetNodeIdentity(Linked->GetOwningNode());
 					ConnRecord.TargetPinName = Linked->PinName.ToString();
 					Data.Connections.Add(ConnRecord);
 				}

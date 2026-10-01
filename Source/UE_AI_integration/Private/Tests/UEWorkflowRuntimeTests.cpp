@@ -487,6 +487,109 @@ bool GetOperationString(
 	return false;
 }
 
+bool OperationReportsVerificationState(
+	const TSharedPtr<FJsonObject>& Receipt,
+	const FString& OperationId,
+	const FString& CapabilityId,
+	const FString& ExpectedStatus,
+	const bool bExpectedExecuted)
+{
+	const TArray<TSharedPtr<FJsonValue>>* Operations = nullptr;
+	if (!Receipt.IsValid()
+		|| !TryGetResultArray(Receipt, TEXT("operations"), Operations)
+		|| !Operations)
+	{
+		return false;
+	}
+
+	const TCHAR* BooleanFields[] = {
+		TEXT("localDeclared"),
+		TEXT("handlerRegistered"),
+		TEXT("liveAvailable"),
+		TEXT("executed")};
+	const TCHAR* NullableFields[] = {
+		TEXT("readbackVerified"),
+		TEXT("runtimeVerified")};
+	auto HasNullableBoolean = [](const TSharedPtr<FJsonObject>& Object,
+		const TCHAR* Field) -> bool
+	{
+		const TSharedPtr<FJsonValue>* Value = Object->Values.Find(Field);
+		return Value
+			&& Value->IsValid()
+			&& ((*Value)->Type == EJson::Null || (*Value)->Type == EJson::Boolean);
+	};
+
+	for (const TSharedPtr<FJsonValue>& Value : *Operations)
+	{
+		if (!Value.IsValid() || Value->Type != EJson::Object)
+		{
+			continue;
+		}
+		const TSharedPtr<FJsonObject> Operation = Value->AsObject();
+		if (!Operation.IsValid()
+			|| Operation->GetStringField(TEXT("id")) != OperationId
+			|| Operation->GetStringField(TEXT("type")) != CapabilityId
+			|| Operation->GetStringField(TEXT("status")) != ExpectedStatus)
+		{
+			continue;
+		}
+
+		const TSharedPtr<FJsonObject>* Data = nullptr;
+		const TSharedPtr<FJsonObject>* State = nullptr;
+		if (!Operation->TryGetObjectField(TEXT("data"), Data)
+			|| !Data
+			|| !Data->IsValid()
+			|| !(*Data)->TryGetObjectField(TEXT("verificationState"), State)
+			|| !State
+			|| !State->IsValid()
+			|| (*State)->GetStringField(TEXT("capability")) != CapabilityId)
+		{
+			return false;
+		}
+
+		bool bExecuted = !bExpectedExecuted;
+		if (!(*Data)->TryGetBoolField(TEXT("executed"), bExecuted)
+			|| bExecuted != bExpectedExecuted
+			|| !(*State)->TryGetBoolField(TEXT("executed"), bExecuted)
+			|| bExecuted != bExpectedExecuted)
+		{
+			return false;
+		}
+		for (const TCHAR* Field : BooleanFields)
+		{
+			bool bRootValue = false;
+			bool bStateValue = false;
+			if (!(*Data)->TryGetBoolField(Field, bRootValue)
+				|| !(*State)->TryGetBoolField(Field, bStateValue)
+				|| bRootValue != bStateValue)
+			{
+				return false;
+			}
+		}
+		for (const TCHAR* Field : NullableFields)
+		{
+			if (!HasNullableBoolean(*Data, Field)
+				|| !HasNullableBoolean(*State, Field))
+			{
+				return false;
+			}
+			const TSharedPtr<FJsonValue>* RootValue = (*Data)->Values.Find(Field);
+			const TSharedPtr<FJsonValue>* StateValue = (*State)->Values.Find(Field);
+			if ((*RootValue)->Type != (*StateValue)->Type)
+			{
+				return false;
+			}
+			if ((*RootValue)->Type == EJson::Boolean
+				&& (*RootValue)->AsBool() != (*StateValue)->AsBool())
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+	return false;
+}
+
 bool CreateFixtureAsset(
 	FMCPToolRegistry& Registry,
 	const FString& Capability,
@@ -2639,7 +2742,14 @@ bool FUEWorkflowMaterialConnectionFailureRollbackTest::RunTest(
 		return false;
 	}
 
-	const FMCPResult Result = ExecuteWorkflow(Runtime, Workflow, Digest);
+	const FMCPResult Result = ExecuteWorkflow(
+		Runtime,
+		Workflow,
+		Digest,
+		false,
+		TEXT("full"),
+		FString(),
+		true);
 	TestFalse(
 		TEXT("Incompatible material connection fails the workflow"),
 		Result.bOk);
@@ -2647,6 +2757,15 @@ bool FUEWorkflowMaterialConnectionFailureRollbackTest::RunTest(
 		TEXT("Connection failure is promoted to workflow failure"),
 		Result.Error.Code,
 		FString(TEXT("workflow_execution_failed")));
+	TestTrue(
+		TEXT("Failed Workflow operation exposes executed=true verification state"),
+		OperationReportsVerificationState(
+			Result.Error.Details,
+			TEXT("invalidConnect"),
+			TEXT("content.material.pin.connect"),
+			TEXT("failed"),
+			true));
+
 	TestTrue(
 		TEXT("Connection failure rollback is verified"),
 		Result.Error.Details.IsValid()
@@ -2766,8 +2885,24 @@ bool FUEWorkflowExplicitScopeInitializerTest::RunTest(
 				FirstKind)
 			&& FirstKind == TEXT("scopeInitializer"));
 
-	const FMCPResult Result = ExecuteWorkflow(Runtime, Workflow, Digest);
+	const FMCPResult Result = ExecuteWorkflow(
+		Runtime,
+		Workflow,
+		Digest,
+		false,
+		TEXT("full"),
+		FString(),
+		true);
 	TestTrue(TEXT("Explicit initializer executes"), Result.bOk);
+	TestTrue(
+		TEXT("Successful Workflow operation exposes all six verification states"),
+		Result.bOk
+			&& OperationReportsVerificationState(
+				Result.Data,
+				TEXT("setTwoSided"),
+				TEXT("content.material.property.set"),
+				TEXT("succeeded"),
+				true));
 	TestTrue(
 		TEXT("Explicit initializer creates exact scoped material"),
 		AssetExistsWithoutLoading(MaterialPath));

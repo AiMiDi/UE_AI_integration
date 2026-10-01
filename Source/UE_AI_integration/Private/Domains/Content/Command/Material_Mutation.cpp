@@ -166,6 +166,113 @@ static FString MaterialMutationNodeId(const UEdGraphNode* Node)
 	return Node->NodeGuid.ToString();
 }
 
+// A material expression can be consumed by more than one authored input.  A
+// value edit on such a node has fan-out semantics even though it changes only
+// one UObject.  Keep this check independent of the editor graph projection so
+// headless MaterialFunctions receive the same shared-node protection.
+static void CollectMaterialExpressionConsumers(
+	UMaterial* Material,
+	UMaterialFunction* Function,
+	UMaterialExpression* Expression,
+	TArray<FString>& OutConsumerIds)
+{
+	OutConsumerIds.Reset();
+	if (!Expression)
+	{
+		return;
+	}
+	TSet<FString> UniqueConsumers;
+	auto AddConsumer = [&UniqueConsumers](const FString& Id)
+	{
+		if (!Id.IsEmpty())
+		{
+			UniqueConsumers.Add(Id);
+		}
+	};
+
+	// GetExpressions() is a raw-pointer array on some UE versions and a
+	// TArrayView<const TObjectPtr<...>> on others.  Keep this helper generic so
+	// the protection contract follows the engine's container without coupling
+	// the authoring path to one representation.
+	auto InspectConsumers = [&Expression, &AddConsumer](const auto& Expressions)
+	{
+		for (const auto& ConsumerValue : Expressions)
+		{
+			UMaterialExpression* Consumer = ConsumerValue;
+			if (!Consumer || Consumer == Expression)
+			{
+				continue;
+			}
+			for (const FExpressionInput* Input : Consumer->GetInputsView())
+			{
+				if (Input && Input->Expression == Expression)
+				{
+					AddConsumer(MCPMaterialInfrastructure::ExpressionNodeId(Consumer));
+					break;
+				}
+			}
+		}
+	};
+	if (Material)
+	{
+		InspectConsumers(Material->GetExpressions());
+	}
+	else if (Function)
+	{
+		InspectConsumers(Function->GetExpressions());
+	}
+	if (Material)
+	{
+		for (int32 InputIndex = 0; InputIndex < MP_MAX; ++InputIndex)
+		{
+			const FExpressionInput* Input = Material->GetExpressionInputForProperty(
+				static_cast<EMaterialProperty>(InputIndex));
+			if (Input && Input->Expression == Expression)
+			{
+				AddConsumer(TEXT("root"));
+			}
+		}
+	}
+	OutConsumerIds = UniqueConsumers.Array();
+	OutConsumerIds.Sort();
+}
+
+static void AddMaterialBoundaryResultFields(
+	const UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& Validation,
+	const TArray<FString>& ExternalConsumerIds,
+	TSharedRef<FJsonObject>& Result,
+	const bool bImplicitWorkflowConfirmation = false)
+{
+	const bool bHasBoundary = Validation.Boundary.IsValid();
+	const bool bShared = bHasBoundary
+		? Validation.Boundary->bRequiresSharedNodeConfirmation
+		: ExternalConsumerIds.Num() > 1;
+	Result->SetBoolField(TEXT("writeBoundaryVerified"), bHasBoundary);
+	Result->SetBoolField(TEXT("sharedNodeImpactDetected"), bShared);
+	Result->SetBoolField(
+		TEXT("sharedNodeImpactConfirmed"),
+		(bHasBoundary && Validation.bSharedNodeImpactConfirmed)
+			|| (bShared && bImplicitWorkflowConfirmation));
+	TArray<TSharedPtr<FJsonValue>> Consumers;
+	const TArray<FString>* Source = &ExternalConsumerIds;
+	if (bHasBoundary)
+	{
+		Source = &Validation.Boundary->ExternallyConsumedNodeIds;
+	}
+	for (const FString& Id : *Source)
+	{
+		Consumers.Add(MakeShared<FJsonValueString>(Id));
+	}
+	Result->SetArrayField(TEXT("externallyConsumedNodeIds"), Consumers);
+	if (bHasBoundary)
+	{
+		Result->SetStringField(TEXT("boundaryId"), Validation.Boundary->BoundaryId);
+		Result->SetStringField(TEXT("snapshotId"), Validation.SourceSnapshot->Id);
+		Result->SetStringField(TEXT("sourceProjectionHash"), Validation.SourceSnapshot->ProjectionHash);
+		Result->SetStringField(TEXT("freshProjectionHash"), Validation.FreshSnapshot->ProjectionHash);
+	}
+}
+
 static FMCPToolResult RequireMaterialBoundaryNode(
 	const UEAIIntegration::MaterialQuery::FBoundaryWriteValidation& Validation,
 	const UEdGraphNode* Node,
@@ -994,6 +1101,12 @@ public:
 		FString DeletedExprClass = TargetMatNode->MaterialExpression->GetClass()->GetName();
 
 		UMaterialExpression* ExprToRemove = TargetMatNode->MaterialExpression;
+		TArray<FString> DeletedNodeConsumerIds;
+		CollectMaterialExpressionConsumers(
+			Material,
+			MatFunc,
+			ExprToRemove,
+			DeletedNodeConsumerIds);
 		const FMaterialExpressionDeleteSnapshot DeleteSnapshot = CaptureMaterialExpressionDeleteSnapshot(
 			Material,
 			MatFunc,
@@ -1077,13 +1190,10 @@ public:
 		Result->SetStringField(TEXT("deletedNodeTitle"), DeletedNodeTitle);
 		Result->SetStringField(TEXT("deletedExpressionClass"), DeletedExprClass);
 		Result->SetBoolField(TEXT("saved"), bSaved);
-		if (BoundaryValidation.Boundary.IsValid())
-		{
-			Result->SetStringField(TEXT("boundaryId"), BoundaryValidation.Boundary->BoundaryId);
-			Result->SetStringField(TEXT("snapshotId"), BoundaryValidation.SourceSnapshot->Id);
-			Result->SetStringField(TEXT("sourceProjectionHash"), BoundaryValidation.SourceSnapshot->ProjectionHash);
-			Result->SetStringField(TEXT("freshProjectionHash"), BoundaryValidation.FreshSnapshot->ProjectionHash);
-		}
+		AddMaterialBoundaryResultFields(
+			BoundaryValidation,
+			DeletedNodeConsumerIds,
+			Result);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -1224,13 +1334,10 @@ public:
 			}
 			const bool bSaved = SaveMaterialForExecution(Asset, Params);
 			Result->SetBoolField(TEXT("saved"), bSaved);
-			if (BoundaryValidation.Boundary.IsValid())
-			{
-				Result->SetStringField(TEXT("boundaryId"), BoundaryValidation.Boundary->BoundaryId);
-				Result->SetStringField(TEXT("snapshotId"), BoundaryValidation.SourceSnapshot->Id);
-				Result->SetStringField(TEXT("sourceProjectionHash"), BoundaryValidation.SourceSnapshot->ProjectionHash);
-				Result->SetStringField(TEXT("freshProjectionHash"), BoundaryValidation.FreshSnapshot->ProjectionHash);
-			}
+			AddMaterialBoundaryResultFields(
+				BoundaryValidation,
+				TArray<FString>(),
+				Result);
 		}
 		else
 		{
@@ -1368,13 +1475,10 @@ public:
 		Result->SetStringField(TEXT("pinName"), PinName);
 		Result->SetNumberField(TEXT("brokenLinkCount"), BrokenCount);
 		Result->SetBoolField(TEXT("saved"), bSaved);
-		if (BoundaryValidation.Boundary.IsValid())
-		{
-			Result->SetStringField(TEXT("boundaryId"), BoundaryValidation.Boundary->BoundaryId);
-			Result->SetStringField(TEXT("snapshotId"), BoundaryValidation.SourceSnapshot->Id);
-			Result->SetStringField(TEXT("sourceProjectionHash"), BoundaryValidation.SourceSnapshot->ProjectionHash);
-			Result->SetStringField(TEXT("freshProjectionHash"), BoundaryValidation.FreshSnapshot->ProjectionHash);
-		}
+		AddMaterialBoundaryResultFields(
+			BoundaryValidation,
+			TArray<FString>(),
+			Result);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -1438,6 +1542,43 @@ public:
 		if (!Expr) return FMCPToolResult::Error(TEXT("Node has no material expression"));
 
 		UObject* Asset = Material ? (UObject*)Material : (UObject*)MatFunc;
+		TArray<FString> ConsumerIds;
+		CollectMaterialExpressionConsumers(Material, MatFunc, Expr, ConsumerIds);
+		const bool bSharedNode = ConsumerIds.Num() > 1;
+		const bool bApprovedWorkflow =
+			UEAIIntegration::Workflow::IsApprovedWorkflowExecution(Params);
+		UEAIIntegration::MaterialQuery::FBoundaryWriteValidation BoundaryValidation;
+		if (Params->HasField(TEXT("boundaryId"))
+			|| (bSharedNode && !bApprovedWorkflow))
+		{
+			FMCPToolResult BoundaryResult = RequireMaterialMutationBoundary(
+				Asset,
+				Params,
+				BoundaryValidation);
+			if (!BoundaryResult.bSuccess)
+			{
+				return BoundaryResult;
+			}
+			if (BoundaryValidation.Boundary.IsValid())
+			{
+				if (!TargetMatNode)
+				{
+					return FMCPToolResult::Error(
+						TEXT("The edited expression has no stable material graph node identity for boundary validation."),
+						TEXT("material_boundary_node_identity_missing"),
+						409);
+				}
+				BoundaryResult = RequireMaterialBoundaryNode(
+					BoundaryValidation,
+					TargetMatNode,
+					TEXT("edited"),
+					true);
+				if (!BoundaryResult.bSuccess)
+				{
+					return BoundaryResult;
+				}
+			}
+		}
 		BeginMaterialMutation(Asset, Params);
 		if (Graph) Graph->Modify();
 		if (TargetMatNode) TargetMatNode->Modify();
@@ -1549,6 +1690,11 @@ public:
 		Result->SetStringField(TEXT("expressionType"), ExprType);
 		Result->SetStringField(TEXT("newValue"), NewValueStr);
 		Result->SetBoolField(TEXT("saved"), bSaved);
+		AddMaterialBoundaryResultFields(
+			BoundaryValidation,
+			ConsumerIds,
+			Result,
+			bApprovedWorkflow);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -1888,6 +2034,38 @@ bool ContainsAllSnapshotConnections(
 	}
 	return true;
 }
+
+bool HasSameMaterialConnectionTopology(
+	const FGraphSnapshotData& Left,
+	const FGraphSnapshotData& Right)
+{
+	TSet<FString> LeftConnections;
+	TSet<FString> RightConnections;
+	LeftConnections.Reserve(Left.Connections.Num());
+	RightConnections.Reserve(Right.Connections.Num());
+	for (const FPinConnectionRecord& Connection : Left.Connections)
+	{
+		LeftConnections.Add(MakeMaterialConnectionKey(Connection));
+	}
+	for (const FPinConnectionRecord& Connection : Right.Connections)
+	{
+		RightConnections.Add(MakeMaterialConnectionKey(Connection));
+	}
+	return LeftConnections.Num() == RightConnections.Num()
+		&& LeftConnections.Includes(RightConnections);
+}
+
+FString SummarizeMaterialConnections(const FGraphSnapshotData& Data)
+{
+	TArray<FString> Keys;
+	Keys.Reserve(Data.Connections.Num());
+	for (const FPinConnectionRecord& Connection : Data.Connections)
+	{
+		Keys.Add(MakeMaterialConnectionKey(Connection));
+	}
+	Keys.Sort();
+	return FString::Join(Keys, TEXT(";"));
+}
 }
 
 // ============================================================
@@ -1919,7 +2097,9 @@ public:
 		Snapshot.BlueprintPath = Material->GetPathName();
 		Snapshot.CreatedAt = FDateTime::Now();
 
-		FGraphSnapshotData GraphData = MCPHelpers::CaptureGraphSnapshot(Material->MaterialGraph);
+		FGraphSnapshotData GraphData = MCPHelpers::CaptureGraphSnapshot(
+			Material->MaterialGraph,
+			true);
 		int32 NodeCount = GraphData.Nodes.Num();
 		int32 ConnectionCount = GraphData.Connections.Num();
 		FString StateDigest;
@@ -1988,7 +2168,9 @@ public:
 		EnsureMaterialGraph(Material);
 		if (!Material->MaterialGraph) return FMCPToolResult::Error(TEXT("Material has no graph"));
 
-		FGraphSnapshotData CurrentData = MCPHelpers::CaptureGraphSnapshot(Material->MaterialGraph);
+		FGraphSnapshotData CurrentData = MCPHelpers::CaptureGraphSnapshot(
+			Material->MaterialGraph,
+			true);
 		const FGraphSnapshotData* SnapData = SnapshotPtr->Graphs.Find(TEXT("MaterialGraph"));
 		if (!SnapData) return FMCPToolResult::Error(TEXT("Snapshot has no MaterialGraph"));
 
@@ -2110,6 +2292,25 @@ public:
 
 		bool bDryRun = false;
 		bool bSave = false;
+		FString RestoreMode = TEXT("connectionsOnly");
+		bool bConfirmFullGraphRestore = false;
+		if (Params->HasField(TEXT("restoreMode"))
+			&& (!Params->TryGetStringField(TEXT("restoreMode"), RestoreMode)
+				|| (RestoreMode != TEXT("connectionsOnly") && RestoreMode != TEXT("fullGraph"))))
+		{
+			return FMCPToolResult::Error(
+				TEXT("restoreMode must be 'connectionsOnly' or 'fullGraph'."),
+				TEXT("invalid_restore_request"),
+				422);
+		}
+		if (Params->HasField(TEXT("confirmFullGraphRestore"))
+			&& !Params->TryGetBoolField(TEXT("confirmFullGraphRestore"), bConfirmFullGraphRestore))
+		{
+			return FMCPToolResult::Error(
+				TEXT("confirmFullGraphRestore must be a boolean."),
+				TEXT("invalid_restore_request"),
+				422);
+		}
 		if ((Params->HasField(TEXT("dryRun"))
 				&& !Params->TryGetBoolField(TEXT("dryRun"), bDryRun))
 			|| (Params->HasField(TEXT("save"))
@@ -2178,7 +2379,7 @@ public:
 		}
 
 		const FGraphSnapshotData BeforeData =
-			MCPHelpers::CaptureGraphSnapshot(Graph);
+			MCPHelpers::CaptureGraphSnapshot(Graph, true);
 		FString BeforeDigest;
 		FString SnapshotDigest;
 		if (!ComputeMaterialConnectionStateDigest(
@@ -2202,6 +2403,43 @@ public:
 				TEXT("material_graph_state_conflict"),
 				409);
 		}
+		const bool bFullGraphRestore = RestoreMode == TEXT("fullGraph");
+		if (bFullGraphRestore && !bConfirmFullGraphRestore && !bDryRun)
+		{
+			return FMCPToolResult::Error(
+				TEXT("fullGraph restore requires confirmFullGraphRestore=true because it may remove links absent from the snapshot."),
+				TEXT("full_graph_restore_confirmation_required"),
+				409);
+		}
+		if (bFullGraphRestore)
+		{
+			TSet<FString> SnapshotNodeIds;
+			TSet<FString> CurrentNodeIds;
+			for (const FNodeRecord& Node : SnapshotData->Nodes)
+			{
+				SnapshotNodeIds.Add(Node.NodeGuid);
+			}
+			for (const FNodeRecord& Node : BeforeData.Nodes)
+			{
+				CurrentNodeIds.Add(Node.NodeGuid);
+			}
+			bool bSameNodeSet = SnapshotNodeIds.Num() == CurrentNodeIds.Num();
+			for (const FString& CurrentNodeId : CurrentNodeIds)
+			{
+				if (!SnapshotNodeIds.Contains(CurrentNodeId))
+				{
+					bSameNodeSet = false;
+					break;
+				}
+			}
+			if (!bSameNodeSet)
+			{
+				return FMCPToolResult::Error(
+					TEXT("fullGraph restore requires the current graph to contain exactly the snapshot node set; node creation/removal is not inferred from legacy snapshots."),
+					TEXT("full_graph_restore_node_set_mismatch"),
+					409);
+			}
+		}
 
 		TSet<FString> CurrentConnections;
 		CurrentConnections.Reserve(BeforeData.Connections.Num());
@@ -2218,7 +2456,9 @@ public:
 				continue;
 			}
 			const FString NodeGuid = Node->NodeGuid.ToString();
-			if (NodeLookup.Contains(NodeGuid))
+			const FString StableNodeId = MaterialMutationNodeId(Node);
+			if (NodeLookup.Contains(NodeGuid)
+				|| (!StableNodeId.IsEmpty() && NodeLookup.Contains(StableNodeId)))
 			{
 				return FMCPToolResult::Error(
 					TEXT("The live material graph has duplicate node GUIDs; no connection was changed."),
@@ -2226,6 +2466,10 @@ public:
 					409);
 			}
 			NodeLookup.Add(NodeGuid, Node);
+			if (!StableNodeId.IsEmpty())
+			{
+				NodeLookup.Add(StableNodeId, Node);
+			}
 		}
 
 		const UEdGraphSchema* Schema = Graph->GetSchema();
@@ -2242,7 +2486,8 @@ public:
 		for (const FPinConnectionRecord& Connection : SnapshotData->Connections)
 		{
 			const FString Key = MakeMaterialConnectionKey(Connection);
-			if (CurrentConnections.Contains(Key) || PlannedKeys.Contains(Key))
+			if ((!bFullGraphRestore && CurrentConnections.Contains(Key))
+				|| PlannedKeys.Contains(Key))
 			{
 				continue;
 			}
@@ -2283,7 +2528,7 @@ public:
 			}
 			const FPinConnectionResponse Response =
 				Schema->CanCreateConnection(SourcePin, TargetPin);
-			if (Response.Response != CONNECT_RESPONSE_MAKE)
+			if (!bFullGraphRestore && Response.Response != CONNECT_RESPONSE_MAKE)
 			{
 				return FMCPToolResult::Error(
 					FString::Printf(
@@ -2309,8 +2554,16 @@ public:
 		});
 
 		FGraphSnapshotData ExpectedAfterData = BeforeData;
+		if (bFullGraphRestore)
+		{
+			ExpectedAfterData.Connections = SnapshotData->Connections;
+		}
 		for (const FPinConnectionRecord& Connection : SnapshotData->Connections)
 		{
+			if (bFullGraphRestore)
+			{
+				continue;
+			}
 			const FString Key = MakeMaterialConnectionKey(Connection);
 			if (!CurrentConnections.Contains(Key))
 			{
@@ -2343,8 +2596,9 @@ public:
 			Result->SetStringField(
 				TEXT("projectionIdentity"), MaterialRestoreProjection);
 			Result->SetStringField(
-				TEXT("restoreSemantics"), TEXT("missingConnectionsOnly"));
-			Result->SetBoolField(TEXT("fullGraphRestore"), false);
+				TEXT("restoreSemantics"),
+				bFullGraphRestore ? TEXT("fullGraph") : TEXT("missingConnectionsOnly"));
+			Result->SetBoolField(TEXT("fullGraphRestore"), bFullGraphRestore);
 			Result->SetBoolField(TEXT("preflightVerified"), true);
 			Result->SetNumberField(
 				TEXT("missingConnectionCount"), Plan.Num());
@@ -2372,7 +2626,10 @@ public:
 			return FMCPToolResult::Ok(Result);
 		}
 
-		if (Plan.IsEmpty())
+		const bool bFullGraphNoOp = bFullGraphRestore
+			&& BeforeData.Connections.Num() == 0
+			&& SnapshotData->Connections.Num() == 0;
+		if (Plan.IsEmpty() && (!bFullGraphRestore || bFullGraphNoOp))
 		{
 			TSharedRef<FJsonObject> Result = MakeResult();
 			Result->SetNumberField(TEXT("appliedConnectionCount"), 0);
@@ -2418,6 +2675,85 @@ public:
 		TArray<int32> AppliedIndexes;
 		AppliedIndexes.Reserve(Plan.Num());
 		bool bMutationFinalized = false;
+		auto ClearAllGraphLinks = [&]()
+		{
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				if (!Node)
+				{
+					continue;
+				}
+				for (UEdGraphPin* Pin : Node->Pins)
+				{
+					if (Pin)
+					{
+						Pin->BreakAllPinLinks();
+					}
+				}
+			}
+		};
+		auto LinkSnapshotConnections = [&](const FGraphSnapshotData& Data)
+		{
+			TMap<FString, UEdGraphNode*> NodesByGuid;
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				if (Node)
+				{
+					NodesByGuid.Add(Node->NodeGuid.ToString(), Node);
+					const FString StableNodeId = MaterialMutationNodeId(Node);
+					if (!StableNodeId.IsEmpty())
+					{
+						NodesByGuid.Add(StableNodeId, Node);
+					}
+				}
+			}
+			for (const FPinConnectionRecord& Connection : Data.Connections)
+			{
+				UEdGraphNode* const* SourceNode = NodesByGuid.Find(Connection.SourceNodeGuid);
+				UEdGraphNode* const* TargetNode = NodesByGuid.Find(Connection.TargetNodeGuid);
+				if (!SourceNode || !TargetNode || !*SourceNode || !*TargetNode)
+				{
+					return false;
+				}
+				UEdGraphPin* SourcePin = nullptr;
+				UEdGraphPin* TargetPin = nullptr;
+				for (UEdGraphPin* Pin : (*SourceNode)->Pins)
+				{
+					if (Pin && Pin->Direction == EGPD_Output
+						&& Pin->PinName.ToString() == Connection.SourcePinName)
+					{
+						if (SourcePin)
+						{
+							return false;
+						}
+						SourcePin = Pin;
+					}
+				}
+				for (UEdGraphPin* Pin : (*TargetNode)->Pins)
+				{
+					if (Pin && Pin->Direction == EGPD_Input
+						&& Pin->PinName.ToString() == Connection.TargetPinName)
+					{
+						if (TargetPin)
+						{
+							return false;
+						}
+						TargetPin = Pin;
+					}
+				}
+				if (!SourcePin || !TargetPin)
+				{
+					return false;
+				}
+				SourcePin->MakeLinkTo(TargetPin);
+				if (!SourcePin->LinkedTo.Contains(TargetPin)
+					|| !TargetPin->LinkedTo.Contains(SourcePin))
+				{
+					return false;
+				}
+			}
+			return true;
+		};
 		auto RollBackOwnedConnections = [&]()
 		{
 			FMaterialRestoreRollbackStatus Status;
@@ -2425,6 +2761,10 @@ public:
 				&& !UEAIIntegration::Workflow::ShouldDeferCompile(Params))
 			{
 				Material->PreEditChange(nullptr);
+			}
+			if (bFullGraphRestore)
+			{
+				ClearAllGraphLinks();
 			}
 			for (int32 Index = AppliedIndexes.Num() - 1; Index >= 0; --Index)
 			{
@@ -2441,11 +2781,15 @@ public:
 					}
 				}
 			}
+			if (bFullGraphRestore && !LinkSnapshotConnections(BeforeData))
+			{
+				Status.bSemanticRollbackVerified = false;
+			}
 			Graph->LinkMaterialExpressionsFromGraph();
 			FinalizeMaterialMutation(Material, Params);
 			bMutationFinalized = true;
 			const FGraphSnapshotData RestoredData =
-				MCPHelpers::CaptureGraphSnapshot(Graph);
+				MCPHelpers::CaptureGraphSnapshot(Graph, true);
 			FString RestoredDigest;
 			Status.bSemanticRollbackVerified =
 				ComputeMaterialConnectionStateDigest(
@@ -2466,6 +2810,10 @@ public:
 			return Status;
 		};
 
+		if (bFullGraphRestore)
+		{
+			ClearAllGraphLinks();
+		}
 		for (int32 Index = 0; Index < Plan.Num(); ++Index)
 		{
 			const FMaterialRestoreConnection& Connection = Plan[Index];
@@ -2502,23 +2850,30 @@ public:
 		FinalizeMaterialMutation(Material, Params);
 		bMutationFinalized = true;
 		const FGraphSnapshotData AfterData =
-			MCPHelpers::CaptureGraphSnapshot(Graph);
+			MCPHelpers::CaptureGraphSnapshot(Graph, true);
 		FString AfterDigest;
 		const bool bPostconditionVerified =
 			ComputeMaterialConnectionStateDigest(
 				AssetPath,
 				AfterData,
 				AfterDigest)
-			&& AfterDigest == ExpectedAfterDigest
+			&& HasSameMaterialConnectionTopology(ExpectedAfterData, AfterData)
 			&& ContainsAllSnapshotConnections(*SnapshotData, AfterData)
-			&& ContainsAllSnapshotConnections(BeforeData, AfterData);
+			&& (bFullGraphRestore || ContainsAllSnapshotConnections(BeforeData, AfterData));
 		if (!bPostconditionVerified)
 		{
 			const FMaterialRestoreRollbackStatus Rollback =
 				RollBackOwnedConnections();
 			return FMCPToolResult::Error(
 				FString::Printf(
-					TEXT("Material graph restore postcondition failed; semanticRollbackVerified=%s, dirtyRestored=%s, diskRollbackRequired=false."),
+					TEXT("Material graph restore postcondition failed; expectedAfter=%s, actualAfter=%s, beforeConnections=%d, snapshotConnections=%d, actualConnections=%d, expectedConnections=%s, actualConnectionKeys=%s, semanticRollbackVerified=%s, dirtyRestored=%s, diskRollbackRequired=false."),
+					*ExpectedAfterDigest,
+					*AfterDigest,
+					BeforeData.Connections.Num(),
+					SnapshotData->Connections.Num(),
+					AfterData.Connections.Num(),
+					*SummarizeMaterialConnections(ExpectedAfterData),
+					*SummarizeMaterialConnections(AfterData),
 					Rollback.bSemanticRollbackVerified ? TEXT("true") : TEXT("false"),
 					Rollback.bDirtyRestored ? TEXT("true") : TEXT("false")),
 				Rollback.IsVerified()

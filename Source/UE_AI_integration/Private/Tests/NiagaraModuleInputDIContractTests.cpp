@@ -42,6 +42,7 @@
 namespace UEAIIntegrationTools
 {
 void RegisterNiagaraGraphModuleTools(FMCPToolRegistry& Registry);
+void RegisterNiagaraDynamicInputTools(FMCPToolRegistry& Registry);
 }
 
 #if WITH_UEAI_NIAGARA && WITH_EDITORONLY_DATA
@@ -264,6 +265,70 @@ TSharedRef<FJsonObject> MakeNiagaraModuleInputDIParams(
 	Params->SetStringField(TEXT("dynamicInput"), DynamicInput);
 	return Params;
 }
+
+// A mounted Dynamic Input is itself a stack function call.  Use the same
+// engine input enumeration as the command under test so the nested edit is
+// driven through a real authored input rather than a guessed pin name.
+bool FindNiagaraModuleInputDINestedLinkable(
+	UNiagaraSystem* System,
+	const FString& EmitterName,
+	UNiagaraNodeFunctionCall* DynamicNode,
+	FNiagaraVariable& OutInput)
+{
+	if (!System || !DynamicNode)
+	{
+		return false;
+	}
+	const ENiagaraScriptUsage Usage = ENiagaraScriptUsage::ParticleUpdateScript;
+	FCompileConstantResolver ConstantResolver(System, Usage);
+	for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
+	{
+		if (Handle.GetName().ToString().Equals(EmitterName, ESearchCase::CaseSensitive))
+		{
+			ConstantResolver = FCompileConstantResolver(Handle.GetInstance(), Usage);
+			break;
+		}
+	}
+	TArray<FNiagaraVariable> Inputs;
+	TSet<FNiagaraVariable> HiddenInputs;
+	FNiagaraStackGraphUtilities::GetStackFunctionInputs(
+		*DynamicNode,
+		Inputs,
+		HiddenInputs,
+		ConstantResolver,
+		FNiagaraStackGraphUtilities::ENiagaraGetStackFunctionInputPinsOptions::ModuleInputsOnly);
+	TArray<UEdGraphPin*> StaticSwitchPins;
+	TSet<UEdGraphPin*> HiddenSwitchPins;
+	FNiagaraStackGraphUtilities::GetStackFunctionStaticSwitchPins(
+		*DynamicNode, StaticSwitchPins, HiddenSwitchPins, ConstantResolver);
+	for (const FNiagaraVariable& Candidate : Inputs)
+	{
+		if (Candidate.IsDataInterface() || Candidate.IsUObject())
+		{
+			continue;
+		}
+		bool bStaticSwitch = false;
+		for (UEdGraphPin* Pin : StaticSwitchPins)
+		{
+			if (Pin && Pin->GetFName() == Candidate.GetName())
+			{
+				bStaticSwitch = true;
+				break;
+			}
+		}
+		if (!bStaticSwitch)
+		{
+			OutInput = Candidate;
+			return true;
+		}
+	}
+	return false;
+}
+
+FString NiagaraModuleInputDIShortNameFromVariable(const FNiagaraVariable& Input)
+{
+	return NiagaraModuleInputDIShortName(Input.GetName());
+}
 } // namespace
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -294,6 +359,7 @@ bool FNiagaraModuleInputDIContractTest::RunTest(const FString&)
 	FMCPToolRegistry Registry;
 	Registry.BeginDomainRegistration(TEXT("content"));
 	UEAIIntegrationTools::RegisterNiagaraGraphModuleTools(Registry);
+	UEAIIntegrationTools::RegisterNiagaraDynamicInputTools(Registry);
 	Registry.EndDomainRegistration();
 
 	TestNotNull(TEXT("Module-input-DI tool registers"),
@@ -432,22 +498,220 @@ bool FNiagaraModuleInputDIContractTest::RunTest(const FString&)
 	TestFalse(TEXT("Module input dynamic input never saves"), SetResult.Data->GetBoolField(TEXT("saved")));
 	TestTrue(TEXT("Module input dynamic input reports compiled"), SetResult.Data->GetBoolField(TEXT("compiled")));
 
+	{
+		auto SearchParams = MakeShared<FJsonObject>();
+		SearchParams->SetStringField(TEXT("query"), DynamicInputScript->GetName());
+		SearchParams->SetNumberField(TEXT("limit"), 16);
+		const FMCPToolResult SearchResult = Registry.ExecuteTool(
+			TEXT("content.niagara.graph.dynamic_input.search"), SearchParams);
+		TestTrue(TEXT("Dynamic input search succeeds"), SearchResult.bSuccess);
+		bool bFoundScript = false;
+		if (SearchResult.Data)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* Rows = nullptr;
+			if (SearchResult.Data->TryGetArrayField(TEXT("dynamicInputs"), Rows) && Rows)
+			{
+				for (const TSharedPtr<FJsonValue>& RowValue : *Rows)
+				{
+					const TSharedPtr<FJsonObject> Row = RowValue.IsValid() ? RowValue->AsObject() : nullptr;
+					FString ObjectPath;
+					if (Row.IsValid() && Row->TryGetStringField(TEXT("path"), ObjectPath)
+						&& ObjectPath.Equals(DynamicInputScript->GetPathName(), ESearchCase::IgnoreCase))
+					{
+						bFoundScript = true;
+						break;
+					}
+				}
+			}
+		}
+		TestTrue(TEXT("Dynamic input search returns the mounted script asset"), bFoundScript);
+	}
+
 	// Independent read-back: the override pin is now linked to a dynamic-input
 	// function-call node.
 	const FNiagaraParameterHandle Aliased = FNiagaraParameterHandle::CreateAliasedModuleParameterHandle(
 		FNiagaraParameterHandle(Linkable.GetName()), Added);
 	UEdGraphPin& OverridePin = FNiagaraStackGraphUtilities::GetOrCreateStackFunctionInputOverridePin(
 		*Added, Aliased, Linkable.GetType(), FGuid(), FGuid());
+	UNiagaraNodeFunctionCall* RootDynamicInputNode = nullptr;
 	bool bDIReadBack = false;
 	if (OverridePin.LinkedTo.Num() == 1 && OverridePin.LinkedTo[0] != nullptr)
 	{
-		UNiagaraNodeFunctionCall* DynamicInputNode =
+		RootDynamicInputNode =
 			Cast<UNiagaraNodeFunctionCall>(OverridePin.LinkedTo[0]->GetOwningNodeUnchecked());
-		bDIReadBack = DynamicInputNode != nullptr
-			&& DynamicInputNode->FunctionScript != nullptr
-			&& DynamicInputNode->FunctionScript->GetUsage() == ENiagaraScriptUsage::DynamicInput;
+		bDIReadBack = RootDynamicInputNode != nullptr
+			&& RootDynamicInputNode->FunctionScript != nullptr
+			&& RootDynamicInputNode->FunctionScript->GetUsage() == ENiagaraScriptUsage::DynamicInput;
 	}
 	TestTrue(TEXT("Override pin read-back is linked to a dynamic-input node"), bDIReadBack);
+
+	// Exercise the complete mounted-Dynamic-Input query/edit surface against
+	// the same isolated authored graph.  The list/tree calls must expose the
+	// stable node GUID used by value.get and remove; no result here is accepted
+	// merely because the transport returned ok=true.
+	auto MakeMountedDynamicInputParams = [&]()
+	{
+		auto Params = MakeShared<FJsonObject>();
+		Params->SetStringField(TEXT("system"), Fixture.System->GetPathName());
+		Params->SetStringField(TEXT("emitter"), Fixture.EmitterName);
+		Params->SetStringField(TEXT("outputNodePath"), ParticleUpdatePath);
+		Params->SetStringField(TEXT("moduleSelector"), ModuleScript->GetPathName());
+		return Params;
+	};
+	FString MountedDynamicInputGuid;
+	FString MountedNestedDynamicInputGuid;
+	{
+		const FMCPToolResult ListResult = Registry.ExecuteTool(
+			TEXT("content.niagara.graph.module.dynamic_inputs.list"),
+			MakeMountedDynamicInputParams());
+		TestTrue(TEXT("Mounted dynamic input list succeeds"), ListResult.bSuccess);
+		if (ListResult.Data)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* Entries = nullptr;
+			if (ListResult.Data->TryGetArrayField(TEXT("dynamicInputs"), Entries)
+				&& Entries && Entries->Num() > 0)
+			{
+				const TSharedPtr<FJsonObject> Entry = (*Entries)[0].IsValid()
+					? (*Entries)[0]->AsObject() : nullptr;
+				if (Entry.IsValid())
+				{
+					Entry->TryGetStringField(TEXT("dynamicInputGuid"), MountedDynamicInputGuid);
+				}
+			}
+		}
+	}
+	TestTrue(TEXT("Mounted dynamic input list returns a stable GUID"), !MountedDynamicInputGuid.IsEmpty());
+	if (!MountedDynamicInputGuid.IsEmpty())
+	{
+		const FMCPToolResult TreeResult = Registry.ExecuteTool(
+			TEXT("content.niagara.graph.module.dynamic_inputs.tree"),
+			MakeMountedDynamicInputParams());
+		TestTrue(TEXT("Mounted dynamic input tree succeeds"), TreeResult.bSuccess);
+		if (TreeResult.Data)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* Roots = nullptr;
+			bool bGuidFoundInTree = false;
+			if (TreeResult.Data->TryGetArrayField(TEXT("dynamicInputs"), Roots) && Roots)
+			{
+				for (const TSharedPtr<FJsonValue>& RootValue : *Roots)
+				{
+					const TSharedPtr<FJsonObject> Root = RootValue.IsValid() ? RootValue->AsObject() : nullptr;
+					FString RootGuid;
+					if (Root.IsValid() && Root->TryGetStringField(TEXT("dynamicInputGuid"), RootGuid)
+						&& RootGuid.Equals(MountedDynamicInputGuid, ESearchCase::IgnoreCase))
+					{
+						bGuidFoundInTree = true;
+						break;
+					}
+				}
+			}
+			TestTrue(TEXT("Dynamic input tree preserves the list GUID"), bGuidFoundInTree);
+		}
+
+		const FMCPToolResult ScriptInputs = Registry.ExecuteTool(
+			TEXT("content.niagara.graph.dynamic_input.inputs.get"),
+			MakeShared<FJsonObject>());
+		// This intentionally validates the stable error contract for a malformed
+		// query before issuing value.get; the latter needs a script sub-input
+		// name that varies across Niagara engine versions.
+		TestFalse(TEXT("Dynamic input inputs query rejects a missing script path"), ScriptInputs.bSuccess);
+		TestEqual(TEXT("Missing dynamic input script uses the required-field code"),
+			ScriptInputs.ErrorCode, FString(TEXT("script_path_required")));
+		auto ValidScriptParams = MakeShared<FJsonObject>();
+		ValidScriptParams->SetStringField(TEXT("scriptPath"), DynamicInputScript->GetPathName());
+		const FMCPToolResult ValidScriptInputs = Registry.ExecuteTool(
+			TEXT("content.niagara.graph.dynamic_input.inputs.get"), ValidScriptParams);
+		TestTrue(TEXT("Dynamic input script inputs query succeeds"), ValidScriptInputs.bSuccess);
+		if (ValidScriptInputs.Data)
+			TestEqual(TEXT("Dynamic input inputs query identifies the script"),
+				ValidScriptInputs.Data->GetStringField(TEXT("scriptPath")), DynamicInputScript->GetPathName());
+
+	}
+
+	// Exercise a second level when the mounted script exposes a compatible
+	// authored input. The setter receives the root GUID as a scope and resolves
+	// the child beneath it, proving complete-tree edits stay module-local.
+	if (RootDynamicInputNode && !MountedDynamicInputGuid.IsEmpty())
+	{
+		FNiagaraVariable NestedInput;
+		if (FindNiagaraModuleInputDINestedLinkable(
+			Fixture.System, Fixture.EmitterName, RootDynamicInputNode, NestedInput))
+		{
+			UNiagaraScript* NestedScript = FindNiagaraModuleInputDIScriptForType(NestedInput.GetType());
+			if (NestedScript)
+			{
+				auto NestedSetParams = MakeNiagaraModuleInputDIParams(
+					Fixture, ParticleUpdatePath, ModuleScript->GetPathName(),
+					NiagaraModuleInputDIShortNameFromVariable(NestedInput),
+					NestedScript->GetPathName());
+				NestedSetParams->SetStringField(TEXT("dynamicInputGuid"), MountedDynamicInputGuid);
+				const FMCPToolResult NestedSet = Registry.ExecuteTool(
+					TEXT("content.niagara.graph.module.input.di.set"), NestedSetParams);
+				if (TestTrue(TEXT("Nested Dynamic Input set succeeds"), NestedSet.bSuccess))
+				{
+					const FMCPToolResult NestedValue = Registry.ExecuteTool(
+						TEXT("content.niagara.graph.module.dynamic_input.value.get"), NestedSetParams);
+					if (TestTrue(TEXT("Nested Dynamic Input value read succeeds"), NestedValue.bSuccess)
+						&& NestedValue.Data)
+					{
+						TestEqual(TEXT("Nested Dynamic Input value reports a dynamic source"),
+							NestedValue.Data->GetStringField(TEXT("source")), FString(TEXT("dynamicInput")));
+						TestEqual(TEXT("Nested Dynamic Input value reports the child script"),
+							NestedValue.Data->GetStringField(TEXT("nestedDynamicInputPath")),
+							NestedScript->GetPathName());
+					}
+
+					// Discover the child GUID from the complete tree and remove only
+					// that child. The root remains mounted, proving subtree removal
+					// does not accidentally clear the enclosing module input.
+					const FMCPToolResult NestedTree = Registry.ExecuteTool(
+						TEXT("content.niagara.graph.module.dynamic_inputs.tree"),
+						MakeMountedDynamicInputParams());
+					FString NestedGuid;
+					if (NestedTree.Data)
+					{
+						const TArray<TSharedPtr<FJsonValue>>* Roots = nullptr;
+						if (NestedTree.Data->TryGetArrayField(TEXT("dynamicInputs"), Roots) && Roots)
+						{
+							for (const TSharedPtr<FJsonValue>& RootValue : *Roots)
+							{
+								const TSharedPtr<FJsonObject> Root = RootValue.IsValid()
+									? RootValue->AsObject() : nullptr;
+								if (!Root.IsValid()
+									|| !Root->GetStringField(TEXT("dynamicInputGuid"))
+										.Equals(MountedDynamicInputGuid, ESearchCase::IgnoreCase))
+								{
+									continue;
+								}
+								const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
+								if (Root->TryGetArrayField(TEXT("children"), Children) && Children
+									&& Children->Num() > 0)
+								{
+									const TSharedPtr<FJsonObject> Child = (*Children)[0].IsValid()
+										? (*Children)[0]->AsObject() : nullptr;
+									if (Child.IsValid())
+										Child->TryGetStringField(TEXT("dynamicInputGuid"), NestedGuid);
+								}
+								break;
+							}
+						}
+					}
+					if (TestTrue(TEXT("Nested tree exposes a child GUID"), !NestedGuid.IsEmpty()))
+					{
+						MountedNestedDynamicInputGuid = NestedGuid;
+					}
+				}
+			}
+			else
+			{
+				AddInfo(TEXT("No type-compatible child Dynamic Input script was found; nested-tree edit coverage was skipped."));
+			}
+		}
+		else
+		{
+			AddInfo(TEXT("The mounted Dynamic Input exposes no linkable child input; nested-tree edit coverage was skipped."));
+		}
+	}
 
 	// The authored System Spec exporter must carry the mounted Dynamic Input
 	// tree, and importing that unchanged tree must preserve its node identity.
@@ -461,7 +725,9 @@ bool FNiagaraModuleInputDIContractTest::RunTest(const FString&)
 	{
 		FString ExportedDynamicGuid;
 		FString ExportedTreeGuid;
+		FString ExportedNestedGuid;
 		bool bFoundDynamicTree = false;
+		bool bFoundNestedTree = false;
 		const TArray<TSharedPtr<FJsonValue>>* Emitters = nullptr;
 		if (SpecExport.Data->TryGetArrayField(TEXT("emitters"), Emitters) && Emitters)
 		{
@@ -489,6 +755,21 @@ bool FNiagaraModuleInputDIContractTest::RunTest(const FString&)
 							Input->TryGetStringField(TEXT("dynamicInputGuid"), ExportedDynamicGuid);
 							(*Tree)->TryGetStringField(TEXT("guid"), ExportedTreeGuid);
 							bFoundDynamicTree = !ExportedDynamicGuid.IsEmpty() && ExportedDynamicGuid == ExportedTreeGuid;
+							const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
+							if ((*Tree)->TryGetArrayField(TEXT("children"), Children) && Children)
+							{
+								for (const TSharedPtr<FJsonValue>& ChildValue : *Children)
+								{
+									const TSharedPtr<FJsonObject> Child = ChildValue.IsValid()
+										? ChildValue->AsObject() : nullptr;
+									if (Child.IsValid() && Child->TryGetStringField(TEXT("guid"), ExportedNestedGuid)
+										&& !ExportedNestedGuid.IsEmpty())
+									{
+										bFoundNestedTree = true;
+										break;
+									}
+								}
+							}
 							break;
 						}
 						if (bFoundDynamicTree) break;
@@ -499,8 +780,18 @@ bool FNiagaraModuleInputDIContractTest::RunTest(const FString&)
 			}
 		}
 		TestTrue(TEXT("System spec preserves the dynamic input GUID in its tree root"), bFoundDynamicTree);
+		if (!MountedNestedDynamicInputGuid.IsEmpty())
+		{
+			TestTrue(TEXT("System spec preserves the nested dynamic input tree"), bFoundNestedTree);
+			if (bFoundNestedTree)
+			{
+				TestEqual(TEXT("System spec preserves the nested dynamic input GUID"),
+					ExportedNestedGuid, MountedNestedDynamicInputGuid);
+			}
+		}
 		if (bFoundDynamicTree)
 		{
+			const FString OriginalDynamicSpecDigest = SpecExport.Data->GetStringField(TEXT("specDigest"));
 			auto SpecImportParams = MakeShared<FJsonObject>();
 			SpecImportParams->SetStringField(TEXT("system"), Fixture.System->GetPathName());
 			SpecImportParams->SetObjectField(TEXT("spec"), SpecExport.Data);
@@ -509,8 +800,71 @@ bool FNiagaraModuleInputDIContractTest::RunTest(const FString&)
 			const FMCPToolResult SpecImport = Registry.ExecuteTool(
 				TEXT("content.niagara.system.spec.import"), SpecImportParams);
 			TestTrue(TEXT("System spec imports a mounted dynamic input tree"), SpecImport.bSuccess);
+			if (!SpecImport.bSuccess)
+			{
+				AddError(FString::Printf(
+					TEXT("System spec import failed: code=%s status=%d message=%s"),
+					*SpecImport.ErrorCode,
+					SpecImport.HttpStatus,
+					*SpecImport.ErrorMessage));
+			}
 			if (SpecImport.Data)
 				TestTrue(TEXT("System spec dynamic tree import verifies readback"), SpecImport.Data->GetBoolField(TEXT("readbackVerified")));
+			if (SpecImport.bSuccess)
+			{
+				auto VerifySpecExportParams = MakeShared<FJsonObject>();
+				VerifySpecExportParams->SetStringField(TEXT("system"), Fixture.System->GetPathName());
+				const FMCPToolResult VerifySpecExport = Registry.ExecuteTool(
+					TEXT("content.niagara.system.spec.export"), VerifySpecExportParams);
+				TestTrue(TEXT("System spec export after dynamic tree import succeeds"), VerifySpecExport.bSuccess);
+				if (VerifySpecExport.Data)
+				{
+					TestEqual(
+						TEXT("Unchanged dynamic tree import preserves the canonical spec digest"),
+						VerifySpecExport.Data->GetStringField(TEXT("specDigest")),
+						OriginalDynamicSpecDigest);
+				}
+			}
+		}
+	}
+
+	// Remove the nested node only after spec export/import has verified that its
+	// GUID and child tree survive a round trip. The enclosing root must remain.
+	if (!MountedNestedDynamicInputGuid.IsEmpty())
+	{
+		auto NestedRemoveParams = MakeMountedDynamicInputParams();
+		NestedRemoveParams->SetStringField(TEXT("dynamicInputGuid"), MountedNestedDynamicInputGuid);
+		const FMCPToolResult NestedRemove = Registry.ExecuteTool(
+			TEXT("content.niagara.graph.module.dynamic_input.remove"), NestedRemoveParams);
+		TestTrue(TEXT("Nested Dynamic Input remove succeeds"), NestedRemove.bSuccess);
+		const FMCPToolResult RootAfterRemove = Registry.ExecuteTool(
+			TEXT("content.niagara.graph.module.dynamic_inputs.list"),
+			MakeMountedDynamicInputParams());
+		TestTrue(TEXT("Root Dynamic Input remains after nested remove"), RootAfterRemove.bSuccess
+			&& RootAfterRemove.Data
+			&& RootAfterRemove.Data->GetIntegerField(TEXT("dynamicInputCount")) == 1);
+	}
+
+	// Remove only after the spec round-trip assertions above have observed the
+	// mounted tree.  The read-back must prove that the GUID is gone as well as
+	// returning a successful mutation result.
+	if (!MountedDynamicInputGuid.IsEmpty())
+	{
+		auto RemoveParams = MakeMountedDynamicInputParams();
+		RemoveParams->SetStringField(TEXT("dynamicInputGuid"), MountedDynamicInputGuid);
+		RemoveParams->SetBoolField(TEXT("confirmWrite"), true);
+		const FMCPToolResult RemoveResult = Registry.ExecuteTool(
+			TEXT("content.niagara.graph.module.dynamic_input.remove"), RemoveParams);
+		TestTrue(TEXT("Mounted dynamic input remove succeeds"), RemoveResult.bSuccess);
+		if (RemoveResult.bSuccess)
+		{
+			const FMCPToolResult VerifyList = Registry.ExecuteTool(
+				TEXT("content.niagara.graph.module.dynamic_inputs.list"),
+				MakeMountedDynamicInputParams());
+			TestTrue(TEXT("Mounted dynamic input list succeeds after remove"), VerifyList.bSuccess);
+			if (VerifyList.Data)
+				TestEqual(TEXT("Removed dynamic input no longer appears in list"),
+					VerifyList.Data->GetNumberField(TEXT("dynamicInputCount")), 0.0);
 		}
 	}
 	return true;

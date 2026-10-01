@@ -38,6 +38,7 @@
 #include "Materials/MaterialFunction.h"
 #include "MaterialEditingLibrary.h"
 #include "Infrastructure/MaterialGraphIdentity.h"
+#include "Core/MCPExecutor.h"
 #include "UObject/UnrealType.h"
 #include "Materials/MaterialExpression.h"
 #include "Misc/App.h"
@@ -5522,23 +5523,48 @@ bool FWorkflowRuntime::ExecuteOperation(
 	const TSharedPtr<FJsonObject> MutableOperation = CloneObject(Operation);
 	const FString OperationId = GetStringField(MutableOperation, TEXT("id"));
 	const FString CapabilityId = GetStringField(MutableOperation, TEXT("type"));
+	// Workflow operations historically called the registry directly, which
+	// bypassed the transport executor's six-state verification envelope. Keep
+	// the workflow approval and deferred-compile path unchanged, but annotate
+	// every operation outcome at this boundary. Preflight failures are explicit
+	// non-execution outcomes; failures returned by the handler are executions.
+	TSharedPtr<FJsonObject> VerificationParams = MutableOperation.IsValid()
+		? MutableOperation
+		: MakeShared<FJsonObject>();
+	auto AnnotateOperation =
+		[&](FMCPResult& Result, const bool bExecuted)
+	{
+		FMCPExecutionContext Context;
+		Context.Capability = CapabilityId;
+		Context.Params = VerificationParams;
+		FMCPExecutor VerificationExecutor(Registry);
+		VerificationExecutor.AnnotateVerification(Context, Result, bExecuted);
+	};
+	auto FailPreflight =
+		[&](const FString& Code,
+			const FString& Message,
+			const int32 HttpStatus,
+			const TSharedPtr<FJsonObject>& Details = nullptr)
+	{
+		OutFailure = FMCPResult::Fail(Code, Message, HttpStatus, Details);
+		AnnotateOperation(OutFailure, false);
+		return false;
+	};
 	if (OperationId.IsEmpty() || CapabilityId.IsEmpty())
 	{
-		OutFailure = FMCPResult::Fail(
+		return FailPreflight(
 			TEXT("workflow_core_invalid_response"),
 			TEXT("Normalized workflow operation is missing id or type."),
 			500);
-		return false;
 	}
 	if (!Registry.FindTool(CapabilityId))
 	{
-		OutFailure = FMCPResult::Fail(
+		return FailPreflight(
 			TEXT("capability_not_found"),
 			FString::Printf(
 				TEXT("Workflow capability '%s' is not registered."),
 				*CapabilityId),
 			404);
-		return false;
 	}
 
 	TSharedPtr<FJsonObject> Params = MakeShared<FJsonObject>();
@@ -5551,20 +5577,18 @@ bool FWorkflowRuntime::ExecuteOperation(
 	}
 	if (Params->HasField(TEXT("__ueWorkflow")))
 	{
-		OutFailure = FMCPResult::Fail(
+		return FailPreflight(
 			TEXT("invalid_params"),
 			TEXT("Reserved field '__ueWorkflow' cannot be authored."),
 			422);
-		return false;
 	}
 	FString Error;
 	if (!InjectScopeParams(CapabilityId, Scope, Params, Error))
 	{
-		OutFailure = FMCPResult::Fail(
+		return FailPreflight(
 			TEXT("workflow_scope_mismatch"),
 			Error,
 			422);
-		return false;
 	}
 
 	TSet<FString> ScopeParameters;
@@ -5613,23 +5637,21 @@ bool FWorkflowRuntime::ExecuteOperation(
 				Details->SetStringField(
 					TEXT("protectedParameter"),
 					Destination);
-				OutFailure = FMCPResult::Fail(
+				return FailPreflight(
 					TEXT("workflow_scope_mismatch"),
 					TEXT("A binding cannot target a scope-bound or forbidden parameter."),
 					422,
 					Details);
-				return false;
 			}
 		}
 	}
 
 	if (!ResolveBindings(MutableOperation, PriorOutputs, Params, Error))
 	{
-		OutFailure = FMCPResult::Fail(
+		return FailPreflight(
 			TEXT("workflow_binding_failed"),
 			Error,
 			422);
-		return false;
 	}
 	if (!InjectScopeParams(CapabilityId, Scope, Params, Error)
 		|| (CapabilityId.StartsWith(TEXT("content.material."))
@@ -5641,24 +5663,22 @@ bool FWorkflowRuntime::ExecuteOperation(
 			Error =
 				TEXT("Material and materialFunction targets cannot escape their scoped asset kind.");
 		}
-		OutFailure = FMCPResult::Fail(
+		return FailPreflight(
 			TEXT("workflow_scope_mismatch"),
 			Error,
 			422);
-		return false;
 	}
 
 	TArray<FString> ParamErrors;
 	if (!Registry.ValidateParams(CapabilityId, Params, ParamErrors))
 	{
-		OutFailure = FMCPResult::Fail(
+		return FailPreflight(
 			TEXT("invalid_params"),
 			FString::Printf(
 				TEXT("Workflow operation '%s' failed capability schema validation."),
 				*OperationId),
 			422,
 			MakeDiagnostics(ParamErrors));
-		return false;
 	}
 
 	TSharedPtr<FJsonObject> InternalParams = CloneObject(Params);
@@ -5685,12 +5705,15 @@ bool FWorkflowRuntime::ExecuteOperation(
 				: ToolResult.ErrorMessage,
 			ToolResult.HttpStatus >= 400 ? ToolResult.HttpStatus : 500,
 			ToolResult.Data);
+		VerificationParams = InternalParams;
+		AnnotateOperation(OutFailure, true);
 		return false;
 	}
 
-	OutResult = ToolResult.Data.IsValid()
-		? ToolResult.Data
-		: MakeShared<FJsonObject>();
+	FMCPResult HandlerResult = FMCPResult::Ok(ToolResult.Data);
+	VerificationParams = InternalParams;
+	AnnotateOperation(HandlerResult, true);
+	OutResult = HandlerResult.Data;
 	bool bSemanticSuccess = true;
 	if (OutResult->TryGetBoolField(TEXT("success"), bSemanticSuccess)
 		&& !bSemanticSuccess)
@@ -5702,6 +5725,7 @@ bool FWorkflowRuntime::ExecuteOperation(
 				*CapabilityId),
 			500,
 			OutResult);
+		AnnotateOperation(OutFailure, true);
 		return false;
 	}
 	// Keep execution-phase metadata explicit even for legacy handlers that do
@@ -5734,6 +5758,7 @@ bool FWorkflowRuntime::ExecuteOperation(
 				TEXT("Create operation did not create the exact scoped asset."),
 				500,
 				Details);
+			AnnotateOperation(OutFailure, true);
 			return false;
 		}
 	}

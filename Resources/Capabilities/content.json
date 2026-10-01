@@ -1740,7 +1740,7 @@
       "id": "content.material.expression.value.set",
       "domain": "content",
       "kind": "command",
-      "description": "Set a value on a material expression (Constant, Vector, Parameter, Custom code, etc.).",
+      "description": "Set a value on a material expression (Constant, Vector, Parameter, Custom code, etc.). Shared expressions with more than one authored consumer require a fresh graph boundary and explicit shared-node confirmation; the result reports the detected consumers and confirmation state.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1785,6 +1785,22 @@
           "expectedPreviewId": {
             "type": "string",
             "description": "Required for preview writes. Read editor.context.get first; detects a closed/reopened editor."
+          },
+          "snapshotId": {
+            "type": "string",
+            "description": "Required for shared authored expressions. Immutable graph snapshot used to create boundaryId."
+          },
+          "boundaryId": {
+            "type": "string",
+            "description": "Fresh graph.boundary.get proof for the selected node set; required when the expression has multiple authored consumers."
+          },
+          "expectedProjectionHash": {
+            "type": "string",
+            "description": "Projection hash returned by the source graph snapshot; stale authored writes are rejected."
+          },
+          "confirmSharedNodeImpact": {
+            "type": "boolean",
+            "description": "Required when the boundary reports externally consumed shared nodes."
           }
         },
         "required": [
@@ -2045,7 +2061,7 @@
       "id": "content.material.graph.restore",
       "domain": "content",
       "kind": "command",
-      "description": "Restore only missing material graph connections from a matching snapshot after a fresh current-state digest check. This dirty-only legacy operation never breaks existing links, is not a full graph restore, and never saves the package.",
+      "description": "Restore a material graph from a matching snapshot after a fresh current-state digest check. By default this does not restore the full graph: connectionsOnly adds missing links without breaking existing links; explicit fullGraph mode replaces the complete connection topology only with confirmation. Both modes are dirty-only and never save the package.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2077,6 +2093,20 @@
             "type": "boolean",
             "default": false,
             "description": "Disk persistence is not supported by this legacy restore; save=true is rejected before mutation. Successful apply remains dirty-only."
+          },
+          "restoreMode": {
+            "type": "string",
+            "enum": [
+              "connectionsOnly",
+              "fullGraph"
+            ],
+            "default": "connectionsOnly",
+            "description": "Restore semantics. fullGraph requires an exact snapshot node set and confirmFullGraphRestore=true; it may remove links absent from the snapshot."
+          },
+          "confirmFullGraphRestore": {
+            "type": "boolean",
+            "const": true,
+            "description": "Explicit confirmation required for fullGraph mode because it can remove authored links."
           }
         },
         "required": [
@@ -13724,7 +13754,7 @@
       "id": "content.niagara.renderer.property.set",
       "domain": "content",
       "kind": "command",
-      "description": "Set a bounded, enumerated renderer property (enabled, sortOrderHint, sortMode, facingMode, alignment, subImageSize, subImageBlend, shape, tessellationMode, tessellationFactor or tubeSubdivisions). Unsupported properties are rejected with the supported set. Never performs arbitrary UProperty reflection.",
+      "description": "Set a bounded, enumerated renderer property (enabled, sortOrderHint, sortMode, facingMode, alignment, subImageSize/subUVSize, subImageBlend/subUVBlend, shape, tessellationMode, tessellationFactor or tubeSubdivisions). Unsupported properties are rejected with the supported set. Never performs arbitrary UProperty reflection.",
       "requires": {
         "features": [
           "Niagara"
@@ -13761,7 +13791,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 256,
-            "description": "Whitelisted property key: enabled, sortOrderHint, sortMode, facingMode, alignment, subImageSize, subImageBlend, shape, tessellationMode, tessellationFactor or tubeSubdivisions."
+            "description": "Whitelisted property key: enabled, sortOrderHint, sortMode, facingMode, alignment, subImageSize/subUVSize, subImageBlend/subUVBlend, shape, tessellationMode, tessellationFactor or tubeSubdivisions. subUVSize and subUVBlend are aliases for the native SubImageSize and bSubImageBlend fields."
           },
           "value": {
             "anyOf": [
@@ -13778,7 +13808,7 @@
                 "type": "object"
               }
             ],
-            "description": "Type-directed value: boolean for enabled/subImageBlend, integer for sortOrderHint/tessellationFactor/tubeSubdivisions, enum name string for sortMode/facingMode/alignment/shape/tessellationMode, {x, y} object for subImageSize."
+              "description": "Type-directed value: boolean for enabled/subImageBlend/subUVBlend, integer for sortOrderHint/tessellationFactor/tubeSubdivisions, enum name string for sortMode/facingMode/alignment/shape/tessellationMode, {x, y} object for subImageSize/subUVSize."
           }
         },
         "required": [
@@ -15512,6 +15542,39 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 128
+          },
+          "numIterations": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535
+          },
+          "numIterationsBinding": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "properties": {
+            "type": "object",
+            "description": "Editable Generic Simulation Stage properties. Values are typed according to the Niagara property and are included in the plan digest and readback.",
+            "properties": {
+              "iterationSource": {"type": "string", "enum": ["Particles", "DataInterface", "DirectSet"]},
+              "executeBehavior": {"type": "string", "enum": ["Always", "OnSimulationReset", "NotOnSimulationReset"]},
+              "disablePartialParticleUpdate": {"type": "boolean"},
+              "particleIterationStateEnabled": {"type": "boolean"},
+              "particleIterationStateBinding": {"type": "object"},
+              "particleIterationStateRange": {"type": "object"},
+              "gpuDispatchForceLinear": {"type": "boolean"},
+              "overrideGpuDispatchNumThreads": {"type": "boolean"},
+              "directDispatchType": {"type": "string", "enum": ["OneD", "TwoD", "ThreeD", "Custom"]},
+              "directDispatchElementType": {"type": "string", "enum": ["NumThreads", "NumThreadsNoClipping", "NumGroups"]},
+              "overrideGpuDispatchNumThreadsX": {"type": "object"},
+              "overrideGpuDispatchNumThreadsY": {"type": "object"},
+              "overrideGpuDispatchNumThreadsZ": {"type": "object"},
+              "elementCountX": {"type": "object"},
+              "elementCountY": {"type": "object"},
+              "elementCountZ": {"type": "object"},
+              "dataInterface": {"type": "object"}
+            },
+            "additionalProperties": false
           }
         },
         "required": [
@@ -15597,6 +15660,31 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 128
+          },
+          "numIterations": {"type": "integer", "minimum": 0, "maximum": 65535},
+          "numIterationsBinding": {"type": "string", "maxLength": 2048},
+          "properties": {
+            "type": "object",
+            "properties": {
+              "iterationSource": {"type": "string", "enum": ["Particles", "DataInterface", "DirectSet"]},
+              "executeBehavior": {"type": "string", "enum": ["Always", "OnSimulationReset", "NotOnSimulationReset"]},
+              "disablePartialParticleUpdate": {"type": "boolean"},
+              "particleIterationStateEnabled": {"type": "boolean"},
+              "particleIterationStateBinding": {"type": "object"},
+              "particleIterationStateRange": {"type": "object"},
+              "gpuDispatchForceLinear": {"type": "boolean"},
+              "overrideGpuDispatchNumThreads": {"type": "boolean"},
+              "directDispatchType": {"type": "string", "enum": ["OneD", "TwoD", "ThreeD", "Custom"]},
+              "directDispatchElementType": {"type": "string", "enum": ["NumThreads", "NumThreadsNoClipping", "NumGroups"]},
+              "overrideGpuDispatchNumThreadsX": {"type": "object"},
+              "overrideGpuDispatchNumThreadsY": {"type": "object"},
+              "overrideGpuDispatchNumThreadsZ": {"type": "object"},
+              "elementCountX": {"type": "object"},
+              "elementCountY": {"type": "object"},
+              "elementCountZ": {"type": "object"},
+              "dataInterface": {"type": "object"}
+            },
+            "additionalProperties": false
           },
           "requestId": {
             "type": "string",
@@ -15721,7 +15809,7 @@
       "domain": "content", "kind": "query",
       "description": "Plan updating an existing Niagara Simulation Stage name, enabled state, or stack index.",
       "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
-      "inputSchema": {"type": "object", "properties": {"system": {"type": "string", "minLength": 1}, "emitter": {"type": "string", "minLength": 1}, "usageId": {"type": "string", "minLength": 1}, "stageClass": {"type": "string"}, "name": {"type": "string"}, "enabled": {"type": "boolean"}, "index": {"type": "integer", "minimum": 0, "maximum": 128}}, "required": ["system", "emitter", "usageId"], "additionalProperties": false},
+      "inputSchema": {"type": "object", "properties": {"system": {"type": "string", "minLength": 1}, "emitter": {"type": "string", "minLength": 1}, "usageId": {"type": "string", "minLength": 1}, "stageClass": {"type": "string"}, "name": {"type": "string"}, "enabled": {"type": "boolean"}, "index": {"type": "integer", "minimum": 0, "maximum": 128}, "numIterations": {"type": "integer", "minimum": 0, "maximum": 65535}, "numIterationsBinding": {"type": "string", "maxLength": 2048}, "properties": {"type": "object", "additionalProperties": false, "properties": {"iterationSource": {"type": "string", "enum": ["Particles", "DataInterface", "DirectSet"]}, "executeBehavior": {"type": "string", "enum": ["Always", "OnSimulationReset", "NotOnSimulationReset"]}, "disablePartialParticleUpdate": {"type": "boolean"}, "particleIterationStateEnabled": {"type": "boolean"}, "particleIterationStateBinding": {"type": "object"}, "particleIterationStateRange": {"type": "object"}, "gpuDispatchForceLinear": {"type": "boolean"}, "overrideGpuDispatchNumThreads": {"type": "boolean"}, "directDispatchType": {"type": "string", "enum": ["OneD", "TwoD", "ThreeD", "Custom"]}, "directDispatchElementType": {"type": "string", "enum": ["NumThreads", "NumThreadsNoClipping", "NumGroups"]}, "overrideGpuDispatchNumThreadsX": {"type": "object"}, "overrideGpuDispatchNumThreadsY": {"type": "object"}, "overrideGpuDispatchNumThreadsZ": {"type": "object"}, "elementCountX": {"type": "object"}, "elementCountY": {"type": "object"}, "elementCountZ": {"type": "object"}, "dataInterface": {"type": "object"}}}}, "required": ["system", "emitter", "usageId"], "additionalProperties": false},
       "traits": {"destructive": false, "expensive": false}, "output": {"kind": "json"},
       "dsl": {"admission": "observeOnly", "scopeKinds": [], "transactionDomain": "none", "deferCompile": false, "risk": "readOnly"},
       "effects": {"asset": "read", "world": "none", "editorSession": "none", "external": "none"},
@@ -15732,7 +15820,7 @@
       "domain": "content", "kind": "command",
       "description": "Apply an approved Simulation Stage update with compile/read-back verification and same-Editor rollback.",
       "requires": {"features": ["Niagara"], "plugins": ["Niagara"], "modules": ["Niagara"]},
-      "inputSchema": {"type": "object", "properties": {"system": {"type": "string", "minLength": 1}, "emitter": {"type": "string", "minLength": 1}, "usageId": {"type": "string", "minLength": 1}, "stageClass": {"type": "string"}, "name": {"type": "string"}, "enabled": {"type": "boolean"}, "index": {"type": "integer", "minimum": 0, "maximum": 128}, "requestId": {"type": "string", "minLength": 1}, "approvePlanDigest": {"type": "string", "minLength": 1}, "confirmWrite": {"type": "boolean", "const": true}}, "required": ["system", "emitter", "usageId", "requestId", "approvePlanDigest", "confirmWrite"], "additionalProperties": false},
+       "inputSchema": {"type": "object", "properties": {"system": {"type": "string", "minLength": 1}, "emitter": {"type": "string", "minLength": 1}, "usageId": {"type": "string", "minLength": 1}, "stageClass": {"type": "string"}, "name": {"type": "string"}, "enabled": {"type": "boolean"}, "index": {"type": "integer", "minimum": 0, "maximum": 128}, "numIterations": {"type": "integer", "minimum": 0, "maximum": 65535}, "numIterationsBinding": {"type": "string", "maxLength": 2048}, "properties": {"type": "object", "additionalProperties": false, "properties": {"iterationSource": {"type": "string", "enum": ["Particles", "DataInterface", "DirectSet"]}, "executeBehavior": {"type": "string", "enum": ["Always", "OnSimulationReset", "NotOnSimulationReset"]}, "disablePartialParticleUpdate": {"type": "boolean"}, "particleIterationStateEnabled": {"type": "boolean"}, "particleIterationStateBinding": {"type": "object"}, "particleIterationStateRange": {"type": "object"}, "gpuDispatchForceLinear": {"type": "boolean"}, "overrideGpuDispatchNumThreads": {"type": "boolean"}, "directDispatchType": {"type": "string", "enum": ["OneD", "TwoD", "ThreeD", "Custom"]}, "directDispatchElementType": {"type": "string", "enum": ["NumThreads", "NumThreadsNoClipping", "NumGroups"]}, "overrideGpuDispatchNumThreadsX": {"type": "object"}, "overrideGpuDispatchNumThreadsY": {"type": "object"}, "overrideGpuDispatchNumThreadsZ": {"type": "object"}, "elementCountX": {"type": "object"}, "elementCountY": {"type": "object"}, "elementCountZ": {"type": "object"}, "dataInterface": {"type": "object"}}}, "requestId": {"type": "string", "minLength": 1}, "approvePlanDigest": {"type": "string", "minLength": 1}, "confirmWrite": {"type": "boolean", "const": true}}, "required": ["system", "emitter", "usageId", "requestId", "approvePlanDigest", "confirmWrite"], "additionalProperties": false},
       "traits": {"destructive": false, "expensive": true}, "output": {"kind": "json"},
       "dsl": {"admission": "none", "scopeKinds": [], "transactionDomain": "asset", "deferCompile": false, "risk": "confirmWrite"},
       "effects": {"asset": "write", "world": "none", "editorSession": "write", "external": "none"},
@@ -16342,7 +16430,7 @@
       "id": "content.niagara.system.spec.import",
       "domain": "content",
       "kind": "command",
-      "description": "Import authored user-parameter defaults from a Niagara System spec after strict emitter/renderer/stack structure validation. The package is marked dirty and is never saved implicitly.",
+      "description": "Import authored user-parameter defaults, module input value/binding/dynamic-input trees, and supported renderer properties from a Niagara System spec after strict emitter/renderer/stack structure validation. Explicitly omitted module sources clear existing overrides; the package is marked dirty and is never saved implicitly.",
       "requires": {
         "features": ["Niagara"],
         "plugins": ["Niagara"],

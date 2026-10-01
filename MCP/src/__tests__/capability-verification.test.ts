@@ -172,3 +172,49 @@ test("verification-aware domain routes expose six states on success and failure"
     runtimeVerified: null,
   });
 });
+
+test("every catalog capability receives the common six-state success proof", async () => {
+  const catalog = loadCapabilityCatalog();
+  const executor = {
+    verificationAware: true,
+    execute: async (id: string) => {
+      const descriptor = catalog.get(id);
+      assert.ok(descriptor, id);
+      return descriptor.output.kind === "image"
+        ? { image_base64: "AAAA", mime_type: "image/png" }
+        : {};
+    },
+  } as CapabilityExecutor;
+
+  for (const descriptor of catalog.capabilities) {
+    const response = await runDomainOperation(
+      catalog,
+      executor,
+      descriptor.domain,
+      descriptor.id,
+    );
+    assert.equal(response.isError, false, descriptor.id);
+    const text = response.content.find((item) => item.type === "text");
+    assert.ok(text && text.type === "text", descriptor.id);
+    const payload = JSON.parse(text.text) as Record<string, unknown>;
+    const state = payload.verificationState as Record<string, unknown>;
+    assert.equal(state.schema, "ue.capability-verification.v1", descriptor.id);
+    assert.equal(state.capability, descriptor.id, descriptor.id);
+    assert.equal(state.localDeclared, true, descriptor.id);
+    assert.equal(state.handlerRegistered, true, descriptor.id);
+    assert.equal(state.liveAvailable, true, descriptor.id);
+    assert.equal(state.executed, true, descriptor.id);
+    assert.equal(state.readbackVerified, null, descriptor.id);
+    assert.equal(state.runtimeVerified, null, descriptor.id);
+    for (const field of [
+      "localDeclared",
+      "handlerRegistered",
+      "liveAvailable",
+      "executed",
+      "readbackVerified",
+      "runtimeVerified",
+    ]) {
+      assert.equal(payload[field], state[field], `${descriptor.id}.${field}`);
+    }
+  }
+});

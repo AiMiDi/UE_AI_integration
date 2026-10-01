@@ -14,6 +14,7 @@
 #include "NiagaraEmitterHandle.h"
 #include "NiagaraScript.h"
 #include "NiagaraScriptSource.h"
+#include "NiagaraSimulationStageBase.h"
 #include "NiagaraSystem.h"
 #include "NiagaraSystemFactoryNew.h"
 #include "UObject/Package.h"
@@ -138,6 +139,14 @@ bool FNiagaraSimulationStageAuthoringContractTest::RunTest(const FString&)
 	TSharedPtr<FJsonObject> UpdateParams = BaseStageParams(Fixture, UsageId);
 	UpdateParams->SetStringField(TEXT("name"), TEXT("UpdatedStage"));
 	UpdateParams->RemoveField(TEXT("enabled"));
+	UpdateParams->SetNumberField(TEXT("numIterations"), 4);
+	UpdateParams->SetStringField(TEXT("numIterationsBinding"), TEXT(""));
+	TSharedPtr<FJsonObject> Properties = MakeShared<FJsonObject>();
+	Properties->SetStringField(TEXT("iterationSource"), TEXT("DirectSet"));
+	Properties->SetStringField(TEXT("executeBehavior"), TEXT("OnSimulationReset"));
+	Properties->SetStringField(TEXT("directDispatchType"), TEXT("TwoD"));
+	Properties->SetBoolField(TEXT("disablePartialParticleUpdate"), true);
+	UpdateParams->SetObjectField(TEXT("properties"), Properties);
 	const FMCPToolResult UpdatePlan = Registry.ExecuteTool(TEXT("content.niagara.simulation_stage.update.plan"), UpdateParams);
 	if (!TestTrue(TEXT("Simulation-stage update plan succeeds"), UpdatePlan.bSuccess) || !UpdatePlan.Data)
 	{
@@ -149,7 +158,66 @@ bool FNiagaraSimulationStageAuthoringContractTest::RunTest(const FString&)
 	UpdateParams->SetBoolField(TEXT("confirmWrite"), true);
 	UpdateParams->SetStringField(TEXT("approvePlanDigest"), UpdatePlan.Data->GetStringField(TEXT("planDigest")));
 	const FMCPToolResult Updated = Registry.ExecuteTool(TEXT("content.niagara.simulation_stage.update.apply"), UpdateParams);
-	TestTrue(TEXT("Simulation-stage update apply succeeds"), Updated.bSuccess);
+	if (!TestTrue(TEXT("Simulation-stage update apply succeeds"), Updated.bSuccess) || !Updated.Data)
+	{
+		return false;
+	}
+	const FString UpdateReceipt = Updated.Data->GetStringField(TEXT("receiptId"));
+	TestTrue(TEXT("Simulation-stage update returns a receipt"), !UpdateReceipt.IsEmpty());
+	if (Updated.Data)
+	{
+		TestEqual(TEXT("Updated stage exposes its iteration count"), Updated.Data->GetIntegerField(TEXT("numIterations")), 4);
+		const TSharedPtr<FJsonObject> ReadBackProperties = Updated.Data->GetObjectField(TEXT("properties"));
+		TestEqual(TEXT("Updated stage exposes its iteration source"), ReadBackProperties->GetStringField(TEXT("iterationSource")), FString(TEXT("DirectSet")));
+		TestEqual(TEXT("Updated stage exposes its execute behavior"), ReadBackProperties->GetStringField(TEXT("executeBehavior")), FString(TEXT("OnSimulationReset")));
+		TestEqual(TEXT("Updated stage exposes its dispatch dimensions"), ReadBackProperties->GetStringField(TEXT("directDispatchType")), FString(TEXT("TwoD")));
+	}
+
+	TSharedPtr<FJsonObject> UnsupportedProperties = MakeShared<FJsonObject>();
+	UnsupportedProperties->SetNumberField(TEXT("unsupportedField"), 1);
+	TSharedPtr<FJsonObject> UnsupportedParams = BaseStageParams(Fixture, UsageId);
+	UnsupportedParams->SetObjectField(TEXT("properties"), UnsupportedProperties);
+	const FMCPToolResult UnsupportedUpdate = Registry.ExecuteTool(TEXT("content.niagara.simulation_stage.update.plan"), UnsupportedParams);
+	TestFalse(TEXT("Simulation-stage update rejects unsupported properties"), UnsupportedUpdate.bSuccess);
+	TestEqual(TEXT("Unsupported property uses a stable error code"), UnsupportedUpdate.ErrorCode, FString(TEXT("property_unsupported")));
+
+	TSharedPtr<FJsonObject> SecondUpdateParams = BaseStageParams(Fixture, UsageId);
+	SecondUpdateParams->SetStringField(TEXT("name"), TEXT("SecondStage"));
+	SecondUpdateParams->SetNumberField(TEXT("numIterations"), 7);
+	const FMCPToolResult SecondUpdatePlan = Registry.ExecuteTool(TEXT("content.niagara.simulation_stage.update.plan"), SecondUpdateParams);
+	if (!TestTrue(TEXT("Second simulation-stage update plan succeeds"), SecondUpdatePlan.bSuccess) || !SecondUpdatePlan.Data)
+	{
+		return false;
+	}
+	const FString SecondUpdateRequestId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	SecondUpdateParams->SetStringField(TEXT("requestId"), SecondUpdateRequestId);
+	SecondUpdateParams->SetBoolField(TEXT("confirmWrite"), true);
+	SecondUpdateParams->SetStringField(TEXT("approvePlanDigest"), SecondUpdatePlan.Data->GetStringField(TEXT("planDigest")));
+	const FMCPToolResult SecondUpdated = Registry.ExecuteTool(TEXT("content.niagara.simulation_stage.update.apply"), SecondUpdateParams);
+	if (!TestTrue(TEXT("Second simulation-stage update apply succeeds"), SecondUpdated.bSuccess) || !SecondUpdated.Data)
+	{
+		return false;
+	}
+	TSharedPtr<FJsonObject> UpdateRollbackParams = MakeShared<FJsonObject>();
+	UpdateRollbackParams->SetStringField(TEXT("rollbackId"), SecondUpdated.Data->GetStringField(TEXT("receiptId")));
+	UpdateRollbackParams->SetStringField(TEXT("requestId"), SecondUpdateRequestId);
+	UpdateRollbackParams->SetBoolField(TEXT("confirmWrite"), true);
+	const FMCPToolResult UpdateRolledBack = Registry.ExecuteTool(TEXT("content.niagara.simulation_stage.update.rollback"), UpdateRollbackParams);
+	if (!TestTrue(TEXT("Simulation-stage update rollback succeeds"), UpdateRolledBack.bSuccess))
+	{
+		return false;
+	}
+	TSharedPtr<FJsonObject> AfterUpdateRollbackListParams = BaseStageParams(Fixture, UsageId);
+	const FMCPToolResult AfterUpdateRollback = Registry.ExecuteTool(TEXT("content.niagara.simulation_stage.list"), AfterUpdateRollbackListParams);
+	if (AfterUpdateRollback.bSuccess)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Rows = nullptr;
+		if (AfterUpdateRollback.Data->TryGetArrayField(TEXT("simulationStages"), Rows) && Rows && Rows->Num() == 1)
+		{
+			TestEqual(TEXT("Update rollback restores the previous stage name"), (*Rows)[0]->AsObject()->GetStringField(TEXT("name")), FString(TEXT("UpdatedStage")));
+			TestEqual(TEXT("Update rollback restores the previous iteration count"), (*Rows)[0]->AsObject()->GetIntegerField(TEXT("numIterations")), 4);
+		}
+	}
 
 	const FMCPToolResult InvalidUpdate = Registry.ExecuteTool(TEXT("content.niagara.simulation_stage.update.plan"), BaseStageParams(Fixture, FGuid::NewGuid()));
 	TestFalse(TEXT("Simulation-stage update rejects an unknown stable identity"), InvalidUpdate.bSuccess);

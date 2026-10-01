@@ -411,6 +411,19 @@ bool FNiagaraRendererMeshRibbonSubUVContractTest::RunTest(const FString&)
 	if (!AssertAuthoredReceipt(TEXT("Mesh SubUV blend"), MeshBlend)) return false;
 	TestTrue(TEXT("Mesh SubUV blend reaches its native property"), Fixture.Mesh->bSubImageBlend != 0);
 	TestTrue(TEXT("Mesh SubUV blend is read back"), MeshBlend.Data->GetBoolField(TEXT("readback")));
+	// The public renderer vocabulary also accepts the common SubUV spelling.
+	// Both aliases must resolve to the same native Niagara properties so an
+	// authoring client can round-trip either terminology without a second
+	// capability or a reflection escape hatch.
+	const FMCPToolResult SpriteSubUVAlias = SetProperty(
+		Fixture.Sprite, TEXT("subUVSize"), SubImageValue(8.0, 8.0));
+	if (!AssertAuthoredReceipt(TEXT("Sprite SubUV size alias"), SpriteSubUVAlias)) return false;
+	TestTrue(TEXT("Sprite SubUV size alias reaches its native property"),
+		Fixture.Sprite->SubImageSize.Equals(FVector2D(8.0, 8.0)));
+	const FMCPToolResult SpriteSubUVBlendAlias = SetProperty(
+		Fixture.Sprite, TEXT("subUVBlend"), MakeShared<FJsonValueBoolean>(false));
+	if (!AssertAuthoredReceipt(TEXT("Sprite SubUV blend alias"), SpriteSubUVBlendAlias)) return false;
+	TestFalse(TEXT("Sprite SubUV blend alias reaches its native property"), Fixture.Sprite->bSubImageBlend != 0);
 
 	const FMCPToolResult MeshSort = SetProperty(
 		Fixture.Mesh, TEXT("sortMode"), MakeShared<FJsonValueString>(TEXT("ViewDepth")));

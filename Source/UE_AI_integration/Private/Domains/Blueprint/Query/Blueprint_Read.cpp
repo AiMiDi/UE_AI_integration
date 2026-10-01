@@ -28,9 +28,73 @@
 #include "Editor.h"
 #include "EngineUtils.h"
 #include "Misc/PackageName.h"
+#include "UObject/UObjectGlobals.h"
 
 namespace
 {
+	// The Asset Registry can expose package dependencies without exposing an
+	// object-level node for an inherited Blueprint class.  When the exact query
+	// has no registry node, inspect the loaded Blueprint references as a bounded
+	// read-only fallback.  This keeps exact object evidence separate from the
+	// package fallback and covers native/inherited Blueprint references that are
+	// serialized through GeneratedClass rather than a searchable object field.
+	static bool CollectLoadedBlueprintObjectReferencers(
+		const FString& AssetPath,
+		const TArray<FAssetData>& BlueprintAssets,
+		TSet<FString>& OutReferencerIdentities)
+	{
+		UBlueprint* TargetBlueprint = Cast<UBlueprint>(
+			StaticLoadObject(UBlueprint::StaticClass(), nullptr, *AssetPath));
+		if (!TargetBlueprint)
+		{
+			return false;
+		}
+
+		UClass* TargetGeneratedClass = TargetBlueprint->GeneratedClass;
+		if (!TargetGeneratedClass)
+		{
+			return false;
+		}
+		for (const FAssetData& Candidate : BlueprintAssets)
+		{
+			// Keep the fallback read-only and bounded.  The package-level query has
+			// already provided the candidate set; only inspect Blueprint objects that
+			// are resident in this Editor instead of loading every project asset.
+			UBlueprint* CandidateBlueprint = Cast<UBlueprint>(FindObject<UBlueprint>(
+				nullptr,
+				*Candidate.GetSoftObjectPath().ToString()));
+			if (!CandidateBlueprint || CandidateBlueprint == TargetBlueprint)
+			{
+				continue;
+			}
+
+			bool bReferencesTarget =
+				CandidateBlueprint->ParentClass == TargetGeneratedClass;
+			if (!bReferencesTarget)
+			{
+				TArray<UObject*> ReferencedObjects;
+				FReferenceFinder Finder(
+					ReferencedObjects,
+					nullptr,
+					false,
+					true,
+					true,
+					true);
+				Finder.FindReferences(CandidateBlueprint);
+				bReferencesTarget = ReferencedObjects.Contains(TargetBlueprint)
+					|| ReferencedObjects.Contains(TargetGeneratedClass);
+			}
+			if (bReferencesTarget)
+			{
+				OutReferencerIdentities.Add(
+					FAssetIdentifier(
+						Candidate.PackageName,
+						Candidate.AssetName).ToString());
+			}
+		}
+		return OutReferencerIdentities.Num() > 0;
+	}
+
 	bool ReadBlueprintListPageInteger(
 		const TSharedPtr<FJsonObject>& Params,
 		const TCHAR* Field,
@@ -1617,9 +1681,59 @@ public:
 		const FString TargetPackagePath = FPackageName::ObjectPathToPackageName(AssetPath);
 		Registry.GetReferencers(FName(*TargetPackagePath), Referencers);
 		Referencers.Sort(FNameLexicalLess());
+		const FAssetIdentifier TargetIdentifier =
+			FAssetIdentifier::FromString(AssetPath);
+		const bool bExactObjectQueryAttempted = TargetIdentifier.IsObject()
+			|| TargetIdentifier.IsValue();
+		TArray<FAssetIdentifier> ExactReferencers;
+		bool bExactObjectReferenceAvailable =
+			bExactObjectQueryAttempted
+			&& Registry.GetReferencers(
+				TargetIdentifier,
+				ExactReferencers,
+				UE::AssetRegistry::EDependencyCategory::All);
+		ExactReferencers.Sort([](
+			const FAssetIdentifier& Left,
+			const FAssetIdentifier& Right)
+		{
+			return Left.ToString() < Right.ToString();
+		});
+		TSet<FString> ExactReferencerIdentities;
+		TArray<TSharedPtr<FJsonValue>> ExactReferencerValues;
+		for (const FAssetIdentifier& ExactReferencer : ExactReferencers)
+		{
+			const FString Identity = ExactReferencer.ToString();
+			ExactReferencerIdentities.Add(Identity);
+			ExactReferencerValues.Add(
+				MakeShared<FJsonValueString>(Identity));
+		}
 
 		TArray<FAssetData> AllBP;
 		Registry.GetAssetsByClass(UBlueprint::StaticClass()->GetClassPathName(), AllBP, true);
+		if (bExactObjectQueryAttempted && !bExactObjectReferenceAvailable)
+		{
+			if (CollectLoadedBlueprintObjectReferencers(
+				AssetPath,
+				AllBP,
+				ExactReferencerIdentities))
+			{
+				bExactObjectReferenceAvailable = true;
+			}
+		}
+		if (bExactObjectReferenceAvailable)
+		{
+			ExactReferencers.Reset();
+			ExactReferencerValues.Reset();
+			TArray<FString> SortedExactReferencers =
+				ExactReferencerIdentities.Array();
+			SortedExactReferencers.Sort();
+			for (const FString& Identity : SortedExactReferencers)
+			{
+				ExactReferencers.Add(FAssetIdentifier::FromString(Identity));
+				ExactReferencerValues.Add(
+					MakeShared<FJsonValueString>(Identity));
+			}
+		}
 		TSet<FString> BlueprintPackages;
 		for (const FAssetData& A : AllBP)
 			BlueprintPackages.Add(A.PackageName.ToString());
@@ -1683,6 +1797,8 @@ public:
 				Record->SetStringField(TEXT("sourceObjectPath"), FString());
 				Record->SetStringField(TEXT("sourceClassPath"), FString());
 				Record->SetStringField(TEXT("sourceIdentity"), StableIdentity);
+				Record->SetStringField(TEXT("sourceAssetIdentifier"), FString());
+				Record->SetBoolField(TEXT("sourceObjectReferenceExact"), false);
 				Record->SetStringField(TEXT("identityStatus"), TEXT("unresolved"));
 				Record->SetNumberField(TEXT("candidateCount"), 0);
 				Record->SetBoolField(TEXT("ambiguous"), false);
@@ -1695,6 +1811,11 @@ public:
 			{
 				const FString ObjectPath = Candidate.GetSoftObjectPath().ToString();
 				const FString ClassPath = Candidate.AssetClassPath.ToString();
+				const FAssetIdentifier CandidateIdentifier =
+					FAssetIdentifier(Candidate.PackageName, Candidate.AssetName);
+				const FString CandidateIdentity = CandidateIdentifier.ToString();
+				const bool bSourceObjectReferenceExact =
+					ExactReferencerIdentities.Contains(CandidateIdentity);
 				const bool bCandidateIdentityComplete = !RefStr.IsEmpty()
 					&& !ObjectPath.IsEmpty()
 					&& !ClassPath.IsEmpty();
@@ -1712,6 +1833,11 @@ public:
 				Record->SetStringField(TEXT("sourceObjectPath"), ObjectPath);
 				Record->SetStringField(TEXT("sourceClassPath"), ClassPath);
 				Record->SetStringField(TEXT("sourceIdentity"), StableIdentity);
+				Record->SetStringField(
+					TEXT("sourceAssetIdentifier"), CandidateIdentity);
+				Record->SetBoolField(
+					TEXT("sourceObjectReferenceExact"),
+					bSourceObjectReferenceExact);
 				Record->SetStringField(
 					TEXT("identityStatus"),
 					bAmbiguous
@@ -1744,6 +1870,19 @@ public:
 		Result->SetNumberField(TEXT("otherReferencerCount"), OtherRefs.Num());
 		Result->SetArrayField(TEXT("otherReferencers"), OtherRefs);
 		Result->SetArrayField(TEXT("references"), ReferenceRecords);
+		Result->SetStringField(TEXT("targetIdentity"), TargetIdentifier.ToString());
+		Result->SetBoolField(
+			TEXT("exactObjectQueryAttempted"),
+			bExactObjectQueryAttempted);
+		Result->SetBoolField(
+			TEXT("exactObjectReferenceAvailable"),
+			bExactObjectReferenceAvailable);
+		Result->SetNumberField(
+			TEXT("exactObjectReferencerCount"),
+			ExactReferencers.Num());
+		Result->SetArrayField(
+			TEXT("exactObjectReferencers"),
+			ExactReferencerValues);
 		Result->SetNumberField(TEXT("candidateReferenceCount"), CandidateReferenceCount);
 		Result->SetNumberField(TEXT("ambiguousReferencerCount"), AmbiguousReferencerCount);
 		Result->SetNumberField(TEXT("unresolvedReferencerCount"), UnresolvedReferencerCount);
@@ -1809,6 +1948,14 @@ public:
 		Result->SetBoolField(TEXT("compiled"), Blueprint->Status != BS_Error);
 		Result->SetBoolField(TEXT("runtimeVerified"), false);
 		Result->SetNumberField(TEXT("instanceCount"), 0);
+		Result->SetNumberField(TEXT("runtimeWorldCount"), 0);
+		Result->SetStringField(TEXT("worldType"), FString());
+		Result->SetStringField(TEXT("worldIdentity"), FString());
+		Result->SetStringField(TEXT("instanceClass"), FString());
+		Result->SetStringField(
+			TEXT("observedGeneratedClass"),
+			Blueprint->GeneratedClass->GetPathName());
+		Result->SetBoolField(TEXT("instanceIdentityComplete"), false);
 
 		if (!Blueprint->GeneratedClass->IsChildOf(AActor::StaticClass()))
 		{
@@ -1818,8 +1965,11 @@ public:
 		}
 
 		int32 InstanceCount = 0;
+		int32 RuntimeWorldCount = 0;
 		FString ObservedWorld;
 		FString ObservedInstance;
+		FString ObservedWorldType;
+		FString ObservedInstanceClass;
 		if (GEngine)
 		{
 			for (const FWorldContext& Context : GEngine->GetWorldContexts())
@@ -1834,6 +1984,10 @@ public:
 				{
 					continue;
 				}
+				++RuntimeWorldCount;
+				const TCHAR* WorldType = Context.WorldType == EWorldType::PIE
+					? TEXT("pie")
+					: TEXT("game");
 				for (TActorIterator<AActor> It(World); It; ++It)
 				{
 					AActor* Actor = *It;
@@ -1846,19 +2000,32 @@ public:
 					{
 						ObservedWorld = World->GetPathName();
 						ObservedInstance = Actor->GetPathName();
+						ObservedWorldType = WorldType;
+						ObservedInstanceClass = Actor->GetClass()->GetPathName();
 					}
 				}
 			}
 		}
 		Result->SetNumberField(TEXT("instanceCount"), InstanceCount);
+		Result->SetNumberField(TEXT("runtimeWorldCount"), RuntimeWorldCount);
 		Result->SetBoolField(TEXT("runtimeVerified"), InstanceCount > 0);
 		Result->SetStringField(
 			TEXT("runtimeVerificationReason"),
-			InstanceCount > 0 ? TEXT("pie_instance_observed") : TEXT("no_pie_instance_observed"));
+			InstanceCount > 0
+				? TEXT("runtime_instance_observed")
+				: (RuntimeWorldCount > 0
+					? TEXT("no_runtime_instance_observed")
+					: TEXT("no_runtime_world")));
 		if (!ObservedWorld.IsEmpty())
 		{
 			Result->SetStringField(TEXT("world"), ObservedWorld);
 			Result->SetStringField(TEXT("instance"), ObservedInstance);
+			Result->SetStringField(TEXT("worldType"), ObservedWorldType);
+			Result->SetStringField(TEXT("worldIdentity"), ObservedWorld);
+			Result->SetStringField(TEXT("instanceClass"), ObservedInstanceClass);
+			Result->SetBoolField(
+				TEXT("instanceIdentityComplete"),
+				!ObservedInstance.IsEmpty() && !ObservedInstanceClass.IsEmpty());
 		}
 		Result->SetStringField(TEXT("scope"), TEXT("PIE actor instance acceptance; compile and asset persistence are reported separately"));
 		return FMCPToolResult::Ok(Result);
