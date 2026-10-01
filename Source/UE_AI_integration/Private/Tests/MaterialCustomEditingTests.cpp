@@ -178,7 +178,7 @@ bool FMaterialCustomFunctionParametersTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialCustomCompilerTest, "UE_AI_integration.MaterialCustom.NativeCompilerCorrection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialCustomCompilerTest, "UE_AI_integration.MaterialCustom.NativeCompilerCorrection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 bool FMaterialCustomCompilerTest::RunTest(const FString& Parameters)
 {
 	if (!CustomRegistry()) return false;

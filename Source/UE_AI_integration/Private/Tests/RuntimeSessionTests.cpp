@@ -1133,7 +1133,7 @@ bool FRuntimeKeyStateReleasedOnSessionEndTest::RunTest(
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRuntimeRealPIEViewportCaptureTest,
 	"UE_AI_integration.Runtime.Viewport.RealPIECapture",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 
 bool FRuntimeRealPIEViewportCaptureTest::RunTest(const FString& Parameters)
 {

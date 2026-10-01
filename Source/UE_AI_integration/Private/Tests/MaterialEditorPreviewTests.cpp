@@ -23,7 +23,7 @@
 #include "UObject/GCObjectScopeGuard.h"
 #include "RHI.h"
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialEditorPreviewTest, "UE_AI_integration.MaterialEditor.PreviewEditing", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialEditorPreviewTest, "UE_AI_integration.MaterialEditor.PreviewEditing", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 bool FMaterialEditorPreviewTest::RunTest(const FString& Parameters)
 {
 	if (!FApp::CanEverRender() || GUsingNullRHI) { AddInfo(TEXT("Native Material Editor requires a rendering session; preview integration not exercised under NullRHI.")); return true; }

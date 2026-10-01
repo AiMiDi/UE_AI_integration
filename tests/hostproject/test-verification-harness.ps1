@@ -75,6 +75,53 @@ foreach ($needle in @(
     Assert-Contains -Text $hostText -Needle $needle -Path $hostHarness
 }
 
+# Tests that create native Material/Blueprint editors or exercise shader/PIE
+# rendering must be selected only in a NonNullRHI lane.  A NullRHI process may
+# still report an Automation "Success" for a test body that exits early, which
+# is a false runtime/visual acceptance signal.  Keep this list explicit so a
+# new rendering test cannot silently regress to a NullRHI pass.  Keep the
+# exact test paths here so a different test in the same file cannot satisfy the
+# assertion accidentally.
+$nonNullRhiTests = @(
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/MaterialEditorPreviewTests.cpp'; Test = 'UE_AI_integration.MaterialEditor.PreviewEditing' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/MaterialApplyReviewTests.cpp'; Test = 'UE_AI_integration.MaterialEditor.ApplyReviewAndReadback' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/MaterialCustomEditingTests.cpp'; Test = 'UE_AI_integration.MaterialCustom.NativeCompilerCorrection' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/MaterialDiagnosticSourceMapTests.cpp'; Test = 'UE_AI_integration.MaterialSourceMap.CompilerCorrection' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/MaterialFunctionCallTests.cpp'; Test = 'UE_AI_integration.MaterialFunctionCall.HostShaderCorrection' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/MaterialPreviewGraphTests.cpp'; Test = 'UE_AI_integration.MaterialEditor.GraphCrudAndSnapshots' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/MaterialPreviewGraphTests.cpp'; Test = 'UE_AI_integration.MaterialEditor.BatchAtomicity' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/MaterialPreviewGraphTests.cpp'; Test = 'UE_AI_integration.MaterialEditor.DeletionBatchRefresh' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/MaterialPreviewGraphTests.cpp'; Test = 'UE_AI_integration.MaterialEditor.NamedReroutePreview' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/MaterialSourceFingerprintTests.cpp'; Test = 'UE_AI_integration.MaterialSource.IncludeFreshness' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/MaterialSourceFingerprintTests.cpp'; Test = 'UE_AI_integration.MaterialSource.IncludeCompilerCorrection' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/BlueprintEditorLayoutTests.cpp'; Test = 'UE_AI_integration.Blueprint.EditorLayout.NativeCommandLoop' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/BlueprintDebugPIEHttpTests.cpp'; Test = 'UE_AI_integration.BlueprintDebug.RealPIEHttpStepWatchContinue' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/RuntimeSessionTests.cpp'; Test = 'UE_AI_integration.Runtime.Viewport.RealPIECapture' }
+)
+foreach ($test in $nonNullRhiTests) {
+    $relativePath = [string]$test.Path
+    $sourcePath = Join-Path $PluginRoot $relativePath
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        throw "NonNullRHI test source is missing: $sourcePath"
+    }
+    $sourceText = Get-Content -LiteralPath $sourcePath -Raw
+    $macroMatches = [regex]::Matches(
+        $sourceText,
+        '(?s)IMPLEMENT_SIMPLE_AUTOMATION_TEST\s*\((?<body>.*?)\)')
+    $matchingMacros = @($macroMatches | Where-Object {
+            $_.Groups['body'].Value.IndexOf(
+                ('"' + [string]$test.Test + '"'),
+                [StringComparison]::Ordinal) -ge 0
+        })
+    if ($matchingMacros.Count -ne 1) {
+        throw "Expected exactly one Automation declaration for '$($test.Test)' in $sourcePath"
+    }
+    Assert-Contains `
+        -Text $matchingMacros[0].Groups['body'].Value `
+        -Needle 'EAutomationTestFlags::NonNullRHI' `
+        -Path "$sourcePath ($($test.Test))"
+}
+
 $contractText = Get-Content -LiteralPath $contractHarness -Raw
 foreach ($needle in @(
         'Get-SourceIdentity',

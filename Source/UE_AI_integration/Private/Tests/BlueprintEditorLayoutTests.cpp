@@ -224,7 +224,7 @@ bool CleanupBlueprintByObjectPath(const FString &ObjectPath) {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
     FBlueprintEditorNativeLayoutCommandsTest,
     "UE_AI_integration.Blueprint.EditorLayout.NativeCommandLoop",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 
 bool FBlueprintEditorNativeLayoutCommandsTest::RunTest(
     const FString &Parameters) {

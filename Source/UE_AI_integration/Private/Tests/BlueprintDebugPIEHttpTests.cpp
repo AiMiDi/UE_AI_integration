@@ -1050,7 +1050,7 @@ bool FWaitForBlueprintDebugPIEHttp::Update()
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FBlueprintDebugPIEHttpE2ETest,
 	"UE_AI_integration.BlueprintDebug.RealPIEHttpStepWatchContinue",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 
 bool FBlueprintDebugPIEHttpE2ETest::RunTest(const FString& Parameters)
 {

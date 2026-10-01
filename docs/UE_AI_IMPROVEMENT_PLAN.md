@@ -91,6 +91,13 @@ NullRHI 适合契约和拒绝分支，但 Niagara 生命周期、材质预览、
 
 验收：一次测试报告可以反向定位“代码未编译、模块未加载、Editor 不匹配、RHI 不适用、真实资产未验证”中的具体一类。
 
+本阶段已补上渲染测试的 RHI 选择边界：创建原生 Material/Blueprint 编辑器、触发
+Shader 编译、预览、PIE 调试/捕获或布局捕获的 Automation 测试声明
+`EAutomationTestFlags::NonNullRHI`。NullRHI 仍用于契约和拒绝分支；即使测试主体因
+环境不可用而提前返回成功，也不会再被当作该测试的渲染验收入口。HostProject 静态
+harness 会检查这组测试源码仍保留 NonNullRHI 标志；报告中的
+`runtimeVerified`/`visualVerified` 继续保持未知，直到有对应的真实 Editor/资产证据。
+
 ### P1：当前域能力仍有语义缺口
 
 这些是从当前 564 capability 目录和历史 Monolith 对比中得到的候选缺口，实施前必须重新读取当前 Monolith 注册和 live schema：

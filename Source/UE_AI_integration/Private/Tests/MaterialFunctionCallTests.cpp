@@ -97,7 +97,7 @@ bool FMaterialFunctionCallInterfaceTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialFunctionHostValidationTest, "UE_AI_integration.MaterialFunctionCall.HostShaderCorrection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialFunctionHostValidationTest, "UE_AI_integration.MaterialFunctionCall.HostShaderCorrection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 bool FMaterialFunctionHostValidationTest::RunTest(const FString&)
 {
 	if (!FunctionCallRegistry()) return false;

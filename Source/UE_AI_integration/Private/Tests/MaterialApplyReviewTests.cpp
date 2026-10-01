@@ -23,7 +23,7 @@
 #include "Serialization/JsonWriter.h"
 #include "RHI.h"
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialApplyReviewTest, "UE_AI_integration.MaterialEditor.ApplyReviewAndReadback", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialApplyReviewTest, "UE_AI_integration.MaterialEditor.ApplyReviewAndReadback", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 bool FMaterialApplyReviewTest::RunTest(const FString&)
 {
 	if (!FApp::CanEverRender() || GUsingNullRHI) { AddInfo(TEXT("Apply readback acceptance requires a rendering Editor.")); return true; }

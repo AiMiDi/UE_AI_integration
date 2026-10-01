@@ -87,7 +87,7 @@ bool FMaterialDependencyFingerprintTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialIncludeFingerprintTest, "UE_AI_integration.MaterialSource.IncludeFreshness", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialIncludeFingerprintTest, "UE_AI_integration.MaterialSource.IncludeFreshness", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 bool FMaterialIncludeFingerprintTest::RunTest(const FString&)
 {
 	if (!FApp::CanEverRender() || GUsingNullRHI) { AddInfo(TEXT("Virtual shader mapping test requires a rendering Editor.")); return true; }
@@ -117,7 +117,7 @@ bool FMaterialIncludeFingerprintTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialIncludeCompilerTest, "UE_AI_integration.MaterialSource.IncludeCompilerCorrection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialIncludeCompilerTest, "UE_AI_integration.MaterialSource.IncludeCompilerCorrection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 bool FMaterialIncludeCompilerTest::RunTest(const FString&)
 {
 	if (!FApp::CanEverRender() || GUsingNullRHI) { AddInfo(TEXT("Include compiler test requires a rendering Editor.")); return true; }

@@ -91,7 +91,7 @@ TSharedRef<FJsonObject> Fields(std::initializer_list<TPair<const TCHAR*, FString
 }
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPreviewGraphCrudTest, "UE_AI_integration.MaterialEditor.GraphCrudAndSnapshots", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPreviewGraphCrudTest, "UE_AI_integration.MaterialEditor.GraphCrudAndSnapshots", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 bool FPreviewGraphCrudTest::RunTest(const FString& Parameters)
 {
 	if (!FApp::CanEverRender() || GUsingNullRHI) { AddInfo(TEXT("Native graph preview test requires a rendering Editor.")); return true; }
@@ -166,7 +166,7 @@ bool FPreviewGraphCrudTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPreviewBatchTest, "UE_AI_integration.MaterialEditor.BatchAtomicity", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPreviewBatchTest, "UE_AI_integration.MaterialEditor.BatchAtomicity", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 bool FPreviewBatchTest::RunTest(const FString& Parameters)
 {
 	if (!FApp::CanEverRender() || GUsingNullRHI) { AddInfo(TEXT("Native preview batch test requires a rendering Editor.")); return true; }
@@ -211,7 +211,7 @@ bool FPreviewBatchTest::RunTest(const FString& Parameters)
 	}
 	return true;
 }
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPreviewDeletionBatchTest, "UE_AI_integration.MaterialEditor.DeletionBatchRefresh", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPreviewDeletionBatchTest, "UE_AI_integration.MaterialEditor.DeletionBatchRefresh", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 bool FPreviewDeletionBatchTest::RunTest(const FString& Parameters)
 {
 	if (!FApp::CanEverRender() || GUsingNullRHI) { AddInfo(TEXT("Native deletion test requires a rendering Editor.")); return true; }
@@ -289,7 +289,7 @@ bool FPreviewDeletionBatchTest::RunTest(const FString& Parameters)
 	return true;
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialNamedReroutePreviewTest,
-	"UE_AI_integration.MaterialEditor.NamedReroutePreview", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+	"UE_AI_integration.MaterialEditor.NamedReroutePreview", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 bool FMaterialNamedReroutePreviewTest::RunTest(const FString&)
 {
 	if (!FApp::CanEverRender() || GUsingNullRHI) { AddWarning(TEXT("Named reroute preview requires a rendering Editor.")); return true; }

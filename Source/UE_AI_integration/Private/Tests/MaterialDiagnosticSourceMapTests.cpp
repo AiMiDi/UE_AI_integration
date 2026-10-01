@@ -88,7 +88,7 @@ bool FMaterialSourceMapBoundariesTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialSourceMapCompilerTest, "UE_AI_integration.MaterialSourceMap.CompilerCorrection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMaterialSourceMapCompilerTest, "UE_AI_integration.MaterialSourceMap.CompilerCorrection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter | EAutomationTestFlags::NonNullRHI)
 bool FMaterialSourceMapCompilerTest::RunTest(const FString&)
 {
 	if (!FApp::CanEverRender() || GUsingNullRHI) { AddInfo(TEXT("Source map compiler acceptance requires rendering.")); return true; }
