@@ -69,6 +69,13 @@ foreach ($needle in @(
         'compiled',
         'moduleLoaded',
         'moduleLoadProof',
+        'production.module.loaded.get',
+        'UE_PORT',
+        'expectedDll',
+        'expectedPdb',
+        'pathMatches',
+        'hashMatches',
+        'pdbMatches',
         'assetReadback',
         'runtimeVerified',
         'visualVerified')) {
@@ -131,6 +138,8 @@ foreach ($needle in @(
         'staticVerified',
         'compiled',
         'moduleLoaded',
+        'moduleLoadProof',
+        'production.module.loaded.get',
         'assetReadback',
         'runtimeVerified',
         'visualVerified')) {

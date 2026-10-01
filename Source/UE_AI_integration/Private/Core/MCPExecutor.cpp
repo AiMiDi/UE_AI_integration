@@ -82,6 +82,7 @@ FMCPResult FMCPExecutor::Execute(const FMCPExecutionContext& Context)
 	FMCPResult LeaseFailure;
 	if (!CheckProtectedLease(Context, LeaseFailure))
 	{
+		AnnotateVerification(Context, LeaseFailure, false);
 		return LeaseFailure;
 	}
 	if (Context.RequestId.IsEmpty())
@@ -100,11 +101,13 @@ FMCPResult FMCPExecutor::Execute(const FMCPExecutionContext& Context)
 		{
 			TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
 			Details->SetStringField(TEXT("requestId"), Context.RequestId);
-			return FMCPResult::Fail(
+			FMCPResult Conflict = FMCPResult::Fail(
 				TEXT("idempotency_conflict"),
 				TEXT("The requestId has already been used with a different payload."),
 				409,
 				Details);
+			AnnotateVerification(Context, Conflict, false);
+			return Conflict;
 		}
 		return Existing->Result;
 	}
@@ -122,6 +125,7 @@ bool FMCPExecutor::BeginExecuteAsync(
 	check(IsInGameThread());
 	if (!CheckProtectedLease(Context, OutImmediate))
 	{
+		AnnotateVerification(Context, OutImmediate, false);
 		return false;
 	}
 	FMCPToolBase* Tool = Registry.FindTool(Context.Capability);
@@ -149,6 +153,7 @@ bool FMCPExecutor::BeginExecuteAsync(
 					TEXT("The requestId has already been used with a different payload."),
 					409,
 					Details);
+				AnnotateVerification(Context, OutImmediate, false);
 			}
 			else
 			{
@@ -172,6 +177,7 @@ bool FMCPExecutor::BeginExecuteAsync(
 					TEXT("The requestId is already executing with a different payload."),
 					409,
 					Details);
+			AnnotateVerification(Context, OutImmediate, false);
 			return false;
 		}
 	}
@@ -179,6 +185,7 @@ bool FMCPExecutor::BeginExecuteAsync(
 	TSharedPtr<FJsonObject> EffectiveParams;
 	if (!PrepareExecution(Context, EffectiveParams, OutImmediate))
 	{
+		AnnotateVerification(Context, OutImmediate, false);
 		return false;
 	}
 	if (!Context.RequestId.IsEmpty())
@@ -189,6 +196,7 @@ bool FMCPExecutor::BeginExecuteAsync(
 	}
 
 	const FString RequestId = Context.RequestId;
+	const FMCPExecutionContext ResultContext = Context;
 	const TSharedRef<bool, ESPMode::ThreadSafe> bCompleted =
 		MakeShared<bool, ESPMode::ThreadSafe>(false);
 	const bool bStarted = Registry.BeginExecuteToolAsync(
@@ -197,6 +205,7 @@ bool FMCPExecutor::BeginExecuteAsync(
 		[this,
 		 RequestId,
 		 PayloadKey,
+		 ResultContext,
 		 bCompleted,
 		 Completion = MoveTemp(Completion)](FMCPToolResult&& ToolResult) mutable
 		{
@@ -208,6 +217,7 @@ bool FMCPExecutor::BeginExecuteAsync(
 			}
 			*bCompleted = true;
 			FMCPResult Result = ConvertToolResult(MoveTemp(ToolResult));
+			AnnotateVerification(ResultContext, Result, true);
 			if (!RequestId.IsEmpty())
 			{
 				InFlightRequests.Remove(RequestId);
@@ -232,6 +242,7 @@ bool FMCPExecutor::BeginExecuteAsync(
 		TEXT("async_start_failed"),
 		TEXT("The asynchronous capability did not accept the request."),
 		500);
+	AnnotateVerification(Context, OutImmediate, false);
 	return false;
 }
 
@@ -290,11 +301,113 @@ FMCPResult FMCPExecutor::ExecuteUncached(const FMCPExecutionContext& Context) co
 	FMCPResult Failure;
 	if (!PrepareExecution(Context, EffectiveParams, Failure))
 	{
+		AnnotateVerification(Context, Failure, false);
 		return Failure;
 	}
 
-	return ConvertToolResult(
+	FMCPResult Result = ConvertToolResult(
 		Registry.ExecuteTool(Context.Capability, EffectiveParams));
+	AnnotateVerification(Context, Result, true);
+	return Result;
+}
+
+void FMCPExecutor::AnnotateVerification(
+	const FMCPExecutionContext& Context,
+	FMCPResult& Result,
+	bool bExecuted) const
+{
+	const TSharedPtr<FJsonObject>* Descriptor =
+		Registry.FindCapabilityDescriptor(Context.Capability);
+	const bool bLocalDeclared = Descriptor && Descriptor->IsValid();
+	const bool bHandlerRegistered =
+		Registry.FindTool(Context.Capability) != nullptr;
+	const TArray<FString> AvailabilityReasons =
+		bLocalDeclared
+			? UEAIIntegration::Infrastructure::GetCapabilityUnavailableReasons(
+				*Descriptor)
+			: TArray<FString>();
+	const bool bLiveAvailable = bLocalDeclared
+		&& bHandlerRegistered
+		&& Registry.IsReady()
+		&& AvailabilityReasons.IsEmpty();
+
+	TSharedPtr<FJsonObject> Target;
+	if (Result.bOk)
+	{
+		if (!Result.Data.IsValid())
+		{
+			Result.Data = MakeShared<FJsonObject>();
+		}
+		Target = Result.Data;
+	}
+	else
+	{
+		if (!Result.Error.Details.IsValid())
+		{
+			Result.Error.Details = MakeShared<FJsonObject>();
+		}
+		Target = Result.Error.Details;
+	}
+
+	// Preserve handler-owned values, including explicit false values used by
+	// read-only queries. Missing values remain JSON null rather than being
+	// inferred as a successful readback or runtime check.
+	bool bReadbackVerified = false;
+	const bool bHasReadbackVerified = Target->TryGetBoolField(
+		TEXT("readbackVerified"),
+		bReadbackVerified);
+	bool bRuntimeVerified = false;
+	const bool bHasRuntimeVerified = Target->TryGetBoolField(
+		TEXT("runtimeVerified"),
+		bRuntimeVerified);
+
+	Target->SetBoolField(TEXT("localDeclared"), bLocalDeclared);
+	Target->SetBoolField(TEXT("handlerRegistered"), bHandlerRegistered);
+	Target->SetBoolField(TEXT("liveAvailable"), bLiveAvailable);
+	Target->SetBoolField(TEXT("executed"), bExecuted);
+	if (bHasReadbackVerified)
+	{
+		Target->SetBoolField(TEXT("readbackVerified"), bReadbackVerified);
+	}
+	else
+	{
+		Target->SetField(TEXT("readbackVerified"), MakeShared<FJsonValueNull>());
+	}
+	if (bHasRuntimeVerified)
+	{
+		Target->SetBoolField(TEXT("runtimeVerified"), bRuntimeVerified);
+	}
+	else
+	{
+		Target->SetField(TEXT("runtimeVerified"), MakeShared<FJsonValueNull>());
+	}
+
+	TSharedPtr<FJsonObject> State = MakeShared<FJsonObject>();
+	State->SetStringField(TEXT("schema"), TEXT("ue.capability-verification.v1"));
+	State->SetStringField(TEXT("capability"), Context.Capability);
+	State->SetBoolField(TEXT("localDeclared"), bLocalDeclared);
+	State->SetBoolField(TEXT("handlerRegistered"), bHandlerRegistered);
+	State->SetBoolField(TEXT("liveAvailable"), bLiveAvailable);
+	State->SetBoolField(TEXT("executed"), bExecuted);
+	if (bHasReadbackVerified)
+	{
+		State->SetBoolField(TEXT("readbackVerified"), bReadbackVerified);
+	}
+	else
+	{
+		State->SetField(TEXT("readbackVerified"), MakeShared<FJsonValueNull>());
+	}
+	if (bHasRuntimeVerified)
+	{
+		State->SetBoolField(TEXT("runtimeVerified"), bRuntimeVerified);
+	}
+	else
+	{
+		State->SetField(TEXT("runtimeVerified"), MakeShared<FJsonValueNull>());
+	}
+	// Some domain payloads already use a string field named "verification";
+	// keep that field intact and expose the cross-capability state separately.
+	Target->SetObjectField(TEXT("verificationState"), State);
 }
 
 bool FMCPExecutor::CheckProtectedLease(

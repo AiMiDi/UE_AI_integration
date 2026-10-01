@@ -54,6 +54,15 @@ private:
 		TSharedPtr<FJsonObject>& OutEffectiveParams,
 		FMCPResult& OutFailure) const;
 	static FMCPResult ConvertToolResult(FMCPToolResult&& ToolResult);
+	/**
+	 * Attach the transport-wide capability verification state to every result.
+	 * Handlers may provide a more specific readback/runtime value; unknown
+	 * values remain JSON null instead of being inferred as success.
+	 */
+	void AnnotateVerification(
+		const FMCPExecutionContext& Context,
+		FMCPResult& Result,
+		bool bExecuted) const;
 	void StoreIdempotencyResult(
 		const FString& RequestId,
 		const FString& PayloadKey,

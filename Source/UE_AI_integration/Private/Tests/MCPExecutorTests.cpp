@@ -160,6 +160,58 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 		ExecutionFailure.Error.Code,
 		FString(TEXT("execution_failed")));
 
+	// Every transport-executed capability exposes the same six-state result
+	// contract.  The two readback/runtime fields are deliberately nullable
+	// when a handler does not prove them; this prevents a generic success from
+	// being mistaken for asset or runtime acceptance.
+	const FMCPResult VerificationSuccess = Executor.Execute(
+		{TEXT("production.lease.status"), MakeShared<FJsonObject>()});
+	TestTrue(TEXT("Verification fixture succeeds"), VerificationSuccess.bOk);
+	if (VerificationSuccess.bOk && VerificationSuccess.Data.IsValid())
+	{
+		for (const TCHAR* Field : {
+			TEXT("localDeclared"),
+			TEXT("handlerRegistered"),
+			TEXT("liveAvailable"),
+			TEXT("executed"),
+			TEXT("readbackVerified"),
+			TEXT("runtimeVerified")})
+		{
+			TestTrue(
+				FString::Printf(TEXT("Success includes verification field %s"), Field),
+				VerificationSuccess.Data->HasField(Field));
+		}
+		const TSharedPtr<FJsonObject>* State = nullptr;
+		TestTrue(
+			TEXT("Success includes verificationState object"),
+			VerificationSuccess.Data->TryGetObjectField(
+				TEXT("verificationState"),
+				State));
+		if (State && State->IsValid())
+		{
+			TestEqual(
+				TEXT("Verification state identifies the capability"),
+				(*State)->GetStringField(TEXT("capability")),
+				FString(TEXT("production.lease.status")));
+			TestTrue(
+				TEXT("Verification state records handler execution"),
+				(*State)->GetBoolField(TEXT("executed")));
+		}
+	}
+
+	if (Unknown.Error.Details.IsValid())
+	{
+		TestTrue(
+			TEXT("Rejected capability includes verification details"),
+			Unknown.Error.Details->HasField(TEXT("verificationState")));
+		TestFalse(
+			TEXT("Unknown capability is not locally declared"),
+			Unknown.Error.Details->GetBoolField(TEXT("localDeclared")));
+		TestFalse(
+			TEXT("Unknown capability was not executed"),
+			Unknown.Error.Details->GetBoolField(TEXT("executed")));
+	}
+
 	FMCPExecutionContext FirstIdempotentRequest;
 	FirstIdempotentRequest.Capability = TEXT("production.build.status");
 	FirstIdempotentRequest.Params = MakeShared<FJsonObject>();

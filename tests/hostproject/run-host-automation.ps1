@@ -232,6 +232,107 @@ function Get-ErrorLines {
         ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique)
 }
 
+function Get-ProductionModuleLoadedProof {
+    param(
+        [Parameter(Mandatory)][Diagnostics.Process] $Process,
+        [Parameter(Mandatory)][int] $Port,
+        [Parameter(Mandatory)][string] $ExpectedDllPath,
+        [Parameter(Mandatory)][string] $ExpectedPdbPath
+    )
+
+    $endpoint = "http://127.0.0.1:$Port/api/execute"
+    $requestId = "harness-module-$([Guid]::NewGuid().ToString('N'))"
+    $expectedDll = Get-FileIdentity -Path $ExpectedDllPath
+    $expectedPdb = Get-FileIdentity -Path $ExpectedPdbPath
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    while (-not $Process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+        try {
+            $request = [ordered]@{
+                capability = 'production.module.loaded.get'
+                params = [ordered]@{}
+                requestId = $requestId
+            } | ConvertTo-Json -Depth 5 -Compress
+            $response = Invoke-RestMethod -Uri $endpoint -Method Post `
+                -ContentType 'application/json' -Body $request -TimeoutSec 3 `
+                -ErrorAction Stop
+            if ($response.ok -eq $true -and $null -ne $response.data) {
+                $data = $response.data
+                $dll = $data.dll
+                $pdb = $data.pdb
+                $observedModulePath = [string]$data.modulePath
+                $observedDllPath = if ($dll) { [string]$dll.path } else { '' }
+                $observedDllHash = if ($dll) { [string]$dll.sha256 } else { '' }
+                $observedPdbPath = if ($pdb) { [string]$pdb.path } else { '' }
+                $observedPdbHash = if ($pdb) { [string]$pdb.sha256 } else { '' }
+                $pathMatches = $false
+                if ($expectedDll.present -and $observedDllPath -and $observedModulePath) {
+                    $pathMatches =
+                        [IO.Path]::GetFullPath($observedDllPath).Equals(
+                            [IO.Path]::GetFullPath($expectedDll.path),
+                            [StringComparison]::OrdinalIgnoreCase) -and
+                        [IO.Path]::GetFullPath($observedModulePath).Equals(
+                            [IO.Path]::GetFullPath($expectedDll.path),
+                            [StringComparison]::OrdinalIgnoreCase)
+                }
+                $hashMatches = [bool]($expectedDll.present -and
+                    $observedDllHash -and
+                    $observedDllHash.ToLowerInvariant() -eq $expectedDll.sha256)
+                $pdbMatches = -not $expectedPdb.present
+                if ($expectedPdb.present -and $observedPdbPath -and $observedPdbHash) {
+                    $pdbMatches =
+                        [IO.Path]::GetFullPath($observedPdbPath).Equals(
+                            [IO.Path]::GetFullPath($expectedPdb.path),
+                            [StringComparison]::OrdinalIgnoreCase) -and
+                        $observedPdbHash.ToLowerInvariant() -eq $expectedPdb.sha256
+                }
+                $loaded = [bool]$data.loaded
+                $verified = $loaded -and $pathMatches -and $hashMatches -and $pdbMatches
+                return [ordered]@{
+                    status = if ($verified) { 'verified' } else { 'mismatch' }
+                    capability = 'production.module.loaded.get'
+                    endpoint = $endpoint
+                    requestId = $requestId
+                    processId = $Process.Id
+                    loaded = $loaded
+                    modulePath = $observedModulePath
+                    dll = $dll
+                    pdb = $pdb
+                    expectedDll = $expectedDll
+                    expectedPdb = $expectedPdb
+                    pathMatches = $pathMatches
+                    hashMatches = $hashMatches
+                    pdbMatches = $pdbMatches
+                    matchesLatestBuildArtifact = [bool]$data.matchesLatestBuildArtifact
+                }
+            }
+        }
+        catch {
+            # The subsystem may not have bound the listener yet. Retry while
+            # the isolated Editor is alive; the final report keeps the exact
+            # failure class as unavailable rather than guessing module state.
+        }
+        Start-Sleep -Milliseconds 250
+        try { $Process.Refresh() } catch { }
+    }
+
+    return [ordered]@{
+        status = 'unavailable'
+        capability = 'production.module.loaded.get'
+        endpoint = $endpoint
+        requestId = $requestId
+        processId = $Process.Id
+        loaded = $null
+        expectedDll = $expectedDll
+        expectedPdb = $expectedPdb
+        reason = if ($Process.HasExited) {
+            'The isolated Editor exited before production.module.loaded.get returned.'
+        }
+        else {
+            'production.module.loaded.get did not become reachable within the bounded startup window.'
+        }
+    }
+}
+
 $Snapshot = Get-PluginSnapshot
 Write-Host "[harness] plugin snapshot head=$($Snapshot.head) sha256=$($Snapshot.snapshotSha256)"
 
@@ -389,17 +490,19 @@ $Automation = [ordered]@{
         moduleLoaded = $null
         moduleLoadProof = [ordered]@{
             status = 'unavailable'
-            reason = 'Host automation does not query production.module.loaded.get.'
+            capability = 'production.module.loaded.get'
+            reason = 'Module proof is unavailable until an isolated Editor process is running.'
         }
         assetReadback = $null
         runtimeVerified = $null
         visualVerified = $null
-        unknownReasons = @('Host automation does not query production.module.loaded.get or prove project-asset/visual acceptance.')
+        unknownReasons = @('The isolated Editor has not run production.module.loaded.get or proved project-asset/visual acceptance.')
     }
     reason = if ($TestFilter.Count -eq 0) { 'no_test_filter' } elseif (-not $CanRunAutomation) { $PackageBinding.reason } else { 'not_started' }
 }
 $AutomationExit = $null
 $AutomationOk = ($TestFilter.Count -eq 0)
+$AutomationModuleProof = $null
 if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
     $project = Join-Path $PackageDir 'HostProject\HostProject.uproject'
     if (-not (Test-Path -LiteralPath $project)) {
@@ -425,6 +528,7 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
         }
     )
     $filterArgument = $filterTokens -join '+'
+    $serverPort = Get-Random -Minimum 39000 -Maximum 49000
     $arguments = @(
         "`"$project`"",
         '-unattended',
@@ -433,7 +537,6 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
         '-NoSound',
         $(if ($VerificationLane -eq 'isolated-nullrhi') { '-NullRHI' } else { '-RenderOffscreen' }),
         '-NoLiveCoding',
-        '-UEAIDisableServer',
         '-stdout',
         '-FullStdOutLogOutput',
         '-Verbose',
@@ -452,6 +555,10 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    # Keep the isolated Editor's HTTP service separate from any user-owned
+    # Editor.  Query production.module.loaded.get while the packaged DLL is
+    # resident so the report proves the exact loaded module identity.
+    $startInfo.Environment['UE_PORT'] = [string]$serverPort
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     if (-not $process.Start()) {
@@ -462,6 +569,12 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
     try {
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
+        $expectedModuleArtifacts = $PackageBinding.packageContent.moduleArtifacts
+        $AutomationModuleProof = Get-ProductionModuleLoadedProof `
+            -Process $process `
+            -Port $serverPort `
+            -ExpectedDllPath ([string]$expectedModuleArtifacts.dll.path) `
+            -ExpectedPdbPath ([string]$expectedModuleArtifacts.pdb.path)
         if (-not $process.WaitForExit($AutomationTimeoutSeconds * 1000)) {
             $process.Kill()
             throw "Automation run timed out after $AutomationTimeoutSeconds seconds."
@@ -556,22 +669,22 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
         editor = [ordered]@{
             executable = $EditorIdentity
             processId = $automationProcessId
+            serverPort = $serverPort
             startedAtUtc = $automationStartedAtUtc
             finishedAtUtc = $automationFinishedAtUtc
         }
         verification = [ordered]@{
             staticVerified = $null
             compiled = if ($SkipBuild) { $null } else { $BuildExit -eq 0 }
-            moduleLoaded = $null
-            moduleLoadProof = [ordered]@{
-                status = 'unavailable'
-                reason = 'The automation report does not expose production.module.loaded.get or the exact loaded DLL hash.'
-            }
+            moduleLoaded = if ($AutomationModuleProof.status -eq 'verified') { $true } elseif ($AutomationModuleProof.status -eq 'mismatch') { $false } else { $null }
+            moduleLoadProof = $AutomationModuleProof
             assetReadback = $null
             runtimeVerified = $null
             visualVerified = $null
             unknownReasons = @(
-                'The automation report does not expose production.module.loaded.get or the exact loaded DLL hash.'
+                if ($null -eq $AutomationModuleProof -or $AutomationModuleProof.status -ne 'verified') {
+                    'production.module.loaded.get did not prove the exact packaged DLL/PDB identity.'
+                }
                 if ($VerificationLane -eq 'isolated-nullrhi') {
                     'NullRHI contract results are not NonNullRHI runtime or visual acceptance.'
                 }

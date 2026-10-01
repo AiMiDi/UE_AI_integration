@@ -166,6 +166,11 @@ $summaryPath = Join-Path $EvidenceRoot 'summary.json'
         staticVerified = $capabilityChecksPassed
         compiled = $mcpBuildPassed
         moduleLoaded = $null
+        moduleLoadProof = [ordered]@{
+            status = 'unavailable'
+            capability = 'production.module.loaded.get'
+            reason = 'Manifest/CLI/MCP contract checks do not load an Editor module.'
+        }
         assetReadback = $null
         runtimeVerified = $null
         visualVerified = $null
