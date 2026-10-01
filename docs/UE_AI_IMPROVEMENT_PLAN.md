@@ -102,7 +102,8 @@ harness 会检查这组测试源码仍保留 NonNullRHI 标志；报告中的
 
 这些是从当前 564 capability 目录和历史 Monolith 对比中得到的候选缺口，实施前必须重新读取当前 Monolith 注册和 live schema：
 
-- **Niagara**：动态输入目前有 list/tree/get 和 add 流程，但 set/remove/search/完整树编辑仍需核对；事件处理器和仿真阶段已有 add 流程，缺少完整查询、修改和删除闭环；系统 spec 目前有 export，import/round-trip 仍需补；模块 override/duplicate、renderer 的 mesh/ribbon/subUV 细节也需要专项核对。
+- **Niagara**：动态输入目前有 list/tree/get 和 add 流程，但 set/remove/search/完整树编辑仍需核对；事件处理器和仿真阶段已有 add 流程，缺少完整修改/删除闭环；系统 spec 目前有 export，import/round-trip 仍需补；模块 override/duplicate、renderer 的 mesh/ribbon/subUV 细节也需要专项核对。
+  `content.niagara.system.inspect` 已补齐 Event Handler/Simulation Stage 的独立 offset/limit/total/hasMore/nextOffset 分页，`content.niagara.event_handler.list` 已提供只读的有界 usage/options/graph presence 查询；`event_handler.add.apply` 也会显式创建对应的 Particle Event graph output，并由 Automation 覆盖 apply、read-back 和 rollback。上述查询和 add 闭环仍不等同于完整的事件/阶段修改删除语义或 spec round-trip。
 - **Material**：GraphIR `execute_plan` 已存在，但“读 boundary → 执行 → 读回 → 恢复”的语义完整性、共享节点保护和失败恢复仍要按真实资产验收；预览、缩略图、tiling、Custom HLSL、函数实例和父级迁移需要 NonNullRHI/Editor context 的端到端证据，而不能只看 handler。
 - **Blueprint**：Timeline、CDO、批量节点、复制/导出、DataAsset 和批量生成已有目录入口；模板发现/应用、跨资产引用稳定性、声明式 build 的真实编译保存和运行态验收仍需补齐。
 - **项目专属能力**：WidgetTree、ViewModel、Lua binding/packing 仍属于项目 MCP 边界，不应为了“通用能力数量”硬塞进 UE_AI_integration；需要提供清晰路由和互操作说明。
