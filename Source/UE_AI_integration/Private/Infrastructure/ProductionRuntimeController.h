@@ -5,6 +5,7 @@
 #include "Tools/MCPToolBase.h"
 
 class FMCPToolRegistry;
+class FMCPExecutor;
 
 namespace UEAIIntegration::Infrastructure
 {
@@ -14,7 +15,6 @@ class FPerformanceRegressionService;
 class FPerformanceSuiteService;
 class FRecoveryJournalService;
 class FReflectionInspectService;
-class FMCPExecutor;
 
 /**
  * Owns the asynchronous production jobs exposed by the production domain.

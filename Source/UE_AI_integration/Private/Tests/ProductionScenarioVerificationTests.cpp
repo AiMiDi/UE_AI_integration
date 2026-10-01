@@ -145,8 +145,8 @@ bool FProductionScenarioVerificationContractTest::RunTest(const FString& Paramet
 		MakeStartParams(MakeScenario(TEXT("object.find"), SuccessParams)));
 	TestTrue(TEXT("Success scenario starts"), Started.bSuccess);
 	const FString SuccessRunId = Started.Data->GetStringField(TEXT("runId"));
-	Controller.Tick();
-	Controller.Tick();
+	Controller.Tick(0.016f);
+	Controller.Tick(0.016f);
 	FMCPToolResult SuccessResult = Controller.GetScenarioResult(
 		MakeRunParams(SuccessRunId));
 	TSharedPtr<FJsonObject> SuccessReceipt;
@@ -184,7 +184,7 @@ bool FProductionScenarioVerificationContractTest::RunTest(const FString& Paramet
 		MakeStartParams(MakeScenario(TEXT("object.get"), FailureParams)));
 	TestTrue(TEXT("Failure scenario starts"), FailureStarted.bSuccess);
 	const FString FailureRunId = FailureStarted.Data->GetStringField(TEXT("runId"));
-	Controller.Tick();
+	Controller.Tick(0.016f);
 	FMCPToolResult FailureResult = Controller.GetScenarioResult(
 		MakeRunParams(FailureRunId));
 	TSharedPtr<FJsonObject> FailureReceipt;
@@ -213,7 +213,7 @@ bool FProductionScenarioVerificationContractTest::RunTest(const FString& Paramet
 		MakeStartParams(MakeScenario(TEXT("object.find"), InvalidParams)));
 	TestTrue(TEXT("Preflight scenario starts"), PreflightStarted.bSuccess);
 	const FString PreflightRunId = PreflightStarted.Data->GetStringField(TEXT("runId"));
-	Controller.Tick();
+	Controller.Tick(0.016f);
 	FMCPToolResult PreflightResult = Controller.GetScenarioResult(
 		MakeRunParams(PreflightRunId));
 	TSharedPtr<FJsonObject> PreflightReceipt;
