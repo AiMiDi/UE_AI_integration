@@ -355,6 +355,73 @@ bool HasRendererClass(const TSharedPtr<FJsonObject>& Spec, const TCHAR* Suffix)
 	}
 	return false;
 }
+
+bool HasEventHandlerUsage(const TSharedPtr<FJsonObject>& Spec, const FGuid& UsageId, const bool bImported = false)
+{
+	const TArray<TSharedPtr<FJsonValue>>* Emitters = nullptr;
+	if (!Spec.IsValid() || !Spec->TryGetArrayField(TEXT("emitters"), Emitters) || !Emitters)
+	{
+		return false;
+	}
+	const FString ExpectedUsageId = UsageId.ToString(EGuidFormats::DigitsWithHyphensLower);
+	for (const TSharedPtr<FJsonValue>& EmitterValue : *Emitters)
+	{
+		const TSharedPtr<FJsonObject> Emitter = EmitterValue.IsValid() ? EmitterValue->AsObject() : nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* Handlers = nullptr;
+		if (!Emitter.IsValid() || !Emitter->TryGetArrayField(TEXT("eventHandlers"), Handlers) || !Handlers)
+		{
+			continue;
+		}
+		for (const TSharedPtr<FJsonValue>& HandlerValue : *Handlers)
+		{
+			const TSharedPtr<FJsonObject> Handler = HandlerValue.IsValid() ? HandlerValue->AsObject() : nullptr;
+			if (Handler.IsValid() && Handler->GetStringField(TEXT("usageId")) == ExpectedUsageId)
+			{
+				return Handler->GetStringField(TEXT("sourceEventName")) == (bImported ? TEXT("PersistenceBurstImported") : TEXT("PersistenceBurst"))
+					&& Handler->GetBoolField(TEXT("randomSpawnNumber"))
+					&& Handler->GetNumberField(TEXT("spawnNumber")) == (bImported ? 7.0 : 4.0)
+					&& Handler->GetNumberField(TEXT("minSpawnNumber")) == (bImported ? 2.0 : 2.0)
+					&& Handler->GetNumberField(TEXT("maxEventsPerFrame")) == 32.0
+					&& (!bImported || Handler->GetStringField(TEXT("sourceEmitterId")).IsEmpty());
+			}
+		}
+	}
+	return false;
+}
+
+bool HasSimulationStageUsage(const TSharedPtr<FJsonObject>& Spec, const FGuid& UsageId, const bool bImported = false)
+{
+	const TArray<TSharedPtr<FJsonValue>>* Emitters = nullptr;
+	if (!Spec.IsValid() || !Spec->TryGetArrayField(TEXT("emitters"), Emitters) || !Emitters)
+	{
+		return false;
+	}
+	const FString ExpectedUsageId = UsageId.ToString(EGuidFormats::DigitsWithHyphensLower);
+	for (const TSharedPtr<FJsonValue>& EmitterValue : *Emitters)
+	{
+		const TSharedPtr<FJsonObject> Emitter = EmitterValue.IsValid() ? EmitterValue->AsObject() : nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* Stages = nullptr;
+		if (!Emitter.IsValid() || !Emitter->TryGetArrayField(TEXT("simulationStages"), Stages) || !Stages)
+		{
+			continue;
+		}
+		for (const TSharedPtr<FJsonValue>& StageValue : *Stages)
+		{
+			const TSharedPtr<FJsonObject> Stage = StageValue.IsValid() ? StageValue->AsObject() : nullptr;
+			if (Stage.IsValid() && Stage->GetStringField(TEXT("usageId")) == ExpectedUsageId)
+			{
+				const TSharedPtr<FJsonObject> Properties = Stage->GetObjectField(TEXT("properties"));
+				return Stage->GetStringField(TEXT("name")) == (bImported ? TEXT("PersistenceStageImported") : TEXT("PersistenceStage"))
+					&& Stage->GetBoolField(TEXT("enabled")) == !bImported
+					&& Stage->GetStringField(TEXT("stageClass")).EndsWith(TEXT("NiagaraSimulationStageGeneric"))
+					&& Stage->GetNumberField(TEXT("numIterations")) == (bImported ? 5.0 : 3.0)
+					&& Properties.IsValid()
+					&& (!bImported || Properties->GetBoolField(TEXT("bGpuDispatchForceLinear")));
+			}
+		}
+	}
+	return false;
+}
 } // namespace UEAINiagaraSpecPersistencePrivate
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -424,6 +491,29 @@ bool FUEAINiagaraSystemSpecCrossProcessPersistenceTest::RunTest(const FString&)
 		if (Spec->TryGetArrayField(TEXT("emitters"), Emitters) && Emitters && Emitters->Num() > 0)
 		{
 			const TSharedPtr<FJsonObject> Emitter = (*Emitters)[0]->AsObject();
+			const TArray<TSharedPtr<FJsonValue>>* EventHandlers = nullptr;
+			if (Emitter.IsValid() && Emitter->TryGetArrayField(TEXT("eventHandlers"), EventHandlers) && EventHandlers && EventHandlers->Num() > 0)
+			{
+				const TSharedPtr<FJsonObject> EventHandler = (*EventHandlers)[0]->AsObject();
+				if (EventHandler.IsValid())
+				{
+					EventHandler->SetStringField(TEXT("sourceEventName"), TEXT("PersistenceBurstImported"));
+					EventHandler->SetStringField(TEXT("sourceEmitterId"), TEXT(""));
+					EventHandler->SetNumberField(TEXT("spawnNumber"), 7.0);
+				}
+			}
+			const TArray<TSharedPtr<FJsonValue>>* SimulationStages = nullptr;
+			if (Emitter.IsValid() && Emitter->TryGetArrayField(TEXT("simulationStages"), SimulationStages) && SimulationStages && SimulationStages->Num() > 0)
+			{
+				const TSharedPtr<FJsonObject> SimulationStage = (*SimulationStages)[0]->AsObject();
+				if (SimulationStage.IsValid())
+				{
+					SimulationStage->SetStringField(TEXT("name"), TEXT("PersistenceStageImported"));
+					SimulationStage->SetBoolField(TEXT("enabled"), false);
+					SimulationStage->SetNumberField(TEXT("numIterations"), 5.0);
+					SimulationStage->GetObjectField(TEXT("properties"))->SetBoolField(TEXT("bGpuDispatchForceLinear"), true);
+				}
+			}
 			const TArray<TSharedPtr<FJsonValue>>* Renderers = nullptr;
 			if (Emitter.IsValid() && Emitter->TryGetArrayField(TEXT("renderers"), Renderers) && Renderers)
 				for (const TSharedPtr<FJsonValue>& Value : *Renderers)
@@ -461,8 +551,13 @@ bool FUEAINiagaraSystemSpecCrossProcessPersistenceTest::RunTest(const FString&)
 	const FMCPToolResult Export = Registry.ExecuteTool(TEXT("content.niagara.system.spec.export"), ExportParams);
 	if (!TestTrue(TEXT("Post-reload native spec export succeeds"), Export.bSuccess) || !Export.Data) return false;
 	TSharedPtr<FJsonObject> Evidence = LoadJsonFile(ArtifactPath);
-	AddInfo(TEXT("Event Handler and Simulation Stage runtime coverage is intentionally not claimed by this authored-persistence fixture."));
 	TestTrue(TEXT("Dynamic input coverage was completed before persistence"), Evidence.IsValid() && Evidence->GetBoolField(TEXT("dynamicInputCovered")));
+	TestTrue(TEXT("Event Handler authored state survived the process boundary"),
+		Evidence.IsValid() && Evidence->GetBoolField(TEXT("eventHandlerCovered"))
+		&& HasEventHandlerUsage(Export.Data, Fixture.EventHandlerUsageId, true));
+	TestTrue(TEXT("Simulation Stage authored state survived the process boundary"),
+		Evidence.IsValid() && Evidence->GetBoolField(TEXT("simulationStageCovered"))
+		&& HasSimulationStageUsage(Export.Data, Fixture.SimulationStageUsageId, true));
 	bool bPersistedUserDefault = false;
 	for (const TSharedPtr<FJsonValue>& Value : Export.Data->GetArrayField(TEXT("userParameters")))
 	{
