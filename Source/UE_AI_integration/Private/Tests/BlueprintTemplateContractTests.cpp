@@ -1,15 +1,19 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Editor.h"
 #include "EditorAssetLibrary.h"
 #include "Components/SphereComponent.h"
 #include "Engine/Blueprint.h"
+#include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Guid.h"
+#include "Misc/PackageName.h"
 #include "Misc/ScopeExit.h"
 #include "PackageTools.h"
 #include "Tools/MCPToolRegistry.h"
@@ -461,6 +465,245 @@ bool FBlueprintTemplateWorkflowContractTest::RunTest(const FString&)
 			UEAIIntegration::Workflow::FWorkflowRuntime::ComputeAssetStructureHash(Blueprint), BeforeHash);
 		TestEqual(TEXT("Rollback removes template-owned variable additions"), Blueprint->NewVariables.Num(), BeforeVariableCount);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBlueprintTemplateCrossAssetAcceptanceTest,
+	"UE_AI_integration.Blueprint.Template.CrossAssetRenameRedirectorAndBytecodeAcceptance",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBlueprintTemplateCrossAssetAcceptanceTest::RunTest(const FString&)
+{
+	UUEAIIntegrationSubsystem* Subsystem = GEditor
+		? GEditor->GetEditorSubsystem<UUEAIIntegrationSubsystem>()
+		: nullptr;
+	FMCPToolRegistry* Registry = Subsystem ? Subsystem->GetRegistry() : nullptr;
+	FUEAIIntegrationServer* Server = Subsystem ? Subsystem->GetServer() : nullptr;
+	auto* Runtime = Server ? Server->GetWorkflowRuntimeForTesting() : nullptr;
+	if (!TestNotNull(TEXT("Template cross-asset acceptance has the integration registry"), Registry)
+		|| !TestNotNull(TEXT("Template cross-asset acceptance has the Workflow runtime"), Runtime))
+	{
+		return false;
+	}
+
+	const FString Suffix = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	const FString ParentPath = TEXT("/Game/Automation/UEAI_TemplateParent_") + Suffix;
+	const FString ChildPath = TEXT("/Game/Automation/UEAI_TemplateChild_") + Suffix;
+	const FString RenamedPath = ParentPath + TEXT("_Renamed");
+	const FString ParentName = FPackageName::GetLongPackageAssetName(ParentPath);
+	const FString ParentObjectPath = ParentPath + TEXT(".") + ParentName;
+	ON_SCOPE_EXIT
+	{
+		for (const FString& Path : {ChildPath, RenamedPath, ParentPath})
+		{
+			if (UEditorAssetLibrary::DoesAssetExist(Path))
+			{
+				TestTrue(TEXT("Template cross-asset fixture is removed"),
+					UEditorAssetLibrary::DeleteAsset(Path));
+			}
+		}
+	};
+
+	auto Create = MakeShared<FJsonObject>();
+	Create->SetStringField(TEXT("blueprintName"), ParentName);
+	Create->SetStringField(TEXT("packagePath"), TEXT("/Game/Automation"));
+	Create->SetStringField(TEXT("parentClass"), TEXT("Actor"));
+	const FMCPToolResult Created = Registry->ExecuteTool(TEXT("blueprint.asset.create"), Create);
+	if (!TestTrue(TEXT("Template cross-asset parent fixture creates"), Created.bSuccess))
+	{
+		AddError(Created.ErrorCode + TEXT(": ") + Created.ErrorMessage);
+		return false;
+	}
+	UBlueprint* Parent = LoadObject<UBlueprint>(nullptr, *ParentPath);
+	if (!TestNotNull(TEXT("Template cross-asset parent fixture loads"), Parent)
+		|| !TestTrue(TEXT("Template cross-asset parent baseline saves"),
+			UEditorAssetLibrary::SaveAsset(ParentPath, false)))
+	{
+		return false;
+	}
+
+	auto Apply = MakeTemplateParams(TEXT("health_system"));
+	Apply->SetStringField(TEXT("blueprint"), ParentPath);
+	auto Values = MakeShared<FJsonObject>();
+	Values->SetNumberField(TEXT("maxHealth"), 125.5);
+	Values->SetNumberField(TEXT("damageAmount"), 25.0);
+	Values->SetNumberField(TEXT("healAmount"), 15.0);
+	Apply->SetObjectField(TEXT("parameters"), Values);
+	const FMCPToolResult Planned = Registry->ExecuteTool(TEXT("blueprint.template.apply"), Apply);
+	if (!TestTrue(TEXT("Template cross-asset application plans"), Planned.bSuccess)
+		|| !TestNotNull(TEXT("Template cross-asset plan has a workflow"), Planned.Data.Get()))
+	{
+		return false;
+	}
+	const FMCPResult Executed = ExecuteTemplateWorkflow(
+		*Runtime,
+		Planned.Data->GetObjectField(TEXT("workflow")),
+		Planned.Data->GetStringField(TEXT("planDigest")));
+	if (!TestTrue(TEXT("Template cross-asset application executes"), Executed.bOk))
+	{
+		AddError(Executed.Error.Code + TEXT(": ") + Executed.Error.Message);
+		return false;
+	}
+	Parent = LoadObject<UBlueprint>(nullptr, *ParentPath);
+	if (!TestNotNull(TEXT("Template cross-asset parent reloads after application"), Parent)
+		|| !TestNotNull(TEXT("Template cross-asset parent has a generated class"), Parent->GeneratedClass))
+	{
+		return false;
+	}
+
+	UPackage* ChildPackage = CreatePackage(*ChildPath);
+	UBlueprint* Child = ChildPackage
+		? FKismetEditorUtilities::CreateBlueprint(
+			Parent->GeneratedClass,
+			ChildPackage,
+			FName(*FPackageName::GetLongPackageAssetName(ChildPath)),
+			BPTYPE_Normal,
+			UBlueprint::StaticClass(),
+			UBlueprintGeneratedClass::StaticClass(),
+			FName(TEXT("UEAI.TemplateCrossAssetAcceptance")))
+		: nullptr;
+	if (!TestNotNull(TEXT("Template cross-asset child fixture creates"), Child))
+	{
+		return false;
+	}
+	FAssetRegistryModule::AssetCreated(Child);
+	FKismetEditorUtilities::CompileBlueprint(Child, EBlueprintCompileOptions::SkipSave);
+	if (!TestEqual(TEXT("Template cross-asset child compiles"), Child->Status, BS_UpToDate)
+		|| !TestTrue(TEXT("Template cross-asset child saves"), UEditorAssetLibrary::SaveAsset(ChildPath, false)))
+	{
+		return false;
+	}
+
+	IAssetRegistry& AssetRegistry = FAssetRegistryModule::GetRegistry();
+	AssetRegistry.ScanPathsSynchronous({TEXT("/Game/Automation")}, true);
+	auto FindReferences = [Registry](const FString& AssetPath)
+	{
+		auto Params = MakeShared<FJsonObject>();
+		Params->SetStringField(TEXT("assetPath"), AssetPath);
+		return Registry->ExecuteTool(TEXT("blueprint.asset.references"), Params);
+	};
+	auto ContainsExactReferencer = [Child](const TSharedPtr<FJsonObject>& Data)
+	{
+		if (!Data.IsValid()) return false;
+		const FString ChildIdentity = FAssetIdentifier::FromString(Child->GetPathName()).ToString();
+		const TArray<TSharedPtr<FJsonValue>>* Exact = nullptr;
+		if (!Data->TryGetArrayField(TEXT("exactObjectReferencers"), Exact) || !Exact) return false;
+		return Exact->ContainsByPredicate([&ChildIdentity](const TSharedPtr<FJsonValue>& Value)
+		{
+			return Value.IsValid() && Value->Type == EJson::String
+				&& Value->AsString() == ChildIdentity;
+		});
+	};
+	FMCPToolResult BeforeRename = FindReferences(Parent->GetPathName());
+	if (!TestTrue(TEXT("Template parent references query succeeds before rename"), BeforeRename.bSuccess)
+		|| !TestNotNull(TEXT("Template parent references read-back exists"), BeforeRename.Data.Get()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("Template child is an exact referencer before rename"),
+		BeforeRename.Data->GetBoolField(TEXT("exactObjectReferenceAvailable"))
+			&& ContainsExactReferencer(BeforeRename.Data));
+	TestTrue(TEXT("Template parent references have complete identity before rename"),
+		BeforeRename.Data->GetBoolField(TEXT("identityComplete")));
+
+	auto Rename = MakeShared<FJsonObject>();
+	Rename->SetStringField(TEXT("assetPath"), ParentPath);
+	Rename->SetStringField(TEXT("newPath"), RenamedPath);
+	const FMCPToolResult Renamed = Registry->ExecuteTool(TEXT("blueprint.asset.rename"), Rename);
+	if (!TestTrue(TEXT("Template parent rename succeeds"), Renamed.bSuccess)
+		|| !TestNotNull(TEXT("Template parent rename receipt exists"), Renamed.Data.Get()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("Template parent rename creates an Asset Registry redirector"),
+		Renamed.Data->GetBoolField(TEXT("redirectorCreated")));
+	Parent = LoadObject<UBlueprint>(nullptr, *RenamedPath);
+	Child = LoadObject<UBlueprint>(nullptr, *ChildPath);
+	if (!TestNotNull(TEXT("Renamed template parent reloads"), Parent)
+		|| !TestNotNull(TEXT("Renamed template child reloads"), Child))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Template child parent class follows the renamed asset"),
+		Child->ParentClass.Get(), Parent->GeneratedClass.Get());
+	if (!TestTrue(TEXT("Renamed template child saves its fixed-up reference"),
+		UEditorAssetLibrary::SaveAsset(ChildPath, false)))
+	{
+		return false;
+	}
+	const FAssetData Redirector = AssetRegistry.GetAssetByObjectPath(
+		FSoftObjectPath(ParentObjectPath));
+	TestTrue(TEXT("Template rename leaves a redirector at the old object path"), Redirector.IsValid() && Redirector.IsRedirector());
+
+	FMCPToolResult AfterRename = FindReferences(Parent->GetPathName());
+	if (!TestTrue(TEXT("Renamed template parent references query succeeds"), AfterRename.bSuccess)
+		|| !TestNotNull(TEXT("Renamed template references read-back exists"), AfterRename.Data.Get()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("Template child remains an exact referencer after rename"),
+		AfterRename.Data->GetBoolField(TEXT("exactObjectReferenceAvailable"))
+			&& ContainsExactReferencer(AfterRename.Data));
+	TestTrue(TEXT("Renamed template reference identity remains complete"),
+		AfterRename.Data->GetBoolField(TEXT("identityComplete")));
+
+	TArray<UPackage*> PackagesToReload{Parent->GetOutermost(), Child->GetOutermost()};
+	FText ReloadError;
+	if (!TestTrue(TEXT("Renamed template parent and child reload from disk"),
+		UPackageTools::ReloadPackages(PackagesToReload, ReloadError, EReloadPackagesInteractionMode::AssumePositive)))
+	{
+		AddError(ReloadError.ToString());
+		return false;
+	}
+	Parent = LoadObject<UBlueprint>(nullptr, *RenamedPath);
+	Child = LoadObject<UBlueprint>(nullptr, *ChildPath);
+	if (!TestNotNull(TEXT("Reloaded renamed template parent exists"), Parent)
+		|| !TestNotNull(TEXT("Reloaded renamed template child exists"), Child))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Reloaded child keeps the renamed parent class"),
+		Child->ParentClass.Get(), Parent->GeneratedClass.Get());
+
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("Renamed template runtime world creates"), World)
+		|| !TestNotNull(TEXT("Renamed template runtime engine exists"), GEngine))
+	{
+		return false;
+	}
+	GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FURL URL;
+	World->InitializeActorsForPlay(URL);
+	World->BeginPlay();
+	AActor* Actor = World->SpawnActor<AActor>(Child->GeneratedClass, FTransform::Identity);
+	if (!TestNotNull(TEXT("Renamed template child spawns in a Game world"), Actor))
+	{
+		return false;
+	}
+	ON_SCOPE_EXIT { if (Actor) Actor->Destroy(); };
+	TSharedRef<FJsonObject> RuntimeParams = MakeShared<FJsonObject>();
+	RuntimeParams->SetStringField(TEXT("blueprint"), ChildPath);
+	const FMCPToolResult RuntimeObserved = Registry->ExecuteTool(
+		TEXT("blueprint.asset.runtime.verify"), RuntimeParams);
+	TestTrue(TEXT("Runtime acceptance identifies the renamed template child"),
+		RuntimeObserved.bSuccess && RuntimeObserved.Data
+			&& RuntimeObserved.Data->GetBoolField(TEXT("runtimeVerified"))
+			&& RuntimeObserved.Data->GetStringField(TEXT("instance")) == Actor->GetPathName()
+			&& RuntimeObserved.Data->GetStringField(TEXT("instanceClass")) == Actor->GetClass()->GetPathName());
+	FNumericProperty* Health = FindFProperty<FNumericProperty>(Actor->GetClass(), TEXT("Health"));
+	UFunction* TakeDamage = Actor->FindFunction(FName(TEXT("TakeDamage")));
+	if (!TestNotNull(TEXT("Renamed template child retains Health bytecode state"), Health)
+		|| !TestNotNull(TEXT("Renamed template child retains TakeDamage bytecode"), TakeDamage))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Renamed template child starts with the authored health default"),
+		Health->GetFloatingPointPropertyValue(Health->ContainerPtrToValuePtr<void>(Actor)), 125.5);
+	Actor->ProcessEvent(TakeDamage, nullptr);
+	TestEqual(TEXT("Renamed template child executes the persisted TakeDamage bytecode"),
+		Health->GetFloatingPointPropertyValue(Health->ContainerPtrToValuePtr<void>(Actor)), 100.5);
 	return true;
 }
 
