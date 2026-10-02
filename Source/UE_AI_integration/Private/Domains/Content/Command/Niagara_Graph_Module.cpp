@@ -9210,16 +9210,16 @@ namespace UEAINiagaraModulePrivate
 								|| Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient))
 								return ErrorResult(FString::Printf(TEXT("Renderer property '%s' is not editable."), *PropertyPair.Key), TEXT("renderer_property_unsupported"), 422);
 							ValueText = SpecCanonicalRendererPropertyText(Property->GetFName(), MoveTemp(ValueText));
-							FString Before;
-							Property->ExportTextItem_Direct(Before, Property->ContainerPtrToValuePtr<void>(Renderer), nullptr, nullptr, PPF_None);
-							Before = SpecCanonicalRendererPropertyText(Property->GetFName(), MoveTemp(Before));
+							FString RawBefore;
+							Property->ExportTextItem_Direct(RawBefore, Property->ContainerPtrToValuePtr<void>(Renderer), nullptr, nullptr, PPF_None);
+							const FString Before = SpecCanonicalRendererPropertyText(Property->GetFName(), RawBefore);
 							if (Before == ValueText)
 								continue;
 							ExplicitRendererProperties.Add(PropertyPair.Key);
 							FString RendererError;
 							if (!SpecImportEditRendererProperty(Scratch.Get(), Property, ValueText, RendererError))
 								return ErrorResult(RendererError, TEXT("renderer_property_invalid"), 422);
-							RendererEdits.Add({Renderer, PropertyPair.Key, RawValueText, Before});
+							RendererEdits.Add({Renderer, PropertyPair.Key, RawValueText, RawBefore});
 						}
 						// Hooks may also change bindings or another authored property.
 						// Verify the entire supplied renderer state on the same scratch

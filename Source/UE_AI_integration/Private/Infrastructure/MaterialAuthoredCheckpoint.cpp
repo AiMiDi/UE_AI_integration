@@ -173,7 +173,35 @@ FString AuthoredDigestMismatch(UMaterial* Original, UMaterial* Image, const FStr
 	BuildRecords(Image, ImagePrefix, ImageObjects, ImageRecords);
 	if (OriginalRecords.Num() != ImageRecords.Num())
 	{
-		return FString::Printf(TEXT("object_count:%d/%d"), OriginalRecords.Num(), ImageRecords.Num());
+		FString Missing;
+		int32 MissingCount = 0;
+		for (const auto& Pair : OriginalRecords)
+		{
+			if (!ImageRecords.Contains(Pair.Key))
+			{
+				if (MissingCount++ < 3)
+				{
+					if (!Missing.IsEmpty()) Missing += TEXT(",");
+					Missing += Pair.Key;
+				}
+			}
+		}
+		FString Extra;
+		int32 ExtraCount = 0;
+		for (const auto& Pair : ImageRecords)
+		{
+			if (!OriginalRecords.Contains(Pair.Key))
+			{
+				if (ExtraCount++ < 3)
+				{
+					if (!Extra.IsEmpty()) Extra += TEXT(",");
+					Extra += Pair.Key;
+				}
+			}
+		}
+		return FString::Printf(TEXT("object_count:%d/%d;missing=%s%s;extra=%s%s"),
+			OriginalRecords.Num(), ImageRecords.Num(), *Missing, MissingCount > 3 ? TEXT(",...") : TEXT(""),
+			*Extra, ExtraCount > 3 ? TEXT(",...") : TEXT(""));
 	}
 	auto Fingerprint = [](const FString& Value)
 	{
