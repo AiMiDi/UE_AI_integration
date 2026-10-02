@@ -9171,6 +9171,12 @@ namespace UEAINiagaraModulePrivate
 							return ErrorResult(TEXT("Unable to validate the renderer properties on an isolated copy."),
 								TEXT("renderer_property_invalid"), 422);
 						Scratch->SetFlags(RF_Transient);
+						// Niagara editor hooks can normalize related binding metadata
+						// when an authored renderer property is edited.  Validate only
+						// fields explicitly changed by this spec; untouched fields are
+						// still preserved on the real renderer but may legitimately
+						// differ on the scratch copy after the hook runs.
+						TSet<FString> ExplicitRendererProperties;
 						for (const TPair<FString, TSharedPtr<FJsonValue>>& PropertyPair : (*Properties)->Values)
 						{
 							FString ValueText;
@@ -9186,6 +9192,7 @@ namespace UEAINiagaraModulePrivate
 							Before = SpecCanonicalRendererPropertyText(Property->GetFName(), MoveTemp(Before));
 							if (Before == ValueText)
 								continue;
+							ExplicitRendererProperties.Add(PropertyPair.Key);
 							FString RendererError;
 							if (!SpecImportEditRendererProperty(Scratch.Get(), Property, ValueText, RendererError))
 								return ErrorResult(RendererError, TEXT("renderer_property_invalid"), 422);
@@ -9196,6 +9203,8 @@ namespace UEAINiagaraModulePrivate
 						// object before any user parameter or graph edits begin.
 						for (const TPair<FString, TSharedPtr<FJsonValue>>& PropertyPair : (*Properties)->Values)
 						{
+							if (!ExplicitRendererProperties.Contains(PropertyPair.Key))
+								continue;
 							FProperty* Property = FindFProperty<FProperty>(Renderer->GetClass(), FName(*PropertyPair.Key));
 							FString ScratchValue;
 							Property->ExportTextItem_Direct(ScratchValue, Property->ContainerPtrToValuePtr<void>(Scratch.Get()), nullptr, nullptr, PPF_None);
