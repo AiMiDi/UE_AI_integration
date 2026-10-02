@@ -213,6 +213,61 @@ bool CreateFixture(FFixture& Out)
 	Out.ParticleUpdateOutput = FindOutput(Out.ParticleGraph, ENiagaraScriptUsage::ParticleUpdateScript);
 	if (!Out.ParticleGraph || !Out.ParticleUpdateOutput) return false;
 
+	// Author one event handler and one generic simulation stage so the
+	// cross-process spec contract exercises their authored metadata and stable
+	// usage identities.  Their dedicated capabilities own structural edits;
+	// system-spec import treats these arrays as structure guarded fields.
+	Out.EventHandlerUsageId = FGuid::NewGuid();
+	FNiagaraEventScriptProperties EventHandler;
+	EventHandler.ExecutionMode = EScriptExecutionMode::SpawnedParticles;
+	EventHandler.SpawnNumber = 4;
+	EventHandler.MinSpawnNumber = 2;
+	EventHandler.MaxEventsPerFrame = 32;
+	EventHandler.bRandomSpawnNumber = true;
+	EventHandler.UpdateAttributeInitialValues = false;
+	EventHandler.SourceEmitterID = Handle.GetId();
+	EventHandler.SourceEventName = FName(TEXT("PersistenceBurst"));
+	EventHandler.Script = NewObject<UNiagaraScript>(
+		Out.Emitter, TEXT("PersistenceEventScript"), RF_Transactional);
+	if (!EventHandler.Script)
+	{
+		return false;
+	}
+	EventHandler.Script->SetUsage(ENiagaraScriptUsage::ParticleEventScript);
+	EventHandler.Script->SetUsageId(Out.EventHandlerUsageId);
+	EventHandler.Script->SetLatestSource(EmitterSource);
+	Out.Emitter->AddEventHandler(EventHandler, Out.EmitterVersion);
+	if (!ResetGraph(EmitterSource->NodeGraph, EventHandler.Script, ENiagaraScriptUsage::ParticleEventScript))
+	{
+		return false;
+	}
+
+	Out.SimulationStageUsageId = FGuid::NewGuid();
+	UNiagaraSimulationStageGeneric* SimulationStage = NewObject<UNiagaraSimulationStageGeneric>(
+		Out.Emitter, TEXT("PersistenceSimulationStage"), RF_Transactional);
+	if (!SimulationStage)
+	{
+		return false;
+	}
+	SimulationStage->SimulationStageName = FName(TEXT("PersistenceStage"));
+	SimulationStage->bEnabled = true;
+	SimulationStage->OuterEmitterVersion = Out.EmitterVersion;
+	SimulationStage->NumIterations.SetDefaultParameter(FNiagaraTypeDefinition::GetIntDef(), 3);
+	SimulationStage->Script = NewObject<UNiagaraScript>(
+		SimulationStage, TEXT("PersistenceSimulationStageScript"), RF_Transactional);
+	if (!SimulationStage->Script)
+	{
+		return false;
+	}
+	SimulationStage->Script->SetUsage(ENiagaraScriptUsage::ParticleSimulationStageScript);
+	SimulationStage->Script->SetUsageId(Out.SimulationStageUsageId);
+	SimulationStage->Script->SetLatestSource(EmitterSource);
+	Out.Emitter->AddSimulationStage(SimulationStage, Out.EmitterVersion);
+	if (!ResetGraph(EmitterSource->NodeGraph, SimulationStage->Script, ENiagaraScriptUsage::ParticleSimulationStageScript))
+	{
+		return false;
+	}
+
 	if (UNiagaraScript* ModuleScript = LoadModuleScript())
 	{
 		Out.Module = FNiagaraStackGraphUtilities::AddScriptModuleToStack(ModuleScript, *Out.ParticleUpdateOutput);
