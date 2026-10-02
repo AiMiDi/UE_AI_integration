@@ -9179,6 +9179,13 @@ namespace UEAINiagaraModulePrivate
 						TSet<FString> ExplicitRendererProperties;
 						for (const TPair<FString, TSharedPtr<FJsonValue>>& PropertyPair : (*Properties)->Values)
 						{
+							// CustomSortingBinding is editor-derived metadata.  Its
+							// registered type handles are process-local and can be
+							// reconstructed differently after a package reload; it is
+							// intentionally preserved by Niagara rather than imported as
+							// an authored renderer edit.
+							if (PropertyPair.Key == TEXT("CustomSortingBinding"))
+								continue;
 							FString ValueText;
 							if (!PropertyPair.Value.IsValid() || !PropertyPair.Value->TryGetString(ValueText))
 								return ErrorResult(TEXT("Renderer properties must contain exported text values."), TEXT("renderer_property_invalid"), 422);
@@ -9203,6 +9210,8 @@ namespace UEAINiagaraModulePrivate
 						// object before any user parameter or graph edits begin.
 						for (const TPair<FString, TSharedPtr<FJsonValue>>& PropertyPair : (*Properties)->Values)
 						{
+							if (PropertyPair.Key == TEXT("CustomSortingBinding"))
+								continue;
 							if (!ExplicitRendererProperties.Contains(PropertyPair.Key))
 								continue;
 							FProperty* Property = FindFProperty<FProperty>(Renderer->GetClass(), FName(*PropertyPair.Key));
