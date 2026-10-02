@@ -9217,7 +9217,7 @@ namespace UEAINiagaraModulePrivate
 								continue;
 							ExplicitRendererProperties.Add(PropertyPair.Key);
 							FString RendererError;
-							if (!SpecImportEditRendererProperty(Scratch.Get(), Property, ValueText, RendererError))
+							if (!SpecImportEditRendererProperty(Scratch.Get(), Property, RawValueText, RendererError))
 								return ErrorResult(RendererError, TEXT("renderer_property_invalid"), 422);
 							RendererEdits.Add({Renderer, PropertyPair.Key, RawValueText, RawBefore});
 						}
