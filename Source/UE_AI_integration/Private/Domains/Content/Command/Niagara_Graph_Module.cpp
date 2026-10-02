@@ -7351,6 +7351,89 @@ namespace UEAINiagaraModulePrivate
 		return Result;
 	}
 
+	TSharedRef<FJsonObject> SpecExportBuildEventHandler(
+		const FNiagaraEventScriptProperties& Handler)
+	{
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		const UNiagaraScript* Script = Handler.Script;
+		const FGuid UsageId = Script ? Script->GetUsageId() : FGuid();
+		Result->SetStringField(TEXT("usageId"), UsageId.ToString(EGuidFormats::DigitsWithHyphensLower));
+		Result->SetStringField(TEXT("script"), Script ? Script->GetPathName() : FString());
+		Result->SetStringField(
+			TEXT("executionMode"),
+			StaticEnum<EScriptExecutionMode>()->GetNameStringByValue(
+				static_cast<int64>(Handler.ExecutionMode)));
+		Result->SetNumberField(TEXT("spawnNumber"), Handler.SpawnNumber);
+		Result->SetNumberField(TEXT("minSpawnNumber"), Handler.MinSpawnNumber);
+		Result->SetNumberField(TEXT("maxEventsPerFrame"), Handler.MaxEventsPerFrame);
+		Result->SetBoolField(TEXT("randomSpawnNumber"), Handler.bRandomSpawnNumber);
+		Result->SetBoolField(
+			TEXT("updateAttributeInitialValues"),
+			Handler.UpdateAttributeInitialValues);
+		Result->SetStringField(
+			TEXT("sourceEmitterId"),
+			Handler.SourceEmitterID.ToString(EGuidFormats::DigitsWithHyphensLower));
+		Result->SetStringField(TEXT("sourceEventName"), Handler.SourceEventName.ToString());
+		return Result;
+	}
+
+	TSharedRef<FJsonObject> SpecExportBuildSimulationStage(
+		UNiagaraSimulationStageBase* Stage,
+		const int32 Index)
+	{
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		if (!Stage)
+		{
+			return Result;
+		}
+		const UNiagaraScript* Script = Stage->Script;
+		Result->SetStringField(
+			TEXT("usageId"),
+			Script ? Script->GetUsageId().ToString(EGuidFormats::DigitsWithHyphensLower) : FString());
+		Result->SetStringField(TEXT("name"), Stage->SimulationStageName.ToString());
+		Result->SetBoolField(TEXT("enabled"), Stage->bEnabled);
+		Result->SetStringField(TEXT("stageClass"), Stage->GetClass()->GetPathName());
+		Result->SetStringField(TEXT("script"), Script ? Script->GetPathName() : FString());
+		Result->SetNumberField(TEXT("index"), Index);
+		if (const UNiagaraSimulationStageGeneric* Generic =
+			Cast<UNiagaraSimulationStageGeneric>(Stage))
+		{
+			if (Generic->NumIterations.GetDefaultValueArray().Num() == sizeof(int32))
+			{
+				Result->SetNumberField(
+					TEXT("numIterations"),
+					Generic->NumIterations.GetDefaultValue<int32>());
+			}
+			Result->SetStringField(
+				TEXT("numIterationsBinding"),
+				Generic->NumIterations.ResolvedParameter.GetName().ToString());
+			TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
+			for (TFieldIterator<FProperty> It(Generic->GetClass()); It; ++It)
+			{
+				FProperty* Property = *It;
+				if (!Property
+					// SimulationStageName and NumIterations have dedicated top-level
+					// fields.  Keeping them out of the generic property bag avoids two
+					// competing authored representations during import/read-back.
+					|| Property->GetFName() == TEXT("SimulationStageName")
+					|| Property->GetFName() == TEXT("NumIterations")
+					|| !Property->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible)
+					|| Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient))
+				{
+					continue;
+				}
+				const TSharedPtr<FJsonValue> Value = FJsonObjectConverter::UPropertyToJsonValue(
+					Property,
+					Property->ContainerPtrToValuePtr<void>(Generic));
+				if (Value.IsValid())
+				{
+					Properties->SetField(Property->GetName(), Value);
+				}
+			}
+			Result->SetObjectField(TEXT("properties"), Properties);
+		}
+		return Result;
+	}
 	TSharedRef<FJsonObject> SpecExportBuildEmitter(
 		const FNiagaraEmitterHandle& Handle,
 		bool& bOutStacksTruncated,
@@ -7542,6 +7625,8 @@ namespace UEAINiagaraModulePrivate
 		}
 	};
 
+	TSharedPtr<FJsonValue> SpecContentDigestCanonicalClone(const TSharedPtr<FJsonValue>& Value);
+
 	// A spec carries its own digest for transport, so digesting the object as
 	// supplied would make a valid export fail round-trip (the digest would be
 	// included on the second pass). Keep the transport field outside the
@@ -7570,7 +7655,7 @@ namespace UEAINiagaraModulePrivate
 				|| Pair.Key.Equals(TEXT("status"), ESearchCase::CaseSensitive);
 			if (!bTransportField)
 			{
-				Content->SetField(Pair.Key, Pair.Value);
+				Content->SetField(Pair.Key, SpecContentDigestCanonicalClone(Pair.Value));
 			}
 		}
 		return TryDigestJson(Content, OutDigest);
@@ -7843,6 +7928,36 @@ namespace UEAINiagaraModulePrivate
 		return Clone.IsValid() && Clone->Type == EJson::Object ? Clone->AsObject() : nullptr;
 	}
 
+	TSharedPtr<FJsonValue> SpecContentDigestCanonicalClone(const TSharedPtr<FJsonValue>& Value)
+	{
+		if (!Value.IsValid()) return MakeShared<FJsonValueNull>();
+		if (Value->Type == EJson::Object)
+		{
+			const TSharedPtr<FJsonObject> Source = Value->AsObject();
+			if (!Source.IsValid()) return MakeShared<FJsonValueNull>();
+			auto Result = MakeShared<FJsonObject>();
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Source->Values)
+			{
+				// Niagara type registrations are process-local.  They are useful
+				// diagnostics but are not authored stage/renderer state.
+				if (Pair.Key.Equals(TEXT("registeredTypeIndex"), ESearchCase::IgnoreCase)) continue;
+				Result->SetField(Pair.Key, SpecContentDigestCanonicalClone(Pair.Value));
+			}
+			return MakeShared<FJsonValueObject>(Result);
+		}
+		if (Value->Type == EJson::Array)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* Source = nullptr;
+			if (!Value->TryGetArray(Source) || !Source) return MakeShared<FJsonValueNull>();
+			TArray<TSharedPtr<FJsonValue>> Result;
+			Result.Reserve(Source->Num());
+			for (const TSharedPtr<FJsonValue>& Item : *Source)
+				Result.Add(SpecContentDigestCanonicalClone(Item));
+			return MakeShared<FJsonValueArray>(MoveTemp(Result));
+		}
+		return SpecImportCloneValue(Value);
+	}
+
 	bool SpecImportStructureDigest(const TSharedPtr<FJsonObject>& Spec, FString& OutDigest)
 	{
 		if (!Spec.IsValid()) return false;
@@ -7912,6 +8027,71 @@ namespace UEAINiagaraModulePrivate
 						{
 							if (!RendererPair.Key.Equals(TEXT("properties"), ESearchCase::CaseSensitive))
 								Row->SetField(RendererPair.Key, SpecImportCloneValue(RendererPair.Value));
+						}
+						Rows.Add(MakeShared<FJsonValueObject>(Row));
+					}
+					Emitter->SetArrayField(Pair.Key, MoveTemp(Rows));
+				}
+				else if (Pair.Key.Equals(TEXT("eventHandlers"), ESearchCase::CaseSensitive))
+				{
+					const TArray<TSharedPtr<FJsonValue>>* EventHandlers = nullptr;
+					if (!Pair.Value.IsValid() || !Pair.Value->TryGetArray(EventHandlers) || !EventHandlers)
+						return MakeShared<FJsonValueNull>();
+					TArray<TSharedPtr<FJsonValue>> Rows;
+					Rows.Reserve(EventHandlers->Num());
+					for (const TSharedPtr<FJsonValue>& EventValue : *EventHandlers)
+					{
+						const TSharedPtr<FJsonObject> Event = EventValue.IsValid()
+							&& EventValue->Type == EJson::Object ? EventValue->AsObject() : nullptr;
+						if (!Event.IsValid()) return MakeShared<FJsonValueNull>();
+						auto Row = MakeShared<FJsonObject>();
+						for (const TPair<FString, TSharedPtr<FJsonValue>>& EventPair : Event->Values)
+						{
+							// These are authored metadata fields.  Identity (usageId and
+							// script) remains in the stale-spec guard below.
+							if (EventPair.Key == TEXT("executionMode")
+								|| EventPair.Key == TEXT("spawnNumber")
+								|| EventPair.Key == TEXT("minSpawnNumber")
+								|| EventPair.Key == TEXT("maxEventsPerFrame")
+								|| EventPair.Key == TEXT("randomSpawnNumber")
+								|| EventPair.Key == TEXT("updateAttributeInitialValues")
+								|| EventPair.Key == TEXT("sourceEmitterId")
+								|| EventPair.Key == TEXT("sourceEventName"))
+							{
+								continue;
+							}
+							Row->SetField(EventPair.Key, SpecImportCloneValue(EventPair.Value));
+						}
+						Rows.Add(MakeShared<FJsonValueObject>(Row));
+					}
+					Emitter->SetArrayField(Pair.Key, MoveTemp(Rows));
+				}
+				else if (Pair.Key.Equals(TEXT("simulationStages"), ESearchCase::CaseSensitive))
+				{
+					const TArray<TSharedPtr<FJsonValue>>* Stages = nullptr;
+					if (!Pair.Value.IsValid() || !Pair.Value->TryGetArray(Stages) || !Stages)
+						return MakeShared<FJsonValueNull>();
+					TArray<TSharedPtr<FJsonValue>> Rows;
+					Rows.Reserve(Stages->Num());
+					for (const TSharedPtr<FJsonValue>& StageValue : *Stages)
+					{
+						const TSharedPtr<FJsonObject> Stage = StageValue.IsValid()
+							&& StageValue->Type == EJson::Object ? StageValue->AsObject() : nullptr;
+						if (!Stage.IsValid()) return MakeShared<FJsonValueNull>();
+						auto Row = MakeShared<FJsonObject>();
+						for (const TPair<FString, TSharedPtr<FJsonValue>>& StagePair : Stage->Values)
+						{
+							// Stage usageId/stageClass/script/index are identity.  The
+							// remaining fields are the authored stage state being imported.
+							if (StagePair.Key == TEXT("name")
+								|| StagePair.Key == TEXT("enabled")
+								|| StagePair.Key == TEXT("numIterations")
+								|| StagePair.Key == TEXT("numIterationsBinding")
+								|| StagePair.Key == TEXT("properties"))
+							{
+								continue;
+							}
+							Row->SetField(StagePair.Key, SpecImportCloneValue(StagePair.Value));
 						}
 						Rows.Add(MakeShared<FJsonValueObject>(Row));
 					}
@@ -9042,6 +9222,174 @@ namespace UEAINiagaraModulePrivate
 		return true;
 	}
 
+	struct FSpecEventHandlerImportEdit
+	{
+		FNiagaraEventScriptProperties* Handler = nullptr;
+		FNiagaraEventScriptProperties Before;
+		FGuid SourceEmitterId;
+		FString RequestedExecutionMode;
+		uint32 SpawnNumber = 0;
+		uint32 MinSpawnNumber = 0;
+		uint32 MaxEventsPerFrame = 0;
+		bool bRandomSpawnNumber = false;
+		bool bUpdateAttributeInitialValues = false;
+		FName SourceEventName;
+		bool bHasExecutionMode = false;
+		bool bHasSpawnNumber = false;
+		bool bHasMinSpawnNumber = false;
+		bool bHasMaxEventsPerFrame = false;
+		bool bHasRandomSpawnNumber = false;
+		bool bHasUpdateAttributeInitialValues = false;
+		bool bHasSourceEventName = false;
+		bool bHasSourceEmitterId = false;
+		bool bAttempted = false;
+	};
+
+	struct FSpecSimulationStagePropertyImportEdit
+	{
+		UNiagaraSimulationStageGeneric* Stage = nullptr;
+		FName PropertyName;
+		FString Before;
+		TSharedPtr<FJsonValue> Value;
+		bool bAttempted = false;
+	};
+
+	struct FSpecSimulationStageImportEdit
+	{
+		UNiagaraSimulationStageBase* Stage = nullptr;
+		FString BeforeName;
+		bool bBeforeEnabled = true;
+		FNiagaraParameterBindingWithValue BeforeNumIterations;
+		bool bHasBeforeNumIterations = false;
+		FString RequestedName;
+		bool bRequestedEnabled = true;
+		int32 RequestedNumIterations = 1;
+		FString RequestedNumIterationsBinding;
+		bool bHasName = false;
+		bool bHasEnabled = false;
+		bool bHasNumIterations = false;
+		bool bHasNumIterationsBinding = false;
+		bool bAttempted = false;
+	};
+
+	bool SpecImportReadUInt32(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field, uint32& OutValue)
+	{
+		double Number = 0.0;
+		if (!Object.IsValid() || !Object->TryGetNumberField(Field, Number)
+			|| !FMath::IsFinite(Number) || Number < 0.0 || Number > static_cast<double>(MAX_uint32)
+			|| Number != FMath::FloorToDouble(Number))
+		{
+			return false;
+		}
+		OutValue = static_cast<uint32>(Number);
+		return true;
+	}
+
+	bool SpecImportReadInt32(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field, int32& OutValue)
+	{
+		double Number = 0.0;
+		if (!Object.IsValid() || !Object->TryGetNumberField(Field, Number)
+			|| !FMath::IsFinite(Number) || Number < static_cast<double>(MIN_int32)
+			|| Number > static_cast<double>(MAX_int32) || Number != FMath::FloorToDouble(Number))
+		{
+			return false;
+		}
+		OutValue = static_cast<int32>(Number);
+		return true;
+	}
+
+	FName SpecImportReadName(const FString& Value)
+	{
+		return Value.IsEmpty() || Value.Equals(TEXT("None"), ESearchCase::IgnoreCase)
+			? NAME_None : FName(*Value);
+	}
+
+	bool SpecImportResolveExecutionMode(const FString& Value, EScriptExecutionMode& OutMode)
+	{
+		const UEnum* Enum = StaticEnum<EScriptExecutionMode>();
+		if (!Enum) return false;
+		const int64 ValueIndex = Enum->GetValueByNameString(Value);
+		if (ValueIndex == INDEX_NONE) return false;
+		OutMode = static_cast<EScriptExecutionMode>(ValueIndex);
+		return true;
+	}
+
+	FName SpecImportResolveStagePropertyName(const FString& JsonName)
+	{
+		static const TMap<FString, FName> Names = {
+			{TEXT("iterationSource"), TEXT("IterationSource")},
+			{TEXT("executeBehavior"), TEXT("ExecuteBehavior")},
+			{TEXT("disablePartialParticleUpdate"), TEXT("bDisablePartialParticleUpdate")},
+			{TEXT("particleIterationStateEnabled"), TEXT("bParticleIterationStateEnabled")},
+			{TEXT("particleIterationStateBinding"), TEXT("ParticleIterationStateBinding")},
+			{TEXT("particleIterationStateRange"), TEXT("ParticleIterationStateRange")},
+			{TEXT("gpuDispatchForceLinear"), TEXT("bGpuDispatchForceLinear")},
+			{TEXT("overrideGpuDispatchNumThreads"), TEXT("bOverrideGpuDispatchNumThreads")},
+			{TEXT("directDispatchType"), TEXT("DirectDispatchType")},
+			{TEXT("directDispatchElementType"), TEXT("DirectDispatchElementType")},
+			{TEXT("overrideGpuDispatchNumThreadsX"), TEXT("OverrideGpuDispatchNumThreadsX")},
+			{TEXT("overrideGpuDispatchNumThreadsY"), TEXT("OverrideGpuDispatchNumThreadsY")},
+			{TEXT("overrideGpuDispatchNumThreadsZ"), TEXT("OverrideGpuDispatchNumThreadsZ")},
+			{TEXT("elementCountX"), TEXT("ElementCountX")},
+			{TEXT("elementCountY"), TEXT("ElementCountY")},
+			{TEXT("elementCountZ"), TEXT("ElementCountZ")},
+			{TEXT("dataInterface"), TEXT("DataInterface")}};
+		if (const FName* Name = Names.Find(JsonName)) return *Name;
+		// Exports use the native UPROPERTY name for fields that do not have a
+		// public camelCase alias.  Keep the alias table for stable API names, but
+		// allow an exact native name through to the property-flag/type validator.
+		return JsonName.IsEmpty() ? NAME_None : FName(*JsonName);
+	}
+
+	bool SpecImportApplyStageProperty(
+		UNiagaraSimulationStageGeneric* Stage, const FName PropertyName,
+		const TSharedPtr<FJsonValue>& Value, FString& OutError)
+	{
+		if (!Stage || !Value.IsValid())
+		{
+			OutError = TEXT("Simulation-stage property is unavailable.");
+			return false;
+		}
+		FProperty* Property = Stage->GetClass()->FindPropertyByName(PropertyName);
+		if (!Property || PropertyName == TEXT("SimulationStageName") || PropertyName == TEXT("NumIterations")
+			|| !Property->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible)
+			|| Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient))
+		{
+			OutError = FString::Printf(TEXT("Simulation-stage property '%s' is not editable by system spec import."), *PropertyName.ToString());
+			return false;
+		}
+		void* ValueAddress = Property->ContainerPtrToValuePtr<void>(Stage);
+		Stage->PreEditChange(Property);
+		if (!FJsonObjectConverter::JsonValueToUProperty(Value, Property, ValueAddress, 0, 0, true))
+		{
+			OutError = FString::Printf(TEXT("Simulation-stage property '%s' has an invalid value."), *PropertyName.ToString());
+			return false;
+		}
+		FPropertyChangedEvent Event(Property, EPropertyChangeType::ValueSet);
+		Stage->PostEditChangeProperty(Event);
+		return true;
+	}
+
+	bool SpecImportRestoreStageProperty(
+		UNiagaraSimulationStageGeneric* Stage, const FName PropertyName,
+		const FString& Before, FString& OutError)
+	{
+		if (!Stage) return false;
+		FProperty* Property = Stage->GetClass()->FindPropertyByName(PropertyName);
+		if (!Property) return false;
+		Stage->PreEditChange(Property);
+		void* ValueAddress = Property->ContainerPtrToValuePtr<void>(Stage);
+		const TCHAR* ParsedEnd = Property->ImportText_Direct(*Before, ValueAddress, Stage, PPF_None);
+		if (!ParsedEnd || !FString(ParsedEnd).TrimStartAndEnd().IsEmpty())
+		{
+			OutError = FString::Printf(TEXT("Simulation-stage property '%s' could not be restored."), *PropertyName.ToString());
+			return false;
+		}
+		FPropertyChangedEvent Event(Property, EPropertyChangeType::ValueSet);
+		Stage->PostEditChangeProperty(Event);
+		return true;
+	}
+
 	class FTool_NiagaraSystemSpecImport final : public FMCPToolBase
 	{
 	public:
@@ -9131,6 +9479,9 @@ namespace UEAINiagaraModulePrivate
 
 			TArray<FSpecModuleImportEdit> ModuleEdits;
 			TArray<FSpecRendererImportEdit> RendererEdits;
+			TArray<FSpecEventHandlerImportEdit> EventHandlerEdits;
+			TArray<FSpecSimulationStageImportEdit> SimulationStageEdits;
+			TArray<FSpecSimulationStagePropertyImportEdit> SimulationStagePropertyEdits;
 			const TArray<TSharedPtr<FJsonValue>>* Emitters = nullptr;
 			if (!Spec->TryGetArrayField(TEXT("emitters"), Emitters) || !Emitters)
 				return ErrorResult(TEXT("spec.emitters must be an array."), TEXT("spec_invalid"), 422);
@@ -9154,6 +9505,178 @@ namespace UEAINiagaraModulePrivate
 				}
 				if (!Handle || !Handle->GetEmitterData())
 					return ErrorResult(FString::Printf(TEXT("Emitter '%s' was not found."), *EmitterName), TEXT("emitter_not_found"), 409);
+
+				FVersionedNiagaraEmitterData* EmitterData = Handle->GetEmitterData();
+				const TArray<FNiagaraEventScriptProperties>& LiveEventHandlers = EmitterData->GetEventHandlers();
+				const TArray<UNiagaraSimulationStageBase*>& LiveSimulationStages = EmitterData->GetSimulationStages();
+				const TArray<TSharedPtr<FJsonValue>>* EventHandlers = nullptr;
+				if (!EmitterSpec->TryGetArrayField(TEXT("eventHandlers"), EventHandlers) || !EventHandlers)
+					return ErrorResult(TEXT("Each emitter requires a complete eventHandlers array."), TEXT("spec_invalid"), 422);
+				if (EventHandlers->Num() != LiveEventHandlers.Num())
+					return ErrorResult(FString::Printf(TEXT("Emitter '%s' event-handler count changed."), *EmitterName), TEXT("spec_structure_mismatch"), 409);
+				TSet<FGuid> SeenEventHandlerIds;
+				for (int32 HandlerIndex = 0; HandlerIndex < EventHandlers->Num(); ++HandlerIndex)
+				{
+					const TSharedPtr<FJsonObject> HandlerSpec = (*EventHandlers)[HandlerIndex].IsValid()
+						&& (*EventHandlers)[HandlerIndex]->Type == EJson::Object ? (*EventHandlers)[HandlerIndex]->AsObject() : nullptr;
+					if (!HandlerSpec.IsValid() || !LiveEventHandlers.IsValidIndex(HandlerIndex)
+						|| !LiveEventHandlers[HandlerIndex].Script)
+						return ErrorResult(TEXT("Each event-handler entry must match a live authored script."), TEXT("spec_structure_mismatch"), 409);
+					FString UsageId, ScriptPath, SourceEmitterId;
+					FGuid ParsedUsageId;
+					if (!HandlerSpec->TryGetStringField(TEXT("usageId"), UsageId)
+						|| !HandlerSpec->TryGetStringField(TEXT("script"), ScriptPath)
+						|| !FGuid::Parse(UsageId, ParsedUsageId) || !ParsedUsageId.IsValid()
+						|| SeenEventHandlerIds.Contains(ParsedUsageId))
+						return ErrorResult(TEXT("Each event-handler entry requires a unique valid usageId."), TEXT("spec_structure_mismatch"), 409);
+					SeenEventHandlerIds.Add(ParsedUsageId);
+					const int32 LiveHandlerIndex = LiveEventHandlers.IndexOfByPredicate(
+						[&ParsedUsageId](const FNiagaraEventScriptProperties& Candidate)
+						{
+							return Candidate.Script && Candidate.Script->GetUsageId() == ParsedUsageId;
+						});
+					if (!LiveEventHandlers.IsValidIndex(LiveHandlerIndex)
+						|| ScriptPath != LiveEventHandlers[LiveHandlerIndex].Script->GetPathName())
+						return ErrorResult(TEXT("Event-handler usage or script identity changed since export."), TEXT("spec_structure_mismatch"), 409);
+					const FNiagaraEventScriptProperties& LiveHandler = LiveEventHandlers[LiveHandlerIndex];
+					FSpecEventHandlerImportEdit Edit;
+					Edit.Handler = const_cast<FNiagaraEventScriptProperties*>(&LiveHandler);
+					Edit.Before = LiveHandler;
+					Edit.bHasExecutionMode = HandlerSpec->HasField(TEXT("executionMode"));
+					if (Edit.bHasExecutionMode && !HandlerSpec->TryGetStringField(TEXT("executionMode"), Edit.RequestedExecutionMode))
+						return ErrorResult(TEXT("Event-handler executionMode must be a valid enum name."), TEXT("spec_invalid"), 422);
+					Edit.bHasSpawnNumber = HandlerSpec->HasField(TEXT("spawnNumber"));
+					Edit.bHasMinSpawnNumber = HandlerSpec->HasField(TEXT("minSpawnNumber"));
+					Edit.bHasMaxEventsPerFrame = HandlerSpec->HasField(TEXT("maxEventsPerFrame"));
+					Edit.bHasRandomSpawnNumber = HandlerSpec->HasField(TEXT("randomSpawnNumber"));
+					Edit.bHasUpdateAttributeInitialValues = HandlerSpec->HasField(TEXT("updateAttributeInitialValues"));
+					Edit.bHasSourceEventName = HandlerSpec->HasField(TEXT("sourceEventName"));
+					Edit.bHasSourceEmitterId = HandlerSpec->HasField(TEXT("sourceEmitterId"));
+					if (Edit.bHasSpawnNumber && !SpecImportReadUInt32(HandlerSpec, TEXT("spawnNumber"), Edit.SpawnNumber))
+						return ErrorResult(TEXT("Event-handler spawnNumber must be a uint32."), TEXT("spec_invalid"), 422);
+					if (Edit.bHasMinSpawnNumber && !SpecImportReadUInt32(HandlerSpec, TEXT("minSpawnNumber"), Edit.MinSpawnNumber))
+						return ErrorResult(TEXT("Event-handler minSpawnNumber must be a uint32."), TEXT("spec_invalid"), 422);
+					if (Edit.bHasMaxEventsPerFrame && !SpecImportReadUInt32(HandlerSpec, TEXT("maxEventsPerFrame"), Edit.MaxEventsPerFrame))
+						return ErrorResult(TEXT("Event-handler maxEventsPerFrame must be a uint32."), TEXT("spec_invalid"), 422);
+					if (Edit.bHasRandomSpawnNumber && !HandlerSpec->TryGetBoolField(TEXT("randomSpawnNumber"), Edit.bRandomSpawnNumber))
+						return ErrorResult(TEXT("Event-handler randomSpawnNumber must be boolean."), TEXT("spec_invalid"), 422);
+					if (Edit.bHasUpdateAttributeInitialValues && !HandlerSpec->TryGetBoolField(TEXT("updateAttributeInitialValues"), Edit.bUpdateAttributeInitialValues))
+						return ErrorResult(TEXT("Event-handler updateAttributeInitialValues must be boolean."), TEXT("spec_invalid"), 422);
+					FString SourceEventName;
+					if (Edit.bHasSourceEventName && !HandlerSpec->TryGetStringField(TEXT("sourceEventName"), SourceEventName))
+						return ErrorResult(TEXT("Event-handler sourceEventName must be a string."), TEXT("spec_invalid"), 422);
+					Edit.SourceEventName = FName(*SourceEventName);
+					if (Edit.bHasSourceEmitterId)
+					{
+						if (!HandlerSpec->TryGetStringField(TEXT("sourceEmitterId"), SourceEmitterId)
+							|| (!SourceEmitterId.IsEmpty() && !FGuid::Parse(SourceEmitterId, Edit.SourceEmitterId)))
+							return ErrorResult(TEXT("Event-handler sourceEmitterId must be empty or a valid emitter handle GUID."), TEXT("spec_invalid"), 422);
+						if (SourceEmitterId.IsEmpty())
+							Edit.SourceEmitterId.Invalidate();
+					}
+					if (Edit.bHasExecutionMode || Edit.bHasSpawnNumber || Edit.bHasMinSpawnNumber || Edit.bHasRandomSpawnNumber)
+					{
+						EScriptExecutionMode Mode = LiveHandler.ExecutionMode;
+						if (Edit.bHasExecutionMode && !SpecImportResolveExecutionMode(Edit.RequestedExecutionMode, Mode))
+							return ErrorResult(TEXT("Event-handler executionMode is unsupported."), TEXT("property_unsupported"), 422);
+						const uint32 Spawn = Edit.bHasSpawnNumber ? Edit.SpawnNumber : LiveHandler.SpawnNumber;
+						const uint32 MinSpawn = Edit.bHasMinSpawnNumber ? Edit.MinSpawnNumber : LiveHandler.MinSpawnNumber;
+						const bool bRandom = Edit.bHasRandomSpawnNumber ? Edit.bRandomSpawnNumber : LiveHandler.bRandomSpawnNumber;
+						if (MinSpawn > Spawn || (Mode != EScriptExecutionMode::SpawnedParticles && (Spawn != 0 || MinSpawn != 0 || bRandom)))
+							return ErrorResult(TEXT("Event-handler spawn settings are invalid for the selected execution mode."), TEXT("property_invalid"), 422);
+					}
+					EventHandlerEdits.Add(MoveTemp(Edit));
+				}
+
+				const TArray<TSharedPtr<FJsonValue>>* SimulationStages = nullptr;
+				if (!EmitterSpec->TryGetArrayField(TEXT("simulationStages"), SimulationStages) || !SimulationStages)
+					return ErrorResult(TEXT("Each emitter requires a complete simulationStages array."), TEXT("spec_invalid"), 422);
+				if (SimulationStages->Num() != LiveSimulationStages.Num())
+					return ErrorResult(FString::Printf(TEXT("Emitter '%s' simulation-stage count changed."), *EmitterName), TEXT("spec_structure_mismatch"), 409);
+				for (int32 StageIndex = 0; StageIndex < SimulationStages->Num(); ++StageIndex)
+				{
+					const TSharedPtr<FJsonObject> StageSpec = (*SimulationStages)[StageIndex].IsValid()
+						&& (*SimulationStages)[StageIndex]->Type == EJson::Object ? (*SimulationStages)[StageIndex]->AsObject() : nullptr;
+					UNiagaraSimulationStageBase* LiveStage = LiveSimulationStages.IsValidIndex(StageIndex) ? LiveSimulationStages[StageIndex] : nullptr;
+					if (!StageSpec.IsValid() || !LiveStage || !LiveStage->Script)
+						return ErrorResult(TEXT("Each simulation-stage entry must match a live authored script."), TEXT("spec_structure_mismatch"), 409);
+					FString UsageId, StageClass, ScriptPath;
+					double ExportedIndex = -1.0;
+					if (!StageSpec->TryGetStringField(TEXT("usageId"), UsageId)
+						|| !StageSpec->TryGetStringField(TEXT("stageClass"), StageClass)
+						|| !StageSpec->TryGetStringField(TEXT("script"), ScriptPath)
+						|| !StageSpec->TryGetNumberField(TEXT("index"), ExportedIndex)
+						|| ExportedIndex != StageIndex
+						|| UsageId != LiveStage->Script->GetUsageId().ToString(EGuidFormats::DigitsWithHyphensLower)
+						|| StageClass != LiveStage->GetClass()->GetPathName()
+						|| ScriptPath != LiveStage->Script->GetPathName())
+						return ErrorResult(TEXT("Simulation-stage usage, class, script, or index identity changed since export."), TEXT("spec_structure_mismatch"), 409);
+					FSpecSimulationStageImportEdit Edit;
+					Edit.Stage = LiveStage;
+					Edit.BeforeName = LiveStage->SimulationStageName.ToString();
+					Edit.bBeforeEnabled = LiveStage->bEnabled;
+					if (UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(LiveStage))
+					{
+						Edit.BeforeNumIterations = Generic->NumIterations;
+						Edit.bHasBeforeNumIterations = true;
+					}
+					Edit.bHasName = StageSpec->HasField(TEXT("name"));
+					Edit.bHasEnabled = StageSpec->HasField(TEXT("enabled"));
+					Edit.bHasNumIterations = StageSpec->HasField(TEXT("numIterations"));
+					Edit.bHasNumIterationsBinding = StageSpec->HasField(TEXT("numIterationsBinding"));
+					if (Edit.bHasName && !StageSpec->TryGetStringField(TEXT("name"), Edit.RequestedName))
+						return ErrorResult(TEXT("Simulation-stage name must be a string."), TEXT("spec_invalid"), 422);
+					if (Edit.bHasEnabled && !StageSpec->TryGetBoolField(TEXT("enabled"), Edit.bRequestedEnabled))
+						return ErrorResult(TEXT("Simulation-stage enabled must be boolean."), TEXT("spec_invalid"), 422);
+					if (Edit.bHasNumIterations && !SpecImportReadInt32(StageSpec, TEXT("numIterations"), Edit.RequestedNumIterations))
+						return ErrorResult(TEXT("Simulation-stage numIterations must be an int32."), TEXT("spec_invalid"), 422);
+					if (Edit.bHasNumIterationsBinding && !StageSpec->TryGetStringField(TEXT("numIterationsBinding"), Edit.RequestedNumIterationsBinding))
+						return ErrorResult(TEXT("Simulation-stage numIterationsBinding must be a string."), TEXT("spec_invalid"), 422);
+					if (Edit.bHasNumIterations && Edit.RequestedNumIterations < 0)
+						return ErrorResult(TEXT("Simulation-stage numIterations must be non-negative."), TEXT("property_invalid"), 422);
+					if ((Edit.bHasNumIterations || Edit.bHasNumIterationsBinding) && !Edit.bHasBeforeNumIterations)
+						return ErrorResult(TEXT("numIterations requires NiagaraSimulationStageGeneric."), TEXT("property_unsupported"), 422);
+					if ((Edit.bHasNumIterations || Edit.bHasNumIterationsBinding)
+						&& Edit.bHasBeforeNumIterations
+						&& Edit.BeforeNumIterations.GetDefaultValueArray().Num() != sizeof(int32))
+						return ErrorResult(TEXT("Generic simulation-stage NumIterations has an unsupported authored type."), TEXT("property_unsupported"), 422);
+					SimulationStageEdits.Add(MoveTemp(Edit));
+
+					const TSharedPtr<FJsonObject>* Properties = nullptr;
+					if (StageSpec->TryGetObjectField(TEXT("properties"), Properties) && Properties && Properties->IsValid())
+					{
+						UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(LiveStage);
+						if (!Generic) return ErrorResult(TEXT("Simulation-stage properties require NiagaraSimulationStageGeneric."), TEXT("property_unsupported"), 422);
+						for (const TPair<FString, TSharedPtr<FJsonValue>>& PropertyPair : (*Properties)->Values)
+						{
+							const FName PropertyName = SpecImportResolveStagePropertyName(PropertyPair.Key);
+							if (PropertyName.IsNone())
+							{
+								// Exported engine/editor bookkeeping fields that are not in
+								// the dedicated authored property allow-list remain part of
+								// the snapshot but are intentionally not importable.
+								continue;
+							}
+							FProperty* Property = Generic->GetClass()->FindPropertyByName(PropertyName);
+							if (!Property || !PropertyPair.Value.IsValid())
+								return ErrorResult(FString::Printf(TEXT("Simulation-stage property '%s' is invalid."), *PropertyPair.Key), TEXT("spec_invalid"), 422);
+							FString Before;
+							Property->ExportTextItem_Direct(Before, Property->ContainerPtrToValuePtr<void>(Generic), nullptr, nullptr, PPF_None);
+							TSharedPtr<FJsonValue> CurrentValue = FJsonObjectConverter::UPropertyToJsonValue(Property, Property->ContainerPtrToValuePtr<void>(Generic));
+							FString CurrentDigest, RequestedDigest;
+							if (!CurrentValue.IsValid() || !TryDigestJson(MakeShared<FJsonObject>(), CurrentDigest))
+								return ErrorResult(TEXT("Could not inspect simulation-stage property state."), TEXT("digest_unavailable"), 500);
+							auto CurrentHolder = MakeShared<FJsonObject>();
+							auto RequestedHolder = MakeShared<FJsonObject>();
+							CurrentHolder->SetField(TEXT("value"), CurrentValue);
+							RequestedHolder->SetField(TEXT("value"), PropertyPair.Value);
+							if (!TryDigestJson(CurrentHolder, CurrentDigest) || !TryDigestJson(RequestedHolder, RequestedDigest))
+								return ErrorResult(TEXT("Could not digest simulation-stage property state."), TEXT("digest_unavailable"), 500);
+							if (CurrentDigest != RequestedDigest)
+								SimulationStagePropertyEdits.Add({Generic, PropertyName, Before, SpecImportCloneValue(PropertyPair.Value), false});
+						}
+					}
+				}
 
 				const TArray<TSharedPtr<FJsonValue>>* Renderers = nullptr;
 				if (EmitterSpec->TryGetArrayField(TEXT("renderers"), Renderers) && Renderers)
@@ -9471,6 +9994,21 @@ namespace UEAINiagaraModulePrivate
 				if (UNiagaraRendererProperties* Renderer = Edit.Renderer.Get())
 					CapturePackageDirtyState(Renderer->GetOutermost());
 			}
+			for (const FSpecEventHandlerImportEdit& Edit : EventHandlerEdits)
+			{
+				if (Edit.Handler)
+					CapturePackageDirtyState(Edit.Handler->Script ? Edit.Handler->Script->GetOutermost() : nullptr);
+			}
+			for (const FSpecSimulationStageImportEdit& Edit : SimulationStageEdits)
+			{
+				if (Edit.Stage)
+					CapturePackageDirtyState(Edit.Stage->GetOutermost());
+			}
+			for (const FSpecSimulationStagePropertyImportEdit& Edit : SimulationStagePropertyEdits)
+			{
+				if (Edit.Stage)
+					CapturePackageDirtyState(Edit.Stage->GetOutermost());
+			}
 			TSet<UNiagaraGraph*> AttemptedGraphs;
 			FScopedTransaction Transaction(FText::FromString(TEXT("UE AI Import Niagara System Spec")));
 			System->Modify();
@@ -9478,6 +10016,9 @@ namespace UEAINiagaraModulePrivate
 			int32 Applied = 0;
 			int32 AppliedModuleEdits = 0;
 			int32 AppliedRendererEdits = 0;
+			int32 AppliedEventHandlerEdits = 0;
+			int32 AppliedSimulationStageEdits = 0;
+			int32 AppliedSimulationStagePropertyEdits = 0;
 			int32 DynamicInputNodeBudget = SpecExportMaxDynamicInputNodes;
 			bool bApplyFailed = false;
 			FString ApplyFailureCode = TEXT("parameter_default_invalid");
@@ -9551,6 +10092,107 @@ namespace UEAINiagaraModulePrivate
 					++AppliedRendererEdits;
 				bGraphChanged = true;
 			}
+			for (FSpecEventHandlerImportEdit& Edit : EventHandlerEdits)
+			{
+				if (bApplyFailed) break;
+				FNiagaraEventScriptProperties* Handler = Edit.Handler;
+				if (!Handler || !Handler->Script)
+				{
+					ApplyFailureCode = TEXT("event_handler_apply_failed");
+					bApplyFailed = true;
+					break;
+				}
+				EScriptExecutionMode Mode = Handler->ExecutionMode;
+				if (Edit.bHasExecutionMode && !SpecImportResolveExecutionMode(Edit.RequestedExecutionMode, Mode))
+				{
+					ApplyFailureCode = TEXT("property_unsupported");
+					bApplyFailed = true;
+					break;
+				}
+				const uint32 Spawn = Edit.bHasSpawnNumber ? Edit.SpawnNumber : Handler->SpawnNumber;
+				const uint32 MinSpawn = Edit.bHasMinSpawnNumber ? Edit.MinSpawnNumber : Handler->MinSpawnNumber;
+				const bool bRandom = Edit.bHasRandomSpawnNumber ? Edit.bRandomSpawnNumber : Handler->bRandomSpawnNumber;
+				if (MinSpawn > Spawn || (Mode != EScriptExecutionMode::SpawnedParticles && (Spawn != 0 || MinSpawn != 0 || bRandom)))
+				{
+					ApplyFailureCode = TEXT("property_invalid");
+					bApplyFailed = true;
+					break;
+				}
+				const bool bChanged = (Edit.bHasExecutionMode && Handler->ExecutionMode != Mode)
+					|| (Edit.bHasSpawnNumber && Handler->SpawnNumber != Edit.SpawnNumber)
+					|| (Edit.bHasMinSpawnNumber && Handler->MinSpawnNumber != Edit.MinSpawnNumber)
+					|| (Edit.bHasMaxEventsPerFrame && Handler->MaxEventsPerFrame != Edit.MaxEventsPerFrame)
+					|| (Edit.bHasRandomSpawnNumber && Handler->bRandomSpawnNumber != Edit.bRandomSpawnNumber)
+					|| (Edit.bHasUpdateAttributeInitialValues && Handler->UpdateAttributeInitialValues != Edit.bUpdateAttributeInitialValues)
+					|| (Edit.bHasSourceEmitterId && Handler->SourceEmitterID != Edit.SourceEmitterId)
+					|| (Edit.bHasSourceEventName && Handler->SourceEventName != Edit.SourceEventName);
+				if (!bChanged) continue;
+				Edit.bAttempted = true;
+				Handler->Script->Modify();
+				Handler->ExecutionMode = Mode;
+				if (Edit.bHasSpawnNumber) Handler->SpawnNumber = Edit.SpawnNumber;
+				if (Edit.bHasMinSpawnNumber) Handler->MinSpawnNumber = Edit.MinSpawnNumber;
+				if (Edit.bHasMaxEventsPerFrame) Handler->MaxEventsPerFrame = Edit.MaxEventsPerFrame;
+				if (Edit.bHasRandomSpawnNumber) Handler->bRandomSpawnNumber = Edit.bRandomSpawnNumber;
+				if (Edit.bHasUpdateAttributeInitialValues) Handler->UpdateAttributeInitialValues = Edit.bUpdateAttributeInitialValues;
+				if (Edit.bHasSourceEmitterId) Handler->SourceEmitterID = Edit.SourceEmitterId;
+				if (Edit.bHasSourceEventName) Handler->SourceEventName = Edit.SourceEventName;
+				++AppliedEventHandlerEdits;
+				bGraphChanged = true;
+			}
+			for (FSpecSimulationStageImportEdit& Edit : SimulationStageEdits)
+			{
+				if (bApplyFailed) break;
+				UNiagaraSimulationStageBase* Stage = Edit.Stage;
+				if (!Stage || !Stage->Script)
+				{
+					ApplyFailureCode = TEXT("simulation_stage_apply_failed");
+					bApplyFailed = true;
+					break;
+				}
+				UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Stage);
+				const bool bChanged = (Edit.bHasName && Stage->SimulationStageName != FName(*Edit.RequestedName))
+					|| (Edit.bHasEnabled && static_cast<bool>(Stage->bEnabled) != Edit.bRequestedEnabled)
+					|| (Edit.bHasNumIterations && (!Generic || Generic->NumIterations.GetDefaultValueArray().Num() != sizeof(int32)
+						|| Generic->NumIterations.GetDefaultValue<int32>() != Edit.RequestedNumIterations))
+					|| (Edit.bHasNumIterationsBinding && Generic && Generic->NumIterations.ResolvedParameter.GetName() != SpecImportReadName(Edit.RequestedNumIterationsBinding));
+				if (!bChanged) continue;
+				Edit.bAttempted = true;
+				Stage->Modify();
+				if (Edit.bHasName) Stage->SimulationStageName = FName(*Edit.RequestedName);
+				if (Edit.bHasEnabled) Stage->bEnabled = Edit.bRequestedEnabled;
+				if (Edit.bHasNumIterations || Edit.bHasNumIterationsBinding)
+				{
+					if (!Generic)
+					{
+						ApplyFailureCode = TEXT("property_unsupported");
+						bApplyFailed = true;
+						break;
+					}
+					const int32 DefaultIterations = Edit.bHasNumIterations ? Edit.RequestedNumIterations : Generic->NumIterations.GetDefaultValue<int32>();
+					const FName BindingName = Edit.bHasNumIterationsBinding
+						? SpecImportReadName(Edit.RequestedNumIterationsBinding)
+						: Generic->NumIterations.ResolvedParameter.GetName();
+					if (BindingName.IsNone()) Generic->NumIterations.SetDefaultParameter(FNiagaraTypeDefinition::GetIntDef(), DefaultIterations);
+					else Generic->NumIterations.SetDefaultParameter(BindingName, FNiagaraTypeDefinition::GetIntDef(), DefaultIterations);
+				}
+				++AppliedSimulationStageEdits;
+				bGraphChanged = true;
+			}
+			for (FSpecSimulationStagePropertyImportEdit& Edit : SimulationStagePropertyEdits)
+			{
+				if (bApplyFailed) break;
+				Edit.bAttempted = true;
+				FString StageError;
+				if (!SpecImportApplyStageProperty(Edit.Stage, Edit.PropertyName, Edit.Value, StageError))
+				{
+					ApplyFailureCode = TEXT("simulation_stage_property_invalid");
+					bApplyFailed = true;
+					break;
+				}
+				++AppliedSimulationStagePropertyEdits;
+				bGraphChanged = true;
+			}
 			auto RestoreImportChanges = [&]()
 			{
 				bool bRestored = true;
@@ -9579,6 +10221,31 @@ namespace UEAINiagaraModulePrivate
 					}
 					FString RendererError;
 					bRestored &= SpecImportEditRendererProperty(Renderer, Property, Edit.Before, RendererError);
+				}
+				for (int32 Index = SimulationStagePropertyEdits.Num() - 1; Index >= 0; --Index)
+				{
+					FSpecSimulationStagePropertyImportEdit& Edit = SimulationStagePropertyEdits[Index];
+					if (!Edit.bAttempted) continue;
+					FString StageError;
+					bRestored &= SpecImportRestoreStageProperty(Edit.Stage, Edit.PropertyName, Edit.Before, StageError);
+				}
+				for (int32 Index = SimulationStageEdits.Num() - 1; Index >= 0; --Index)
+				{
+					FSpecSimulationStageImportEdit& Edit = SimulationStageEdits[Index];
+					if (!Edit.bAttempted || !Edit.Stage) continue;
+					Edit.Stage->SimulationStageName = FName(*Edit.BeforeName);
+					Edit.Stage->bEnabled = Edit.bBeforeEnabled;
+					if (Edit.bHasBeforeNumIterations)
+					{
+						if (UNiagaraSimulationStageGeneric* Generic = Cast<UNiagaraSimulationStageGeneric>(Edit.Stage))
+							Generic->NumIterations = Edit.BeforeNumIterations;
+						else bRestored = false;
+					}
+				}
+				for (int32 Index = EventHandlerEdits.Num() - 1; Index >= 0; --Index)
+				{
+					FSpecEventHandlerImportEdit& Edit = EventHandlerEdits[Index];
+					if (Edit.bAttempted && Edit.Handler) *Edit.Handler = Edit.Before;
 				}
 				if (!bRestored || !CompileSystem(System).bCompiled)
 					return false;
@@ -9655,6 +10322,11 @@ namespace UEAINiagaraModulePrivate
 			Json->SetNumberField(TEXT("appliedUserParameters"), Applied);
 			Json->SetNumberField(TEXT("appliedModuleInputs"), AppliedModuleEdits);
 			Json->SetNumberField(TEXT("appliedRendererProperties"), AppliedRendererEdits);
+			Json->SetNumberField(TEXT("appliedEventHandlers"), AppliedEventHandlerEdits);
+			Json->SetNumberField(TEXT("appliedSimulationStages"), AppliedSimulationStageEdits);
+			Json->SetNumberField(TEXT("appliedSimulationStageProperties"), AppliedSimulationStagePropertyEdits);
+			Json->SetBoolField(TEXT("eventHandlerReadbackVerified"), bReadback);
+			Json->SetBoolField(TEXT("simulationStageReadbackVerified"), bReadback);
 			Json->SetBoolField(TEXT("changed"), Applied > 0 || bGraphChanged);
 			Json->SetBoolField(TEXT("saved"), false);
 			Json->SetBoolField(TEXT("readbackVerified"), bReadback);
