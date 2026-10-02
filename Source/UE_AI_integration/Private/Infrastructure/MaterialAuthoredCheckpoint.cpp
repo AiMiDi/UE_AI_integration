@@ -146,6 +146,59 @@ FString AuthoredDigest(UMaterial* Material, const FString& AssetPath)
 		? TEXT("sha256:") + Hex : FString();
 }
 
+FString AuthoredDigestMismatch(UMaterial* Original, UMaterial* Image, const FString& AssetPath)
+{
+	if (!Original || !Image)
+	{
+		return TEXT("image_or_original_null");
+	}
+	TArray<UObject*> OriginalObjects;
+	TArray<UObject*> ImageObjects;
+	GatherAuthoredObjects(Original, OriginalObjects);
+	GatherAuthoredObjects(Image, ImageObjects);
+	const FString OriginalPrefix = Original->GetPathName();
+	const FString ImagePrefix = Image->GetPathName();
+	auto BuildRecords = [&AssetPath](UMaterial* Material, const FString& SourcePrefix,
+		TArray<UObject*>& Objects, TMap<FString, FString>& Records)
+	{
+		for (UObject* Object : Objects)
+		{
+			const FString StablePath = Object->GetPathName().Replace(*SourcePrefix, *AssetPath);
+			Records.Add(StablePath, AuthoredObjectRecord(Object, Material, AssetPath));
+		}
+	};
+	TMap<FString, FString> OriginalRecords;
+	TMap<FString, FString> ImageRecords;
+	BuildRecords(Original, OriginalPrefix, OriginalObjects, OriginalRecords);
+	BuildRecords(Image, ImagePrefix, ImageObjects, ImageRecords);
+	if (OriginalRecords.Num() != ImageRecords.Num())
+	{
+		return FString::Printf(TEXT("object_count:%d/%d"), OriginalRecords.Num(), ImageRecords.Num());
+	}
+	auto Fingerprint = [](const FString& Value)
+	{
+		FTCHARToUTF8 Utf8(*Value);
+		FString Hash;
+		return UEAIIntegration::Infrastructure::TrySha256Hex(
+			Utf8.Get(), static_cast<uint64>(Utf8.Length()), Hash) ? Hash : TEXT("hash_unavailable");
+	};
+	for (const auto& Pair : OriginalRecords)
+	{
+		const FString* ImageRecord = ImageRecords.Find(Pair.Key);
+		if (!ImageRecord)
+		{
+			return FString::Printf(TEXT("missing_image_record:%s"), *Pair.Key);
+		}
+		if (*ImageRecord != Pair.Value)
+		{
+			return FString::Printf(TEXT("record_mismatch:%s;orig_len=%d;image_len=%d;orig_sha256=%s;image_sha256=%s"),
+				*Pair.Key, Pair.Value.Len(), ImageRecord->Len(),
+				*Fingerprint(Pair.Value), *Fingerprint(*ImageRecord));
+		}
+	}
+	return TEXT("records_equal_digest_mismatch");
+}
+
 UMaterial* DuplicateAuthoredImage(
 	UMaterial* Material, const FName Prefix, TArray<TStrongObjectPtr<UObject>>& OutOwnedObjects)
 {
@@ -488,9 +541,18 @@ FMCPToolResult Capture(UMaterial* Material, const FString& SnapshotId, FString& 
 	Checkpoint->AssetPath = Material->GetPathName();
 	Checkpoint->Digest = OutDigest;
 	Checkpoint->CapturedAt = FPlatformTime::Seconds();
-	if (!Checkpoint->Image.IsValid() || AuthoredDigest(Checkpoint->Image.Get(), Checkpoint->AssetPath) != OutDigest)
+	if (!Checkpoint->Image.IsValid())
 	{
-		return FMCPToolResult::Error(TEXT("The authored material checkpoint failed independent readback."), TEXT("checkpoint_capture_failed"), 500);
+		return FMCPToolResult::Error(TEXT("The authored material checkpoint failed independent readback (image_null)."), TEXT("checkpoint_capture_failed"), 500);
+	}
+	const FString ImageDigest = AuthoredDigest(Checkpoint->Image.Get(), Checkpoint->AssetPath);
+	if (ImageDigest != OutDigest)
+	{
+		const FString Detail = AuthoredDigestMismatch(Material, Checkpoint->Image.Get(), Checkpoint->AssetPath);
+		return FMCPToolResult::Error(
+			FString::Printf(TEXT("The authored material checkpoint failed independent readback (%s;orig_digest=%s;image_digest=%s)."),
+				*Detail, *OutDigest, *ImageDigest),
+			TEXT("checkpoint_capture_failed"), 500);
 	}
 	// Retain a bounded number of full images; stale callers receive an explicit
 	// unavailable checkpoint error instead of silently falling back to topology.
