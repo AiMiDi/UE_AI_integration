@@ -7151,14 +7151,29 @@ namespace UEAINiagaraModulePrivate
 
 	FString SpecCanonicalRendererPropertyText(const FName PropertyName, FString Value)
 	{
-		// Niagara normalizes this binding's cached-value bookkeeping while
-		// importing a renderer property.  It is derived editor metadata, not an
-		// authored renderer setting, so omit it from the wire contract to keep
-		// export -> import -> export stable.
-		if (PropertyName == TEXT("RendererEnabledBinding"))
+		// Niagara normalizes binding metadata while importing a renderer
+		// property. Cached-value flags and registered type handles are editor
+		// bookkeeping, not authored renderer settings; remove them from the
+		// comparison form so an export/import across Editor processes remains
+		// stable while the raw text is still used when an authored binding is
+		// explicitly edited.
+		if (PropertyName.ToString().EndsWith(TEXT("Binding")))
 		{
 			Value.ReplaceInline(TEXT(",bIsCachedParticleValue=True"), TEXT(""), ESearchCase::CaseSensitive);
 			Value.ReplaceInline(TEXT(",bIsCachedParticleValue=False"), TEXT(""), ESearchCase::CaseSensitive);
+			const FString TypeHandlePrefix = TEXT("TypeDefHandle=(RegisteredTypeIndex=");
+			int32 SearchOffset = 0;
+			while (true)
+			{
+				const int32 Start = Value.Find(TypeHandlePrefix, ESearchCase::CaseSensitive, ESearchDir::FromStart, SearchOffset);
+				if (Start == INDEX_NONE)
+					break;
+				const int32 End = Value.Find(TEXT(")"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Start + TypeHandlePrefix.Len());
+				if (End == INDEX_NONE)
+					break;
+				Value.RemoveAt(Start, End - Start + 1, false);
+				SearchOffset = Start;
+			}
 		}
 		return Value;
 	}
@@ -9186,9 +9201,10 @@ namespace UEAINiagaraModulePrivate
 							// an authored renderer edit.
 							if (PropertyPair.Key == TEXT("CustomSortingBinding"))
 								continue;
-							FString ValueText;
-							if (!PropertyPair.Value.IsValid() || !PropertyPair.Value->TryGetString(ValueText))
+							FString RawValueText;
+							if (!PropertyPair.Value.IsValid() || !PropertyPair.Value->TryGetString(RawValueText))
 								return ErrorResult(TEXT("Renderer properties must contain exported text values."), TEXT("renderer_property_invalid"), 422);
+							FString ValueText = RawValueText;
 							FProperty* Property = FindFProperty<FProperty>(Renderer->GetClass(), FName(*PropertyPair.Key));
 							if (!Property || !Property->HasAnyPropertyFlags(CPF_Edit | CPF_BlueprintVisible)
 								|| Property->HasAnyPropertyFlags(CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient))
@@ -9203,7 +9219,7 @@ namespace UEAINiagaraModulePrivate
 							FString RendererError;
 							if (!SpecImportEditRendererProperty(Scratch.Get(), Property, ValueText, RendererError))
 								return ErrorResult(RendererError, TEXT("renderer_property_invalid"), 422);
-							RendererEdits.Add({Renderer, PropertyPair.Key, ValueText, Before});
+							RendererEdits.Add({Renderer, PropertyPair.Key, RawValueText, Before});
 						}
 						// Hooks may also change bindings or another authored property.
 						// Verify the entire supplied renderer state on the same scratch
