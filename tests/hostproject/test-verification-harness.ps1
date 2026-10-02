@@ -135,6 +135,7 @@ $nonNullRhiTests = @(
     @{ Path = 'Source/UE_AI_integration/Private/Tests/BlueprintEditorLayoutTests.cpp'; Test = 'UE_AI_integration.Blueprint.EditorLayout.NativeCommandLoop' },
     @{ Path = 'Source/UE_AI_integration/Private/Tests/BlueprintDebugPIEHttpTests.cpp'; Test = 'UE_AI_integration.BlueprintDebug.RealPIEHttpStepWatchContinue' },
     @{ Path = 'Source/UE_AI_integration/Private/Tests/ProjectAssetReplicaAcceptanceTests.cpp'; Test = 'UE_AI_integration.ProjectReplica.RealAssetsWriteRestoreReferencesAndRuntime' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/NiagaraSystemRuntimeAcceptanceTests.cpp'; Test = 'UE_AI_integration.Niagara.SystemSpec.NonNullRHIRuntimeAcceptance' },
     @{ Path = 'Source/UE_AI_integration/Private/Tests/RuntimeSessionTests.cpp'; Test = 'UE_AI_integration.Runtime.Viewport.RealPIECapture' }
 )
 foreach ($test in $nonNullRhiTests) {
