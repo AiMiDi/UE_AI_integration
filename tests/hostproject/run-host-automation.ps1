@@ -349,6 +349,18 @@ function Get-ProductionModuleLoadedProof {
                     $identity.schema -eq 'ue.loaded-module-identity.v1' -and
                     $identity.plugin -eq 'UE_AI_integration' -and
                     $identity.module -eq 'UE_AI_integration' -and
+                    $data.identityComplete -eq $true -and
+                    @($data.identityFailureReasons).Count -eq 0 -and
+                    $data.exactIdentityComplete -eq $true -and
+                    @($data.exactIdentityFailureReasons).Count -eq 0 -and
+                    $identity.loaded -eq $true -and
+                    $identity.identityComplete -eq $true -and
+                    $identity.exactIdentityComplete -eq $true -and
+                    $identity.moduleFilenameMatches -eq $true -and
+                    $identity.modulePathWithinPlugin -eq $true -and
+                    $identity.moduleSha256Complete -eq $true -and
+                    $identity.pdbSha256Complete -eq $true -and
+                    $identity.latestArtifactIdentityComplete -eq $true -and
                     $identityProcessId -eq [int64]$Process.Id -and
                     $resolvedIdentityModulePath.Equals([IO.Path]::GetFullPath($expectedDll.path), [StringComparison]::OrdinalIgnoreCase) -and
                     $identityModuleHash.ToLowerInvariant() -eq $expectedDll.sha256 -and
@@ -608,6 +620,25 @@ if (-not $SkipBuild -and $CanRunAutomation) {
     }
 }
 
+# BuildPlugin leaves its payload at the package root, but the automation
+# lane moves that payload into the recreated HostProject plugin directory.
+# Refresh the package snapshot after that move so module identity proof uses
+# the exact DLL/PDB path that the isolated Editor will load.
+if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
+    $PackageBinding.packageContent = Get-PackageContentSnapshot -PackageDirectory $PackageDir
+    if (-not $PackageBinding.packageContent.present -or
+        $PackageBinding.packageContent.fileCount -eq 0) {
+        $CanRunAutomation = $false
+        $PackageBinding.reason = 'automation_package_has_no_files_after_host_recreation'
+    }
+    else {
+        if (-not $SkipBuild) {
+            $PackageBinding | ConvertTo-Json -Depth 8 |
+                Set-Content -LiteralPath $PackageBindingPath -Encoding utf8NoBOM
+        }
+    }
+}
+
 $Automation = [ordered]@{
     skipped = $true
     lane = $VerificationLane
@@ -665,7 +696,16 @@ if ($CanRunAutomation -and $TestFilter.Count -gt 0) {
         '-nosplash',
         '-NoSound',
         $(if ($VerificationLane -eq 'isolated-nullrhi') { '-NullRHI' } else { '-RenderOffscreen' }),
-        '-NoEnginePlugins',
+        # The source engine's default plugin set contains project-only
+        # Monolith modules that are intentionally absent from this isolated
+        # HostProject. Keep engine discovery enabled for Niagara, while
+        # explicitly excluding that unrelated plugin.
+        '-DisablePlugins=Monolith',
+        # Niagara's editor module owns graph node classes used by the
+        # Simulation Stage and shared-graph recovery contracts.  The module is
+        # part of the engine's Niagara plugin rather than a standalone
+        # NiagaraEditor plugin, so let the isolated Editor discover that engine
+        # plugin and explicitly enable its owning plugin.
         '-EnablePlugins=UE_AI_integration,Niagara',
         '-NoLiveCoding',
         '-stdout',

@@ -10,10 +10,69 @@
 #include "Materials/Material.h"
 #include "Materials/MaterialFunction.h"
 #include "Materials/MaterialExpressionNamedReroute.h"
+#include "UObject/UObjectHash.h"
 
 namespace UEAIIntegration::MaterialEditing
 {
 using namespace MCPMaterialInfrastructure;
+
+namespace
+{
+// Material and material-function expression collections expose the authored
+// roots, while nested UMaterialExpression objects can be owned by another
+// expression (for example a custom expression's authored child graph).  A
+// shared-write proof must inspect that complete owned set; otherwise a nested
+// expression with two consumers could be edited as if it were private.
+TArray<UMaterialExpression*> CollectAuthoredExpressions(
+	const TArray<UMaterialExpression*>& Roots)
+{
+	TArray<UMaterialExpression*> Expressions;
+	Expressions.Reserve(Roots.Num());
+	TSet<UMaterialExpression*> Visited;
+	TArray<UMaterialExpression*> Pending;
+	for (UMaterialExpression* Root : Roots)
+	{
+		if (IsValid(Root) && !Visited.Contains(Root))
+		{
+			Visited.Add(Root);
+			Expressions.Add(Root);
+			Pending.Add(Root);
+		}
+	}
+	for (int32 Index = 0; Index < Pending.Num(); ++Index)
+	{
+		UMaterialExpression* Owner = Pending[Index];
+		TArray<UObject*> Children;
+		GetObjectsWithOuter(Owner, Children, true);
+		for (UObject* Child : Children)
+		{
+			UMaterialExpression* Expression = Cast<UMaterialExpression>(Child);
+			if (IsValid(Expression) && !Visited.Contains(Expression))
+			{
+				Visited.Add(Expression);
+				Expressions.Add(Expression);
+				Pending.Add(Expression);
+			}
+		}
+	}
+	return Expressions;
+}
+
+TArray<UMaterialExpression*> CollectAuthoredExpressions(
+	const TArrayView<const TObjectPtr<UMaterialExpression>>& Roots)
+{
+	TArray<UMaterialExpression*> RawRoots;
+	RawRoots.Reserve(Roots.Num());
+	for (const TObjectPtr<UMaterialExpression>& Root : Roots)
+	{
+		if (Root)
+		{
+			RawRoots.Add(Root.Get());
+		}
+	}
+	return CollectAuthoredExpressions(RawRoots);
+}
+}
 
 // Read both authored inputs and graph pins: a deferred editor edit may not yet
 // have copied its links into FExpressionInput. Transparent reroutes must not
@@ -24,6 +83,8 @@ void InspectMaterialExpressionConsumers(
 	FMaterialSharedWriteProof& Proof)
 {
 	Proof = FMaterialSharedWriteProof();
+	const TArray<UMaterialExpression*> AuthoredExpressions =
+		CollectAuthoredExpressions(Target.Expressions);
 	TSet<UMaterialExpression*> Visited;
 	TArray<UMaterialExpression*> Pending{Expression};
 	// Authored inputs and graph pins are two representations of the same edge.
@@ -64,7 +125,7 @@ void InspectMaterialExpressionConsumers(
 			continue;
 		}
 		Visited.Add(Source);
-		for (UMaterialExpression* Consumer : Target.Expressions)
+		for (UMaterialExpression* Consumer : AuthoredExpressions)
 		{
 			if (!Consumer || Consumer == Source)
 			{
@@ -157,7 +218,9 @@ FMCPToolResult ValidateMaterialExpressionSharedWrite(
 	const TSharedPtr<FJsonObject>& Params,
 	FMaterialSharedWriteProof& Proof)
 {
-	if (!Target.Asset || !Expression || !Target.Expressions.Contains(Expression))
+	const TArray<UMaterialExpression*> AuthoredExpressions =
+		CollectAuthoredExpressions(Target.Expressions);
+	if (!Target.Asset || !Expression || !AuthoredExpressions.Contains(Expression))
 	{
 		return FMCPToolResult::Error(
 			TEXT("The edited expression is not a member of the resolved material target."),
@@ -253,26 +316,20 @@ namespace
 {
 FTarget MakeMaterialSharedWriteTarget(UObject* Asset)
 {
-    FTarget Target;
-    Target.Asset = Asset;
-    Target.OriginalAsset = Asset;
-    Target.Material = Cast<UMaterial>(Asset);
-    Target.Function = Cast<UMaterialFunction>(Asset);
-    if (Target.Material)
-    {
-        for (UMaterialExpression* Expression : Target.Material->GetExpressions())
-        {
-            Target.Expressions.Add(Expression);
-        }
-    }
-    else if (Target.Function)
-    {
-        for (UMaterialExpression* Expression : Target.Function->GetExpressions())
-        {
-            Target.Expressions.Add(Expression);
-        }
-    }
-    return Target;
+	FTarget Target;
+	Target.Asset = Asset;
+	Target.OriginalAsset = Asset;
+	Target.Material = Cast<UMaterial>(Asset);
+	Target.Function = Cast<UMaterialFunction>(Asset);
+	if (Target.Material)
+	{
+		Target.Expressions = CollectAuthoredExpressions(Target.Material->GetExpressions());
+	}
+	else if (Target.Function)
+	{
+		Target.Expressions = CollectAuthoredExpressions(Target.Function->GetExpressions());
+	}
+	return Target;
 }
 }
 

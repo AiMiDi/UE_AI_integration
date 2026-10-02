@@ -377,6 +377,10 @@ public:
 			Test.TestEqual(TEXT("Preflight keeps its stable error code"), (*Error)->GetStringField(TEXT("code")), State->ExpectedCode);
 			Test.TestEqual(TEXT("Preflight identifies the requested capability"),
 				(*Verification)->GetStringField(TEXT("capability")), State->Capability);
+			Test.TestEqual(
+				TEXT("Preflight verification schema is versioned"),
+				(*Verification)->GetStringField(TEXT("schema")),
+				FString(TEXT("ue.capability-verification.v1")));
 			for (const TSharedPtr<FJsonObject>& Target : {*Details, *Verification})
 			{
 				Test.TestEqual(TEXT("Declaration state is precise"), Target->GetBoolField(TEXT("localDeclared")), State->bExpectedDeclared);
@@ -387,6 +391,17 @@ public:
 				{
 					const TSharedPtr<FJsonValue> Value = Target->TryGetField(Field);
 					Test.TestTrue(TEXT("Unperformed readback/runtime verification stays unknown"), Value.IsValid() && Value->Type == EJson::Null);
+				}
+				for (const TCHAR* Field : {
+					TEXT("localDeclared"),
+					TEXT("handlerRegistered"),
+					TEXT("liveAvailable"),
+					TEXT("executed")})
+				{
+					bool Value = false;
+					Test.TestTrue(
+						TEXT("Preflight six-state boolean field has a boolean JSON type"),
+						Target->TryGetBoolField(Field, Value));
 				}
 			}
 		}

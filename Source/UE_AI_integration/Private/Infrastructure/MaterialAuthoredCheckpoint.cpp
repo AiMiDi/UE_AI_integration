@@ -105,10 +105,36 @@ void GatherAuthoredObjects(UMaterial* Material, TArray<UObject*>& Objects)
 	});
 }
 
+FString CanonicalAuthoredObjectPath(UObject* Object, UMaterial* Material, const FString& AssetPath)
+{
+	const FString SourcePrefix = Material->GetPathName();
+	FString CanonicalObjectName = AssetPath;
+	int32 ObjectNameSeparator = INDEX_NONE;
+	if (AssetPath.FindLastChar(TEXT('.'), ObjectNameSeparator))
+	{
+		CanonicalObjectName = AssetPath.Mid(ObjectNameSeparator + 1);
+	}
+	const FString ImageObjectName = Material->GetName();
+	const FString ImageObjectReferencePrefix = TEXT(":") + ImageObjectName;
+	const FString CanonicalObjectReferencePrefix = TEXT(":") + CanonicalObjectName;
+	FString Canonical = Object->GetPathName().Replace(*SourcePrefix, *AssetPath);
+	Canonical.ReplaceInline(*ImageObjectReferencePrefix, *CanonicalObjectReferencePrefix);
+	return Canonical;
+}
+
 FString AuthoredObjectRecord(UObject* Object, UMaterial* Material, const FString& AssetPath)
 {
 	const FString SourcePrefix = Material->GetPathName();
-	FString Canonical = Object->GetPathName().Replace(*SourcePrefix, *AssetPath);
+	FString CanonicalObjectName = AssetPath;
+	int32 ObjectNameSeparator = INDEX_NONE;
+	if (AssetPath.FindLastChar(TEXT('.'), ObjectNameSeparator))
+	{
+		CanonicalObjectName = AssetPath.Mid(ObjectNameSeparator + 1);
+	}
+	const FString ImageObjectName = Material->GetName();
+	const FString ImageObjectReferencePrefix = TEXT(":") + ImageObjectName;
+	const FString CanonicalObjectReferencePrefix = TEXT(":") + CanonicalObjectName;
+	FString Canonical = CanonicalAuthoredObjectPath(Object, Material, AssetPath);
 	Canonical += TEXT("|") + Object->GetClass()->GetPathName() + TEXT("|");
 	for (TFieldIterator<FProperty> It(Object->GetClass()); It; ++It)
 	{
@@ -120,10 +146,19 @@ FString AuthoredObjectRecord(UObject* Object, UMaterial* Material, const FString
 		FString Value;
 		for (int32 Index = 0; Index < Property->ArrayDim; ++Index)
 		{
-			Property->ExportText_InContainer(Index, Value, Object, Object, Object, PPF_None);
+			// A null delta forces ExportText_Direct to emit the authored value.
+			// Passing Object as both Data and Delta makes UE treat the property as
+			// identical and leaves Value empty, which would remove property edits
+			// from the checkpoint digest entirely.
+			Property->ExportText_InContainer(Index, Value, Object, nullptr, Object, PPF_None);
 			Value += TEXT(";");
 		}
 		Value.ReplaceInline(*SourcePrefix, *AssetPath);
+		// ExportText_InContainer can encode a subobject reference with the
+		// duplicated root object's short name after a colon. The package path
+		// replacement above cannot see that suffix, so canonicalize the root
+		// object prefix independently of the transient duplicate's name.
+		Value.ReplaceInline(*ImageObjectReferencePrefix, *CanonicalObjectReferencePrefix);
 		Canonical += FString::Printf(TEXT("%d:%s=%d:%s|"),
 			Property->GetName().Len(), *Property->GetName(), Value.Len(), *Value);
 	}
@@ -135,9 +170,19 @@ FString AuthoredDigest(UMaterial* Material, const FString& AssetPath)
 	TArray<UObject*> Objects;
 	GatherAuthoredObjects(Material, Objects);
 	FString Canonical = TEXT("ue.material.authoredGraph/1|") + AssetPath + TEXT("|");
+	TArray<FString> Records;
+	Records.Reserve(Objects.Num());
 	for (UObject* Object : Objects)
 	{
-		Canonical += AuthoredObjectRecord(Object, Material, AssetPath);
+		Records.Add(AuthoredObjectRecord(Object, Material, AssetPath));
+	}
+	// Duplicate images can have different transient object names, so the raw
+	// UObject path order is not a stable ordering for a cross-process digest.
+	// Sort the already canonicalized records instead.
+	Records.Sort();
+	for (const FString& Record : Records)
+	{
+		Canonical += Record;
 	}
 	FTCHARToUTF8 Utf8(*Canonical);
 	FString Hex;
@@ -163,7 +208,7 @@ FString AuthoredDigestMismatch(UMaterial* Original, UMaterial* Image, const FStr
 	{
 		for (UObject* Object : Objects)
 		{
-			const FString StablePath = Object->GetPathName().Replace(*SourcePrefix, *AssetPath);
+			const FString StablePath = CanonicalAuthoredObjectPath(Object, Material, AssetPath);
 			Records.Add(StablePath, AuthoredObjectRecord(Object, Material, AssetPath));
 		}
 	};
@@ -219,9 +264,63 @@ FString AuthoredDigestMismatch(UMaterial* Original, UMaterial* Image, const FStr
 		}
 		if (*ImageRecord != Pair.Value)
 		{
-			return FString::Printf(TEXT("record_mismatch:%s;orig_len=%d;image_len=%d;orig_sha256=%s;image_sha256=%s"),
+			FString PropertyDifference;
+			UObject* OriginalObject = nullptr;
+			UObject* ImageObject = nullptr;
+			for (UObject* Object : OriginalObjects)
+			{
+				if (CanonicalAuthoredObjectPath(Object, Original, AssetPath) == Pair.Key)
+				{
+					OriginalObject = Object;
+					break;
+				}
+			}
+			for (UObject* Object : ImageObjects)
+			{
+				if (CanonicalAuthoredObjectPath(Object, Image, AssetPath) == Pair.Key)
+				{
+					ImageObject = Object;
+					break;
+				}
+			}
+			if (OriginalObject && ImageObject && OriginalObject->GetClass() == ImageObject->GetClass())
+			{
+				for (TFieldIterator<FProperty> It(OriginalObject->GetClass()); It; ++It)
+				{
+					FProperty* Property = *It;
+					if (!IsAuthoredProperty(Property)) continue;
+					FString OriginalValue;
+					FString ImageValue;
+					for (int32 Index = 0; Index < Property->ArrayDim; ++Index)
+					{
+						Property->ExportText_InContainer(Index, OriginalValue, OriginalObject, nullptr, OriginalObject, PPF_None);
+						Property->ExportText_InContainer(Index, ImageValue, ImageObject, nullptr, ImageObject, PPF_None);
+						OriginalValue += TEXT(";");
+						ImageValue += TEXT(";");
+					}
+					OriginalValue.ReplaceInline(*OriginalPrefix, *AssetPath);
+					ImageValue.ReplaceInline(*ImagePrefix, *AssetPath);
+					const FString OriginalObjectName = Original->GetName();
+					const FString ImageObjectName = Image->GetName();
+					FString CanonicalObjectName = AssetPath;
+					int32 ObjectNameSeparator = INDEX_NONE;
+					if (AssetPath.FindLastChar(TEXT('.'), ObjectNameSeparator))
+					{
+						CanonicalObjectName = AssetPath.Mid(ObjectNameSeparator + 1);
+					}
+					ImageValue.ReplaceInline(*(TEXT(":") + ImageObjectName), *(TEXT(":") + CanonicalObjectName));
+					OriginalValue.ReplaceInline(*(TEXT(":") + OriginalObjectName), *(TEXT(":") + CanonicalObjectName));
+					if (OriginalValue != ImageValue)
+					{
+						PropertyDifference = FString::Printf(TEXT(";property=%s;orig_value=%s;image_value=%s"),
+							*Property->GetName(), *OriginalValue.Left(256), *ImageValue.Left(256));
+						break;
+					}
+				}
+			}
+			return FString::Printf(TEXT("record_mismatch:%s;orig_len=%d;image_len=%d;orig_sha256=%s;image_sha256=%s%s"),
 				*Pair.Key, Pair.Value.Len(), ImageRecord->Len(),
-				*Fingerprint(Pair.Value), *Fingerprint(*ImageRecord));
+				*Fingerprint(Pair.Value), *Fingerprint(*ImageRecord), *PropertyDifference);
 		}
 	}
 	return TEXT("records_equal_digest_mismatch");
@@ -240,6 +339,34 @@ UMaterial* DuplicateAuthoredImage(
 	UMaterial* Image = Cast<UMaterial>(StaticDuplicateObjectEx(Duplicate));
 	if (!Image)
 	{
+		return nullptr;
+	}
+	// EditorOnlyData is an optional, owner-created subobject rather than a
+	// default subobject. The duplication reader normally records the populated
+	// source-data copy in CreatedObjects and PostDuplicate renames that same
+	// object to the duplicate root's expected name. Keep that source-to-image
+	// identity explicit so the root EditorOnlyData pointer is always remapped
+	// back to the populated image object and is never duplicated a second time
+	// by the authored-object fallback below.
+	UObject* SourceEditorOnlyData = Material->GetEditorOnlyData();
+	UObject* ImageEditorOnlyData = Image->GetEditorOnlyData();
+	if (!SourceEditorOnlyData || !ImageEditorOnlyData)
+	{
+		return nullptr;
+	}
+	if (UObject* ExistingImageEditorOnlyData = CreatedObjects.FindRef(SourceEditorOnlyData))
+	{
+		if (ExistingImageEditorOnlyData != ImageEditorOnlyData)
+		{
+			return nullptr;
+		}
+	}
+	else
+	{
+		// The normal duplication reader must have populated this mapping because
+		// EditorOnlyData is a reflected UPROPERTY. Do not bind the auto-created
+		// empty object as a fallback: its non-UPROPERTY cached state and owner
+		// linkage are not a faithful checkpoint image.
 		return nullptr;
 	}
 	// PostDuplicate may regenerate cache/parameter GUIDs even with verbatim port
@@ -294,6 +421,13 @@ struct FObjectRestore
 	UObject* Occupant = nullptr;
 	FString RelativePath;
 	bool bRename = false;
+	enum class ECollectionMembership : uint8
+	{
+		None,
+		Expression,
+		Comment,
+	};
+	ECollectionMembership CollectionMembership = ECollectionMembership::None;
 };
 
 struct FOwnedSubtreeRemoval
@@ -303,6 +437,7 @@ struct FOwnedSubtreeRemoval
 	FName OriginalName;
 	FName RetiredName;
 	TArray<UObject*> OwnedObjects;
+	FObjectRestore::ECollectionMembership CollectionMembership = FObjectRestore::ECollectionMembership::None;
 };
 
 // No UObject mutation is permitted here. Resolve every identity, including the
@@ -311,10 +446,32 @@ FMCPToolResult BuildRestorePlan(
 	UMaterial* Material, UMaterial* Image, TArray<FObjectRestore>& Plan,
 	TArray<FOwnedSubtreeRemoval>& RemovedSubtrees)
 {
+	if (!Material || !Image)
+	{
+		return FMCPToolResult::Error(
+			TEXT("Material checkpoint restore requires both the live material and its image."),
+			TEXT("restore_preflight_failed"), 409);
+	}
 	TArray<UObject*> SavedObjects;
 	TArray<UObject*> CurrentObjects;
 	GatherAuthoredObjects(Image, SavedObjects);
 	GatherAuthoredObjects(Material, CurrentObjects);
+	// UMaterialInterface::PostDuplicate creates a fresh optional data object and
+	// names it from the duplicated material (for example,
+	// UEAIAuthoredCheckpoint_0EditorOnlyData). That name is intentionally
+	// different from the live asset's EditorOnlyData name, so it cannot be
+	// resolved through StaticFindObjectFast. Bind the two objects by their
+	// owner-owned semantic slot and preserve the live object identity. Copying
+	// the root material later may temporarily copy the image pointer, but the
+	// replacement archive maps it back to this exact target object.
+	UMaterialEditorOnlyData* ImageEditorOnlyData = Image->GetEditorOnlyData();
+	UMaterialEditorOnlyData* MaterialEditorOnlyData = Material->GetEditorOnlyData();
+	if (!ImageEditorOnlyData || !MaterialEditorOnlyData)
+	{
+		return FMCPToolResult::Error(
+			TEXT("Material checkpoint restore requires valid EditorOnlyData objects."),
+			TEXT("restore_preflight_failed"), 409);
+	}
 	auto OuterDepth = [](const UObject* Object)
 	{
 		int32 Depth = 0;
@@ -335,9 +492,29 @@ FMCPToolResult BuildRestorePlan(
 		FObjectRestore& Item = Plan.AddDefaulted_GetRef();
 		Item.Image = Saved;
 		Item.RelativePath = Saved->GetPathName(Image);
+		if (Saved->GetOuter() == Image)
+		{
+			Item.CollectionMembership = Cast<UMaterialExpressionComment>(Saved)
+				? FObjectRestore::ECollectionMembership::Comment
+				: (Saved->IsA<UMaterialExpression>()
+					? FObjectRestore::ECollectionMembership::Expression
+					: FObjectRestore::ECollectionMembership::None);
+		}
 		if (Saved == Image)
 		{
 			Item.Target = Material;
+			continue;
+		}
+		// UMaterialInterface owns exactly one editor-only data object and the
+		// engine enforces its name from the live material name during PostLoad and
+		// save. A transient checkpoint therefore has a different short name even
+		// though it represents the same authored object; resolve it by ownership
+		// identity instead of creating a second, unreferenced editor-data object.
+		if (Saved == ImageEditorOnlyData)
+		{
+			Item.Target = MaterialEditorOnlyData;
+			Claimed.Add(Item.Target);
+			ResolvedObjects.Add(Saved, Item.Target);
 			continue;
 		}
 		if (!ResolvedObjects.Contains(Saved->GetOuter()))
@@ -411,6 +588,33 @@ FMCPToolResult BuildRestorePlan(
 	for (UObject* Current : CurrentObjects)
 	{
 		if (Claimed.Contains(Current)) continue;
+		if (Current->GetOuter() == Material
+			&& (Current->IsA<UMaterialExpression>() || Current->IsA<UMaterialExpressionComment>()))
+		{
+			FOwnedSubtreeRemoval Removal;
+			Removal.Object = Current;
+			Removal.OriginalOuter = Current->GetOuter();
+			Removal.OriginalName = Current->GetFName();
+			Removal.RetiredName = MakeUniqueObjectName(GetTransientPackage(), Current->GetClass(), Current->GetFName());
+			Removal.CollectionMembership = Cast<UMaterialExpressionComment>(Current)
+				? FObjectRestore::ECollectionMembership::Comment
+				: FObjectRestore::ECollectionMembership::Expression;
+			for (UObject* OwnedObject : CurrentObjects)
+			{
+				if (OwnedObject == Current || (OwnedObject->IsIn(Current) && !Claimed.Contains(OwnedObject)))
+				{
+					Removal.OwnedObjects.Add(OwnedObject);
+				}
+			}
+			if (!Current->Rename(*Removal.RetiredName.ToString(), GetTransientPackage(), REN_Test))
+			{
+				return FMCPToolResult::Error(TEXT("An extra material expression cannot be safely retired."),
+					TEXT("restore_preflight_failed"), 409);
+			}
+			RemovedSubtrees.Add(MoveTemp(Removal));
+			RemovedRoots.Add(Current);
+			continue;
+		}
 		bool bRetainedExpressionAncestor = false;
 		bool bAncestorRemoved = false;
 		for (UObject* Outer = Current->GetOuter(); Outer && Outer != Material; Outer = Outer->GetOuter())
@@ -446,18 +650,42 @@ FMCPToolResult BuildRestorePlan(
 	return FMCPToolResult::Ok(MakeShared<FJsonObject>());
 }
 
-bool RestoreRemovedSubtrees(const TArray<FOwnedSubtreeRemoval>& RemovedSubtrees)
+bool RestoreRemovedSubtrees(UMaterial* Material, const TArray<FOwnedSubtreeRemoval>& RemovedSubtrees)
 {
+	if (Material && RemovedSubtrees.Num() > 0)
+	{
+		Material->SetFlags(RF_Transactional);
+		Material->Modify();
+		if (UMaterialEditorOnlyData* EditorOnlyData = Material->GetEditorOnlyData())
+		{
+			EditorOnlyData->SetFlags(RF_Transactional);
+			EditorOnlyData->Modify();
+		}
+	}
 	for (const FOwnedSubtreeRemoval& Removal : RemovedSubtrees)
 	{
 		if (!IsValid(Removal.Object) || !IsValid(Removal.OriginalOuter)) return false;
-		if (Removal.Object->GetOuter() == Removal.OriginalOuter
-			&& Removal.Object->GetFName() == Removal.OriginalName) continue;
-		if (Removal.Object->GetOuter() != GetTransientPackage()
-			|| Removal.Object->GetFName() != Removal.RetiredName
-			|| !Removal.Object->Rename(*Removal.OriginalName.ToString(), Removal.OriginalOuter, REN_Test)
-			|| !Removal.Object->Rename(*Removal.OriginalName.ToString(), Removal.OriginalOuter,
-				REN_DontCreateRedirectors | REN_DoNotDirty)) return false;
+		if (Removal.Object->GetOuter() != Removal.OriginalOuter
+			|| Removal.Object->GetFName() != Removal.OriginalName)
+		{
+			if (Removal.Object->GetOuter() != GetTransientPackage()
+				|| Removal.Object->GetFName() != Removal.RetiredName
+				|| !Removal.Object->Rename(*Removal.OriginalName.ToString(), Removal.OriginalOuter, REN_Test)
+				|| !Removal.Object->Rename(*Removal.OriginalName.ToString(), Removal.OriginalOuter,
+					REN_DontCreateRedirectors | REN_DoNotDirty)) return false;
+		}
+		if (Material && Removal.CollectionMembership != FObjectRestore::ECollectionMembership::None)
+		{
+			FMaterialExpressionCollection& Collection = Material->GetExpressionCollection();
+			if (Removal.CollectionMembership == FObjectRestore::ECollectionMembership::Comment)
+			{
+				Collection.AddComment(CastChecked<UMaterialExpressionComment>(Removal.Object));
+			}
+			else
+			{
+				Collection.AddExpression(CastChecked<UMaterialExpression>(Removal.Object));
+			}
+		}
 	}
 	return true;
 }
@@ -466,6 +694,13 @@ bool ApplyRestorePlan(
 	UMaterial* Material, UMaterial* Image, TArray<FObjectRestore>& Plan,
 	const TArray<FOwnedSubtreeRemoval>& RemovedSubtrees)
 {
+	Material->SetFlags(RF_Transactional);
+	Material->Modify();
+	if (UMaterialEditorOnlyData* EditorOnlyData = Material->GetEditorOnlyData())
+	{
+		EditorOnlyData->SetFlags(RF_Transactional);
+		EditorOnlyData->Modify();
+	}
 	TMap<UObject*, UObject*> Replacements;
 	Replacements.Add(Image, Material);
 	for (FObjectRestore& Item : Plan)
@@ -491,6 +726,19 @@ bool ApplyRestorePlan(
 				return false;
 			}
 			Item.Target = NewObject<UObject>(Outer, Item.Image->GetClass(), Item.Image->GetFName(), RF_Transactional);
+			if (Item.CollectionMembership != FObjectRestore::ECollectionMembership::None
+				&& Outer == Material)
+			{
+				FMaterialExpressionCollection& Collection = Material->GetExpressionCollection();
+				if (Item.CollectionMembership == FObjectRestore::ECollectionMembership::Comment)
+				{
+					Collection.AddComment(CastChecked<UMaterialExpressionComment>(Item.Target));
+				}
+				else
+				{
+					Collection.AddExpression(CastChecked<UMaterialExpression>(Item.Target));
+				}
+			}
 		}
 		else if (Item.bRename && !Item.Target->Rename(*Item.Image->GetName(), Outer, REN_DontCreateRedirectors | REN_DoNotDirty))
 		{
@@ -514,6 +762,23 @@ bool ApplyRestorePlan(
 			OwnedObject->SetFlags(RF_Transactional);
 			OwnedObject->Modify();
 		}
+		if (Removal.CollectionMembership != FObjectRestore::ECollectionMembership::None)
+		{
+			FMaterialExpressionCollection& Collection = Material->GetExpressionCollection();
+			Material->Modify();
+			if (UMaterialEditorOnlyData* EditorOnlyData = Material->GetEditorOnlyData())
+			{
+				EditorOnlyData->Modify();
+			}
+			if (Removal.CollectionMembership == FObjectRestore::ECollectionMembership::Comment)
+			{
+				Collection.RemoveComment(CastChecked<UMaterialExpressionComment>(Removal.Object));
+			}
+			else
+			{
+				Collection.RemoveExpression(CastChecked<UMaterialExpression>(Removal.Object));
+			}
+		}
 		if (!Removal.Object->Rename(*Removal.RetiredName.ToString(), GetTransientPackage(),
 			REN_DontCreateRedirectors | REN_DoNotDirty)) return false;
 	}
@@ -526,7 +791,9 @@ bool ApplyRestorePlan(
 		// Leave already identical objects out of Undo. In particular, an
 		// unchanged nested texture must not run its own PostEditUndo/resource
 		// rebuild merely because its parent material was restored.
-		if (AuthoredObjectRecord(Item.Target, Material, Material->GetPathName())
+		const bool bIsCheckpointRoot = Item.Image == Image || Item.Target == Material;
+		if (!bIsCheckpointRoot
+			&& AuthoredObjectRecord(Item.Target, Material, Material->GetPathName())
 			== AuthoredObjectRecord(Item.Image, Image, Material->GetPathName()))
 		{
 			continue;
@@ -655,8 +922,17 @@ FMCPToolResult Restore(UMaterial* Material, const FString& SnapshotId, const TSh
 	TSet<FString> SharedNodeIds;
 	for (UMaterial* InspectedMaterial : {Material, Checkpoint->Image.Get()})
 	{
-		for (UMaterialExpression* Source : InspectedMaterial->GetExpressions())
+		// The authored image can contain nested UMaterialExpression objects owned
+		// by a top-level node. They are included in the checkpoint and may have
+		// consumers outside that owner's subtree, so shared-write confirmation must
+		// inspect the complete authored object set rather than only the collection
+		// roots returned by GetExpressions().
+		TArray<UObject*> AuthoredObjects;
+		GatherAuthoredObjects(InspectedMaterial, AuthoredObjects);
+		for (UObject* AuthoredObject : AuthoredObjects)
 		{
+			UMaterialExpression* Source = Cast<UMaterialExpression>(AuthoredObject);
+			if (!Source) continue;
 			UEAIIntegration::MaterialEditing::FMaterialSharedWriteProof Proof;
 			UEAIIntegration::MaterialEditing::InspectMaterialExpressionConsumers(InspectedMaterial, Source, Proof);
 			if (Proof.bShared)
@@ -719,23 +995,51 @@ FMCPToolResult Restore(UMaterial* Material, const FString& SnapshotId, const TSh
 	Params->TryGetStringField(TEXT("expectedAfterDigest"), ExpectedAfter);
 	if (!bApplied || AfterDigest != SavedDigest || AfterDigest != ExpectedAfter)
 	{
+		// Capture the mismatch while the failed restore state is still present.
+		// Computing this only after rollback describes the rollback state instead
+		// of the original postcondition failure and can hide the object/property
+		// that made the restore diverge.
+		const FString AttemptReadbackDetail = AuthoredDigestMismatch(
+			Checkpoint->Image.Get(), Material, Checkpoint->AssetPath);
 		TArray<FObjectRestore> RollbackPlan;
 		TArray<FOwnedSubtreeRemoval> RollbackRemovedSubtrees;
-		const bool bRollback = RestoreRemovedSubtrees(RemovedSubtrees)
-			&& BuildRestorePlan(Material, Before.Get(), RollbackPlan, RollbackRemovedSubtrees).bSuccess
-			&& ApplyRestorePlan(Material, Before.Get(), RollbackPlan, RollbackRemovedSubtrees)
-			&& AuthoredDigest(Material, Checkpoint->AssetPath) == CurrentDigest;
+		const bool bRollbackRemovedSubtrees = RestoreRemovedSubtrees(Material, RemovedSubtrees);
+		bool bRollbackPlanBuilt = false;
+		if (bRollbackRemovedSubtrees)
+		{
+			bRollbackPlanBuilt = BuildRestorePlan(
+				Material, Before.Get(), RollbackPlan, RollbackRemovedSubtrees).bSuccess;
+		}
+		const bool bRollbackApplied = bRollbackPlanBuilt
+			&& ApplyRestorePlan(Material, Before.Get(), RollbackPlan, RollbackRemovedSubtrees);
+		const FString RollbackDigest = AuthoredDigest(Material, Checkpoint->AssetPath);
+		const bool bRollbackDigestMatches = RollbackDigest == CurrentDigest;
+		const bool bRollback = bRollbackRemovedSubtrees && bRollbackPlanBuilt
+			&& bRollbackApplied && bRollbackDigestMatches;
 		if (bRollback)
 		{
 			Material->GetOutermost()->SetDirtyFlag(bWasDirty);
 			Transaction.Cancel();
 		}
-		FMCPToolResult Failure = FMCPToolResult::Error(TEXT("Authored material restore failed its readback."),
+		const FString RollbackReadbackDetail = AuthoredDigestMismatch(
+			Before.Get(), Material, Checkpoint->AssetPath);
+		FMCPToolResult Failure = FMCPToolResult::Error(
+			FString::Printf(TEXT("Authored material restore failed its readback (saved=%s;after=%s;attempt_detail=%s;rollback_detail=%s;rollback_removed=%s;rollback_plan=%s;rollback_apply=%s;rollback_digest=%s)."),
+				*SavedDigest, *AfterDigest, *AttemptReadbackDetail, *RollbackReadbackDetail,
+				bRollbackRemovedSubtrees ? TEXT("true") : TEXT("false"),
+				bRollbackPlanBuilt ? TEXT("true") : TEXT("false"),
+				bRollbackApplied ? TEXT("true") : TEXT("false"),
+				bRollbackDigestMatches ? TEXT("true") : TEXT("false")),
 			bRollback ? TEXT("restore_postcondition_failed") : TEXT("restore_rollback_failed"), 500);
 		Failure.Data = Result;
 		Result->SetStringField(TEXT("attempt_status"), bRollback ? TEXT("rolled_back") : TEXT("failed"));
 		Result->SetStringField(TEXT("restore_status"), bRollback ? TEXT("restored") : TEXT("restore_failed"));
 		Result->SetBoolField(TEXT("rollbackVerified"), bRollback);
+		Result->SetBoolField(TEXT("rollbackSubtreesRestored"), bRollbackRemovedSubtrees);
+		Result->SetBoolField(TEXT("rollbackPlanBuilt"), bRollbackPlanBuilt);
+		Result->SetBoolField(TEXT("rollbackApplied"), bRollbackApplied);
+		Result->SetBoolField(TEXT("rollbackDigestMatches"), bRollbackDigestMatches);
+		Result->SetStringField(TEXT("rollbackDigest"), RollbackDigest);
 		Result->SetBoolField(TEXT("undoRetained"), !bRollback && Transaction.IsOutstanding());
 		Result->SetStringField(TEXT("afterStateDigest"), AuthoredDigest(Material, Checkpoint->AssetPath));
 		if (!bRollback) UEAIIntegration::MaterialEditing::NotifyMaterialSourceEdited(Material);

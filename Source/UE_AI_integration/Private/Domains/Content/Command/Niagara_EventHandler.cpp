@@ -472,8 +472,9 @@ namespace UEAINiagaraEventHandlerPrivate
 		if (Params->HasField(TEXT("sourceEmitterId")))
 		{
 			if (!Params->TryGetStringField(TEXT("sourceEmitterId"), SourceEmitterIdString)
-				|| (!SourceEmitterIdString.IsEmpty() && !
-					FGuid::Parse(SourceEmitterIdString, OutRequest.SourceEmitterId)))
+				|| (!SourceEmitterIdString.IsEmpty()
+					&& (!FGuid::Parse(SourceEmitterIdString, OutRequest.SourceEmitterId)
+						|| !OutRequest.SourceEmitterId.IsValid())))
 			{
 				OutErrorCode = TEXT("source_emitter_id_invalid");
 				OutError = TEXT("sourceEmitterId must be an empty string or a valid emitter handle GUID.");

@@ -711,6 +711,8 @@ bool FMaterialGraphAuthoredRestoreContractTest::RunTest(const FString& Parameter
 	}
 	const FString SnapshotId = Snapshot.Data->GetStringField(TEXT("snapshotId"));
 	const FString SavedDigest = Snapshot.Data->GetStringField(TEXT("stateDigest"));
+	UMaterialEditorOnlyData* EditorOnlyDataIdentity = Fixture.Material->GetEditorOnlyData();
+	TestNotNull(TEXT("Material fixture has EditorOnlyData identity"), EditorOnlyDataIdentity);
 	TArray<FString> AuthoredSnapshotIds = {SnapshotId};
 	ON_SCOPE_EXIT
 	{
@@ -804,6 +806,8 @@ bool FMaterialGraphAuthoredRestoreContractTest::RunTest(const FString& Parameter
 	TestEqual(TEXT("Expression layout is restored"), Fixture.SourceA->MaterialExpressionEditorX, -200);
 	TestFalse(TEXT("Material property is restored"), Fixture.Material->TwoSided);
 	TestEqual(TEXT("Comment text is restored"), Comment->Text, FString(TEXT("checkpoint comment")));
+	TestTrue(TEXT("Authored restore preserves live EditorOnlyData identity"),
+		Fixture.Material->GetEditorOnlyData() == EditorOnlyDataIdentity);
 	UMaterialExpressionConstant* RestoredSourceB = FindObjectFast<UMaterialExpressionConstant>(Fixture.Material, TEXT("SourceB"));
 	UMaterialExpressionAdd* RestoredSum = FindObjectFast<UMaterialExpressionAdd>(Fixture.Material, TEXT("Sum"));
 	TestTrue(TEXT("Rename restores the original source object"), RestoredSourceB == Fixture.SourceB);
@@ -856,6 +860,8 @@ bool FMaterialGraphAuthoredRestoreContractTest::RunTest(const FString& Parameter
 		RollbackNestedTexture->GetOuter() == NestedOwner && RollbackNestedDescendant->GetOuter() == RollbackNestedTexture
 		&& NestedOwner->Texture == RollbackNestedTexture);
 	TestFalse(TEXT("Rollback restores the exact dirty state"), Fixture.Package->IsDirty());
+	TestTrue(TEXT("Rollback preserves live EditorOnlyData identity"),
+		Fixture.Material->GetEditorOnlyData() == EditorOnlyDataIdentity);
 	FString RollbackDigest;
 	TestTrue(TEXT("Rollback restores the complete authored digest"), ReadCurrentRestoreDigest(*this, Registry, Fixture.PackageName, SnapshotId, RollbackDigest) && RollbackDigest == CurrentDigest);
 	if (RolledBack.Data)

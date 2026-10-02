@@ -109,6 +109,19 @@ function Get-ModuleProof([Diagnostics.Process] $Process, [int] $Port, $Dll, $Pdb
             $identity = $data.loadedModuleIdentity
             Assert-Condition ($data.plugin -eq 'UE_AI_integration' -and $data.module -eq 'UE_AI_integration' `
                 -and $data.loaded -eq $true -and $data.processId -eq $Process.Id) 'Native module or Editor PID differs.'
+            Assert-Condition ($data.identityComplete -eq $true `
+                -and @($data.identityFailureReasons).Count -eq 0 `
+                -and $data.exactIdentityComplete -eq $true `
+                -and @($data.exactIdentityFailureReasons).Count -eq 0 `
+                -and $identity.loaded -eq $true `
+                -and $identity.identityComplete -eq $true `
+                -and $identity.exactIdentityComplete -eq $true `
+                -and $identity.moduleFilenameMatches -eq $true `
+                -and $identity.modulePathWithinPlugin -eq $true `
+                -and $identity.moduleSha256Complete -eq $true `
+                -and $identity.pdbSha256Complete -eq $true `
+                -and $identity.latestArtifactIdentityComplete -eq $true) `
+                'Native module identity proof is incomplete.'
             Assert-Condition ($identity.schema -eq 'ue.loaded-module-identity.v1' `
                 -and $identity.plugin -eq 'UE_AI_integration' -and $identity.module -eq 'UE_AI_integration' `
                 -and $identity.processId -eq $Process.Id `

@@ -229,4 +229,118 @@ bool FProductionScenarioVerificationContractTest::RunTest(const FString& Paramet
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FProductionLoadedModuleIdentityContractTest,
+	"UE_AI_integration.Production.LoadedModuleIdentity",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FProductionLoadedModuleIdentityContractTest::RunTest(const FString& Parameters)
+{
+	const TSharedPtr<IPlugin> Plugin =
+		IPluginManager::Get().FindPlugin(TEXT("UE_AI_integration"));
+	TestTrue(TEXT("UE_AI_integration plugin is available"), Plugin.IsValid());
+	if (!Plugin.IsValid())
+	{
+		return false;
+	}
+
+	FMCPToolRegistry Registry;
+	UEAIIntegration::Infrastructure::FPIESessionController PIEController;
+	UEAIIntegration::Infrastructure::FProductionRuntimeController Controller(
+		Registry,
+		PIEController);
+	const FMCPToolResult Result =
+		Controller.GetLoadedModule(MakeShared<FJsonObject>());
+	TestTrue(TEXT("Loaded-module query succeeds"), Result.bSuccess);
+	if (!Result.bSuccess || !Result.Data.IsValid())
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("Loaded-module query reports a loaded module"), Result.Data->GetBoolField(TEXT("loaded")));
+	TestTrue(TEXT("Loaded-module identity is complete"), Result.Data->GetBoolField(TEXT("identityComplete")));
+	TestTrue(
+		TEXT("Loaded-module exact identity is complete"),
+		Result.Data->GetBoolField(TEXT("exactIdentityComplete")));
+	const TArray<TSharedPtr<FJsonValue>>* IdentityFailureReasons = nullptr;
+	if (TestTrue(
+			TEXT("Loaded-module identity publishes failure reasons"),
+			Result.Data->TryGetArrayField(TEXT("identityFailureReasons"), IdentityFailureReasons))
+		&& IdentityFailureReasons)
+	{
+		TestEqual(
+			TEXT("Loaded-module identity has no failure reasons"),
+			IdentityFailureReasons->Num(),
+			0);
+	}
+	TestEqual(TEXT("Top-level plugin identity is exact"), Result.Data->GetStringField(TEXT("plugin")), FString(TEXT("UE_AI_integration")));
+	TestEqual(TEXT("Top-level module identity is exact"), Result.Data->GetStringField(TEXT("module")), FString(TEXT("UE_AI_integration")));
+	TestEqual(
+		TEXT("Loaded-module process is the current Editor process"),
+		static_cast<uint32>(Result.Data->GetIntegerField(TEXT("processId"))),
+		FPlatformProcess::GetCurrentProcessId());
+	TestTrue(TEXT("Loaded module path is reported"), !Result.Data->GetStringField(TEXT("modulePath")).IsEmpty());
+	TestTrue(TEXT("Loaded module provenance includes a DLL object"), Result.Data->HasTypedField<EJson::Object>(TEXT("dll")));
+	TestTrue(TEXT("Loaded module provenance includes a PDB object"), Result.Data->HasTypedField<EJson::Object>(TEXT("pdb")));
+	const TSharedPtr<FJsonObject>* Dll = nullptr;
+	const TSharedPtr<FJsonObject>* Pdb = nullptr;
+	if (!TestTrue(
+			TEXT("DLL provenance object is readable"),
+			Result.Data->TryGetObjectField(TEXT("dll"), Dll))
+		|| !TestTrue(
+			TEXT("PDB provenance object is readable"),
+			Result.Data->TryGetObjectField(TEXT("pdb"), Pdb))
+		|| !Dll || !Dll->IsValid() || !Pdb || !Pdb->IsValid())
+	{
+		return false;
+	}
+	TestEqual(
+		TEXT("DLL provenance path matches the loaded module path"),
+		(*Dll)->GetStringField(TEXT("path")),
+		Result.Data->GetStringField(TEXT("modulePath")));
+
+	const TSharedPtr<FJsonObject>* Identity = nullptr;
+	TestTrue(
+		TEXT("Loaded-module query publishes one identity tuple"),
+		Result.Data->TryGetObjectField(TEXT("loadedModuleIdentity"), Identity));
+	if (!Identity || !Identity->IsValid())
+	{
+		return false;
+	}
+
+	for (const TCHAR* Field : {
+		TEXT("schema"), TEXT("plugin"), TEXT("module"), TEXT("processId"),
+		TEXT("modulePath"), TEXT("moduleSha256"), TEXT("pdbPath"),
+		TEXT("pdbSha256"), TEXT("latestBuildArtifactPath"),
+		TEXT("latestBuildArtifactSha256"), TEXT("editorStartedAtUtc")})
+	{
+		TestTrue(
+			FString::Printf(TEXT("Identity tuple includes %s"), Field),
+			(*Identity)->HasField(Field));
+	}
+	TestEqual(TEXT("Identity schema is versioned"), (*Identity)->GetStringField(TEXT("schema")), FString(TEXT("ue.loaded-module-identity.v1")));
+	TestEqual(TEXT("Identity plugin is UE_AI_integration"), (*Identity)->GetStringField(TEXT("plugin")), FString(TEXT("UE_AI_integration")));
+	TestEqual(TEXT("Identity module is UE_AI_integration"), (*Identity)->GetStringField(TEXT("module")), FString(TEXT("UE_AI_integration")));
+	TestTrue(TEXT("Identity tuple is complete"), (*Identity)->GetBoolField(TEXT("identityComplete")));
+	TestTrue(TEXT("Identity tuple proves the exact module/artifact tuple"), (*Identity)->GetBoolField(TEXT("exactIdentityComplete")));
+	TestTrue(TEXT("Identity tuple matches its module filename"), (*Identity)->GetBoolField(TEXT("moduleFilenameMatches")));
+	TestTrue(TEXT("Identity tuple keeps the module inside the plugin"), (*Identity)->GetBoolField(TEXT("modulePathWithinPlugin")));
+	TestTrue(TEXT("Identity tuple contains a complete module hash"), (*Identity)->GetBoolField(TEXT("moduleSha256Complete")));
+	TestTrue(TEXT("Identity tuple contains a complete PDB hash"), (*Identity)->GetBoolField(TEXT("pdbSha256Complete")));
+	TestTrue(TEXT("Identity tuple matches the latest artifact"), (*Identity)->GetBoolField(TEXT("latestArtifactIdentityComplete")));
+	TestEqual(
+		TEXT("Identity process matches top-level process"),
+		static_cast<uint32>((*Identity)->GetIntegerField(TEXT("processId"))),
+		static_cast<uint32>(Result.Data->GetIntegerField(TEXT("processId"))));
+	TestEqual(TEXT("Identity module path matches top-level path"), (*Identity)->GetStringField(TEXT("modulePath")), Result.Data->GetStringField(TEXT("modulePath")));
+	TestEqual(TEXT("Identity DLL hash matches the DLL provenance hash"), (*Identity)->GetStringField(TEXT("moduleSha256")), (*Dll)->GetStringField(TEXT("sha256")));
+	TestEqual(TEXT("Identity PDB path matches the PDB provenance path"), (*Identity)->GetStringField(TEXT("pdbPath")), (*Pdb)->GetStringField(TEXT("path")));
+	TestEqual(TEXT("Identity PDB hash matches the PDB provenance hash"), (*Identity)->GetStringField(TEXT("pdbSha256")), (*Pdb)->GetStringField(TEXT("sha256")));
+	TestEqual(TEXT("Identity latest artifact path matches top-level path"), (*Identity)->GetStringField(TEXT("latestBuildArtifactPath")), Result.Data->GetStringField(TEXT("latestBuildArtifactPath")));
+	TestEqual(TEXT("Identity latest artifact hash matches top-level hash"), (*Identity)->GetStringField(TEXT("latestBuildArtifactSha256")), Result.Data->GetStringField(TEXT("latestBuildArtifactSha256")));
+	TestTrue(TEXT("Identity module hash is empty or a SHA-256 digest"), (*Identity)->GetStringField(TEXT("moduleSha256")).IsEmpty() || (*Identity)->GetStringField(TEXT("moduleSha256")).Len() == 64);
+	TestTrue(TEXT("Identity Editor start time is reported"), !(*Identity)->GetStringField(TEXT("editorStartedAtUtc")).IsEmpty());
+	return true;
+}
+
 #endif

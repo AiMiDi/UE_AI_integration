@@ -39,6 +39,7 @@ public:
 	}
 
 	int32 GetExecuteCount() const { return ExecuteCount; }
+	void ResetExecuteCount() { ExecuteCount = 0; }
 	const FString& GetLastRequestId() const { return LastRequestId; }
 	const FString& GetLastCallerSessionId() const
 	{
@@ -109,6 +110,126 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Executor fixture has exact bindings"), Registry.LoadCapabilityManifests());
 
 	FMCPExecutor Executor(Registry);
+
+	// Exercise the envelope for every locally declared capability. Individual
+	// cases below assert precise values for representative failures and
+	// transport paths; this sweep closes the coverage hole where a newly added
+	// handler could bypass the six-state projection entirely. The fixture
+	// registry installs a side-effect-free test handler for each descriptor, so
+	// empty params cannot mutate a real asset while still traversing the common
+	// executor result path.
+	const TCHAR* VerificationFields[] = {
+		TEXT("localDeclared"),
+		TEXT("handlerRegistered"),
+		TEXT("liveAvailable"),
+		TEXT("executed"),
+		TEXT("readbackVerified"),
+		TEXT("runtimeVerified")};
+	for (const TSharedPtr<FJsonObject>& Descriptor : Registry.GetCapabilityDescriptors())
+	{
+		if (!Descriptor.IsValid())
+		{
+			continue;
+		}
+		const FString Capability = Descriptor->GetStringField(TEXT("id"));
+		FMCPExecutionContext SweepContext;
+		SweepContext.Capability = Capability;
+		SweepContext.Params = MakeShared<FJsonObject>();
+		const FMCPResult SweepResult = Executor.Execute(SweepContext);
+		const TSharedPtr<FJsonObject>& SweepDetails =
+			SweepResult.bOk ? SweepResult.Data : SweepResult.Error.Details;
+		TestTrue(
+			FString::Printf(TEXT("Six-state envelope exists for %s"), *Capability),
+			SweepDetails.IsValid());
+		if (!SweepDetails.IsValid())
+		{
+			continue;
+		}
+		const TSharedPtr<FJsonObject>* SweepState = nullptr;
+		TestTrue(
+			FString::Printf(TEXT("Nested six-state envelope exists for %s"), *Capability),
+			SweepDetails->TryGetObjectField(TEXT("verificationState"), SweepState));
+		if (!SweepState || !SweepState->IsValid())
+		{
+			continue;
+		}
+		TestEqual(
+			FString::Printf(TEXT("%s verification schema"), *Capability),
+			(*SweepState)->GetStringField(TEXT("schema")),
+			FString(TEXT("ue.capability-verification.v1")));
+		TestEqual(
+			FString::Printf(TEXT("%s verification capability"), *Capability),
+			(*SweepState)->GetStringField(TEXT("capability")),
+			Capability);
+		for (const TCHAR* Field : VerificationFields)
+		{
+			TestTrue(
+				FString::Printf(TEXT("%s exposes top-level six-state field %s"), *Capability, Field),
+				SweepDetails->HasField(Field));
+			TestTrue(
+				FString::Printf(TEXT("%s exposes nested six-state field %s"), *Capability, Field),
+				(*SweepState)->HasField(Field));
+		}
+		for (const TCHAR* Field : {
+			TEXT("localDeclared"),
+			TEXT("handlerRegistered"),
+			TEXT("liveAvailable"),
+			TEXT("executed")})
+		{
+			bool Value = false;
+			TestTrue(
+				FString::Printf(TEXT("%s nested %s is boolean"), *Capability, Field),
+				(*SweepState)->TryGetBoolField(Field, Value));
+		}
+	}
+
+	// Workflow actions are declared by the runtime protocol rather than a
+	// capability manifest, so the manifest sweep above cannot cover them.
+	// Exercise every supported action through the same annotation boundary to
+	// keep the six-state contract complete when a workflow bypasses a tool
+	// registration.
+	for (const TCHAR* WorkflowCapability : {
+		TEXT("workflow.validate"),
+		TEXT("workflow.plan"),
+		TEXT("workflow.execute"),
+		TEXT("workflow.resume"),
+		TEXT("workflow.status"),
+		TEXT("workflow.rollback")})
+	{
+		FMCPExecutionContext WorkflowContext;
+		WorkflowContext.Capability = WorkflowCapability;
+		WorkflowContext.Params = MakeShared<FJsonObject>();
+		FMCPResult WorkflowResult = FMCPResult::Ok(MakeShared<FJsonObject>());
+		Executor.AnnotateVerification(WorkflowContext, WorkflowResult, true);
+		TestTrue(
+			FString::Printf(TEXT("Workflow %s keeps a six-state result"), WorkflowCapability),
+			WorkflowResult.Data.IsValid());
+		if (!WorkflowResult.Data.IsValid())
+		{
+			continue;
+		}
+		const TSharedPtr<FJsonObject>* WorkflowState = nullptr;
+		TestTrue(
+			FString::Printf(TEXT("Workflow %s has nested verification state"), WorkflowCapability),
+			WorkflowResult.Data->TryGetObjectField(TEXT("verificationState"), WorkflowState));
+		if (!WorkflowState || !WorkflowState->IsValid())
+		{
+			continue;
+		}
+		for (const TCHAR* Field : VerificationFields)
+		{
+			TestTrue(
+				FString::Printf(TEXT("Workflow %s exposes top-level %s"), WorkflowCapability, Field),
+				WorkflowResult.Data->HasField(Field));
+			TestTrue(
+				FString::Printf(TEXT("Workflow %s exposes nested %s"), WorkflowCapability, Field),
+				(*WorkflowState)->HasField(Field));
+		}
+		TestEqual(
+			FString::Printf(TEXT("Workflow %s state identity"), WorkflowCapability),
+			(*WorkflowState)->GetStringField(TEXT("capability")),
+			FString(WorkflowCapability));
+	}
 	const FMCPResult Unknown = Executor.Execute(
 		{TEXT("blueprint.unknown.operation"), MakeShared<FJsonObject>()});
 	TestFalse(TEXT("Unknown capability fails"), Unknown.bOk);
@@ -247,6 +368,13 @@ bool FMCPExecutorContractTest::RunTest(const FString& Parameters)
 	FirstIdempotentRequest.Capability = TEXT("production.build.status");
 	FirstIdempotentRequest.Params = MakeShared<FJsonObject>();
 	FirstIdempotentRequest.RequestId = TEXT("executor-test-request");
+	// The manifest-wide six-state sweep above intentionally executes every
+	// registered fixture once. Reset this side-effect counter so the following
+	// assertion isolates request replay from that coverage pass.
+	if (IdempotentTool.IsValid())
+	{
+		IdempotentTool->ResetExecuteCount();
+	}
 	const FMCPResult FirstIdempotentResult = Executor.Execute(FirstIdempotentRequest);
 	const FMCPResult ReplayedIdempotentResult = Executor.Execute(FirstIdempotentRequest);
 	TestTrue(TEXT("Initial idempotent request succeeds"), FirstIdempotentResult.bOk);

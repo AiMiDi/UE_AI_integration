@@ -260,6 +260,12 @@ bool FNiagaraEventHandlerAddApplyContractTest::RunTest(const FString&)
 	Params->SetStringField(TEXT("system"), Fixture.System->GetPathName());
 	Params->SetStringField(TEXT("emitter"), HandleId.ToString(EGuidFormats::DigitsWithHyphensLower));
 	Params->SetStringField(TEXT("usageId"), UsageId.ToString(EGuidFormats::DigitsWithHyphensLower));
+	Params->SetStringField(TEXT("sourceEmitterId"), TEXT("00000000-0000-0000-0000-000000000000"));
+	const FMCPToolResult InvalidSourceEmitter = Registry.ExecuteTool(
+		TEXT("content.niagara.event_handler.add.plan"), Params);
+	TestFalse(TEXT("Event-handler add rejects the zero source-emitter GUID"), InvalidSourceEmitter.bSuccess);
+	TestEqual(TEXT("Zero source-emitter GUID uses a stable error code"),
+		InvalidSourceEmitter.ErrorCode, FString(TEXT("source_emitter_id_invalid")));
 	Params->SetStringField(TEXT("sourceEmitterId"), TEXT(""));
 	Params->SetStringField(TEXT("sourceEventName"), TEXT("Burst"));
 	Params->SetStringField(TEXT("executionMode"), TEXT("SpawnedParticles"));

@@ -49,6 +49,7 @@
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/StrongObjectPtr.h"
+#include "JsonObjectConverter.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "NiagaraEmitterFactoryNew.h"
@@ -7159,8 +7160,43 @@ namespace UEAINiagaraModulePrivate
 		// explicitly edited.
 		if (PropertyName.ToString().EndsWith(TEXT("Binding")))
 		{
-			Value.ReplaceInline(TEXT(",bIsCachedParticleValue=True"), TEXT(""), ESearchCase::CaseSensitive);
-			Value.ReplaceInline(TEXT(",bIsCachedParticleValue=False"), TEXT(""), ESearchCase::CaseSensitive);
+			auto RemoveDerivedBoolean = [&Value](const TCHAR* FieldName)
+			{
+				for (const TCHAR* BooleanValue : { TEXT("True"), TEXT("False") })
+				{
+					const FString Token = FString::Printf(TEXT("%s=%s"), FieldName, BooleanValue);
+					int32 SearchOffset = 0;
+					while (true)
+					{
+						const int32 Start = Value.Find(Token, ESearchCase::CaseSensitive, ESearchDir::FromStart, SearchOffset);
+						if (Start == INDEX_NONE)
+							break;
+						int32 RemoveStart = Start;
+						int32 RemoveEnd = Start + Token.Len();
+						int32 Next = RemoveEnd;
+						while (Next < Value.Len() && FChar::IsWhitespace(Value[Next]))
+							++Next;
+						if (Next < Value.Len() && Value[Next] == TCHAR(','))
+						{
+							RemoveEnd = Next + 1;
+						}
+						else
+						{
+							int32 Previous = RemoveStart - 1;
+							while (Previous >= 0 && FChar::IsWhitespace(Value[Previous]))
+								--Previous;
+							if (Previous >= 0 && Value[Previous] == TCHAR(','))
+							{
+								RemoveStart = Previous;
+							}
+						}
+						Value.RemoveAt(RemoveStart, RemoveEnd - RemoveStart, false);
+						SearchOffset = RemoveStart;
+					}
+				}
+			};
+			RemoveDerivedBoolean(TEXT("bIsCachedParticleValue"));
+			RemoveDerivedBoolean(TEXT("bBindingExistsOnSource"));
 			const FString TypeHandlePrefix = TEXT("TypeDefHandle=(RegisteredTypeIndex=");
 			int32 SearchOffset = 0;
 			while (true)
@@ -7263,7 +7299,16 @@ namespace UEAINiagaraModulePrivate
 			OutError = TEXT("The renderer property is unavailable.");
 			return false;
 		}
-		Renderer->PreEditChange(Property);
+		// Attribute bindings contain authored namespace data plus cached editor
+		// metadata.  Calling a renderer's PostEditChange hook for these fields can
+		// re-cache them against the current emitter/process and silently rewrite
+		// the exported value.  Import the reflected binding verbatim; ordinary
+		// renderer properties still use the native editor hook below.
+		const bool bAttributeBinding = Property->GetFName().ToString().EndsWith(TEXT("Binding"));
+		if (!bAttributeBinding)
+		{
+			Renderer->PreEditChange(Property);
+		}
 		void* Address = Property->ContainerPtrToValuePtr<void>(Renderer);
 		const TCHAR* ParsedEnd = Property->ImportText_Direct(*ExportedText, Address, Renderer, PPF_None);
 		if (!ParsedEnd || !FString(ParsedEnd).TrimStartAndEnd().IsEmpty())
@@ -7286,6 +7331,10 @@ namespace UEAINiagaraModulePrivate
 				OutError = TEXT("Enabling a mesh flipbook with existing meshes requires an interactive editor confirmation.");
 				return false;
 			}
+		}
+		if (bAttributeBinding)
+		{
+			return true;
 		}
 		FString ParsedValue;
 		Property->ExportTextItem_Direct(ParsedValue, Address, nullptr, nullptr, PPF_None);
@@ -7372,7 +7421,9 @@ namespace UEAINiagaraModulePrivate
 			Handler.UpdateAttributeInitialValues);
 		Result->SetStringField(
 			TEXT("sourceEmitterId"),
-			Handler.SourceEmitterID.ToString(EGuidFormats::DigitsWithHyphensLower));
+			Handler.SourceEmitterID.IsValid()
+				? Handler.SourceEmitterID.ToString(EGuidFormats::DigitsWithHyphensLower)
+				: FString());
 		Result->SetStringField(TEXT("sourceEventName"), Handler.SourceEventName.ToString());
 		return Result;
 	}
@@ -7434,6 +7485,7 @@ namespace UEAINiagaraModulePrivate
 		}
 		return Result;
 	}
+
 	TSharedRef<FJsonObject> SpecExportBuildEmitter(
 		const FNiagaraEmitterHandle& Handle,
 		bool& bOutStacksTruncated,
@@ -7450,6 +7502,10 @@ namespace UEAINiagaraModulePrivate
 
 		TArray<TSharedPtr<FJsonValue>> Renderers;
 		TArray<TSharedPtr<FJsonValue>> Stacks;
+		TArray<TSharedPtr<FJsonValue>> EventHandlers;
+		TArray<TSharedPtr<FJsonValue>> SimulationStages;
+		bool bEventHandlersTruncated = false;
+		bool bSimulationStagesTruncated = false;
 		if (FVersionedNiagaraEmitterData* Data = Handle.GetEmitterData())
 		{
 			int32 RendererIndex = 0;
@@ -7500,9 +7556,32 @@ namespace UEAINiagaraModulePrivate
 					DynamicInputBudget, bOutDynamicInputsTruncated)));
 				++StackIndex;
 			}
+			for (const FNiagaraEventScriptProperties& Handler : Data->GetEventHandlers())
+			{
+				if (EventHandlers.Num() >= SpecExportMaxInputs)
+				{
+					bEventHandlersTruncated = true;
+					break;
+				}
+				EventHandlers.Add(MakeShared<FJsonValueObject>(SpecExportBuildEventHandler(Handler)));
+			}
+			const TArray<UNiagaraSimulationStageBase*>& Stages = Data->GetSimulationStages();
+			for (int32 StageIndex = 0; StageIndex < Stages.Num() && StageIndex < SpecExportMaxInputs; ++StageIndex)
+			{
+				if (Stages[StageIndex])
+				{
+					SimulationStages.Add(MakeShared<FJsonValueObject>(
+						SpecExportBuildSimulationStage(Stages[StageIndex], StageIndex)));
+				}
+			}
+			bSimulationStagesTruncated = Stages.Num() > SimulationStages.Num();
 		}
 		Emitter->SetArrayField(TEXT("renderers"), Renderers);
 		Emitter->SetArrayField(TEXT("stacks"), Stacks);
+		Emitter->SetArrayField(TEXT("eventHandlers"), EventHandlers);
+		Emitter->SetArrayField(TEXT("simulationStages"), SimulationStages);
+		Emitter->SetBoolField(TEXT("eventHandlersTruncated"), bEventHandlersTruncated);
+		Emitter->SetBoolField(TEXT("simulationStagesTruncated"), bSimulationStagesTruncated);
 		return Emitter;
 	}
 
@@ -7938,9 +8017,16 @@ namespace UEAINiagaraModulePrivate
 			auto Result = MakeShared<FJsonObject>();
 			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Source->Values)
 			{
-				// Niagara type registrations are process-local.  They are useful
-				// diagnostics but are not authored stage/renderer state.
-				if (Pair.Key.Equals(TEXT("registeredTypeIndex"), ESearchCase::IgnoreCase)) continue;
+				// Niagara type registrations and binding-source markers are
+				// process-local diagnostics, not authored stage/renderer state.  A
+				// reload can omit or rebuild these nested fields while preserving the
+				// binding's actual namespace and parameter identity.
+				if (Pair.Key.Equals(TEXT("registeredTypeIndex"), ESearchCase::IgnoreCase)
+					|| Pair.Key.Equals(TEXT("typeDefHandle"), ESearchCase::IgnoreCase)
+					|| Pair.Key.Equals(TEXT("bBindingExistsOnSource"), ESearchCase::IgnoreCase))
+				{
+					continue;
+				}
 				Result->SetField(Pair.Key, SpecContentDigestCanonicalClone(Pair.Value));
 			}
 			return MakeShared<FJsonValueObject>(Result);
@@ -9569,10 +9655,22 @@ namespace UEAINiagaraModulePrivate
 					if (Edit.bHasSourceEmitterId)
 					{
 						if (!HandlerSpec->TryGetStringField(TEXT("sourceEmitterId"), SourceEmitterId)
-							|| (!SourceEmitterId.IsEmpty() && !FGuid::Parse(SourceEmitterId, Edit.SourceEmitterId)))
+							|| (!SourceEmitterId.IsEmpty()
+								&& (!FGuid::Parse(SourceEmitterId, Edit.SourceEmitterId) || !Edit.SourceEmitterId.IsValid())))
 							return ErrorResult(TEXT("Event-handler sourceEmitterId must be empty or a valid emitter handle GUID."), TEXT("spec_invalid"), 422);
 						if (SourceEmitterId.IsEmpty())
 							Edit.SourceEmitterId.Invalidate();
+						else
+						{
+							const bool bKnownEmitter = System->GetEmitterHandles().ContainsByPredicate(
+								[&Edit](const FNiagaraEmitterHandle& Candidate)
+								{
+									return Candidate.GetId() == Edit.SourceEmitterId;
+								});
+							if (!bKnownEmitter)
+								return ErrorResult(TEXT("Event-handler sourceEmitterId does not identify an emitter handle in this System."),
+									TEXT("source_emitter_not_found"), 409);
+						}
 					}
 					if (Edit.bHasExecutionMode || Edit.bHasSpawnNumber || Edit.bHasMinSpawnNumber || Edit.bHasRandomSpawnNumber)
 					{
@@ -9750,6 +9848,12 @@ namespace UEAINiagaraModulePrivate
 						for (const TPair<FString, TSharedPtr<FJsonValue>>& PropertyPair : (*Properties)->Values)
 						{
 							if (PropertyPair.Key == TEXT("CustomSortingBinding"))
+								continue;
+							// Binding structs carry process-local editor cache fields.  Their
+							// reflected authored value was imported verbatim above, but a
+							// neighboring renderer edit may legitimately rebuild the cache.
+							// Do not treat that derived rewrite as an authored spec mismatch.
+							if (PropertyPair.Key.EndsWith(TEXT("Binding")))
 								continue;
 							if (!ExplicitRendererProperties.Contains(PropertyPair.Key))
 								continue;

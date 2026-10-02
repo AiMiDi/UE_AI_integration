@@ -770,9 +770,10 @@ FMCPToolResult FProductionRuntimeController::GetLoadedModule(
 	Data->SetStringField(TEXT("modulePath"), ModulePath);
 
 	const FString PdbPath = FPaths::ChangeExtension(ModulePath, TEXT("pdb"));
+	const FString EditorStartedAtUtc = GetEditorStartTimeUtc();
 	Data->SetObjectField(TEXT("dll"), MakeFileProvenance(ModulePath));
 	Data->SetObjectField(TEXT("pdb"), MakeFileProvenance(PdbPath));
-	Data->SetStringField(TEXT("editorStartedAtUtc"), GetEditorStartTimeUtc());
+	Data->SetStringField(TEXT("editorStartedAtUtc"), EditorStartedAtUtc);
 	Data->SetStringField(TEXT("controllerInitializedAtUtc"), InitializedAtUtc.ToIso8601());
 
 	TArray<FString> CandidateDlls;
@@ -808,10 +809,75 @@ FMCPToolResult FProductionRuntimeController::GetLoadedModule(
 	const FString LoadedHash = ComputeFileSha256(ModulePath);
 	const FString LatestHash = ComputeFileSha256(LatestPath);
 	Data->SetStringField(TEXT("latestBuildArtifactSha256"), LatestHash);
+	const FString PdbHash = ComputeFileSha256(PdbPath);
 	FString NormalizedModulePath = FPaths::ConvertRelativePathToFull(ModulePath);
 	FString NormalizedLatestPath = FPaths::ConvertRelativePathToFull(LatestPath);
+	FString NormalizedPluginBase = FPaths::ConvertRelativePathToFull(Plugin->GetBaseDir());
 	FPaths::NormalizeFilename(NormalizedModulePath);
 	FPaths::NormalizeFilename(NormalizedLatestPath);
+	FPaths::NormalizeFilename(NormalizedPluginBase);
+	// A plain string prefix would accept a sibling such as
+	// `UE_AI_integration_shadow`.  Keep the directory boundary in the proof so
+	// the loaded module is physically inside this plugin's directory tree.
+	if (!NormalizedPluginBase.EndsWith(TEXT("/")))
+	{
+		NormalizedPluginBase += TEXT("/");
+	}
+	const FString ModuleFileName = FPaths::GetCleanFilename(NormalizedModulePath);
+	const FString ModuleExtension = FPaths::GetExtension(ModuleFileName);
+	const FString ModuleStem = FPaths::GetBaseFilename(ModuleFileName);
+	// Unreal's editor target prefixes plugin modules with the target name
+	// (normally `UnrealEditor-`).  Validate the module token at the end of the
+	// stem so both a standalone module DLL and the standard editor DLL are
+	// accepted without allowing an unrelated module with a similar prefix.
+	const FString ExpectedModuleToken = TEXT("UE_AI_integration");
+	const bool bModuleFileNameMatches =
+		(ModuleStem.Equals(ExpectedModuleToken, ESearchCase::IgnoreCase)
+			|| ModuleStem.EndsWith(
+				TEXT("-") + ExpectedModuleToken,
+				ESearchCase::IgnoreCase))
+		&& (ModuleExtension.Equals(TEXT("dll"), ESearchCase::IgnoreCase)
+			|| ModuleExtension.Equals(TEXT("dylib"), ESearchCase::IgnoreCase)
+			|| ModuleExtension.Equals(TEXT("so"), ESearchCase::IgnoreCase));
+	const bool bModulePathWithinPlugin =
+		!NormalizedModulePath.IsEmpty()
+		&& !NormalizedPluginBase.IsEmpty()
+		&& NormalizedModulePath.StartsWith(NormalizedPluginBase, ESearchCase::IgnoreCase);
+	const bool bLoadedHashComplete = LoadedHash.Len() == 64;
+	const uint32 ProcessId = FPlatformProcess::GetCurrentProcessId();
+	const bool bIdentityComplete = bLoaded
+		&& ProcessId != 0
+		&& bModuleFileNameMatches
+		&& bModulePathWithinPlugin
+		&& bLoadedHashComplete;
+	TArray<FString> IdentityFailureReasons;
+	if (!bLoaded)
+	{
+		IdentityFailureReasons.Add(TEXT("module_not_loaded"));
+	}
+	if (ProcessId == 0)
+	{
+		IdentityFailureReasons.Add(TEXT("process_id_unavailable"));
+	}
+	if (!bModuleFileNameMatches)
+	{
+		IdentityFailureReasons.Add(TEXT("module_filename_mismatch"));
+	}
+	if (!bModulePathWithinPlugin)
+	{
+		IdentityFailureReasons.Add(TEXT("module_path_outside_plugin"));
+	}
+	if (!bLoadedHashComplete)
+	{
+		IdentityFailureReasons.Add(TEXT("module_sha256_unavailable"));
+	}
+	Data->SetBoolField(TEXT("identityComplete"), bIdentityComplete);
+	TArray<TSharedPtr<FJsonValue>> IdentityFailureValues;
+	for (const FString& Reason : IdentityFailureReasons)
+	{
+		IdentityFailureValues.Add(MakeShared<FJsonValueString>(Reason));
+	}
+	Data->SetArrayField(TEXT("identityFailureReasons"), IdentityFailureValues);
 	const bool bLatestArtifactPathMatchesLoaded =
 		!NormalizedModulePath.IsEmpty() && !NormalizedLatestPath.IsEmpty()
 		&& NormalizedModulePath.Equals(NormalizedLatestPath, ESearchCase::IgnoreCase);
@@ -822,6 +888,45 @@ FMCPToolResult FProductionRuntimeController::GetLoadedModule(
 		TEXT("matchesLatestBuildArtifact"),
 		bFoundLatest && bLatestArtifactPathMatchesLoaded
 		&& !LoadedHash.IsEmpty() && LoadedHash == LatestHash);
+	const bool bPdbHashComplete =
+		!PdbPath.IsEmpty() && PdbHash.Len() == 64;
+	const bool bLatestArtifactHashComplete = LatestHash.Len() == 64;
+	const bool bLatestArtifactIdentityComplete =
+		bFoundLatest
+		&& bLatestArtifactPathMatchesLoaded
+		&& bLatestArtifactHashComplete
+		&& !LoadedHash.IsEmpty()
+		&& LoadedHash == LatestHash;
+	const bool bExactIdentityComplete = bIdentityComplete
+		&& bPdbHashComplete
+		&& bLatestArtifactIdentityComplete
+		&& !EditorStartedAtUtc.IsEmpty();
+	TArray<FString> ExactIdentityFailureReasons;
+	if (!bPdbHashComplete)
+	{
+		ExactIdentityFailureReasons.Add(TEXT("pdb_sha256_unavailable"));
+	}
+	if (!bLatestArtifactIdentityComplete)
+	{
+		ExactIdentityFailureReasons.Add(TEXT("latest_artifact_identity_mismatch"));
+	}
+	if (EditorStartedAtUtc.IsEmpty())
+	{
+		ExactIdentityFailureReasons.Add(TEXT("editor_start_time_unavailable"));
+	}
+	Data->SetBoolField(TEXT("pdbSha256Complete"), bPdbHashComplete);
+	Data->SetBoolField(
+		TEXT("latestArtifactIdentityComplete"),
+		bLatestArtifactIdentityComplete);
+	Data->SetBoolField(TEXT("exactIdentityComplete"), bExactIdentityComplete);
+	TArray<TSharedPtr<FJsonValue>> ExactIdentityFailureValues;
+	for (const FString& Reason : ExactIdentityFailureReasons)
+	{
+		ExactIdentityFailureValues.Add(MakeShared<FJsonValueString>(Reason));
+	}
+	Data->SetArrayField(
+		TEXT("exactIdentityFailureReasons"),
+		ExactIdentityFailureValues);
 	// Publish one immutable identity tuple so an isolated harness can verify
 	// that every provenance field came from the same loaded process/module
 	// observation.  The legacy top-level fields remain for compatibility, but
@@ -833,18 +938,30 @@ FMCPToolResult FProductionRuntimeController::GetLoadedModule(
 	LoadedModuleIdentity->SetStringField(TEXT("module"), TEXT("UE_AI_integration"));
 	LoadedModuleIdentity->SetNumberField(
 		TEXT("processId"),
-		static_cast<double>(FPlatformProcess::GetCurrentProcessId()));
+		static_cast<double>(ProcessId));
+	LoadedModuleIdentity->SetBoolField(TEXT("loaded"), bLoaded);
+	LoadedModuleIdentity->SetBoolField(TEXT("identityComplete"), bIdentityComplete);
+	LoadedModuleIdentity->SetBoolField(
+		TEXT("exactIdentityComplete"),
+		bExactIdentityComplete);
+	LoadedModuleIdentity->SetBoolField(TEXT("moduleFilenameMatches"), bModuleFileNameMatches);
+	LoadedModuleIdentity->SetBoolField(TEXT("modulePathWithinPlugin"), bModulePathWithinPlugin);
+	LoadedModuleIdentity->SetBoolField(TEXT("moduleSha256Complete"), bLoadedHashComplete);
+	LoadedModuleIdentity->SetBoolField(TEXT("pdbSha256Complete"), bPdbHashComplete);
+	LoadedModuleIdentity->SetBoolField(
+		TEXT("latestArtifactIdentityComplete"),
+		bLatestArtifactIdentityComplete);
 	LoadedModuleIdentity->SetStringField(TEXT("modulePath"), ModulePath);
 	LoadedModuleIdentity->SetStringField(TEXT("moduleSha256"), LoadedHash);
 	LoadedModuleIdentity->SetStringField(TEXT("pdbPath"), PdbPath);
 	LoadedModuleIdentity->SetStringField(
-		TEXT("pdbSha256"), ComputeFileSha256(PdbPath));
+		TEXT("pdbSha256"), PdbHash);
 	LoadedModuleIdentity->SetStringField(
 		TEXT("latestBuildArtifactPath"), LatestPath);
 	LoadedModuleIdentity->SetStringField(
 		TEXT("latestBuildArtifactSha256"), LatestHash);
 	LoadedModuleIdentity->SetStringField(
-		TEXT("editorStartedAtUtc"), GetEditorStartTimeUtc());
+		TEXT("editorStartedAtUtc"), EditorStartedAtUtc);
 	Data->SetObjectField(TEXT("loadedModuleIdentity"), LoadedModuleIdentity);
 
 	TSharedPtr<FJsonObject> LiveCoding = MakeShared<FJsonObject>();

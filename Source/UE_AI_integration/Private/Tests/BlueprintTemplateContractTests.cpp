@@ -10,6 +10,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/Guid.h"
@@ -20,6 +21,7 @@
 #include "UEAIIntegrationServer.h"
 #include "UEAIIntegrationSubsystem.h"
 #include "UObject/Package.h"
+#include "UObject/GarbageCollection.h"
 #include "UObject/UnrealType.h"
 #include "Workflow/UEWorkflowRuntime.h"
 
@@ -198,6 +200,7 @@ bool FBlueprintTemplateWorkflowContractTest::RunTest(const FString&)
 		ON_SCOPE_EXIT
 		{
 			TestTrue(TEXT("Template fixture is removed"), UEditorAssetLibrary::DeleteAsset(BlueprintPath));
+			CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 		};
 		UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *BlueprintPath);
 		if (!TestNotNull(TEXT("Template fixture exists"), Blueprint)
@@ -309,6 +312,30 @@ bool FBlueprintTemplateWorkflowContractTest::RunTest(const FString&)
 		{
 			return false;
 		}
+		// UPackageTools::ReloadPackages replaces the serialized Blueprint package,
+		// but the generated class is transient and may still be the pre-reload
+		// class that held references to the old event graph.  Recompile the newly
+		// loaded Blueprint before exercising its generated class so overrides such
+		// as ReceiveEndPlay are rebuilt against the reloaded graph.
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+		FKismetEditorUtilities::CompileBlueprint(
+			Blueprint,
+			EBlueprintCompileOptions::SkipSave);
+		if (Blueprint->GetOutermost())
+		{
+			Blueprint->GetOutermost()->SetDirtyFlag(false);
+		}
+		TestTrue(TEXT("Reloaded template Blueprint recompiles its generated class"),
+			Blueprint->Status == BS_UpToDate
+				|| Blueprint->Status == BS_UpToDateWithWarnings);
+		if (FCString::Strcmp(Name, TEXT("timer_loop")) == 0)
+		{
+			TestNotNull(
+				TEXT("Reloaded timer template generated class contains ReceiveEndPlay"),
+				Blueprint->GeneratedClass
+					? Blueprint->GeneratedClass->FindFunctionByName(TEXT("ReceiveEndPlay"))
+					: nullptr);
+		}
 		TestEqual(TEXT("Template structure survives disk reload"),
 			UEAIIntegration::Workflow::FWorkflowRuntime::ComputeAssetStructureHash(Blueprint), AuthoredHash);
 		const FMCPToolResult Reloaded = Registry->ExecuteTool(TEXT("blueprint.graph.build.definition.get"), ReadDefinition);
@@ -333,6 +360,17 @@ bool FBlueprintTemplateWorkflowContractTest::RunTest(const FString&)
 			AActor* Actor = World->SpawnActor<AActor>(Blueprint->GeneratedClass, FTransform::Identity);
 			if (!TestNotNull(TEXT("Saved and reloaded template spawns an actor"), Actor))
 				return false;
+			// A standalone test world is not guaranteed to dispatch BeginPlay for an
+			// actor spawned after the world's initial BeginPlay call.  The lifecycle
+			// assertions below exercise RouteEndPlay, whose contract intentionally
+			// only routes the authored ReceiveEndPlay event for an initialized actor.
+			// Make that state explicit so the test validates the Blueprint lifecycle
+			// rather than an unrelated world bootstrap detail.
+			if (!Actor->HasActorBegunPlay())
+			{
+				Actor->DispatchBeginPlay();
+			}
+			TestTrue(TEXT("Saved and reloaded template actor begins play"), Actor->HasActorBegunPlay());
 			auto RuntimeParams = MakeShared<FJsonObject>();
 			RuntimeParams->SetStringField(TEXT("blueprint"), BlueprintPath);
 			const FMCPToolResult Observed = Registry->ExecuteTool(TEXT("blueprint.asset.runtime.verify"), RuntimeParams);
@@ -547,7 +585,7 @@ bool FBlueprintTemplateCrossAssetAcceptanceTest::RunTest(const FString&)
 	}
 	Parent = LoadObject<UBlueprint>(nullptr, *ParentPath);
 	if (!TestNotNull(TEXT("Template cross-asset parent reloads after application"), Parent)
-		|| !TestNotNull(TEXT("Template cross-asset parent has a generated class"), Parent->GeneratedClass))
+		|| !TestTrue(TEXT("Template cross-asset parent has a generated class"), Parent->GeneratedClass != nullptr))
 	{
 		return false;
 	}

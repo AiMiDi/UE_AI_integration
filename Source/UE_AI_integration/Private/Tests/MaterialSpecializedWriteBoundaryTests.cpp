@@ -391,6 +391,48 @@ bool FMaterialMixedConsumerIdentityTest::RunTest(const FString&)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMaterialNestedOwnedExpressionSharedWriterTest,
+	"UE_AI_integration.MaterialCustom.NestedOwnedExpressionSharedWriterContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMaterialNestedOwnedExpressionSharedWriterTest::RunTest(const FString&)
+{
+	using namespace UEAIIntegration::MaterialEditing;
+	TStrongObjectPtr<UMaterial> Material(NewObject<UMaterial>(CreatePackage(
+		*(TEXT("/Game/Automation/UEAI_NestedSharedWriter_")
+			+ FGuid::NewGuid().ToString(EGuidFormats::Digits))),
+		TEXT("Material"), RF_Transactional));
+	// The nested constant is owned by the custom expression and therefore does
+	// not appear in UMaterial::GetExpressions(). Both top-level consumers still
+	// reference the same nested authored object.
+	auto* Owner = NewSharedWriterExpression<UMaterialExpressionCustom>(Material.Get());
+	auto* Nested = NewObject<UMaterialExpressionConstant>(Owner, TEXT("NestedValue"), RF_Transactional);
+	Nested->Material = Material.Get();
+	Nested->MaterialExpressionGuid = FGuid::NewGuid();
+	auto* First = NewSharedWriterExpression<UMaterialExpressionAdd>(Material.Get());
+	auto* Second = NewSharedWriterExpression<UMaterialExpressionAdd>(Material.Get());
+	First->A.Connect(0, Nested);
+	Second->A.Connect(0, Nested);
+	Material->GetOutermost()->SetDirtyFlag(false);
+
+	FMaterialSharedWriteProof Proof;
+	InspectMaterialExpressionConsumers(Material.Get(), Nested, Proof);
+	TestTrue(TEXT("Nested authored expression is included in the shared proof"), Proof.bShared);
+	TestEqual(TEXT("Nested expression exposes both consumer connections"), Proof.ConsumerConnectionCount, 2);
+	TestEqual(TEXT("Nested expression exposes both consumer identities"), Proof.ConsumerNodeIds.Num(), 2);
+
+	const FMCPToolResult Rejected = ValidateMaterialExpressionSharedWrite(
+		Material.Get(), Nested, MakeShared<FJsonObject>(), Proof);
+	TestFalse(TEXT("Nested shared expression requires a write boundary"), Rejected.bSuccess);
+	TestEqual(TEXT("Nested shared expression uses the stable boundary error"),
+		Rejected.ErrorCode, FString(TEXT("material_boundary_required_for_mutation")));
+	TestTrue(TEXT("Nested shared refusal preserves the first consumer"), First->A.Expression == Nested);
+	TestTrue(TEXT("Nested shared refusal preserves the second consumer"), Second->A.Expression == Nested);
+	TestFalse(TEXT("Nested shared refusal preserves dirty state"), Material->GetOutermost()->IsDirty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FMaterialFunctionSharedMutationTest,
 	"UE_AI_integration.MaterialFunction.SharedGraphMutationContract",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

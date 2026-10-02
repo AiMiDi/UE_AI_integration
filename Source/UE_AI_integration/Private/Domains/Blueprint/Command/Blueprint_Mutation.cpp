@@ -48,6 +48,7 @@
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Logging/TokenizedMessage.h"
 #include "Editor.h"
+#include "ObjectTools.h"
 #include "ScopedTransaction.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
@@ -56,6 +57,8 @@
 #include "Misc/PackageName.h"
 #include "Misc/DefaultValueHelper.h"
 #include "Modules/ModuleManager.h"
+#include "UObject/ObjectRedirector.h"
+#include "UObject/SavePackage.h"
 #include "UObject/UnrealType.h"
 #include "UObject/StructOnScope.h"
 
@@ -87,6 +90,208 @@ UEdGraphPin* FindUniquePinByIdentity(
 		Match = Candidate;
 	}
 	return Match;
+}
+
+// Deferred workflow variable additions are kept in UBlueprint::NewVariables
+// until the batch compile.  The native variable nodes resolve their value pin
+// from the generated/skeleton class, so AllocateDefaultPins() cannot create
+// that pin while the class is intentionally stale.  Materialize just the
+// value pins described by the deferred variable entry; normal native/member
+// variables continue to use the engine implementation unchanged.
+bool MaterializeDeferredVariablePins(
+	UBlueprint* Blueprint,
+	UK2Node_Variable* VariableNode,
+	const bool bIsSetNode)
+{
+	if (!Blueprint || !VariableNode)
+	{
+		return false;
+	}
+
+	const FName VariableName = VariableNode->GetVarName();
+	const FBPVariableDescription* Variable = Blueprint->NewVariables.FindByPredicate(
+		[VariableName](const FBPVariableDescription& Candidate)
+		{
+			return Candidate.VarName == VariableName;
+		});
+	if (!Variable)
+	{
+		return false;
+	}
+
+	auto HasPin = [VariableNode](
+		const EEdGraphPinDirection Direction,
+		const FName PinName)
+	{
+		for (const UEdGraphPin* Pin : VariableNode->Pins)
+		{
+			if (Pin && Pin->Direction == Direction && Pin->PinName == PinName)
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+
+	bool bMaterialized = false;
+	if (bIsSetNode)
+	{
+		if (!HasPin(EGPD_Input, VariableName))
+		{
+			VariableNode->CreatePin(EGPD_Input, Variable->VarType, VariableName);
+			bMaterialized = true;
+		}
+
+		const FName OutputPinName(TEXT("Output_Get"));
+		if (!HasPin(EGPD_Output, OutputPinName))
+		{
+			VariableNode->CreatePin(EGPD_Output, Variable->VarType, OutputPinName);
+			bMaterialized = true;
+		}
+	}
+	else if (!HasPin(EGPD_Output, VariableName))
+	{
+		VariableNode->CreatePin(EGPD_Output, Variable->VarType, VariableName);
+		bMaterialized = true;
+	}
+
+	if (bMaterialized)
+	{
+		// Match UK2Node_Variable's normal setup so self-context and explicit
+		// member access behave the same after the skeleton catches up.
+		VariableNode->CreatePinForSelf();
+	}
+	return bMaterialized;
+}
+
+// AssetTools intentionally omits a redirector when all known referencers can
+// be fixed up in the same mount point.  Blueprint consumers still need the old
+// object path to remain valid across an editor restart, so materialize the
+// redirector through the public ObjectTools rename helper when AssetTools did
+// not leave one.  The temporary round trip preserves AssetTools' generated
+// class/reference fixups and lets UObject::Rename assign the destination safely.
+bool EnsureBlueprintRenameRedirector(
+	UBlueprint* Blueprint,
+	const FString& SourcePackageName,
+	const FString& SourceAssetName,
+	const FString& DestinationPackageName,
+	const FString& DestinationAssetName,
+	IAssetRegistry& AssetRegistry,
+	FString& OutError)
+{
+	OutError.Reset();
+	if (!Blueprint)
+	{
+		OutError = TEXT("The renamed Blueprint is invalid.");
+		return false;
+	}
+
+	const FString SourceObjectPath = FString::Printf(
+		TEXT("%s.%s"),
+		*SourcePackageName,
+		*SourceAssetName);
+	const FAssetData ExistingRedirector =
+		AssetRegistry.GetAssetByObjectPath(FSoftObjectPath(SourceObjectPath));
+	if (ExistingRedirector.IsValid() && ExistingRedirector.IsRedirector())
+	{
+		return true;
+	}
+	// AssetTools registers the redirector with the in-memory object hash before
+	// AssetRegistry observes the rename.  Prefer that authoritative UObject
+	// state over a second rename round-trip; the latter can collide with the
+	// generated-class redirector that AssetTools already created.
+	if (UObjectRedirector* ExistingObjectRedirector =
+		FindObject<UObjectRedirector>(nullptr, *SourceObjectPath))
+	{
+		FAssetRegistryModule::AssetCreated(ExistingObjectRedirector);
+		ExistingObjectRedirector->GetOutermost()->MarkPackageDirty();
+		return true;
+	}
+
+	ObjectTools::FPackageGroupName SourceName;
+	SourceName.PackageName = SourcePackageName;
+	SourceName.ObjectName = SourceAssetName;
+	ObjectTools::FPackageGroupName DestinationName;
+	DestinationName.PackageName = DestinationPackageName;
+	DestinationName.ObjectName = DestinationAssetName;
+	TSet<UPackage*> PackagesUserRefusedToFullyLoad;
+	FText RenameError;
+	if (!ObjectTools::RenameSingleObject(
+			Blueprint,
+			SourceName,
+			PackagesUserRefusedToFullyLoad,
+			RenameError,
+			nullptr,
+			false))
+	{
+		OutError = RenameError.IsEmpty()
+			? TEXT("Could not move the renamed Blueprint through its original path.")
+			: RenameError.ToString();
+		return false;
+	}
+
+	RenameError = FText::GetEmpty();
+	if (!ObjectTools::RenameSingleObject(
+			Blueprint,
+			DestinationName,
+			PackagesUserRefusedToFullyLoad,
+			RenameError,
+			nullptr,
+			true))
+	{
+		OutError = RenameError.IsEmpty()
+			? TEXT("Could not restore the renamed Blueprint after creating its redirector.")
+			: RenameError.ToString();
+		return false;
+	}
+
+	UObjectRedirector* Redirector = FindObject<UObjectRedirector>(
+		nullptr,
+		*SourceObjectPath);
+	if (!Redirector)
+	{
+		OutError = TEXT("The original Blueprint path did not produce a redirector.");
+		return false;
+	}
+	FAssetRegistryModule::AssetCreated(Redirector);
+	Redirector->GetOutermost()->MarkPackageDirty();
+
+	const FString RedirectorFilename = FPackageName::LongPackageNameToFilename(
+		SourcePackageName,
+		FPackageName::GetAssetPackageExtension());
+	FSavePackageArgs SaveArgs;
+	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+	SaveArgs.SaveFlags = SAVE_NoError;
+	if (!UPackage::SavePackage(
+			Redirector->GetOutermost(),
+			Redirector,
+			*RedirectorFilename,
+			SaveArgs))
+	{
+		OutError = FString::Printf(
+			TEXT("Could not persist Blueprint redirector package '%s'."),
+			*RedirectorFilename);
+		return false;
+	}
+
+	// Save the destination again because the round trip dirties the package
+	// after AssetTools has completed its original rename transaction.
+	if (!MCPHelpers::SaveBlueprintPackage(Blueprint))
+	{
+		OutError = TEXT("Could not persist the renamed Blueprint after redirector creation.");
+		return false;
+	}
+	AssetRegistry.ScanPathsSynchronous(
+		{FPackageName::GetLongPackagePath(SourcePackageName)},
+		true);
+	const FAssetData PersistedRedirector = AssetRegistry.GetAssetByObjectPath(
+		FSoftObjectPath(SourceObjectPath));
+	if (!PersistedRedirector.IsValid() || !PersistedRedirector.IsRedirector())
+	{
+		OutError = TEXT("The persisted original Blueprint path is not an Asset Registry redirector.");
+		return false;
+	}
+	return true;
 }
 
 bool ReadRequiredNumber(
@@ -1145,6 +1350,7 @@ FMCPToolResult TryCreateNodeInGraph(
 			N->NodePosX = PosX; N->NodePosY = PosY;
 			TargetGraph->AddNode(N, false, false);
 			N->AllocateDefaultPins();
+			MaterializeDeferredVariablePins(BP, N, false);
 			NewNode = N;
 		}
 		else
@@ -1158,6 +1364,7 @@ FMCPToolResult TryCreateNodeInGraph(
 			N->NodePosX = PosX; N->NodePosY = PosY;
 			TargetGraph->AddNode(N, false, false);
 			N->AllocateDefaultPins();
+			MaterializeDeferredVariablePins(BP, N, true);
 			NewNode = N;
 		}
 	}
@@ -2850,6 +3057,26 @@ public:
 
 		const FAssetData SourcePathState =
 			AssetRegistry.GetAssetByObjectPath(FSoftObjectPath(SourceObjectPath));
+		if (!SourcePathState.IsValid() || !SourcePathState.IsRedirector())
+		{
+			FString RedirectorError;
+			if (!EnsureBlueprintRenameRedirector(
+					BP,
+					SourcePackageName,
+					FPackageName::GetLongPackageAssetName(SourcePackageName),
+					DestinationPackageName,
+					DestinationAssetName,
+					AssetRegistry,
+					RedirectorError))
+			{
+				return FMCPToolResult::Error(
+					RedirectorError,
+					TEXT("asset_rename_redirector_failed"),
+					500);
+			}
+		}
+		const FAssetData PersistedSourcePathState =
+			AssetRegistry.GetAssetByObjectPath(FSoftObjectPath(SourceObjectPath));
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), true);
 		Result->SetBoolField(TEXT("renamed"), true);
@@ -2859,7 +3086,8 @@ public:
 		Result->SetStringField(TEXT("packagePath"), ActualPackageName);
 		Result->SetBoolField(
 			TEXT("redirectorCreated"),
-			SourcePathState.IsValid() && SourcePathState.IsRedirector());
+			PersistedSourcePathState.IsValid()
+				&& PersistedSourcePathState.IsRedirector());
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -3507,6 +3735,7 @@ public:
 			GetNode->NodePosX = AccessorPosX; GetNode->NodePosY = AccessorPosY;
 			Graph->AddNode(GetNode, false, false);
 			GetNode->AllocateDefaultPins();
+			MaterializeDeferredVariablePins(BP, GetNode, false);
 			AccessorNode = GetNode;
 		}
 		else
@@ -3518,6 +3747,7 @@ public:
 			SetNode->NodePosX = AccessorPosX; SetNode->NodePosY = AccessorPosY;
 			Graph->AddNode(SetNode, false, false);
 			SetNode->AllocateDefaultPins();
+			MaterializeDeferredVariablePins(BP, SetNode, true);
 			AccessorNode = SetNode;
 		}
 		if (!AccessorNode)

@@ -7,6 +7,7 @@
 
 #include "Dom/JsonValue.h"
 #include "Engine/Blueprint.h"
+#include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/CompilerResultsLog.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Logging/TokenizedMessage.h"
@@ -127,7 +128,34 @@ public:
 
 		FCompilerResultsLog CompileLog;
 		CompileLog.bSilentMode = true;
-		if (UEAIIntegration::Workflow::IsApprovedWorkflowExecution(Params))
+		const bool bApprovedWorkflowExecution =
+			UEAIIntegration::Workflow::IsApprovedWorkflowExecution(Params);
+		// KismetCompiler currently consumes FBPVariableDescription::DefaultValue
+		// while compiling a Blueprint.  Workflow parameters are authored into
+		// that field before this command runs, so retain the authored text and
+		// restore it after the compiler has populated the generated class.  The
+		// generated CDO remains compiler-owned while the durable Blueprint
+		// description retains the authored value for save/reload and read-back.
+		struct FAuthoredVariableDefault
+		{
+			FGuid VariableGuid;
+			FString DefaultValue;
+		};
+		TArray<FAuthoredVariableDefault> AuthoredVariableDefaults;
+		if (bApprovedWorkflowExecution)
+		{
+			for (const FBPVariableDescription& Variable : Blueprint->NewVariables)
+			{
+				if (Variable.VarGuid.IsValid() && !Variable.DefaultValue.IsEmpty())
+				{
+					FAuthoredVariableDefault& SavedDefault =
+						AuthoredVariableDefaults.AddDefaulted_GetRef();
+					SavedDefault.VariableGuid = Variable.VarGuid;
+					SavedDefault.DefaultValue = Variable.DefaultValue;
+				}
+			}
+		}
+		if (bApprovedWorkflowExecution)
 		{
 			// Flush the batch's deferred asset/editor notification before compiling.
 			FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
@@ -136,6 +164,28 @@ public:
 			Blueprint,
 			EBlueprintCompileOptions::SkipSave,
 			&CompileLog);
+		if (bApprovedWorkflowExecution && !AuthoredVariableDefaults.IsEmpty())
+		{
+			bool bRestoredAuthoredDefault = false;
+			for (FBPVariableDescription& Variable : Blueprint->NewVariables)
+			{
+				const FAuthoredVariableDefault* SavedDefault =
+					AuthoredVariableDefaults.FindByPredicate(
+						[&Variable](const FAuthoredVariableDefault& Candidate)
+						{
+							return Candidate.VariableGuid == Variable.VarGuid;
+						});
+				if (SavedDefault && Variable.DefaultValue != SavedDefault->DefaultValue)
+				{
+					Variable.DefaultValue = SavedDefault->DefaultValue;
+					bRestoredAuthoredDefault = true;
+				}
+			}
+			if (bRestoredAuthoredDefault)
+			{
+				Blueprint->MarkPackageDirty();
+			}
+		}
 
 		TArray<TSharedPtr<FJsonValue>> Diagnostics;
 		for (const TSharedRef<FTokenizedMessage>& Message :
@@ -433,8 +483,36 @@ public:
 				TEXT("asset_reload_verification_failed"),
 				500);
 		}
+		// UPackageTools replaces the serialized package but generated Blueprint
+		// classes are transient. Recompile the newly loaded graph so lifecycle
+		// overrides and native event functions resolve against the replacement
+		// graph instead of retaining the superseded generated class.
+		// Mark the reloaded graph structurally modified before compiling. This
+		// invalidates the superseded skeleton/generated class and forces Kismet to
+		// rebuild transient override functions such as ReceiveEndPlay.
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(ReloadedBlueprint);
+		FCompilerResultsLog ReloadCompileLog;
+		ReloadCompileLog.bSilentMode = true;
+		FKismetEditorUtilities::CompileBlueprint(
+			ReloadedBlueprint,
+			EBlueprintCompileOptions::SkipSave,
+			&ReloadCompileLog);
+		if (ReloadedBlueprint->Status != BS_UpToDate
+			&& ReloadedBlueprint->Status != BS_UpToDateWithWarnings)
+		{
+			return FMCPToolResult::Error(
+				TEXT("Reloaded Blueprint could not rebuild its generated class."),
+				TEXT("asset_reload_compile_failed"),
+				500);
+		}
 		UPackage* ReloadedPackage =
 			ReloadedBlueprint->GetOutermost();
+		if (ReloadedPackage)
+		{
+			// The reload source is authoritative; transient class regeneration must
+			// not turn a successful discard/reload into a dirty package.
+			ReloadedPackage->SetDirtyFlag(false);
+		}
 		const bool bVerified =
 			ReloadedPackage
 			&& ReloadedPackage->GetName() == PackageName

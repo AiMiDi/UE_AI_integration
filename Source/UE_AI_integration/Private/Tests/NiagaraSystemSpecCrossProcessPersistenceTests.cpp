@@ -460,6 +460,12 @@ bool FUEAINiagaraSystemSpecCrossProcessPersistenceTest::RunTest(const FString&)
 		Evidence->SetStringField(TEXT("runId"), RunId); Evidence->SetStringField(TEXT("phase"), Phase);
 		Evidence->SetStringField(TEXT("systemPath"), Fixture.SystemPath);
 		Evidence->SetStringField(TEXT("specPath"), ArtifactPath + TEXT(".spec.json"));
+		// The usage IDs are generated per fixture and are the stable identity
+		// used by the fresh-process read-back assertions. Persist them beside the
+		// exported spec instead of reconstructing a new zero/temporary GUID after
+		// the package crosses the process boundary.
+		Evidence->SetStringField(TEXT("eventHandlerUsageId"), Fixture.EventHandlerUsageId.ToString(EGuidFormats::Digits));
+		Evidence->SetStringField(TEXT("simulationStageUsageId"), Fixture.SimulationStageUsageId.ToString(EGuidFormats::Digits));
 		Evidence->SetBoolField(TEXT("dynamicInputCovered"), Fixture.bDynamicInputCovered);
 		Evidence->SetBoolField(TEXT("spriteCovered"), HasRendererClass(Export.Data, TEXT("NiagaraSpriteRendererProperties")));
 		Evidence->SetBoolField(TEXT("meshCovered"), HasRendererClass(Export.Data, TEXT("NiagaraMeshRendererProperties")));
@@ -551,6 +557,19 @@ bool FUEAINiagaraSystemSpecCrossProcessPersistenceTest::RunTest(const FString&)
 	const FMCPToolResult Export = Registry.ExecuteTool(TEXT("content.niagara.system.spec.export"), ExportParams);
 	if (!TestTrue(TEXT("Post-reload native spec export succeeds"), Export.bSuccess) || !Export.Data) return false;
 	TSharedPtr<FJsonObject> Evidence = LoadJsonFile(ArtifactPath);
+	FGuid PersistedEventHandlerUsageId;
+	FGuid PersistedSimulationStageUsageId;
+	TestTrue(TEXT("Persisted Event Handler usage ID is valid"),
+		Evidence.IsValid()
+		&& FGuid::ParseExact(Evidence->GetStringField(TEXT("eventHandlerUsageId")), EGuidFormats::Digits, PersistedEventHandlerUsageId));
+	TestTrue(TEXT("Persisted Simulation Stage usage ID is valid"),
+		Evidence.IsValid()
+		&& FGuid::ParseExact(Evidence->GetStringField(TEXT("simulationStageUsageId")), EGuidFormats::Digits, PersistedSimulationStageUsageId));
+	if (Evidence.IsValid())
+	{
+		Fixture.EventHandlerUsageId = PersistedEventHandlerUsageId;
+		Fixture.SimulationStageUsageId = PersistedSimulationStageUsageId;
+	}
 	TestTrue(TEXT("Dynamic input coverage was completed before persistence"), Evidence.IsValid() && Evidence->GetBoolField(TEXT("dynamicInputCovered")));
 	TestTrue(TEXT("Event Handler authored state survived the process boundary"),
 		Evidence.IsValid() && Evidence->GetBoolField(TEXT("eventHandlerCovered"))

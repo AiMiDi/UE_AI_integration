@@ -13,6 +13,8 @@
 #include "Misc/Guid.h"
 #include "Misc/PackageName.h"
 #include "Misc/ScopeExit.h"
+#include "Modules/ModuleManager.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraEmitterFactoryNew.h"
 #include "NiagaraEmitterHandle.h"
@@ -25,6 +27,8 @@
 #include "NiagaraSystem.h"
 #include "NiagaraSystemFactoryNew.h"
 #include "UObject/Package.h"
+#include "UObject/GarbageCollection.h"
+#include "UObject/UObjectHash.h"
 #include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 #endif
 
@@ -100,12 +104,42 @@ bool CreateNiagaraSimulationStageFixture(FNiagaraSimulationStageFixture& OutFixt
 	return true;
 }
 
-bool DeleteNiagaraSimulationStageFixture(const FString& PackageName)
+bool DeleteNiagaraSimulationStageFixture(FNiagaraSimulationStageFixture& Fixture)
 {
-	const bool bDeleted = !UEditorAssetLibrary::DoesAssetExist(PackageName)
-		|| UEditorAssetLibrary::DeleteAsset(PackageName);
-	return bDeleted && !UEditorAssetLibrary::DoesAssetExist(PackageName)
-		&& !FPackageName::DoesPackageExist(PackageName);
+	if (Fixture.Package)
+	{
+		Fixture.Package->SetDirtyFlag(false);
+	}
+	if (Fixture.System)
+	{
+		// This fixture is intentionally never saved.  Deleting an unsaved
+		// NiagaraSystem through the editor asset subsystem invokes ForceDeleteObjects,
+		// which can reject the package while VersionedNiagaraScriptData still holds
+		// an internal Source reference.  Remove the transient asset from the
+		// registry and let normal GC release its subobjects instead.
+		TArray<UObject*> PackageObjects;
+		GetObjectsWithOuter(Fixture.System->GetOutermost(), PackageObjects, true);
+		for (UObject* Object : PackageObjects)
+		{
+			if (Object)
+			{
+				FAssetRegistryModule::AssetDeleted(Object);
+			}
+		}
+		FAssetRegistryModule::AssetDeleted(Fixture.System);
+		Fixture.System->ClearFlags(RF_Public | RF_Standalone);
+		Fixture.System->Rename(
+			*FString::Printf(TEXT("UEAI_TransientNiagaraSystem_%s"), *FGuid::NewGuid().ToString(EGuidFormats::Digits)),
+			GetTransientPackage(),
+			REN_DontCreateRedirectors | REN_ForceNoResetLoaders);
+		Fixture.System->MarkAsGarbage();
+		Fixture.System = nullptr;
+	}
+	Fixture.Emitter = nullptr;
+	Fixture.Package = nullptr;
+	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+	return !FPackageName::DoesPackageExist(Fixture.PackageName)
+		&& !UEditorAssetLibrary::DoesAssetExist(Fixture.PackageName);
 }
 
 TSharedPtr<FJsonObject> BaseStageParams(const FNiagaraSimulationStageFixture& Fixture, const FGuid& UsageId)
@@ -193,7 +227,7 @@ bool FNiagaraSimulationStageAuthoringContractTest::RunTest(const FString&)
 		{
 			Fixture.System->WaitForCompilationComplete(false, false);
 		}
-		TestTrue(TEXT("Simulation-stage fixture and package are deleted"), DeleteNiagaraSimulationStageFixture(Fixture.PackageName));
+		TestTrue(TEXT("Simulation-stage fixture and package are deleted"), DeleteNiagaraSimulationStageFixture(Fixture));
 	};
 	if (!TestTrue(TEXT("Simulation-stage fixture builds"), CreateNiagaraSimulationStageFixture(Fixture)))
 	{
@@ -446,7 +480,7 @@ bool FNiagaraSimulationStageSharedGraphRecoveryTest::RunTest(const FString&)
 		{
 			Fixture.System->WaitForCompilationComplete(false, false);
 		}
-		TestTrue(TEXT("Shared stage fixture is deleted"), DeleteNiagaraSimulationStageFixture(Fixture.PackageName));
+		TestTrue(TEXT("Shared stage fixture is deleted"), DeleteNiagaraSimulationStageFixture(Fixture));
 	};
 	if (!TestTrue(TEXT("Shared stage fixture builds"), CreateNiagaraSimulationStageFixture(Fixture)))
 	{
@@ -484,6 +518,8 @@ bool FNiagaraSimulationStageSharedGraphRecoveryTest::RunTest(const FString&)
 	UEdGraphNode* SharedNode = SharedMap->GetOwningNode();
 	// Instantiate the native reroute through reflection: its private Niagara
 	// header exposes non-exported methods, while UNiagaraNode's virtual API is public.
+	TestTrue(TEXT("NiagaraEditor module is loaded for native reroute registration"),
+		FModuleManager::Get().LoadModule(TEXT("NiagaraEditor")) != nullptr);
 	UClass* RerouteClass = LoadObject<UClass>(nullptr, TEXT("/Script/NiagaraEditor.NiagaraNodeReroute"));
 	if (!TestNotNull(TEXT("Native reroute class"), RerouteClass))
 	{

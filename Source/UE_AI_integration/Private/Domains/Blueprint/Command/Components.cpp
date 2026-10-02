@@ -1701,6 +1701,18 @@ public:
 
 		// Resolve component class
 		UClass* ComponentClass = nullptr;
+		// Blueprint build-graph specs persist canonical object paths (for example
+		// /Script/Engine.SphereComponent). Resolve those paths first; comparing the
+		// short UObject name against the full path silently rejected valid specs.
+		if (ComponentClassName.Contains(TEXT(".")))
+		{
+			ComponentClass = LoadObject<UClass>(nullptr, *ComponentClassName);
+			if (ComponentClass
+				&& !ComponentClass->IsChildOf(UActorComponent::StaticClass()))
+			{
+				ComponentClass = nullptr;
+			}
+		}
 		TArray<FString> NamesToTry;
 		NamesToTry.Add(ComponentClassName);
 		if (!ComponentClassName.StartsWith(TEXT("U")))

@@ -92,6 +92,32 @@ namespace UEAIIntegration::MaterialEditing
 					|| (Pin->Direction == EGPD_Output && Index == 0 && Name == TEXT("Output")))
 					Matches.Add(Pin);
 			}
+			// Material root pins use localized display names for PinName. Accept the
+			// stable EMaterialProperty spelling as an invariant alias so callers can
+			// use "Emissive Color" regardless of the Editor culture.
+			if (Matches.IsEmpty() && (!Direction.IsSet() || Direction.GetValue() == EGPD_Input))
+			{
+				if (const auto* Root = Cast<UMaterialGraphNode_Root>(Node))
+				{
+					const auto* Graph = Cast<UMaterialGraph>(Root->GetGraph());
+					const UEnum* Properties = StaticEnum<EMaterialProperty>();
+					FString Requested = Name;
+					Requested.ReplaceInline(TEXT(" "), TEXT(""));
+					Requested.ReplaceInline(TEXT("_"), TEXT(""));
+					for (int32 InputIndex = 0; Graph && InputIndex < Graph->MaterialInputs.Num(); ++InputIndex)
+					{
+						const EMaterialProperty Property = Graph->MaterialInputs[InputIndex].GetProperty();
+						FString Stable = Properties ? Properties->GetNameStringByValue(Property) : FString();
+						if (Stable.StartsWith(TEXT("MP_"))) Stable.RightChopInline(3);
+						Stable.ReplaceInline(TEXT("_"), TEXT(""));
+						Stable.ReplaceInline(TEXT(" "), TEXT(""));
+						if (!Stable.Equals(Requested, ESearchCase::IgnoreCase)) continue;
+						for (UEdGraphPin* Candidate : Node->Pins)
+							if (Candidate && Candidate->Direction == EGPD_Input && Candidate->SourceIndex == InputIndex)
+								Matches.Add(Candidate);
+					}
+				}
+			}
 			return Matches.Num() == 1 ? Matches[0] : nullptr;
 		}
 

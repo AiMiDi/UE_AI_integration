@@ -1764,6 +1764,19 @@ public:
 				return Left.GetSoftObjectPath().ToString()
 					< Right.GetSoftObjectPath().ToString();
 			});
+			// A rename can leave a package containing only redirectors for the old
+			// Blueprint and its generated classes.  AssetRegistry reports that
+			// package as a referencer of the new object, but it is not an authored
+			// asset identity and must not make the real child referencer ambiguous.
+			bool bRedirectorOnly = !PackageAssets.IsEmpty();
+			for (const FAssetData& Candidate : PackageAssets)
+			{
+				bRedirectorOnly &= Candidate.IsRedirector();
+			}
+			if (bRedirectorOnly)
+			{
+				continue;
+			}
 			const int32 CandidateCount = PackageAssets.Num();
 			CandidateReferenceCount += CandidateCount;
 			const bool bAmbiguous = CandidateCount > 1;

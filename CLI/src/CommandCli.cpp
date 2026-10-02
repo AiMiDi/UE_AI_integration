@@ -7318,9 +7318,28 @@ int ExecuteOptions(
                     : "The declared effects are read-only; retry is safe after transport failures." },
             } },
         };
+        // Parameter preflight validates an invocation without dispatching the
+        // capability.  It is still an execution-facing result, so expose the
+        // common verification state and make the unknown runtime phases
+        // explicit.  A local manifest cannot prove a registered handler or a
+        // live Editor; an exact live-schema lookup can prove both.
+        const bool live_available = options.live_schema
+            && descriptor->value("available", true);
+        const bool handler_registered = live_available;
+        json envelope = {
+            { "ok", true },
+            { "data", preflight },
+        };
+        AttachCliCapabilityVerification(
+            envelope,
+            capability,
+            true,
+            handler_registered,
+            live_available,
+            false);
         return PrintSuccess(
             "params-preflight",
-            { true, { { "ok", true }, { "data", preflight } }, {}, {} },
+            { true, std::move(envelope), {}, {} },
             options.json_output,
             output);
     }

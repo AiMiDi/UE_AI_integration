@@ -924,6 +924,7 @@ def main() -> int:
             assert template["request"]["acceptsRequestId"] is True
             assert "requestId" not in template["params"]
             assert template["required"] == ["assetPath", "enabled"]
+            assert "verificationState" not in template
             assert len(queries) == query_count
             assert len(requests) == before_template_requests
 
@@ -949,7 +950,58 @@ def main() -> int:
                 "assetPath": "/Game/Preflight",
                 "enabled": True,
             }
+            assert preflight["localDeclared"] is True
+            assert preflight["handlerRegistered"] is False
+            assert preflight["liveAvailable"] is False
+            assert preflight["executed"] is False
+            assert preflight["readbackVerified"] is None
+            assert preflight["runtimeVerified"] is None
+            assert preflight["verificationState"] == {
+                "schema": "ue.capability-verification.v1",
+                "capability": "test.typed",
+                "localDeclared": True,
+                "handlerRegistered": False,
+                "liveAvailable": False,
+                "executed": False,
+                "readbackVerified": None,
+                "runtimeVerified": None,
+            }
             assert len(requests) == before_preflight_requests
+
+            before_live_preflight_requests = len(requests)
+            live_preflight_result = run(
+                [
+                    "test.typed",
+                    "--preflight",
+                    "--endpoint",
+                    endpoint,
+                    "--live-schema",
+                    "--asset-path",
+                    "/Game/LivePreflight",
+                    "--enabled",
+                    "--json",
+                ],
+                check=True,
+            )
+            live_preflight = json.loads(live_preflight_result.stdout)["data"]
+            assert live_preflight["schemaSource"] == "editor"
+            assert live_preflight["localDeclared"] is True
+            assert live_preflight["handlerRegistered"] is True
+            assert live_preflight["liveAvailable"] is True
+            assert live_preflight["executed"] is False
+            assert live_preflight["readbackVerified"] is None
+            assert live_preflight["runtimeVerified"] is None
+            assert live_preflight["verificationState"] == {
+                "schema": "ue.capability-verification.v1",
+                "capability": "test.typed",
+                "localDeclared": True,
+                "handlerRegistered": True,
+                "liveAvailable": True,
+                "executed": False,
+                "readbackVerified": None,
+                "runtimeVerified": None,
+            }
+            assert len(requests) == before_live_preflight_requests
 
             preflight_file = temporary_path / "preflight-params.json"
             preflight_file.write_text(

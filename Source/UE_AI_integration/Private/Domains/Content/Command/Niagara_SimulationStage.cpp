@@ -141,6 +141,8 @@ namespace UEAINiagaraSimulationStagePrivate
 		{
 			TStrongObjectPtr<UEdGraphNode> Node;
 			TArray<UEdGraphPin*> Pins;
+			FGuid NiagaraChangeId;
+			bool bHasNiagaraChangeId = false;
 		};
 		struct FPinState
 		{
@@ -188,6 +190,11 @@ namespace UEAINiagaraSimulationStagePrivate
 			FGraphSnapshot::FNodeState& NodeState = OutSnapshot.Nodes.AddDefaulted_GetRef();
 			NodeState.Node.Reset(Node);
 			NodeState.Pins = Node->Pins;
+			if (const UNiagaraNode* NiagaraNode = Cast<UNiagaraNode>(Node))
+			{
+				NodeState.NiagaraChangeId = NiagaraNode->GetChangeId();
+				NodeState.bHasNiagaraChangeId = true;
+			}
 			for (UEdGraphPin* Pin : Node->Pins)
 			{
 				if (!Pin || Pin->GetOwningNode() != Node || Pins.Contains(Pin))
@@ -243,6 +250,29 @@ namespace UEAINiagaraSimulationStagePrivate
 		return true;
 	}
 
+	// A removal snapshot intentionally retains the removed nodes after they have
+	// been taken out of Graph->Nodes. Their UObject outer and pin arrays remain
+	// valid, so they can be reattached during rollback. Keep this check separate
+	// from SnapshotPinsSurvive, which is the stricter post-restore membership
+	// check used by GraphSnapshotMatches.
+	bool SnapshotNodesRetained(const UNiagaraGraph* Graph, const FGraphSnapshot& Snapshot)
+	{
+		if (!Graph || !Snapshot.bCaptured || Snapshot.Graph.Get() != Graph
+			|| Snapshot.Nodes.Num() != Snapshot.NodeCount)
+		{
+			return false;
+		}
+		for (const FGraphSnapshot::FNodeState& State : Snapshot.Nodes)
+		{
+			if (!IsValid(State.Node.Get()) || State.Node->GetOuter() != Graph
+				|| State.Node->Pins != State.Pins)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	bool GraphSnapshotMatches(UNiagaraGraph* Graph, const FGraphSnapshot& Snapshot)
 	{
 		if (!SnapshotPinsSurvive(Graph, Snapshot) || Graph->Nodes.Num() != Snapshot.NodeCount)
@@ -275,7 +305,10 @@ namespace UEAINiagaraSimulationStagePrivate
 			UEdGraphNode* Node = State.Node.Get();
 			Node->Modify();
 			Node->BreakAllNodeLinks();
-			Graph->Nodes.Add(Node);
+			// AddNode keeps the graph membership notification and the graph's
+			// ownership invariant together. Directly appending to Nodes can leave a
+			// retained node invisible to graph listeners during rollback.
+			Graph->AddNode(Node, false, false);
 		}
 		for (const FGraphSnapshot::FPinState& State : Snapshot.Pins)
 		{
@@ -287,19 +320,45 @@ namespace UEAINiagaraSimulationStagePrivate
 				State.Pin->MakeLinkTo(Link);
 			}
 		}
+		// Reconnecting a Niagara pin notifies the node and assigns a fresh
+		// synchronization id.  That id is authored graph state (and is part of
+		// the serialized node), so restore it after all links have been rebuilt.
+		for (const FGraphSnapshot::FNodeState& State : Snapshot.Nodes)
+		{
+			if (State.bHasNiagaraChangeId)
+			{
+				if (UNiagaraNode* NiagaraNode = Cast<UNiagaraNode>(State.Node.Get()))
+				{
+					NiagaraNode->ForceChangeId(State.NiagaraChangeId, false);
+				}
+			}
+		}
 		UEAIIntegration::NiagaraEditing::NotifyRestoredGraph(Graph);
 	}
 
-	bool RestoreGraphSnapshot(UNiagaraGraph* Graph, const FGraphSnapshot& Snapshot)
+	bool RestoreGraphSnapshot(UNiagaraGraph* Graph, const FGraphSnapshot& Snapshot, FString* OutFailure = nullptr)
 	{
-		if (!SnapshotPinsSurvive(Graph, Snapshot))
+		auto Fail = [OutFailure](const TCHAR* Reason)
 		{
+			if (OutFailure)
+			{
+				*OutFailure = Reason;
+			}
 			return false;
+		};
+		// A snapshot can describe either a graph that is already attached (the
+		// update failure path) or nodes detached by RemoveNode (the remove
+		// rollback path). Prefer the stricter attached check, then accept only the
+		// retained UObject/pin identity required for detached restoration.
+		const bool bSnapshotAlreadyAttached = SnapshotPinsSurvive(Graph, Snapshot);
+		if (!bSnapshotAlreadyAttached && !SnapshotNodesRetained(Graph, Snapshot))
+		{
+			return Fail(TEXT("snapshot_nodes_not_retained"));
 		}
 		FGraphSnapshot CurrentGraph;
 		if (!CaptureGraphSnapshot(Graph, CurrentGraph))
 		{
-			return false;
+			return Fail(TEXT("current_graph_snapshot_failed"));
 		}
 		// Removal only changes membership and links. An unexpected new node is
 		// graph drift, not permission to replace the emitter's other graphs.
@@ -308,7 +367,7 @@ namespace UEAINiagaraSimulationStagePrivate
 			if (!Snapshot.Nodes.ContainsByPredicate([&State](const FGraphSnapshot::FNodeState& Before)
 				{ return Before.Node.Get() == State.Node.Get(); }))
 			{
-				return false;
+				return Fail(TEXT("current_graph_contains_unexpected_node"));
 			}
 		}
 		ApplyRetainedGraphSnapshot(Graph, Snapshot);
@@ -322,7 +381,7 @@ namespace UEAINiagaraSimulationStagePrivate
 		{
 			ApplyRetainedGraphSnapshot(Graph, CurrentGraph);
 		}
-		return false;
+		return Fail(TEXT("restored_graph_verification_failed"));
 	}
 
 	TMap<FString, FStageReceipt>& Receipts()
@@ -1898,9 +1957,14 @@ namespace UEAINiagaraSimulationStagePrivate
 			System->Modify();
 			Emitter->Modify();
 			Graph->Modify();
-			if (!RestoreGraphSnapshot(Graph, BeforeGraph))
+			FString RestoreError;
+			// RestoreGraphSnapshot(Graph, BeforeGraph) is the single rollback
+			// boundary; the optional diagnostic is populated by the same call.
+			if (!RestoreGraphSnapshot(Graph, BeforeGraph, &RestoreError))
 			{
-				return ErrorResult(TEXT("Full simulation-stage graph restoration was refused or failed; the transaction was retained for Editor Undo."), TEXT("rollback_verification_failed"), 500);
+				return ErrorResult(
+					FString::Printf(TEXT("Full simulation-stage graph restoration was refused or failed (%s); the transaction was retained for Editor Undo."), *RestoreError),
+					TEXT("rollback_verification_failed"), 500);
 			}
 			Emitter->AddSimulationStage(Stage, Receipt->EmitterVersion);
 			Data = Emitter->GetEmitterData(Receipt->EmitterVersion);
