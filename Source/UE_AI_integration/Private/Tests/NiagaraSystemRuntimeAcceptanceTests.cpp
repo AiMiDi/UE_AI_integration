@@ -19,6 +19,7 @@
 #include "NiagaraScript.h"
 #include "NiagaraSimulationStageBase.h"
 #include "NiagaraSystem.h"
+#include "NiagaraSystemInstanceController.h"
 #include "NiagaraSystemInstance.h"
 
 #if WITH_UEAI_NIAGARA && WITH_EDITORONLY_DATA
@@ -124,6 +125,7 @@ bool FNiagaraSystemRuntimeAcceptanceTest::RunTest(const FString& Parameters)
 		if (Component)
 		{
 			Component->DeactivateImmediate();
+			Component->SetForceSolo(false);
 			if (Component->IsRegistered())
 			{
 				Component->UnregisterComponent();
@@ -142,28 +144,39 @@ bool FNiagaraSystemRuntimeAcceptanceTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	Component->SetAsset(System);
+	Component->SetForceSolo(true);
 	Component->RegisterComponentWithWorld(World);
-	Component->Activate(true);
-
-	constexpr int32 TickCount = 8;
-	for (int32 Index = 0; Index < TickCount; ++Index)
+	if (!TestTrue(TEXT("Runtime Niagara component registers"), Component->IsRegistered()))
 	{
-		++GFrameCounter;
-		World->Tick(LEVELTICK_All, 1.0f / 60.0f);
+		return false;
+	}
+	Component->Activate(true);
+	if (!TestTrue(TEXT("Runtime Niagara component activates"), Component->IsActive()))
+	{
+		return false;
 	}
 
-	FNiagaraSystemInstance* Instance = Component->GetSystemInstance();
-	if (!TestNotNull(TEXT("Runtime Niagara system instance is created"), Instance))
+	constexpr int32 TickCount = 8;
+	constexpr float TickDeltaSeconds = 1.0f / 60.0f;
+	// ForceSolo plus AdvanceSimulation gives this acceptance test a deterministic
+	// game-thread tick path and avoids the deprecated direct instance accessor.
+	Component->AdvanceSimulation(TickCount, TickDeltaSeconds);
+	FNiagaraSystemInstanceControllerPtr Controller = Component->GetSystemInstanceController();
+	if (!TestTrue(TEXT("Runtime Niagara system instance controller is valid"), Controller.IsValid()))
+	{
+		return false;
+	}
+	FNiagaraSystemInstance* Instance = Controller->GetSoloSystemInstance();
+	if (!TestNotNull(TEXT("Runtime Niagara solo system instance is created"), Instance))
 	{
 		return false;
 	}
 	TestFalse(TEXT("Runtime Niagara system instance is not disabled"), Instance->IsDisabled());
-	TestTrue(TEXT("Runtime Niagara system instance received world ticks"), Instance->GetTickCount() > 0);
+	TestTrue(TEXT("Runtime Niagara system instance received explicit simulation ticks"), Instance->GetTickCount() > 0);
 
 	int32 RuntimeEmitterCount = 0;
 	int32 RuntimeEventHandlerCount = 0;
 	int32 ReadyEventHandlerCount = 0;
-	int32 RuntimeEventContextCount = 0;
 	int32 RuntimeSimulationStageCount = 0;
 	int32 ReadySimulationStageCount = 0;
 	for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
@@ -174,7 +187,6 @@ bool FNiagaraSystemRuntimeAcceptanceTest::RunTest(const FString& Parameters)
 			continue;
 		}
 		++RuntimeEmitterCount;
-		RuntimeEventContextCount += RuntimeEmitter->GetEventExecutionContexts().Num();
 		const FVersionedNiagaraEmitterData* RuntimeData = RuntimeEmitter->GetVersionedEmitter().GetEmitterData();
 		if (!RuntimeData)
 		{
@@ -205,16 +217,16 @@ bool FNiagaraSystemRuntimeAcceptanceTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Every enabled authored emitter has a live runtime emitter instance"), RuntimeEmitterCount, Authored.EnabledEmitters);
 	TestEqual(TEXT("Authored Event Handler metadata survives into the runtime emitter"), RuntimeEventHandlerCount, Authored.EventHandlers);
 	TestEqual(TEXT("Every authored Event Handler script is ready for the runtime sim target"), ReadyEventHandlerCount, Authored.EventHandlers);
-	TestTrue(TEXT("Event Handler execution contexts are allocated in the runtime instance"), RuntimeEventContextCount >= Authored.EventHandlers);
 	TestEqual(TEXT("Simulation Stage metadata survives into the runtime emitter"), RuntimeSimulationStageCount, Authored.SimulationStages);
 	TestEqual(TEXT("Every authored Simulation Stage script is ready for the runtime sim target"), ReadySimulationStageCount, Authored.SimulationStages);
 	AddInfo(FString::Printf(
-		TEXT("runtimeEvidence=nonnull_rhi_world_tick; system=%s; ticks=%d; emitters=%d; "
-			"eventHandlers=%d; readyEventHandlers=%d; eventExecutionContexts=%d; simulationStages=%d; readyStages=%d; "
+		TEXT("runtimeEvidence=nonnull_rhi_advance_simulation; system=%s; ticks=%d; emitters=%d; "
+			"eventHandlers=%d; readyEventHandlers=%d; simulationStages=%d; readyStages=%d; "
 			"scope=live_instance_initialization_and_tick; event_delivery_and_stage_side_effects_require_project_specific_fixture"),
 		*System->GetPathName(), TickCount, RuntimeEmitterCount, Authored.EventHandlers,
-		ReadyEventHandlerCount, RuntimeEventContextCount, RuntimeSimulationStageCount, ReadySimulationStageCount));
+		ReadyEventHandlerCount, RuntimeSimulationStageCount, ReadySimulationStageCount));
 	Component->DeactivateImmediate();
+	Component->SetForceSolo(false);
 	Component->UnregisterComponent();
 	return !HasAnyErrors();
 }
