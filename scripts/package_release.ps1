@@ -53,6 +53,7 @@ $required = @(
     'MCP/dist/local-capability-cli.js',
     'Resources/Capabilities/blueprint.json',
     'Resources/Capabilities/production.json',
+    'Resources/Python/full_execute.py',
     'Workflow/Contracts/contract-set.v1.json',
     'Resources/Trace/worker-protocol.v1.json',
     'Resources/Contracts/recipe.schema.v2.json',

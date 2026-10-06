@@ -155,6 +155,8 @@ private:
 		FString RunId;
 		FString JobId;
 		FString Risk;
+		FString ScriptExecutionId;
+		FString ScriptModificationLevel;
 		FString Status = TEXT("queued");
 		FString ErrorCode;
 		FString QueuedAtUtc;

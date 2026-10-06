@@ -125,7 +125,7 @@ through the short CLI; MCP fallback uses `ue_scene` with these parameters:
 
 ```json
 {
-  "projectRoot": "S:/SilverPalace/Project",
+  "projectRoot": "C:/Projects/ExampleProject",
   "files": ["Saved/Crashes/example/CrashContext.runtime-xml", "Saved/Crashes/example/Project.log"],
   "maxBytesPerFile": 2097152,
   "limit": 64

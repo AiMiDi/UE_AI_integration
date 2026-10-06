@@ -8,7 +8,7 @@ stdio bridge，让 Codex CLI、Claude Code 等 MCP 客户端查询或修改 Blue
 场景、内容资产、动画、AI 与生产流程，并在 Editor 关闭后分析 `.utrace`。
 
 当前插件版本为 `1.0.0`，以 Unreal Engine 5.3 为发布构建基线；本地
-SilverPalace 5.4.1 已通过 Niagara、NiagaraShader 与插件相关模块构建。
+本地 Unreal Engine 5.4.1 分支已通过 Niagara、NiagaraShader 与插件相关模块构建。
 其他分支尚未完成完整编译与运行验证。
 
 ## 核心特性
@@ -69,8 +69,10 @@ SilverPalace 5.4.1 已通过 Niagara、NiagaraShader 与插件相关模块构建
   sampling/compare/Trace/HTML 合同。
 - 0.7.2 将 Workflow 操作边界发布为 `ue.recovery-journal.v1`，支持持久
   recovery 查询、冲突检查和测试专用的真实进程 fault marker。
-- 0.8.0 增加声明式 Blueprint BuildGraph、只读 UE 反射发现，以及只对
-  不可变 JSON 工作的隔离受限 Python；不开放 `unreal` 模块或写入入口。
+- 0.8.0 增加声明式 Blueprint BuildGraph、只读 UE 反射发现，以及在可终止
+  独立 worker 中执行完整 Python 脚本的能力；调用方必须声明
+  `readOnly`/`safeWrite`/`confirmWrite`/`destructive` 修改级别，宿主会记录
+  脚本摘要、执行状态和审计回执。worker 不注入 UE `unreal` 模块。
 - 0.8.1 增加 Editor/PIE 调试视图的实时可用性、指定 Viewport 无损 PNG、
   状态恢复、渲染指纹比较和有界语义分析；它不是任意 GBuffer/RDG Texture
   导出。详见 [渲染调试证据与离线 Insights](docs/UE_TRACE_INSIGHTS.md)。
@@ -81,8 +83,8 @@ SilverPalace 5.4.1 已通过 Niagara、NiagaraShader 与插件相关模块构建
   默认用本地 schema 单次调用 `/api/execute`，`--live-schema` 可强制在线校验，
   `ue-cli shell` 可复用目录与连接；`ue-workflow-cli` 只保留 DSL。
 - [UE Agent Skills](docs/UE_AGENT_SKILLS.md) 提供十一个已验证领域 Skill 和
-  capability recipe，形成 Load → Discover → Execute → See Results 闭环，
-  但不新增任意脚本执行器。
+  capability recipe，形成 Load → Discover → Execute → See Results 闭环；
+  Python 脚本执行通过独立 worker 和修改级别审计合同完成。
 
 ## 架构
 

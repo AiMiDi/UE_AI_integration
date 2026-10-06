@@ -4,14 +4,29 @@
 from __future__ import annotations
 
 import pathlib
+import os
 import unittest
 
 
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[4]
+def _find_engine_root() -> pathlib.Path:
+    configured = os.environ.get("UEAI_ENGINE_ROOT")
+    if configured:
+        candidate = pathlib.Path(configured).resolve()
+        if (candidate / "Plugins" / "FX" / "Niagara").is_dir():
+            return candidate
+
+    for parent in pathlib.Path(__file__).resolve().parents:
+        if (parent / "Plugins" / "FX" / "Niagara").is_dir():
+            return parent
+        if (parent / "Engine" / "Plugins" / "FX" / "Niagara").is_dir():
+            return parent / "Engine"
+    raise FileNotFoundError(
+        "UEAI_ENGINE_ROOT is not configured and the Unreal Engine root could not be found"
+    )
+
+
 ENGINE_DISPATCH = (
-    PROJECT_ROOT
-    / "unrealengine"
-    / "Engine"
+    _find_engine_root()
     / "Plugins"
     / "FX"
     / "Niagara"
@@ -47,17 +62,14 @@ class NiagaraGDFReadinessGateSourceTest(unittest.TestCase):
         self.assertIn("CachedGDFData.bCacheValid\t\t\t= bGDFResourcesReady;", guard)
         self.assertNotIn("CachedGDFData.bCacheValid\t\t\t= true;", guard)
 
-    def test_guard_is_explicitly_scoped_to_the_silverpalace_change(self) -> None:
+    def test_guard_is_local_to_the_cache_validation_path(self) -> None:
         start = self.source.index("const bool bGDFResourcesReady =")
-        begin = self.source.rfind(
-            "//++[SilverPalace] Begin add by wuziye 2026/09/05", 0, start
+        assignment = self.source.index(
+            "CachedGDFData.bCacheValid\t\t\t= bGDFResourcesReady;", start
         )
-        end = self.source.index(
-            "//--[SilverPalace] End add by wuziye 2026/09/05", start
-        )
-        self.assertGreaterEqual(begin, 0)
-        self.assertLess(begin, start)
-        self.assertGreater(end, start)
+        self.assertGreater(assignment, start)
+        self.assertLess(assignment - start, 4096)
+        self.assertNotIn("CachedGDFData.bCacheValid\t\t\t= true;", self.source[start:assignment])
 
 
 if __name__ == "__main__":

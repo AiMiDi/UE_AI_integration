@@ -11,7 +11,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string] $PluginRoot,
-    [string] $EngineRoot = 'S:\SilverPalace\unrealengine',
+    [string] $EngineRoot = $env:UEAI_ENGINE_ROOT,
     [Parameter(Mandatory)][string] $WorkRoot,
     [ValidateSet('isolated-nullrhi', 'nonnullrhi-editor')]
     [string] $VerificationLane = 'isolated-nullrhi',

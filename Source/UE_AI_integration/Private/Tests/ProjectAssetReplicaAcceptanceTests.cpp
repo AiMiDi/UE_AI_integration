@@ -1,4 +1,4 @@
-// Opt-in real SilverPalace assets, duplicated into an independent replica.
+// Opt-in real project assets, duplicated into an independent replica.
 // The runner supplies a module-proof gate and uses a fresh Editor per phase.
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -413,6 +413,7 @@ private:
 		Test.TestTrue(TEXT("Confirmed request preserves independent consumer"), Target->A.Expression == nullptr && External->A.Expression == Source);
 		Source->DefaultValue = FLinearColor(0.17f, 0.31f, 0.59f, 1.0f);
 		Source->MaterialExpressionEditorX += 61;
+		const bool BaselineTwoSided = Copy->TwoSided;
 		Copy->TwoSided = !Copy->TwoSided;
 		if (!Test.TestTrue(TEXT("Mutated real material digest is readable"), UEAIIntegration::MaterialCheckpoint::GetDigests(Copy, CheckpointId, SavedDigest, CurrentDigest))) return false;
 		auto Restore = MakeShared<FJsonObject>();
@@ -428,6 +429,7 @@ private:
 		const FMCPToolResult Restored = Call(TEXT("content.material.graph.restore"), Restore);
 		if (!Result(TEXT("Real material full authored restore succeeds"), Restored) || !Restored.Data) return false;
 		Test.TestEqual(TEXT("Restore equals the full pre-mutation authored digest"), Restored.Data->GetStringField(TEXT("afterStateDigest")), BaselineDigest);
+		Test.TestEqual(TEXT("Restore reads back the authored TwoSided value"), Copy->TwoSided, BaselineTwoSided);
 		Test.TestTrue(TEXT("Restore reconnects both original consumer identities"), Target->A.Expression == Source && External->A.Expression == Source);
 		bMaterialVerified = !Test.HasAnyErrors();
 		return bMaterialVerified;
@@ -439,6 +441,17 @@ private:
 		UBlueprint* Target = Cast<UBlueprint>(UEditorAssetLibrary::DuplicateAsset(BlueprintSeed, TargetPath));
 		if (!Test.TestNotNull(TEXT("Real project Blueprint duplicates into independent storage"), Target)) return false;
 		if (!Test.TestEqual(TEXT("Selected seed has a plain native Actor parent"), Target->ParentClass.Get(), AActor::StaticClass())) return false;
+		// Editor-prepared workflow plans require an existing, clean asset baseline.
+		// DuplicateAsset creates the new package dirty, so persist the duplicate
+		// before asking the planning capability to inspect it. The later approved
+		// execution performs the authored mutation and save under the same replica
+		// root.
+		FString InitialSaveError;
+		if (!Test.TestTrue(TEXT("Real project Blueprint baseline saves before planning"), SaveBlueprint(Target, InitialSaveError)))
+		{
+			Test.AddError(InitialSaveError);
+			return false;
+		}
 		auto Params = MakeShared<FJsonObject>();
 		Params->SetStringField(TEXT("templateName"), TEXT("health_system"));
 		Params->SetStringField(TEXT("blueprint"), TargetPath);

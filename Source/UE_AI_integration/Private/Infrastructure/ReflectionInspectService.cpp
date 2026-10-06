@@ -231,6 +231,22 @@ TSharedPtr<FJsonObject> ParseJson(const FString& Text)
 	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Text);
 	return FJsonSerializer::Deserialize(Reader, Object) && Object.IsValid() ? Object : nullptr;
 }
+
+bool SaveJsonFileAtomic(const FString& Path, const TSharedPtr<FJsonObject>& Object)
+{
+	if (!Object.IsValid()) return false;
+	FString Text;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Text);
+	if (!FJsonSerializer::Serialize(Object.ToSharedRef(), Writer)) return false;
+	const FString Temporary = Path + TEXT(".tmp-") + FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	if (FFileHelper::SaveStringToFile(Text, *Temporary, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM)
+		&& IFileManager::Get().Move(*Path, *Temporary, true, true, false, true))
+	{
+		return true;
+	}
+	IFileManager::Get().Delete(*Temporary, false, true);
+	return false;
+}
 }
 
 bool FReflectionInspectService::Handles(const FString& CapabilityId) const
@@ -427,54 +443,138 @@ FMCPToolResult FReflectionInspectService::CreateSnapshot(const TSharedPtr<FJsonO
 
 FMCPToolResult FReflectionInspectService::InspectPython(const TSharedPtr<FJsonObject>& Params) const
 {
-	const FString Expression = RefString(Params, TEXT("expression"));
-	const TSharedPtr<FJsonObject>* Snapshot = nullptr;
-	if (Expression.IsEmpty() || !Params->TryGetObjectField(TEXT("snapshot"), Snapshot) || !Snapshot || !Snapshot->IsValid())
+	const FString Script = RefString(Params, TEXT("script"));
+	const FString ModificationLevel = RefString(Params, TEXT("modificationLevel"));
+	if (Script.IsEmpty())
 	{
-		return FMCPToolResult::Error(TEXT("expression and immutable snapshot are required."), TEXT("invalid_params"), 422);
+		return FMCPToolResult::Error(TEXT("script is required."), TEXT("invalid_params"), 422);
 	}
-	if (Expression.Len() > 4096
-		|| RefString(*Snapshot, TEXT("schema")) != TEXT("ue.reflection-snapshot.v1"))
+	if (Script.Len() > 256 * 1024)
+	{
+		return FMCPToolResult::Error(TEXT("Python script exceeds the 256 KiB limit."), TEXT("python_script_rejected"), 413);
+	}
+	if (ModificationLevel != TEXT("readOnly")
+		&& ModificationLevel != TEXT("safeWrite")
+		&& ModificationLevel != TEXT("confirmWrite")
+		&& ModificationLevel != TEXT("destructive"))
 	{
 		return FMCPToolResult::Error(
-			TEXT("Python inspection accepts only a bounded ue.reflection-snapshot.v1 object."),
-			TEXT("python_expression_rejected"),
+			TEXT("modificationLevel must be readOnly, safeWrite, confirmWrite, or destructive."),
+			TEXT("invalid_modification_level"),
 			422);
 	}
+	const TSharedPtr<FJsonObject>* Input = nullptr;
+	if (Params.IsValid() && Params->HasField(TEXT("input")))
+	{
+		if (!Params->TryGetObjectField(TEXT("input"), Input) || !Input || !Input->IsValid())
+		{
+			return FMCPToolResult::Error(TEXT("input must be a JSON object."), TEXT("invalid_params"), 422);
+		}
+	}
+	else if (Params.IsValid() && Params->HasField(TEXT("snapshot")))
+	{
+		if (!Params->TryGetObjectField(TEXT("snapshot"), Input) || !Input || !Input->IsValid())
+		{
+			return FMCPToolResult::Error(TEXT("snapshot must be a JSON object."), TEXT("invalid_params"), 422);
+		}
+	}
 	const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("UE_AI_integration"));
-	const FString Worker = Plugin.IsValid() ? FPaths::Combine(Plugin->GetBaseDir(), TEXT("Resources/Python/restricted_inspect.py")) : FString();
+	const FString Worker = Plugin.IsValid() ? FPaths::Combine(Plugin->GetBaseDir(), TEXT("Resources/Python/full_execute.py")) : FString();
 	FString Python = FPaths::Combine(FPaths::EngineDir(), TEXT("Binaries/ThirdParty/Python3/Win64/python.exe"));
 	if (!IFileManager::Get().FileExists(*Python) || !IFileManager::Get().FileExists(*Worker))
 	{
-		return FMCPToolResult::Error(TEXT("The isolated Engine Python worker is unavailable."), TEXT("job_runtime_unavailable"), 503);
+		return FMCPToolResult::Error(TEXT("The Engine Python worker is unavailable."), TEXT("job_runtime_unavailable"), 503);
 	}
+	FTCHARToUTF8 ScriptUtf8(*Script);
+	FString ScriptDigest;
+	if (!TrySha256Hex(ScriptUtf8.Get(), static_cast<uint64>(ScriptUtf8.Length()), ScriptDigest))
+	{
+		return FMCPToolResult::Error(TEXT("Python script digest failed."), TEXT("python_audit_failed"), 500);
+	}
+	const FString ExecutionId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	const FString AuditDirectory = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("UE_AI_integration/Python/audit"));
+	const FString AuditPath = FPaths::Combine(AuditDirectory, ExecutionId + TEXT(".json"));
+	const FString AuditRelativePath = FPaths::Combine(TEXT("Saved/UE_AI_integration/Python/audit"), ExecutionId + TEXT(".json"));
+	TSharedPtr<FJsonObject> Audit = MakeShared<FJsonObject>();
+	Audit->SetStringField(TEXT("schema"), TEXT("ue.python-execution-audit.v1"));
+	Audit->SetStringField(TEXT("executionId"), ExecutionId);
+	Audit->SetStringField(TEXT("scriptExecutionId"), ExecutionId);
+	Audit->SetStringField(TEXT("modificationLevel"), ModificationLevel);
+	Audit->SetStringField(TEXT("scriptModificationLevel"), ModificationLevel);
+	Audit->SetStringField(TEXT("modificationLevelSource"), TEXT("callerDeclared"));
+	Audit->SetStringField(TEXT("executionMode"), TEXT("fullScript"));
+	Audit->SetBoolField(TEXT("auditRecorded"), true);
+	Audit->SetStringField(TEXT("scriptDigest"), ScriptDigest);
+	Audit->SetNumberField(TEXT("scriptBytes"), static_cast<double>(ScriptUtf8.Length()));
+	Audit->SetStringField(TEXT("startedAtUtc"), FDateTime::UtcNow().ToIso8601());
+	Audit->SetStringField(TEXT("status"), TEXT("running"));
+	Audit->SetStringField(TEXT("worker"), TEXT("engine-python3"));
+	IFileManager::Get().MakeDirectory(*AuditDirectory, true);
+	if (!SaveJsonFileAtomic(AuditPath, Audit))
+	{
+		return FMCPToolResult::Error(TEXT("Python execution audit record could not be written."), TEXT("python_audit_failed"), 507);
+	}
+	const auto Complete = [&Audit, &ExecutionId, &AuditPath, &AuditRelativePath, &ModificationLevel, &ScriptDigest](FMCPToolResult Result, const TCHAR* Status, const FString& ErrorCode)
+	{
+		Audit->SetStringField(TEXT("status"), Status);
+		Audit->SetStringField(TEXT("completedAtUtc"), FDateTime::UtcNow().ToIso8601());
+		if (!ErrorCode.IsEmpty()) Audit->SetStringField(TEXT("errorCode"), ErrorCode);
+		if (!Result.ErrorMessage.IsEmpty()) Audit->SetStringField(TEXT("error"), Result.ErrorMessage);
+		const bool bAuditCompleted = SaveJsonFileAtomic(AuditPath, Audit);
+		TSharedPtr<FJsonObject> Receipt = Result.bSuccess && Result.Data.IsValid()
+			? Result.Data : MakeShared<FJsonObject>();
+		Receipt->SetStringField(TEXT("executionId"), ExecutionId);
+		Receipt->SetStringField(TEXT("scriptExecutionId"), ExecutionId);
+		// Keep machine-specific project roots out of the client-facing receipt. The
+		// artifact remains under Project/Saved and can be resolved by the host.
+		Receipt->SetStringField(TEXT("auditPath"), AuditRelativePath);
+		Receipt->SetStringField(TEXT("modificationLevel"), ModificationLevel);
+		Receipt->SetStringField(TEXT("scriptModificationLevel"), ModificationLevel);
+		Receipt->SetStringField(TEXT("modificationLevelSource"), TEXT("callerDeclared"));
+		Receipt->SetStringField(TEXT("executionMode"), TEXT("fullScript"));
+		Receipt->SetBoolField(TEXT("auditRecorded"), true);
+		Receipt->SetBoolField(TEXT("auditCompleted"), bAuditCompleted);
+		Receipt->SetStringField(TEXT("scriptDigest"), ScriptDigest);
+		Receipt->SetStringField(TEXT("status"), Status);
+		if (!bAuditCompleted)
+		{
+			Result = FMCPToolResult::Error(TEXT("Python execution finished, but its terminal audit record could not be written."), TEXT("python_audit_failed"), 507);
+		}
+		Result.Data = Receipt;
+		return Result;
+	};
 	TSharedRef<FJsonObject> Request = MakeShared<FJsonObject>();
-	Request->SetStringField(TEXT("expression"), Expression);
-	Request->SetObjectField(TEXT("data"), *Snapshot);
+	Request->SetStringField(TEXT("script"), Script);
+	Request->SetStringField(TEXT("modificationLevel"), ModificationLevel);
+	if (Input)
+	{
+		Request->SetObjectField(TEXT("data"), *Input);
+	}
+	else
+	{
+		Request->SetObjectField(TEXT("data"), MakeShared<FJsonObject>());
+	}
 	const FString RequestText = JsonText(Request);
 	FTCHARToUTF8 RequestUtf8(*RequestText);
-	if (RequestUtf8.Length() > 4 * 1024 * 1024)
+	if (RequestUtf8.Length() > 8 * 1024 * 1024)
 	{
-		return FMCPToolResult::Error(
-			TEXT("Reflection snapshot exceeds the four MiB Python inspection limit."),
-			TEXT("python_expression_rejected"),
-			413);
+		return Complete(FMCPToolResult::Error(TEXT("Python request exceeds the eight MiB limit."), TEXT("python_script_rejected"), 413), TEXT("failed"), TEXT("python_script_rejected"));
 	}
 	void* StdoutRead = nullptr; void* StdoutWrite = nullptr;
 	void* StdinRead = nullptr; void* StdinWrite = nullptr;
 	FPlatformProcess::CreatePipe(StdoutRead, StdoutWrite);
 	FPlatformProcess::CreatePipe(StdinRead, StdinWrite, true);
-	const FString Args = FString::Printf(TEXT("-I -S -E \"%s\""), *Worker);
+	const FString Args = FString::Printf(TEXT("-I -E -u \"%s\""), *Worker);
 	FProcHandle Process = FPlatformProcess::CreateProc(*Python, *Args, false, true, true, nullptr, 0, nullptr, StdoutWrite, StdinRead);
 	if (!Process.IsValid())
 	{
 		FPlatformProcess::ClosePipe(StdoutRead, StdoutWrite);
 		FPlatformProcess::ClosePipe(StdinRead, StdinWrite);
-		return FMCPToolResult::Error(TEXT("Python worker could not be started."), TEXT("job_runtime_unavailable"), 503);
+		return Complete(FMCPToolResult::Error(TEXT("Python worker could not be started."), TEXT("job_runtime_unavailable"), 503), TEXT("failed"), TEXT("job_runtime_unavailable"));
 	}
 	FPlatformProcess::WritePipe(StdinWrite, RequestText);
 	FPlatformProcess::ClosePipe(StdinRead, StdinWrite);
-	const double Deadline = FPlatformTime::Seconds() + 2.0;
+	const double Deadline = FPlatformTime::Seconds() + 30.0;
 	FString Output;
 	bool bOutputLimitExceeded = false;
 	while (FPlatformProcess::IsProcRunning(Process) && FPlatformTime::Seconds() < Deadline)
@@ -492,32 +592,42 @@ FMCPToolResult FReflectionInspectService::InspectPython(const TSharedPtr<FJsonOb
 		FPlatformProcess::TerminateProc(Process, true);
 		FPlatformProcess::CloseProc(Process);
 		FPlatformProcess::ClosePipe(StdoutRead, StdoutWrite);
-		return FMCPToolResult::Error(
+		return Complete(FMCPToolResult::Error(
 			TEXT("Python worker output exceeded the one MiB limit."),
-			TEXT("python_expression_rejected"),
-			413);
+			TEXT("python_output_limit"),
+			413), TEXT("failed"), TEXT("python_output_limit"));
 	}
 	if (FPlatformProcess::IsProcRunning(Process))
 	{
 		FPlatformProcess::TerminateProc(Process, true);
 		FPlatformProcess::CloseProc(Process);
 		FPlatformProcess::ClosePipe(StdoutRead, StdoutWrite);
-		return FMCPToolResult::Error(TEXT("Python worker exceeded the two second limit."), TEXT("python_worker_timeout"), 408);
+		return Complete(FMCPToolResult::Error(TEXT("Python worker exceeded the thirty second limit."), TEXT("python_worker_timeout"), 408), TEXT("timedOut"), TEXT("python_worker_timeout"));
 	}
 	Output += FPlatformProcess::ReadPipe(StdoutRead);
+	int32 ReturnCode = 0;
+	FPlatformProcess::GetProcReturnCode(Process, &ReturnCode);
 	FPlatformProcess::CloseProc(Process);
 	FPlatformProcess::ClosePipe(StdoutRead, StdoutWrite);
+	Audit->SetNumberField(TEXT("exitCode"), static_cast<double>(ReturnCode));
 	const TSharedPtr<FJsonObject> Result =
 		FTCHARToUTF8(*Output).Length() <= 1024 * 1024
 			? ParseJson(Output)
 			: nullptr;
 	if (!Result.IsValid())
 	{
-		return FMCPToolResult::Error(TEXT("Python expression was rejected or returned invalid JSON."), TEXT("python_expression_rejected"), 422);
+		return Complete(FMCPToolResult::Error(TEXT("Python script returned invalid JSON."), TEXT("python_script_failed"), 422), TEXT("failed"), TEXT("python_script_failed"));
 	}
 	bool bOk = false;
 	Result->TryGetBoolField(TEXT("ok"), bOk);
-	return bOk ? FMCPToolResult::Ok(Result)
-		: FMCPToolResult::Error(RefString(Result, TEXT("error")), TEXT("python_expression_rejected"), 422);
+	for (const TCHAR* Field : { TEXT("stdout"), TEXT("stderr"), TEXT("exceptionType"), TEXT("traceback") })
+	{
+		if (Result->HasTypedField<EJson::String>(Field)) Audit->SetStringField(Field, RefString(Result, Field));
+	}
+	if (bOk && ReturnCode == 0)
+	{
+		return Complete(FMCPToolResult::Ok(Result), TEXT("completed"), FString());
+	}
+	return Complete(FMCPToolResult::Error(RefString(Result, TEXT("error")), TEXT("python_script_failed"), 422), TEXT("failed"), TEXT("python_script_failed"));
 }
 }

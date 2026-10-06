@@ -159,6 +159,40 @@ function Assert-NoWorkerSavedTree([string] $PluginRoot) {
     }
 }
 
+function Test-EditorUsesEngine(
+    [System.Diagnostics.Process] $Process,
+    [string] $EngineDirectory
+) {
+    # Installation is unsafe while an editor from the selected Engine is
+    # running, but an unrelated project/editor must not block an isolated
+    # install fixture.  Process.Path can be unavailable for elevated or
+    # protected processes; those processes cannot be proven to use this Engine
+    # and therefore do not match this scoped guard.
+    $ExecutablePath = $null
+    try {
+        $ExecutablePath = $Process.Path
+    }
+    catch {
+        try { $ExecutablePath = $Process.MainModule.FileName }
+        catch { return $false }
+    }
+    if (-not $ExecutablePath) {
+        return $false
+    }
+    try {
+        $CanonicalExecutable = [IO.Path]::GetFullPath($ExecutablePath)
+        $CanonicalEngine = [IO.Path]::GetFullPath($EngineDirectory).TrimEnd(
+            [IO.Path]::DirectorySeparatorChar,
+            [IO.Path]::AltDirectorySeparatorChar)
+        return $CanonicalExecutable.StartsWith(
+            $CanonicalEngine + [IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase)
+    }
+    catch {
+        return $false
+    }
+}
+
 function Resolve-WorkerEngineVersion([string] $PluginRoot, [string] $RequestedVersion) {
     $WorkerRoot = Join-Path $PluginRoot 'Tools\Trace\Win64'
     if (-not (Test-Path -LiteralPath $WorkerRoot -PathType Container)) {
@@ -416,6 +450,7 @@ $Required = @(
     'Binaries\Win64\UnrealEditor-UEAITraceAnalysisCore.pdb',
     'Intermediate\Build\Win64\UnrealGame\Development\UEAITraceRuntime\UEAITraceRuntime.precompiled',
     'Intermediate\Build\Win64\x64\UnrealGame\Development\UEAITraceRuntime\Module.UEAITraceRuntime.cpp.obj',
+    'Resources\Python\full_execute.py',
     'Resources\Trace\worker-protocol.v1.json',
     'Resources\Trace\launch-profiles.json'
 )
@@ -448,7 +483,8 @@ if ($PreflightOnly) {
     return
 }
 
-if (Get-Process -Name UnrealEditor, UnrealEditor-Cmd -ErrorAction SilentlyContinue) {
+if (@(Get-Process -Name UnrealEditor, UnrealEditor-Cmd -ErrorAction SilentlyContinue |
+        Where-Object { Test-EditorUsesEngine $_ $EngineEvidence.engineDirectory }).Count -gt 0) {
     throw 'An Unreal Editor process is running. Close it normally before installing the plugin.'
 }
 

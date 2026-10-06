@@ -62,6 +62,28 @@ bool IsAuthoredProperty(const FProperty* Property)
 		CPF_Transient | CPF_DuplicateTransient | CPF_NonPIEDuplicateTransient);
 }
 
+void CopyAuthoredProperty(FProperty* Property, UObject* Destination, const UObject* Source)
+{
+	if (!Property || !Destination || !Source)
+	{
+		return;
+	}
+	// Native bools such as UMaterial::TwoSided may be packed bitfields. Read and
+	// write each logical bool through its accessor to preserve neighbouring bits.
+	if (const FBoolProperty* BoolProperty = CastField<const FBoolProperty>(Property))
+	{
+		for (int32 Index = 0; Index < Property->ArrayDim; ++Index)
+		{
+			BoolProperty->SetPropertyValue_InContainer(
+				Destination,
+				BoolProperty->GetPropertyValue_InContainer(Source, Index),
+				Index);
+		}
+		return;
+	}
+	Property->CopyCompleteValue_InContainer(Destination, Source);
+}
+
 void GatherAuthoredObjects(UMaterial* Material, TArray<UObject*>& Objects)
 {
 	Objects.Reset();
@@ -401,7 +423,7 @@ UMaterial* DuplicateAuthoredImage(
 		{
 			if (IsAuthoredProperty(*It))
 			{
-				It->CopyCompleteValue_InContainer(Destination, Source);
+				CopyAuthoredProperty(*It, Destination, Source);
 			}
 		}
 	}
@@ -804,7 +826,7 @@ bool ApplyRestorePlan(
 			FProperty* Property = *It;
 			if (IsAuthoredProperty(Property))
 			{
-				Property->CopyCompleteValue_InContainer(Item.Target, Item.Image);
+				CopyAuthoredProperty(Property, Item.Target, Item.Image);
 			}
 		}
 	}
@@ -819,6 +841,26 @@ bool ApplyRestorePlan(
 	{
 		Material->MaterialGraph->RebuildGraph();
 		Material->MaterialGraph->NotifyGraphChanged();
+	}
+	// Reapply authored fields on the live root after graph rebuild and callbacks.
+	// The final readback must reflect the checkpoint image, even if graph refresh
+	// or a notification listener has changed root material settings.
+	for (const FObjectRestore& Item : Plan)
+	{
+		if (Item.Image != Image || Item.Target != Material)
+		{
+			continue;
+		}
+		for (TFieldIterator<FProperty> It(Material->GetClass()); It; ++It)
+		{
+			if (IsAuthoredProperty(*It))
+			{
+				CopyAuthoredProperty(*It, Material, Image);
+			}
+		}
+		FArchiveReplaceObjectRef<UObject> Remap(Material, Replacements,
+			EArchiveReplaceObjectFlags::IgnoreOuterRef | EArchiveReplaceObjectFlags::IgnoreArchetypeRef);
+		break;
 	}
 	return true;
 }

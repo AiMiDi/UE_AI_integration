@@ -560,6 +560,21 @@ bool FClientActivityExecutionAccountingTest::RunTest(
 		200,
 		SerializeEnvelope(true, JobData));
 
+	const FString PythonEvent = Service.BeginActivity(Caller, TEXT("capability"));
+	Service.MarkActivityStarted(PythonEvent);
+	Service.UpdateCapabilityActivity(
+		PythonEvent,
+		TEXT("production.python.inspect"),
+		TEXT("python-audit"),
+		TEXT("confirmWrite"));
+	TSharedPtr<FJsonObject> PythonData = MakeShared<FJsonObject>();
+	PythonData->SetStringField(TEXT("executionId"), TEXT("python-execution-1"));
+	PythonData->SetStringField(TEXT("modificationLevel"), TEXT("destructive"));
+	Service.CompleteActivityFromHttp(
+		PythonEvent,
+		200,
+		SerializeEnvelope(true, PythonData));
+
 	TSharedPtr<FJsonObject> PlanData = MakeShared<FJsonObject>();
 	PlanData->SetStringField(TEXT("status"), TEXT("planned"));
 	CompleteWorkflowActivity(
@@ -612,13 +627,13 @@ bool FClientActivityExecutionAccountingTest::RunTest(
 	const TSharedPtr<FJsonObject> Statistics =
 		Snapshot->GetObjectField(TEXT("statistics"));
 	TestEqual(
-		TEXT("Both capability calls are counted"),
+		TEXT("All capability calls are counted"),
 		JsonInt(Statistics, TEXT("capabilityCalls")),
-		2);
+		3);
 	TestEqual(
 		TEXT("Successful capability count is accurate"),
 		JsonInt(Statistics, TEXT("capabilitySucceeded")),
-		1);
+		2);
 	TestEqual(
 		TEXT("Failed capability count is accurate"),
 		JsonInt(Statistics, TEXT("capabilityFailed")),
@@ -717,6 +732,23 @@ bool FClientActivityExecutionAccountingTest::RunTest(
 			TEXT("Durable job id is correlated"),
 			JobActivity->GetStringField(TEXT("jobId")),
 			FString(TEXT("job-1")));
+	}
+
+	const TSharedPtr<FJsonObject> PythonActivity = FindObjectByStringField(
+		Executions,
+		TEXT("requestId"),
+		TEXT("python-audit"));
+	TestTrue(TEXT("Python activity metadata is retained"), PythonActivity.IsValid());
+	if (PythonActivity.IsValid())
+	{
+		TestEqual(
+			TEXT("Python execution id is correlated"),
+			PythonActivity->GetStringField(TEXT("scriptExecutionId")),
+			FString(TEXT("python-execution-1")));
+		TestEqual(
+			TEXT("Python modification level is recorded"),
+			PythonActivity->GetStringField(TEXT("scriptModificationLevel")),
+			FString(TEXT("destructive")));
 	}
 
 	const TSharedPtr<FJsonObject> ExecuteActivity =

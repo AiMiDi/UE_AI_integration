@@ -13,8 +13,9 @@ param(
     [Parameter(Mandatory)][string] $PackagedPluginRoot,
     [Parameter(Mandatory)][string] $BuildSummaryPath,
     [Parameter(Mandatory)][string] $WorkRoot,
-    [string] $OriginalProjectRoot = 'S:\SilverPalace\Project',
-    [string] $EngineRoot = 'S:\SilverPalace\unrealengine',
+    [string] $OriginalProjectRoot = $env:UEAI_PROJECT_ROOT,
+    [string] $EngineRoot = $env:UEAI_ENGINE_ROOT,
+    [string] $ProjectDescriptorName,
     [switch] $PrepareOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -257,9 +258,28 @@ function Invoke-ReplicaPhase([string] $Phase, $Dll, $Pdb) {
     }
 }
 
+if (-not $OriginalProjectRoot) {
+    throw 'Pass -OriginalProjectRoot or set UEAI_PROJECT_ROOT to the source project directory.'
+}
+if (-not $EngineRoot) { $EngineRoot = $env:UE_ENGINE_ROOT }
+if (-not $EngineRoot) {
+    throw 'Pass -EngineRoot or set UEAI_ENGINE_ROOT (or UE_ENGINE_ROOT) to the matching Unreal Engine root.'
+}
 $PackagedPluginRoot = Get-FullPath (Resolve-Path -LiteralPath $PackagedPluginRoot).Path
 $OriginalProjectRoot = Get-FullPath (Resolve-Path -LiteralPath $OriginalProjectRoot).Path
 $EngineRoot = Get-FullPath (Resolve-Path -LiteralPath $EngineRoot).Path
+$originalDescriptorFiles = @(Get-ChildItem -LiteralPath $OriginalProjectRoot -File -Filter '*.uproject')
+if ($ProjectDescriptorName) {
+    Assert-Condition ([IO.Path]::GetExtension($ProjectDescriptorName) -eq '.uproject') `
+        'ProjectDescriptorName must name a .uproject file.'
+    $originalDescriptorFile = Get-Item -LiteralPath (Join-Path $OriginalProjectRoot $ProjectDescriptorName)
+    Assert-Condition ($originalDescriptorFile -and $originalDescriptorFile.PSIsContainer -eq $false) `
+        "Project descriptor does not exist: $ProjectDescriptorName"
+} else {
+    Assert-Condition ($originalDescriptorFiles.Count -eq 1) `
+        'The source project directory must contain exactly one .uproject file, or pass ProjectDescriptorName.'
+    $originalDescriptorFile = $originalDescriptorFiles[0]
+}
 $WorkRoot = Get-FullPath $WorkRoot
 Assert-IndependentDirectory $WorkRoot
 $buildBinding = Get-VerifiedBuildBinding -BuildSummaryPath $BuildSummaryPath -PackagedPluginRoot $PackagedPluginRoot -EngineRoot $EngineRoot
@@ -300,7 +320,7 @@ $mounts = @(
 foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $OriginalProjectRoot 'Content') -File)) {
     Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $content $file.Name)
 }
-$originalDescriptor = Get-Content -Raw -LiteralPath (Join-Path $OriginalProjectRoot 'SilverPalace.uproject') | ConvertFrom-Json -AsHashtable
+$originalDescriptor = Get-Content -Raw -LiteralPath $originalDescriptorFile.FullName | ConvertFrom-Json -AsHashtable
 # Retain the real game's native module and its existing binaries, but do not
 # import project startup maps, Lua/cook tools, auto-enabled Editor extensions,
 # user settings, Saved or Intermediate into the acceptance process.
@@ -319,7 +339,7 @@ $descriptor = @{
         @{ Name = 'UE_AI_integration'; Enabled = $true }, @{ Name = 'Niagara'; Enabled = $true }
     )
 }
-$replicaProject = Join-Path $replica 'SilverPalace.uproject'
+$replicaProject = Join-Path $replica $originalDescriptorFile.Name
 Write-Evidence $replicaProject $descriptor
 @'
 

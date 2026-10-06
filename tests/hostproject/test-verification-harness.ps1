@@ -4,9 +4,9 @@
 
 .DESCRIPTION
     This test intentionally does not invoke Node, npm, UAT, UnrealEditor, or
-    any process that could touch a project. It parses the two harness scripts
-    and checks that source/binary identity and verification-lane fields remain
-    present when the runners evolve.
+    any process that could touch a project. It parses the harness scripts and
+    checks portable input paths, source/binary identity and verification-lane
+    fields when the runners evolve.
 #>
 [CmdletBinding()]
 param(
@@ -44,13 +44,67 @@ function Assert-PowerShellParses {
     }
 }
 
+function Assert-EnvironmentParameterDefault {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][string] $ParameterName,
+        [Parameter(Mandatory)][string] $EnvironmentName
+    )
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+        $Path, [ref]$tokens, [ref]$parseErrors)
+    $parameters = @($ast.ParamBlock.Parameters | Where-Object {
+            $_.Name.VariablePath.UserPath -eq $ParameterName
+        })
+    if ($parameters.Count -ne 1 -or
+        $parameters[0].DefaultValue.Extent.Text -cne ('$env:' + $EnvironmentName)) {
+        throw "Harness parameter '$ParameterName' must default to environment variable '$EnvironmentName': $Path"
+    }
+}
+
 $hostHarness = Join-Path $PluginRoot 'tests\hostproject\run-host-automation.ps1'
 $contractHarness = Join-Path $PluginRoot 'tests\hostproject\run-contract-checks.ps1'
-foreach ($path in @($hostHarness, $contractHarness)) {
+$replicaHarness = Join-Path $PluginRoot 'tests\hostproject\run-project-replica-acceptance.ps1'
+$runtimeHarnesses = @(
+    $hostHarness,
+    (Join-Path $PluginRoot 'tests\hostproject\run-blueprint-persistence.ps1'),
+    (Join-Path $PluginRoot 'tests\hostproject\run-niagara-spec-persistence.ps1'),
+    $replicaHarness
+)
+foreach ($path in @($runtimeHarnesses) + @($contractHarness)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Harness script is missing: $path"
     }
     Assert-PowerShellParses -Path $path
+}
+foreach ($path in $runtimeHarnesses) {
+    Assert-EnvironmentParameterDefault -Path $path -ParameterName 'EngineRoot' -EnvironmentName 'UEAI_ENGINE_ROOT'
+}
+Assert-EnvironmentParameterDefault -Path $replicaHarness -ParameterName 'OriginalProjectRoot' -EnvironmentName 'UEAI_PROJECT_ROOT'
+$replicaText = Get-Content -LiteralPath $replicaHarness -Raw
+foreach ($needle in @(
+        "-Filter '*.uproject'",
+        '$ProjectDescriptorName',
+        '$originalDescriptorFiles.Count -eq 1',
+        '-LiteralPath $originalDescriptorFile.FullName',
+        'Join-Path $replica $originalDescriptorFile.Name',
+        'Assert-IndependentDirectory $WorkRoot',
+        'ReparsePoint',
+        'originalSeedsUnchanged')) {
+    Assert-Contains -Text $replicaText -Needle $needle -Path $replicaHarness
+}
+$tokens = $null
+$parseErrors = $null
+$replicaAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    $replicaHarness, [ref]$tokens, [ref]$parseErrors)
+$literalProjectNames = @($replicaAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+            $node.Value -match '\.uproject$' -and $node.Value -notin @('*.uproject', '.uproject')
+        }, $true))
+if ($literalProjectNames.Count -ne 0) {
+    throw "Replica harness must derive the project descriptor filename from its source project: $replicaHarness"
 }
 
 $hostText = Get-Content -LiteralPath $hostHarness -Raw
@@ -146,6 +200,8 @@ $nonNullRhiTests = @(
     @{ Path = 'Source/UE_AI_integration/Private/Tests/BlueprintDebugPIEHttpTests.cpp'; Test = 'UE_AI_integration.BlueprintDebug.RealPIEHttpStepWatchContinue' },
     @{ Path = 'Source/UE_AI_integration/Private/Tests/ProjectAssetReplicaAcceptanceTests.cpp'; Test = 'UE_AI_integration.ProjectReplica.RealAssetsWriteRestoreReferencesAndRuntime' },
     @{ Path = 'Source/UE_AI_integration/Private/Tests/NiagaraSystemRuntimeAcceptanceTests.cpp'; Test = 'UE_AI_integration.Niagara.SystemSpec.NonNullRHIRuntimeAcceptance' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/NiagaraSimCacheObservationTests.cpp'; Test = 'UE_AI_integration.Niagara.SimCache.CpuLifecycle' },
+    @{ Path = 'Source/UE_AI_integration/Private/Tests/NiagaraSimCacheObservationTests.cpp'; Test = 'UE_AI_integration.Niagara.SimCache.GpuLifecycle' },
     @{ Path = 'Source/UE_AI_integration/Private/Tests/RuntimeSessionTests.cpp'; Test = 'UE_AI_integration.Runtime.Viewport.RealPIECapture' }
 )
 foreach ($test in $nonNullRhiTests) {

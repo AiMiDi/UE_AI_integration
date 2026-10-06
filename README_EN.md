@@ -10,7 +10,7 @@ AI, and production workflows, then analyze `.utrace` files with the Editor
 closed.
 
 The current plugin version is `1.0.0`. Unreal Engine 5.3 is the release build
-baseline. The local SilverPalace 5.4.1 branch has passed builds of Niagara,
+baseline. The local Unreal Engine 5.4.1 branch has passed builds of Niagara,
 NiagaraShader and the plugin modules; other branches still lack full validation.
 
 ## Highlights
@@ -82,8 +82,11 @@ NiagaraShader and the plugin modules; other branches still lack full validation.
   suites with per-rule JSON/JUnit metrics and the existing Trace/HTML evidence.
 - 0.7.2 publishes Workflow boundaries through `ue.recovery-journal.v1`, with
   bounded recovery discovery and test-only real-process fault markers.
-- 0.8.0 adds declarative Blueprint BuildGraph, read-only UE reflection, and an
-  isolated restricted Python evaluator over immutable JSON only.
+- 0.8.0 adds declarative Blueprint BuildGraph, read-only UE reflection, and
+  complete Python script execution in a killable isolated worker. Callers must
+  declare `readOnly`, `safeWrite`, `confirmWrite`, or `destructive`; the host
+  records the script digest, execution status, and an audit receipt. The worker
+  does not inject the UE `unreal` module.
 - 0.8.1 adds live availability, exact-viewport lossless PNG capture, state
   restoration, render-fingerprint comparison, and bounded semantic analysis for
   Editor/PIE debug views. It does not export arbitrary GBuffer/RDG textures. See
@@ -97,8 +100,8 @@ NiagaraShader and the plugin modules; other branches still lack full validation.
   default, supports forced live validation with `--live-schema`, and reuses the
   catalog and connection in `ue-cli shell`; `ue-workflow-cli` contains only DSL commands.
 - [UE Agent Skills](docs/UE_AGENT_SKILLS.md) ships eleven validated domain Skills
-  and capability recipes for a Load → Discover → Execute → See Results loop
-  without adding a generic script executor.
+  and capability recipes for a Load → Discover → Execute → See Results loop;
+  Python scripts use the isolated worker and modification-level audit contract.
 
 ## Architecture
 

@@ -30,6 +30,9 @@
 #include "NiagaraRibbonRendererProperties.h"
 #include "NiagaraScript.h"
 #include "NiagaraScriptSource.h"
+//++[UEAI] Begin implementation
+#include "NiagaraSimulationStageBase.h"
+//--[UEAI] End implementation
 #include "NiagaraSpriteRendererProperties.h"
 #include "NiagaraSystem.h"
 #include "NiagaraSystemFactoryNew.h"
@@ -70,6 +73,10 @@ struct FFixture
 	UNiagaraNodeFunctionCall* Module = nullptr;
 	UNiagaraEmitter* Emitter = nullptr;
 	FGuid EmitterVersion;
+//++[UEAI] Begin implementation
+	FGuid EventHandlerUsageId;
+	FGuid SimulationStageUsageId;
+//--[UEAI] End implementation
 	UNiagaraSpriteRendererProperties* Sprite = nullptr;
 	UNiagaraMeshRendererProperties* Mesh = nullptr;
 	UNiagaraRibbonRendererProperties* Ribbon = nullptr;
@@ -452,6 +459,10 @@ bool FUEAINiagaraSystemSpecCrossProcessPersistenceTest::RunTest(const FString&)
 		TestTrue(TEXT("Export includes sprite renderer"), HasRendererClass(Export.Data, TEXT("NiagaraSpriteRendererProperties")));
 		TestTrue(TEXT("Export includes mesh renderer"), HasRendererClass(Export.Data, TEXT("NiagaraMeshRendererProperties")));
 		TestTrue(TEXT("Export includes ribbon renderer"), HasRendererClass(Export.Data, TEXT("NiagaraRibbonRendererProperties")));
+		const bool bEventHandlerCovered = HasEventHandlerUsage(Export.Data, Fixture.EventHandlerUsageId);
+		const bool bSimulationStageCovered = HasSimulationStageUsage(Export.Data, Fixture.SimulationStageUsageId);
+		TestTrue(TEXT("Export includes authored Event Handler state"), bEventHandlerCovered);
+		TestTrue(TEXT("Export includes authored Simulation Stage state"), bSimulationStageCovered);
 		TestTrue(TEXT("Export includes authored SubUV property"), Export.Data->GetStringField(TEXT("specDigest")).Len() > 0);
 		if (!Fixture.bDynamicInputCovered) AddInfo(TEXT("Dynamic input tree was not created: required Niagara module/dynamic-input assets were unavailable."));
 		TestTrue(TEXT("Generated package saves to disk"), SaveSystem(Fixture.System));
@@ -470,12 +481,12 @@ bool FUEAINiagaraSystemSpecCrossProcessPersistenceTest::RunTest(const FString&)
 		Evidence->SetBoolField(TEXT("spriteCovered"), HasRendererClass(Export.Data, TEXT("NiagaraSpriteRendererProperties")));
 		Evidence->SetBoolField(TEXT("meshCovered"), HasRendererClass(Export.Data, TEXT("NiagaraMeshRendererProperties")));
 		Evidence->SetBoolField(TEXT("ribbonCovered"), HasRendererClass(Export.Data, TEXT("NiagaraRibbonRendererProperties")));
-		Evidence->SetBoolField(TEXT("eventHandlerCovered"), false);
-		Evidence->SetBoolField(TEXT("simulationStageCovered"), false);
+		Evidence->SetBoolField(TEXT("eventHandlerCovered"), bEventHandlerCovered);
+		Evidence->SetBoolField(TEXT("simulationStageCovered"), bSimulationStageCovered);
 		Evidence->SetStringField(TEXT("runtimeEvidence"), TEXT("not_run: this contract proves authored persistence only"));
 		Evidence->SetStringField(TEXT("preparePid"), FString::FromInt(FPlatformProcess::GetCurrentProcessId()));
 		SaveJsonFile(ArtifactPath, Evidence); SaveJsonFile(ArtifactPath + TEXT(".spec.json"), Export.Data);
-		return true;
+		return !HasAnyErrors();
 	}
 
 	FAssetRegistryModule::GetRegistry().ScanPathsSynchronous({TEXT("/Game/Automation")}, true);
@@ -605,7 +616,7 @@ bool FUEAINiagaraSystemSpecCrossProcessPersistenceTest::RunTest(const FString&)
 			for (const TSharedPtr<FJsonValue>& RendererValue : *Renderers)
 			{
 				const TSharedPtr<FJsonObject> Renderer = RendererValue.IsValid() ? RendererValue->AsObject() : nullptr;
-				if (!Renderer.IsValid() || !Renderer->GetStringField(TEXT("rendererClass")).EndsWith(TEXT("NiagaraSpriteRendererProperties"))) continue;
+				if (!Renderer.IsValid()) continue;
 				const TSharedPtr<FJsonObject> Properties = Renderer->GetObjectField(TEXT("properties"));
 				if (Properties.IsValid() && Renderer->GetStringField(TEXT("rendererClass")).EndsWith(TEXT("NiagaraSpriteRendererProperties")))
 					bPersistedSpriteSubUvEdit = Properties->GetStringField(TEXT("bSubImageBlend")).Equals(TEXT("False"), ESearchCase::IgnoreCase);
@@ -625,7 +636,7 @@ bool FUEAINiagaraSystemSpecCrossProcessPersistenceTest::RunTest(const FString&)
 	const FMCPToolResult RoundTrip = Registry.ExecuteTool(TEXT("content.niagara.system.spec.round_trip"), RoundTripParams);
 	TestTrue(TEXT("Post-reload native round-trip verifies"), RoundTrip.bSuccess && RoundTrip.Data && RoundTrip.Data->GetBoolField(TEXT("roundTripVerified")));
 	TestTrue(TEXT("Isolated package is deleted after verification"), !UEditorAssetLibrary::DoesAssetExist(Fixture.SystemPath) || UEditorAssetLibrary::DeleteAsset(Fixture.SystemPath));
-	Evidence->SetStringField(TEXT("phase"), Phase); Evidence->SetStringField(TEXT("verifyPid"), FString::FromInt(FPlatformProcess::GetCurrentProcessId())); Evidence->SetBoolField(TEXT("verifyRoundTrip"), RoundTrip.bSuccess); SaveJsonFile(ArtifactPath, Evidence);
+	Evidence->SetStringField(TEXT("phase"), Phase); Evidence->SetStringField(TEXT("verifyPid"), FString::FromInt(FPlatformProcess::GetCurrentProcessId())); Evidence->SetBoolField(TEXT("verifyRoundTrip"), !HasAnyErrors() && RoundTrip.bSuccess && RoundTrip.Data && RoundTrip.Data->GetBoolField(TEXT("roundTripVerified"))); SaveJsonFile(ArtifactPath, Evidence);
 	return !HasAnyErrors();
 }
 

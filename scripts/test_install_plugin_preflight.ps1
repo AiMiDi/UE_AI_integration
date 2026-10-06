@@ -169,6 +169,8 @@ try {
     $Copies = @(
         @('Resources\Capabilities\production.json',
             'Resources\Capabilities\production.json'),
+        @('Resources\Python\full_execute.py',
+            'Resources\Python\full_execute.py'),
         @('Resources\Trace\insights-actions.5.3.json',
             'Resources\Trace\insights-actions.5.3.json'),
         @('Resources\Trace\launch-profiles.json',

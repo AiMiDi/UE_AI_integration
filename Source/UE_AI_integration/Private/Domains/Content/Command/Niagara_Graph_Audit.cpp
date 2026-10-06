@@ -83,7 +83,7 @@ bool ContainsAnyToken(const FString& Value, std::initializer_list<const TCHAR*> 
 	return false;
 }
 
-//++[SilverPalace] Begin add by wuziye 2026/09/05
+//++[UEAI] Begin implementation
 // Match a module/function identity without treating a longer operation name
 // (for example RayTraceDistanceField_GPU) as the generic RayTrace helper.
 bool HasExactOperationPathOrName(
@@ -109,9 +109,9 @@ bool HasExactOperationPathOrName(
 	return FunctionScript.EndsWith(PathSuffix, ESearchCase::IgnoreCase)
 		|| FunctionScript.EndsWith(ObjectSuffix, ESearchCase::IgnoreCase);
 }
-//--[SilverPalace] End add by wuziye
+//--[UEAI] End implementation
 
-//++[SilverPalace] Begin add by wuziye 2026/09/05
+//++[UEAI] Begin implementation
 // Collision module names share a "Collision" prefix (CollisionRest,
 // CollisionLinearImpulse, and CollisionQueryAndResponse). Match the module
 // identity itself, including its dotted asset name, instead of searching for
@@ -148,7 +148,7 @@ bool HasExactCollisionModuleIdentity(
 			PackagePathSuffix,
 			ESearchCase::IgnoreCase);
 }
-//--[SilverPalace] End add by wuziye
+//--[UEAI] End implementation
 
 void AddUniqueString(TArray<FString>& Values, const FString& Value)
 {
@@ -248,12 +248,12 @@ void AddBestOperationMatch(
 		TEXT("DebugCollisionEvents"),
 		TEXT("FindTangentialVelocityOnSphere"),
 		TEXT("InitialRotationalVelocity"),
-		//++[SilverPalace] Begin add by wuziye 2026/09/05
+		//++[UEAI] Begin implementation
 		TEXT("CalculateNeighbors"),
 		TEXT("SampleNeighbors"),
 		TEXT("NeighborBehaviours"),
 		TEXT("NeighborBehaviors"),
-		//--[SilverPalace] End add by wuziye
+		//--[UEAI] End implementation
 		TEXT("InitializeNeighborGrid"),
 		TEXT("PBD_IntraParticleCollision"),
 		TEXT("PopulateNeighborGrid"),
@@ -633,7 +633,7 @@ void ClassifyFunctionNode(
 			SignatureName,
 			FunctionScript,
 			TEXT("InitialRotationalVelocity"))
-		//++[SilverPalace] Begin add by wuziye 2026/09/05
+		//++[UEAI] Begin implementation
 		// Neighbor update modules participate in the collision solve, but they
 		// are support operations rather than world-query providers.
 		|| HasExactOperationPathOrName(
@@ -656,7 +656,7 @@ void ClassifyFunctionNode(
 			SignatureName,
 			FunctionScript,
 			TEXT("NeighborBehaviors"))
-		//--[SilverPalace] End add by wuziye
+		//--[UEAI] End implementation
 		|| HasExactOperationPathOrName(
 			FunctionName,
 			SignatureName,
@@ -1720,7 +1720,7 @@ void GetCollisionOperationDetails(
 	GetCollisionOperationNames(FunctionCall, OutOperations, OutInterfaceKinds);
 }
 
-//++[SilverPalace] Begin add by wuziye 2026/09/05
+//++[UEAI] Begin implementation
 bool MatchCollisionOperationSelector(
 	const UNiagaraNodeFunctionCall* FunctionCall,
 	const FString& OperationSelector,
@@ -1764,7 +1764,7 @@ bool MatchCollisionOperationSelector(
 	}
 	return false;
 }
-//--[SilverPalace] End add by wuziye
+//--[UEAI] End implementation
 
 void SetCollisionOperationInventory(
 	const TSharedRef<FJsonObject>& Object,

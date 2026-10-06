@@ -36,7 +36,7 @@ namespace
 {
 constexpr SIZE_T MaximumRequestBytes = 4 * 1024 * 1024;
 
-//++[SilverPalace] Begin add by Codex 2026/09/28
+//++[UEAI] Begin implementation
 FString FindInstalledProjectFile()
 {
 	FString Directory = FPaths::GetPath(FPlatformProcess::ExecutablePath());
@@ -76,7 +76,7 @@ bool HasExplicitProjectFile(const int32 ArgC, TCHAR* ArgV[])
 	}
 	return false;
 }
-//--[SilverPalace] End add by Codex
+//--[UEAI] End implementation
 
 class FScopedPreInitStdoutSilencer
 {
@@ -258,7 +258,7 @@ INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 	// The stdio transport is a JSON protocol. Suppress engine log routing so a
 	// caller never has to strip localization or platform warnings from stdout.
 	FScopedPreInitStdoutSilencer PreInitStdout;
-	//++[SilverPalace] Begin add by Codex 2026/09/28
+	//++[UEAI] Begin implementation
 	FString AdditionalCommandline = TEXT("-Unattended -NoLog -NoDefaultLog -SaveToUserDir");
 	if (!HasExplicitProjectFile(ArgC, ArgV))
 	{
@@ -268,7 +268,7 @@ INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 			AdditionalCommandline += FString::Printf(TEXT(" -Project=\"%s\""), *ProjectFile);
 		}
 	}
-	//--[SilverPalace] End add by Codex
+	//--[UEAI] End implementation
 	const int32 InitResult = GEngineLoop.PreInit(
 		ArgC,
 		ArgV,

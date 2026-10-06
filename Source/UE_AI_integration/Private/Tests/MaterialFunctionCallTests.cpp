@@ -262,6 +262,32 @@ bool FMaterialFunctionInstanceCreateTest::RunTest(const FString&)
 		TestEqual(TEXT("Vector A"), C.A, 1.0f);
 		TestEqual(TEXT("Vector GUID resolves"), MFI->VectorParameterValues[0].ExpressionGUID, Vector->ExpressionGUID);
 	}
+	const auto InstancePath = Path;
+	auto SetGain = MakeShared<FJsonObject>();
+	SetGain->SetStringField(TEXT("functionInstance"), InstancePath);
+	SetGain->SetStringField(TEXT("parameter"), TEXT("Gain"));
+	SetGain->SetNumberField(TEXT("value"), 0.75);
+	const auto SetResult = FunctionCallTool(TEXT("content.material.function.instance.set_parameter"), SetGain);
+	if (!TestTrue(TEXT("Function instance parameter set succeeds"), SetResult.bSuccess)) { AddError(SetResult.ErrorMessage); return false; }
+	TestTrue(TEXT("Parameter set readback is verified"), SetResult.Data->GetBoolField(TEXT("readbackVerified")));
+	TestEqual(TEXT("Updated scalar value reads back"), MFI->ScalarParameterValues[0].ParameterValue, 0.75f);
+	auto InvalidSet = MakeShared<FJsonObject>();
+	InvalidSet->SetStringField(TEXT("functionInstance"), InstancePath);
+	InvalidSet->SetStringField(TEXT("parameter"), TEXT("Gain"));
+	auto InvalidColor = MakeShared<FJsonObject>();
+	InvalidColor->SetStringField(TEXT("unexpected"), TEXT("component"));
+	InvalidSet->SetObjectField(TEXT("value"), InvalidColor);
+	const auto InvalidSetResult = FunctionCallTool(TEXT("content.material.function.instance.set_parameter"), InvalidSet);
+	TestFalse(TEXT("Invalid parameter set is rejected"), InvalidSetResult.bSuccess);
+	TestTrue(TEXT("Invalid parameter set reports verified rollback"), InvalidSetResult.Data.IsValid() && InvalidSetResult.Data->GetBoolField(TEXT("rollbackVerified")));
+	TestEqual(TEXT("Rejected parameter set preserves scalar value"), MFI->ScalarParameterValues[0].ParameterValue, 0.75f);
+	auto ClearGain = MakeShared<FJsonObject>();
+	ClearGain->SetStringField(TEXT("functionInstance"), InstancePath);
+	ClearGain->SetStringField(TEXT("parameter"), TEXT("Gain"));
+	const auto ClearResult = FunctionCallTool(TEXT("content.material.function.instance.set_parameter"), ClearGain);
+	if (!TestTrue(TEXT("Function instance parameter clear succeeds"), ClearResult.bSuccess)) { AddError(ClearResult.ErrorMessage); return false; }
+	TestTrue(TEXT("Parameter clear readback is verified"), ClearResult.Data->GetBoolField(TEXT("readbackVerified")));
+	TestEqual(TEXT("Cleared scalar override count"), MFI->ScalarParameterValues.Num(), 0);
 	auto P2 = MakeShared<FJsonObject>();
 	P2->SetStringField(TEXT("parentFunction"), Parent->GetPathName());
 	P2->SetStringField(TEXT("name"), FString::Printf(TEXT("InstBad_%s"), *Id));
@@ -270,6 +296,20 @@ bool FMaterialFunctionInstanceCreateTest::RunTest(const FString&)
 	P2->SetArrayField(TEXT("overrides"), {MakeShared<FJsonValueObject>(Bad)});
 	const auto Missing = FunctionCallTool(TEXT("content.material.function.instance.create"), P2);
 	TestTrue(TEXT("Unknown override reported without failing"), Missing.bSuccess && Missing.Data->GetIntegerField(TEXT("overridesApplied")) == 0 && Missing.Data->GetArrayField(TEXT("errors")).Num() == 1);
+	const FString InvalidName = FString::Printf(TEXT("InstInvalid_%s"), *Id);
+	auto P3 = MakeShared<FJsonObject>();
+	P3->SetStringField(TEXT("parentFunction"), Parent->GetPathName());
+	P3->SetStringField(TEXT("name"), InvalidName);
+	P3->SetStringField(TEXT("packagePath"), TEXT("/Game/Automation"));
+	auto InvalidOverride = MakeShared<FJsonObject>();
+	InvalidOverride->SetStringField(TEXT("parameter"), TEXT("Gain"));
+	auto InvalidOverrideValue = MakeShared<FJsonObject>();
+	InvalidOverrideValue->SetStringField(TEXT("unexpected"), TEXT("component"));
+	InvalidOverride->SetObjectField(TEXT("value"), InvalidOverrideValue);
+	P3->SetArrayField(TEXT("overrides"), {MakeShared<FJsonValueObject>(InvalidOverride)});
+	const auto InvalidCreate = FunctionCallTool(TEXT("content.material.function.instance.create"), P3);
+	TestFalse(TEXT("Malformed override is rejected before asset creation"), InvalidCreate.bSuccess);
+	TestNull(TEXT("Malformed create leaves no package"), FindPackage(nullptr, *FString::Printf(TEXT("/Game/Automation/%s"), *InvalidName)));
 	return true;
 }
 

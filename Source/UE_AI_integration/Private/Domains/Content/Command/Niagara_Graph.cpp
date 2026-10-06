@@ -15,7 +15,7 @@
 
 #if WITH_UEAI_NIAGARA && WITH_EDITORONLY_DATA
 
-//++[SilverPalace] Begin add by wuziye 2026/09/04
+//++[UEAI] Begin implementation
 #include "EdGraphSchema_Niagara.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraEmitterHandle.h"
@@ -61,7 +61,7 @@ using UEAIIntegration::Infrastructure::ValidateChangeApproval;
 constexpr int32 DefaultNodeLimit = 2048;
 constexpr int32 MaxNodeLimit = 4096;
 constexpr int32 MaxPinLimitPerNode = 256;
-//--[SilverPalace] End add by wuziye
+//--[UEAI] End implementation
 
 struct FGraphTarget
 {
@@ -560,7 +560,7 @@ bool ContainsAnyToken(const FString& Value, const TArray<FString>& Tokens)
 	return false;
 }
 
-//++[SilverPalace] Begin add by wuziye 2026/09/05
+//++[UEAI] Begin implementation
 // Match a module/function identity without treating a longer operation name
 // (for example RayTraceDistanceField_GPU) as the generic RayTrace helper.
 bool HasExactOperationPathOrName(
@@ -586,9 +586,9 @@ bool HasExactOperationPathOrName(
 	return FunctionScript.EndsWith(PathSuffix, ESearchCase::IgnoreCase)
 		|| FunctionScript.EndsWith(ObjectSuffix, ESearchCase::IgnoreCase);
 }
-//--[SilverPalace] End add by wuziye
+//--[UEAI] End implementation
 
-//++[SilverPalace] Begin add by wuziye 2026/09/05
+//++[UEAI] Begin implementation
 // Collision module names share a "Collision" prefix (CollisionRest,
 // CollisionLinearImpulse, and CollisionQueryAndResponse). Match the module
 // identity itself, including its dotted asset name, instead of searching for
@@ -625,7 +625,7 @@ bool HasExactCollisionModuleIdentity(
 			PackagePathSuffix,
 			ESearchCase::IgnoreCase);
 }
-//--[SilverPalace] End add by wuziye
+//--[UEAI] End implementation
 
 FString GetPinPath(const UEdGraphPin* Pin)
 {
@@ -871,7 +871,7 @@ void ClassifyNode(
 			SignatureName,
 			FunctionScript,
 			TEXT("InitialRotationalVelocity"))
-		//++[SilverPalace] Begin add by wuziye 2026/09/05
+		//++[UEAI] Begin implementation
 		// Neighbor update modules participate in the collision solve, but they
 		// are support operations rather than world-query providers.
 		|| HasExactOperationPathOrName(
@@ -894,7 +894,7 @@ void ClassifyNode(
 			SignatureName,
 			FunctionScript,
 			TEXT("NeighborBehaviors"))
-		//--[SilverPalace] End add by wuziye
+		//--[UEAI] End implementation
 		|| HasExactOperationPathOrName(
 			FunctionName,
 			SignatureName,
@@ -3385,7 +3385,7 @@ public:
 			}
 			Limit = FMath::Clamp(FMath::TruncToInt(Number), 1, MaxNodeLimit);
 		}
-		//++[SilverPalace] Begin add by wuziye 2026/09/05
+		//++[UEAI] Begin implementation
 		FString OperationSelector;
 		if (Params->HasField(TEXT("operation"))
 			&& !Params->TryGetStringField(TEXT("operation"), OperationSelector))
@@ -3395,7 +3395,7 @@ public:
 				TEXT("invalid_operation_selector"));
 		}
 		OperationSelector = OperationSelector.TrimStartAndEnd();
-		//--[SilverPalace] End add by wuziye
+		//--[UEAI] End implementation
 
 		TArray<FGraphTarget> Graphs;
 		if (!CollectGraphs(
@@ -3587,7 +3587,7 @@ public:
 			TEXT("packageDirty"),
 			System->GetOutermost()->IsDirty());
 		Result->SetBoolField(TEXT("includeDisabled"), bIncludeDisabled);
-		//++[SilverPalace] Begin add by wuziye 2026/09/05
+		//++[UEAI] Begin implementation
 		Result->SetStringField(TEXT("operationSelector"), OperationSelector);
 		const bool bOperationSelectorMatched =
 			OperationSelector.IsEmpty() || OperationInventory.Num() > 0;
@@ -3611,7 +3611,7 @@ public:
 					TEXT("No collision operation matched operation selector '%s'."),
 					*OperationSelector)});
 		}
-		//--[SilverPalace] End add by wuziye
+		//--[UEAI] End implementation
 		Result->SetNumberField(TEXT("graphCount"), GraphValues.Num());
 		Result->SetObjectField(TEXT("summary"), Summary);
 		Result->SetObjectField(TEXT("rayTracing"), SerializeRayTracingState());

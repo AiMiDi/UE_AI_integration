@@ -17,7 +17,7 @@
 
 #include "Infrastructure/NiagaraGraphNotifications.h"
 
-//++[SilverPalace] Begin add by wuziye 2026/09/04
+//++[UEAI] Begin implementation
 #include "Algo/Reverse.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
@@ -54,7 +54,7 @@
 #include "Misc/AutomationTest.h"
 #include "NiagaraEmitterFactoryNew.h"
 #endif
-//--[SilverPalace] End add by wuziye
+//--[UEAI] End implementation
 
 namespace UEAINiagaraModulePrivate
 {

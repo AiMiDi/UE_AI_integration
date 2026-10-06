@@ -2529,28 +2529,33 @@
     {
       "id": "production.python.inspect",
       "domain": "production",
-      "kind": "query",
-      "description": "Evaluate a restricted expression over immutable reflection snapshot JSON in a killable isolated Engine Python worker.",
+      "kind": "command",
+      "description": "Execute a complete Python script in a killable isolated Engine Python worker and record its requested modification level.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "expression": {
+          "script": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 4096
+            "maxLength": 262144
           },
-          "snapshot": {
-            "type": "object"
+          "modificationLevel": {
+            "type": "string",
+            "enum": ["readOnly", "safeWrite", "confirmWrite", "destructive"]
+          },
+          "input": {
+            "type": "object",
+            "additionalProperties": true
           }
         },
         "required": [
-          "expression",
-          "snapshot"
+          "script",
+          "modificationLevel"
         ],
         "additionalProperties": false
       },
       "traits": {
-        "destructive": false,
+        "destructive": true,
         "expensive": true
       },
       "output": {
@@ -2561,13 +2566,13 @@
         "scopeKinds": [],
         "transactionDomain": "external",
         "deferCompile": false,
-        "risk": "notOpen"
+        "risk": "confirmWrite"
       },
       "effects": {
         "asset": "none",
         "world": "none",
         "editorSession": "none",
-        "external": "read"
+        "external": "write"
       },
       "lifecycle": {
         "status": "active",

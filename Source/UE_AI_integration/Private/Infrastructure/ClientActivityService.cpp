@@ -629,6 +629,19 @@ void FClientActivityService::CompleteActivityFromHttp(
 		Activity->ErrorCode = ErrorCode;
 		Activity->RunId = RunId;
 		Activity->JobId = JobId;
+		if (Activity->Capability == TEXT("production.python.inspect") && Data.IsValid())
+		{
+			Activity->ScriptExecutionId = ReadString(Data, TEXT("executionId"));
+			Activity->ScriptModificationLevel = ReadString(Data, TEXT("modificationLevel"));
+			if (Activity->ScriptExecutionId.IsEmpty())
+			{
+				Activity->ScriptExecutionId = ReadString(Data, TEXT("scriptExecutionId"));
+			}
+			if (Activity->ScriptModificationLevel.IsEmpty())
+			{
+				Activity->ScriptModificationLevel = ReadString(Data, TEXT("scriptModificationLevel"));
+			}
+		}
 		Activity->FinishedAtUtc = FinishedAtUtc;
 		const double StartSeconds = Activity->StartedSeconds > 0.0
 			? Activity->StartedSeconds
@@ -959,6 +972,8 @@ TSharedPtr<FJsonObject> FClientActivityService::ActivityToJson(
 	Object->SetNumberField(TEXT("httpStatus"), Activity.HttpStatus);
 	Object->SetStringField(TEXT("errorCode"), Activity.ErrorCode);
 	Object->SetStringField(TEXT("risk"), Activity.Risk);
+	Object->SetStringField(TEXT("scriptExecutionId"), Activity.ScriptExecutionId);
+	Object->SetStringField(TEXT("scriptModificationLevel"), Activity.ScriptModificationLevel);
 	return Object;
 }
 

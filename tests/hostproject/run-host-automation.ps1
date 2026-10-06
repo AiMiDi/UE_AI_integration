@@ -27,7 +27,7 @@
 param(
     [string] $PluginRoot,
 
-    [string] $EngineRoot = 'S:\SilverPalace\unrealengine',
+    [string] $EngineRoot = $env:UEAI_ENGINE_ROOT,
 
     [string] $WorkRoot = 'S:\tmp\ueai-host-automation',
 
@@ -58,6 +58,10 @@ if (-not $PluginRoot) {
     $PluginRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 }
 $PluginRoot = (Resolve-Path -LiteralPath $PluginRoot).Path
+if (-not $EngineRoot) { $EngineRoot = $env:UE_ENGINE_ROOT }
+if (-not $EngineRoot) {
+    throw 'Pass -EngineRoot or set UEAI_ENGINE_ROOT (or UE_ENGINE_ROOT) to the matching Unreal Engine root.'
+}
 $EngineRoot = (Resolve-Path -LiteralPath $EngineRoot).Path
 if (-not $PackageDir) {
     $PackageDir = Join-Path $WorkRoot 'package'

@@ -7284,7 +7284,7 @@ int ExecuteOptions(
                 [](const auto& item)
                 {
                     return item.is_string()
-                        && item.get<std::string>() == "write";
+                        && item.template get<std::string>() == "write";
                 });
         const std::string risk = DescriptorRisk(*descriptor);
         const json preflight = {

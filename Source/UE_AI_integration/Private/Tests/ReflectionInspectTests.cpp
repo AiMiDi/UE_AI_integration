@@ -5,6 +5,7 @@
 #include "GameFramework/Actor.h"
 #include "GameFramework/Pawn.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/Paths.h"
 
 namespace
 {
@@ -20,12 +21,13 @@ TSharedRef<FJsonObject> MakeStringParams(
 }
 
 TSharedRef<FJsonObject> MakeInspectParams(
-	const FString& Expression,
+	const FString& Script,
 	const TSharedPtr<FJsonObject>& Snapshot)
 {
 	TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
-	Params->SetStringField(TEXT("expression"), Expression);
-	Params->SetObjectField(TEXT("snapshot"), Snapshot);
+	Params->SetStringField(TEXT("script"), Script);
+	Params->SetStringField(TEXT("modificationLevel"), TEXT("readOnly"));
+	Params->SetObjectField(TEXT("input"), Snapshot);
 	return Params;
 }
 }
@@ -113,11 +115,11 @@ bool FReflectionContractAndSnapshotTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRestrictedPythonInspectTest,
-	"UE_AI_integration.Reflection.RestrictedPython",
+	FFullPythonExecutionTest,
+	"UE_AI_integration.Reflection.FullPythonExecution",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FRestrictedPythonInspectTest::RunTest(const FString& Parameters)
+bool FFullPythonExecutionTest::RunTest(const FString& Parameters)
 {
 	FReflectionInspectService Service;
 	TSharedRef<FJsonObject> Snapshot = MakeShared<FJsonObject>();
@@ -131,34 +133,51 @@ bool FRestrictedPythonInspectTest::RunTest(const FString& Parameters)
 
 	const FMCPToolResult Good = Service.Execute(
 		TEXT("production.python.inspect"),
-		MakeInspectParams(TEXT("len(data['types'])"), Snapshot));
-	TestTrue(TEXT("Pure JSON expression succeeds"), Good.bSuccess);
+		MakeInspectParams(TEXT("import math\nresult = len(data['types']) + int(math.sqrt(4))"), Snapshot));
+	TestTrue(TEXT("Complete Python script succeeds"), Good.bSuccess);
 	if (Good.bSuccess && Good.Data.IsValid())
 	{
 		TestEqual(
-			TEXT("Pure JSON expression returns the expected value"),
+			TEXT("Complete Python script returns the expected value"),
 			Good.Data->GetIntegerField(TEXT("result")),
-			2);
+			4);
+		TestEqual(
+			TEXT("Execution records its modification level"),
+			Good.Data->GetStringField(TEXT("modificationLevel")),
+			FString(TEXT("readOnly")));
+		TestTrue(
+			TEXT("Execution returns an audit artifact"),
+			Good.Data->HasTypedField<EJson::String>(TEXT("auditPath")));
+		if (Good.Data->HasTypedField<EJson::String>(TEXT("auditPath")))
+		{
+			const FString AuditPath = Good.Data->GetStringField(TEXT("auditPath"));
+			TestTrue(
+				TEXT("Audit receipt does not expose an absolute local path"),
+				FPaths::IsRelative(AuditPath));
+			const FString AbsoluteAuditPath = FPaths::Combine(FPaths::ProjectDir(), AuditPath);
+			TestTrue(
+				TEXT("Audit artifact is written before completion"),
+				IFileManager::Get().FileExists(*AbsoluteAuditPath));
+		}
 	}
 
-	for (const FString& Expression : {
-		TEXT("__import__('os')"),
-		TEXT("data.__class__"),
-		TEXT("open('forbidden.txt')"),
-		TEXT("'x' * 200000"),
-		TEXT("[x for x in data['types'] if x.__class__]"),
+	for (const FString& Level : {
+		TEXT("unknown"),
+		TEXT("write"),
 	})
 	{
+		TSharedRef<FJsonObject> Invalid = MakeInspectParams(TEXT("result = 1"), Snapshot);
+		Invalid->SetStringField(TEXT("modificationLevel"), Level);
 		const FMCPToolResult Rejected = Service.Execute(
 			TEXT("production.python.inspect"),
-			MakeInspectParams(Expression, Snapshot));
+			Invalid);
 		TestFalse(
-			*FString::Printf(TEXT("Expression is rejected: %s"), *Expression),
+			*FString::Printf(TEXT("Invalid modification level is rejected: %s"), *Level),
 			Rejected.bSuccess);
 		TestEqual(
-			TEXT("Rejected expression uses the stable error code"),
+			TEXT("Invalid modification level uses the stable error code"),
 			Rejected.ErrorCode,
-			FString(TEXT("python_expression_rejected")));
+			FString(TEXT("invalid_modification_level")));
 	}
 	return true;
 }

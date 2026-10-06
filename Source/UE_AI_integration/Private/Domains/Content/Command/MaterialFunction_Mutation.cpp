@@ -481,6 +481,162 @@ namespace MCPMaterialInfrastructure
 			return true;
 		}
 
+		// Validate every override before creating the destination asset.  The
+		// factory registers the new package immediately, so returning an error from
+		// the post-create loop would otherwise leave an orphaned in-memory asset.
+		bool ValidateFunctionInstanceOverride(
+			const TSharedPtr<FJsonValue>& Item,
+			FString& OutError)
+		{
+			const auto O = Item.IsValid() && Item->Type == EJson::Object ? Item->AsObject() : nullptr;
+			if (!O)
+			{
+				OutError = TEXT("Every override must be an object with parameter and value.");
+				return false;
+			}
+			FString Parameter;
+			O->TryGetStringField(TEXT("parameter"), Parameter);
+			const TSharedPtr<FJsonValue>* Value = O->Values.Find(TEXT("value"));
+			if (Parameter.IsEmpty() || Parameter.Len() > 256 || !Value)
+			{
+				OutError = TEXT("Each override requires a nonempty parameter (<=256) and a value.");
+				return false;
+			}
+			if ((*Value)->Type == EJson::Number)
+			{
+				double Number = 0.0;
+				if (!(*Value)->TryGetNumber(Number) || !FMath::IsFinite(Number)
+					|| FMath::Abs(Number) > TNumericLimits<float>::Max())
+				{
+					OutError = TEXT("Scalar override must be a finite float.");
+					return false;
+				}
+			}
+			else if ((*Value)->Type == EJson::Object)
+			{
+				FLinearColor Color;
+				if (!ReadColorOverride(*Value, Color))
+				{
+					OutError = TEXT("Vector override must be an object with numeric r/g/b/a.");
+					return false;
+				}
+			}
+			else if ((*Value)->Type == EJson::String)
+			{
+				FString TexturePath;
+				if (!(*Value)->TryGetString(TexturePath) || !TexturePath.StartsWith(TEXT("/"))
+					|| TexturePath.Len() > 1024)
+				{
+					OutError = TEXT("Texture override must be an exact asset path.");
+					return false;
+				}
+				// Missing textures remain a non-fatal per-override diagnostic in the
+				// existing create contract; the post-create loop records that error.
+			}
+			else if ((*Value)->Type != EJson::Boolean)
+			{
+				OutError = TEXT("Override value must be a number, object, string, or boolean.");
+				return false;
+			}
+			return true;
+		}
+
+		struct FFunctionInstanceOverrideSnapshot
+		{
+			TArray<FScalarParameterValue> Scalars;
+			TArray<FVectorParameterValue> Vectors;
+			TArray<FTextureParameterValue> Textures;
+			TArray<FStaticSwitchParameter> StaticSwitches;
+
+			explicit FFunctionInstanceOverrideSnapshot(const UMaterialFunctionInstance* Instance)
+			{
+				if (!Instance) return;
+				Scalars = Instance->ScalarParameterValues;
+				Vectors = Instance->VectorParameterValues;
+				Textures = Instance->TextureParameterValues;
+				StaticSwitches = Instance->StaticSwitchParameterValues;
+			}
+
+			void Restore(UMaterialFunctionInstance* Instance) const
+			{
+				if (!Instance) return;
+				Instance->ScalarParameterValues = Scalars;
+				Instance->VectorParameterValues = Vectors;
+				Instance->TextureParameterValues = Textures;
+				Instance->StaticSwitchParameterValues = StaticSwitches;
+			}
+		};
+
+		bool SameFunctionInstanceOverrides(
+			const FFunctionInstanceOverrideSnapshot& Snapshot,
+			const UMaterialFunctionInstance* Instance)
+		{
+			return Instance
+				&& Snapshot.Scalars == Instance->ScalarParameterValues
+				&& Snapshot.Vectors == Instance->VectorParameterValues
+				&& Snapshot.Textures == Instance->TextureParameterValues
+				&& Snapshot.StaticSwitches == Instance->StaticSwitchParameterValues;
+		}
+
+		bool HasFunctionInstanceOverride(
+			const UMaterialFunctionInstance* Instance,
+			const FName& ParamName)
+		{
+			if (!Instance) return false;
+			for (const FScalarParameterValue& Entry : Instance->ScalarParameterValues)
+				if (Entry.ParameterInfo.Name == ParamName) return true;
+			for (const FVectorParameterValue& Entry : Instance->VectorParameterValues)
+				if (Entry.ParameterInfo.Name == ParamName) return true;
+			for (const FTextureParameterValue& Entry : Instance->TextureParameterValues)
+				if (Entry.ParameterInfo.Name == ParamName) return true;
+			for (const FStaticSwitchParameter& Entry : Instance->StaticSwitchParameterValues)
+				if (Entry.ParameterInfo.Name == ParamName) return true;
+			return false;
+		}
+
+		bool VerifyFunctionInstanceOverride(
+			const UMaterialFunctionInstance* Instance,
+			const FName& ParamName,
+			const TSharedPtr<FJsonValue>& Value)
+		{
+			if (!Instance || !Value.IsValid()) return false;
+			if (Value->Type == EJson::Number)
+			{
+				double Number = 0.0;
+				if (!Value->TryGetNumber(Number)) return false;
+				const float Expected = static_cast<float>(Number);
+				for (const FScalarParameterValue& Entry : Instance->ScalarParameterValues)
+					if (Entry.ParameterInfo.Name == ParamName && Entry.ParameterValue == Expected) return true;
+				return false;
+			}
+			if (Value->Type == EJson::Object)
+			{
+				FLinearColor Expected;
+				if (!ReadColorOverride(Value, Expected)) return false;
+				for (const FVectorParameterValue& Entry : Instance->VectorParameterValues)
+					if (Entry.ParameterInfo.Name == ParamName && Entry.ParameterValue == Expected) return true;
+				return false;
+			}
+			if (Value->Type == EJson::String)
+			{
+				FString TexturePath;
+				if (!Value->TryGetString(TexturePath)) return false;
+				const UTexture* Expected = LoadObject<UTexture>(nullptr, *TexturePath, nullptr, LOAD_NoWarn);
+				for (const FTextureParameterValue& Entry : Instance->TextureParameterValues)
+					if (Entry.ParameterInfo.Name == ParamName && Entry.ParameterValue.Get() == Expected) return true;
+				return false;
+			}
+			if (Value->Type == EJson::Boolean)
+			{
+				bool Expected = false;
+				if (!Value->TryGetBool(Expected)) return false;
+				for (const FStaticSwitchParameter& Entry : Instance->StaticSwitchParameterValues)
+					if (Entry.ParameterInfo.Name == ParamName && Entry.bOverride && Entry.Value == Expected) return true;
+				return false;
+			}
+			return false;
+		}
+
 		// Reuses the same override-type inference + UpdateParameterSet pattern as
 		// content.material.function.instance.create. Existing entries are updated in
 		// place (preserving their ExpressionGUID); new entries resolve the GUID from
@@ -1259,6 +1415,18 @@ public:
 		FString Error;
 		UMaterialFunctionInterface* Parent = LoadMaterialFunctionInterfaceByName(ParentPath, Error);
 		if (!Parent) return BadFunctionEdit(Error);
+		const TArray<TSharedPtr<FJsonValue>>* Overrides = nullptr;
+		if (Params->TryGetArrayField(TEXT("overrides"), Overrides))
+		{
+			if (Overrides->Num() > 128)
+				return BadFunctionEdit(TEXT("overrides must contain at most 128 entries."));
+			for (const TSharedPtr<FJsonValue>& Item : *Overrides)
+			{
+				FString OverrideError;
+				if (!ValidateFunctionInstanceOverride(Item, OverrideError))
+					return BadFunctionEdit(OverrideError);
+			}
+		}
 		// Reuse the AssetTools path from content.material.function.create; the factory
 		// sets Parent and caches Base before we add parameter overrides.
 		auto* Factory = NewObject<UMaterialFunctionInstanceFactory>();
@@ -1269,10 +1437,8 @@ public:
 		if (!Instance) return BadFunctionEdit(TEXT("Could not create MaterialFunctionInstance."));
 		int32 Applied = 0;
 		TArray<TSharedPtr<FJsonValue>> Errors;
-		const TArray<TSharedPtr<FJsonValue>>* Overrides = nullptr;
-		if (Params->TryGetArrayField(TEXT("overrides"), Overrides))
+		if (Overrides)
 		{
-			if (Overrides->Num() > 128) return BadFunctionEdit(TEXT("overrides must contain at most 128 entries."));
 			for (const auto& Item : *Overrides)
 			{
 				const auto O = Item->Type == EJson::Object ? Item->AsObject() : nullptr;
@@ -1469,24 +1635,84 @@ public:
 		// value sets/updates it (type inferred from the JSON value shape).
 		const TSharedPtr<FJsonValue>* Value = Params->Values.Find(TEXT("value"));
 		const bool bClear = !Value || (*Value)->IsNull();
+		const FFunctionInstanceOverrideSnapshot Before(Instance);
+		const bool bDirtyBefore = Instance->GetOutermost() && Instance->GetOutermost()->IsDirty();
 		Instance->Modify();
 		auto Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("functionInstance"), Instance->GetPathName());
 		Result->SetStringField(TEXT("parameter"), Parameter);
 		if (bClear)
 		{
+			auto CountMatching = [&ParamName](const auto& Entries)
+			{
+				int32 Count = 0;
+				for (const auto& Entry : Entries)
+					Count += Entry.ParameterInfo.Name == ParamName ? 1 : 0;
+				return Count;
+			};
+			const int32 BeforeCount = CountMatching(Before.Scalars) + CountMatching(Before.Vectors)
+				+ CountMatching(Before.Textures) + CountMatching(Before.StaticSwitches);
 			Result->SetBoolField(TEXT("cleared"), true);
-			Result->SetNumberField(TEXT("removedCount"), ClearFunctionInstanceOverride(Instance, ParamName));
+			const int32 RemovedCount = ClearFunctionInstanceOverride(Instance, ParamName);
+			Result->SetNumberField(TEXT("removedCount"), RemovedCount);
+			const bool bReadbackVerified = !HasFunctionInstanceOverride(Instance, ParamName)
+				&& RemovedCount == BeforeCount;
+			if (!bReadbackVerified)
+			{
+				Before.Restore(Instance);
+				if (Instance->GetOutermost()) Instance->GetOutermost()->SetDirtyFlag(bDirtyBefore);
+				const bool bRestoreVerified = SameFunctionInstanceOverrides(Before, Instance);
+				Result->SetBoolField(TEXT("readbackVerified"), false);
+				Result->SetBoolField(TEXT("rollbackVerified"), bRestoreVerified);
+				Result->SetStringField(TEXT("attempt_status"), TEXT("rolled_back"));
+				Result->SetStringField(TEXT("restore_status"), bRestoreVerified ? TEXT("restored") : TEXT("restore_failed"));
+				FMCPToolResult Failure = FMCPToolResult::Error(
+					TEXT("Material Function Instance override readback failed; the previous overrides were restored."),
+					TEXT("material_function_instance_readback_failed"), 409);
+				Failure.Data = Result;
+				return Failure;
+			}
 			Instance->MarkPackageDirty();
 			Result->SetBoolField(TEXT("saved"), false);
+			Result->SetBoolField(TEXT("readbackVerified"), true);
 			return FMCPToolResult::Ok(Result);
 		}
 		FString Type;
-		if (!SetFunctionInstanceOverride(Instance, ParamName, *Value, Type, Error)) return BadFunctionEdit(Error);
+		if (!SetFunctionInstanceOverride(Instance, ParamName, *Value, Type, Error))
+		{
+			Before.Restore(Instance);
+			if (Instance->GetOutermost()) Instance->GetOutermost()->SetDirtyFlag(bDirtyBefore);
+			const bool bRestoreVerified = SameFunctionInstanceOverrides(Before, Instance);
+			Result->SetBoolField(TEXT("readbackVerified"), false);
+			Result->SetBoolField(TEXT("rollbackVerified"), bRestoreVerified);
+			Result->SetStringField(TEXT("attempt_status"), TEXT("rolled_back"));
+			Result->SetStringField(TEXT("restore_status"), bRestoreVerified ? TEXT("restored") : TEXT("restore_failed"));
+			FMCPToolResult Failure = BadFunctionEdit(Error);
+			Failure.Data = Result;
+			return Failure;
+		}
+		const bool bReadbackVerified = VerifyFunctionInstanceOverride(Instance, ParamName, *Value);
+		if (!bReadbackVerified)
+		{
+			Before.Restore(Instance);
+			if (Instance->GetOutermost()) Instance->GetOutermost()->SetDirtyFlag(bDirtyBefore);
+			const bool bRestoreVerified = SameFunctionInstanceOverrides(Before, Instance);
+			Result->SetStringField(TEXT("type"), Type);
+			Result->SetBoolField(TEXT("readbackVerified"), false);
+			Result->SetBoolField(TEXT("rollbackVerified"), bRestoreVerified);
+			Result->SetStringField(TEXT("attempt_status"), TEXT("rolled_back"));
+			Result->SetStringField(TEXT("restore_status"), bRestoreVerified ? TEXT("restored") : TEXT("restore_failed"));
+			FMCPToolResult Failure = FMCPToolResult::Error(
+				TEXT("Material Function Instance override readback failed; the previous overrides were restored."),
+				TEXT("material_function_instance_readback_failed"), 409);
+			Failure.Data = Result;
+			return Failure;
+		}
 		Instance->MarkPackageDirty();
 		Result->SetStringField(TEXT("type"), Type);
 		Result->SetBoolField(TEXT("cleared"), false);
 		Result->SetBoolField(TEXT("saved"), false);
+		Result->SetBoolField(TEXT("readbackVerified"), true);
 		return FMCPToolResult::Ok(Result);
 	}
 };

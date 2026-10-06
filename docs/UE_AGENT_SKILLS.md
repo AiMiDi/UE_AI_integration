@@ -223,11 +223,14 @@ frontmatter 和 Agent 元数据，并运行 MCP/CLI tests。
 ## 与 VibeUE 的取舍
 
 本设计借鉴了“摘要列表、正文懒加载、领域 reference、配方先于 API
-discovery”的体验，但不复制其任意 Python 执行模型：
+discovery”的体验。Python 脚本通过可终止的独立 worker 执行，调用方在请求中
+声明修改级别，宿主把脚本摘要、状态和回执写入审计记录；worker 不注入 UE
+`unreal` 模块：
 
 - 使用稳定短 ID 和机器合同，不依赖运行时生成路径。
 - metadata 包含 UE/capability/plugin/risk/result 依赖并由 CI 校验。
 - live discovery 面向受约束 capability，而不是把整个 `unreal.*` 反射面作为
   主入口。
 - Skill 不能自动保存 dirty package、绕过确认、替代 Workflow rollback，或把
-  node ID 当作完成证据。
+  node ID 当作完成证据。Python 的修改级别是调用方声明并记录的合同字段，
+  需要确认的写入仍由上层审批/工作流负责。
