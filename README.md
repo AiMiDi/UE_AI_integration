@@ -13,7 +13,7 @@ stdio bridge，让 Codex CLI、Claude Code 等 MCP 客户端查询或修改 Blue
 
 ## 核心特性
 
-- 当前发布快照包含 564 项 manifest 驱动的 Editor、PIE、Development 与本地
+- 当前发布快照包含 587 项 manifest 驱动的 Editor、PIE、Development 与本地
   Trace 能力；
   服务启动时从 manifest 动态计算数量。
 - Content 领域包含 Niagara graph inspect/collision audit，以及节点启用状态和
@@ -24,6 +24,8 @@ stdio bridge，让 Codex CLI、Claude Code 等 MCP 客户端查询或修改 Blue
 - `scene.render.failure.analyze` 可在 Editor 退出后离线分析 DRED、渲染调用栈、
   Ensure 和 CrashContext，保留范围、哈希及验证边界。详见
   [运行时与故障证据](skills/ue-render-debug-capture/references/runtime-and-failure-evidence.md)。
+- `content.texture.rhi.inspect` 只读已初始化 Texture2D 的 FRHITexture 描述和跨 RHI
+  显存估算；不导出原生句柄、后端堆驻留或资源状态。
 - 十二个稳定的 MCP 工具，不把全部能力直接展开成工具列表。
 - 六个领域路由：Blueprint、Scene、Content、Animation、AI、Production。
 - 专用 PIE 生命周期、Runtime 对象/Widget/Delegate/真实输入与 Scenario 能力。

@@ -9,6 +9,7 @@
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 #include "Infrastructure/EngineeringContractUtils.h"
+#include "Misc/Paths.h"
 #include "RHI.h"
 #include "RHIGlobals.h"
 #include "RHIStats.h"
@@ -37,6 +38,33 @@ FMCPToolResult Unavailable(const FString& Feature, const FString& Reason)
 	Data->SetBoolField(TEXT("available"), false);
 	Data->SetStringField(TEXT("reason"), Reason);
 	return FMCPToolResult::Ok(Data);
+}
+
+FString RedactResourcePath(const FString& Input, bool& bRedacted)
+{
+	bRedacted = false;
+	FString Value = Input;
+	FPaths::NormalizeFilename(Value);
+
+	const TArray<TPair<FString, FString>> Roots = {
+		{FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()), TEXT("<project>/")},
+		{FPaths::ConvertRelativePathToFull(FPaths::EngineDir()), TEXT("<engine>/")}
+	};
+	for (const TPair<FString, FString>& Root : Roots)
+	{
+		FString NormalizedRoot = Root.Key;
+		FPaths::NormalizeFilename(NormalizedRoot);
+		if (!NormalizedRoot.EndsWith(TEXT("/")))
+		{
+			NormalizedRoot.AppendChar(TEXT('/'));
+		}
+		if (Value.StartsWith(NormalizedRoot, ESearchCase::IgnoreCase))
+		{
+			bRedacted = true;
+			return Root.Value + Value.RightChop(NormalizedRoot.Len());
+		}
+	}
+	return Value;
 }
 
 TArray<TSharedPtr<FJsonValue>> VectorJson(const FVector& Value)
@@ -770,8 +798,11 @@ public:
 					continue;
 				}
 				TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
-				Item->SetStringField(TEXT("name"), Name);
-				Item->SetStringField(TEXT("owner"), Owner);
+				bool bNameRedacted = false;
+				bool bOwnerRedacted = false;
+				Item->SetStringField(TEXT("name"), RedactResourcePath(Name, bNameRedacted));
+				Item->SetStringField(TEXT("owner"), RedactResourcePath(Owner, bOwnerRedacted));
+				Item->SetBoolField(TEXT("pathRedacted"), bNameRedacted || bOwnerRedacted);
 				Item->SetStringField(TEXT("type"), Resource->Type);
 				Item->SetStringField(TEXT("flags"), Resource->Flags);
 				Item->SetNumberField(TEXT("reportedSizeBytes"), static_cast<double>(Resource->SizeInBytes));
@@ -793,6 +824,9 @@ public:
 			ResourceData->SetNumberField(TEXT("returned"), Resources.Num());
 			ResourceData->SetBoolField(TEXT("truncated"), Matched > Resources.Num());
 			ResourceData->SetArrayField(TEXT("resources"), Resources);
+			ResourceData->SetStringField(
+				TEXT("labelPolicy"),
+				TEXT("Project and engine directory prefixes are redacted; logical resource names are preserved."));
 			ResourceData->SetStringField(
 				TEXT("evidenceBoundary"),
 				TEXT("Names, owners, allocation sizes and backend flags are instantaneous value snapshots; resource state, addresses, contents and root cause are not exposed."));

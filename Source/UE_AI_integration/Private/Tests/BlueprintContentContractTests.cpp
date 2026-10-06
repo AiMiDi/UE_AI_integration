@@ -111,8 +111,11 @@ bool FBlueprintContentRegistrarContractTest::RunTest(const FString& Parameters)
 	UEAIIntegrationTools::RegisterContentAssetChangeTools(Registry);
 	Registry.EndDomainRegistration();
 
-	TestEqual(TEXT("All Blueprint and Content engineering tools register"), Registry.Num(), 13);
+	TestEqual(TEXT("All Blueprint and Content engineering tools register"), Registry.Num(), 14);
 	TestNotNull(TEXT("Blueprint scan is registered"), Registry.FindTool(TEXT("blueprint.scan")));
+	TestNotNull(
+		TEXT("Texture RHI inspection is registered"),
+		Registry.FindTool(TEXT("content.texture.rhi.inspect")));
 	TestNotNull(
 		TEXT("Content plan is registered"),
 		Registry.FindTool(TEXT("content.asset.change.plan")));
@@ -181,6 +184,19 @@ bool FBlueprintContentRegistrarContractTest::RunTest(const FString& Parameters)
 		TEXT("Unconfirmed write has stable error"),
 		UnconfirmedExecute.ErrorCode,
 		FString(TEXT("write_confirmation_required")));
+
+	TSharedRef<FJsonObject> MissingTexture = MakeShared<FJsonObject>();
+	MissingTexture->SetStringField(
+		TEXT("asset"),
+		TEXT("/Game/__UEAIContractMissing/Texture"));
+	const FMCPToolResult MissingTextureRHI = Registry.ExecuteTool(
+		TEXT("content.texture.rhi.inspect"),
+		MissingTexture);
+	TestFalse(TEXT("Texture RHI inspection rejects missing assets"), MissingTextureRHI.bSuccess);
+	TestEqual(
+		TEXT("Missing texture RHI asset has stable error"),
+		MissingTextureRHI.ErrorCode,
+		FString(TEXT("asset_not_found")));
 	return true;
 }
 

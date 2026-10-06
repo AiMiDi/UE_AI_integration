@@ -15,7 +15,7 @@ NiagaraShader and the plugin modules; other branches still lack full validation.
 
 ## Highlights
 
-- The current release snapshot contains 564 manifest-driven Editor, PIE,
+- The current release snapshot contains 587 manifest-driven Editor, PIE,
   Development, and local Trace capabilities; the service derives the count from
   the manifests at startup.
 - `content.niagara.simcache.*` captures explicit particle attributes through public APIs, inspects retained frames, reads paged values, exports JSON evidence and releases caches. No engine patch is needed. GPU readback may stall and does not expose private AsyncGpuTrace buffers. See the [observation workflow](skills/ue-render-debug-capture/references/runtime-and-failure-evidence.md).
@@ -27,6 +27,9 @@ NiagaraShader and the plugin modules; other branches still lack full validation.
 - `scene.render.failure.analyze` analyzes retained DRED, rendering call stacks,
   Ensures and CrashContext offline, preserving source ranges and evidence limits.
   See [runtime and failure evidence](skills/ue-render-debug-capture/references/runtime-and-failure-evidence.md).
+- `content.texture.rhi.inspect` reads the live FRHITexture descriptor and a
+  cross-RHI memory estimate for an initialized Texture2D. It does not expose
+  native handles, backend heap residency, or resource state.
 - Twelve stable MCP tools instead of exposing every capability as a tool.
 - Six domain routers: Blueprint, Scene, Content, Animation, AI, and Production.
 - Dedicated PIE lifecycle, runtime object/widget/delegate, real input, and

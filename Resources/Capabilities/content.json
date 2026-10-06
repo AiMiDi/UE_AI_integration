@@ -7534,6 +7534,50 @@
       }
     },
     {
+      "id": "content.texture.rhi.inspect",
+      "domain": "content",
+      "kind": "query",
+      "description": "Inspect the live FRHITexture descriptor and cross-RHI memory estimate for a Texture2D without exposing native handles or private backend state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": true
+      },
+      "output": {
+        "kind": "json"
+      },
+      "dsl": {
+        "admission": "none",
+        "scopeKinds": [],
+        "transactionDomain": "none",
+        "deferCompile": false,
+        "risk": "readOnly"
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "content.texture.rhi.inspect"
+      }
+    },
+    {
       "id": "content.asset.change.plan",
       "domain": "content",
       "kind": "validation",

@@ -6,13 +6,20 @@
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "DynamicRHI.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
 #include "HAL/FileManager.h"
 #include "Misc/PackageName.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "PixelFormat.h"
+#include "RenderingThread.h"
+#include "RHIGlobals.h"
+#include "RHIResources.h"
+#include "RHIStrings.h"
 #include "StaticMeshResources.h"
+#include "TextureResource.h"
+#include "UObject/StrongObjectPtr.h"
 
 namespace
 {
@@ -27,6 +34,19 @@ constexpr int32 DefaultGraphLimit = 500;
 constexpr int32 MaxGraphLimit = 5000;
 constexpr int32 MaxGraphDepth = 8;
 constexpr int32 MaxTagCount = 32;
+
+const TCHAR* TextureDimensionName(const ETextureDimension Dimension)
+{
+	switch (Dimension)
+	{
+	case ETextureDimension::Texture2D: return TEXT("Texture2D");
+	case ETextureDimension::Texture2DArray: return TEXT("Texture2DArray");
+	case ETextureDimension::Texture3D: return TEXT("Texture3D");
+	case ETextureDimension::TextureCube: return TEXT("TextureCube");
+	case ETextureDimension::TextureCubeArray: return TEXT("TextureCubeArray");
+	default: return TEXT("Unknown");
+	}
+}
 
 int32 ReadInteger(
 	const TSharedPtr<FJsonObject>& Params,
@@ -628,6 +648,164 @@ public:
 		return FMCPToolResult::Ok(Result);
 	}
 };
+
+class FTool_TextureRHIInspect final : public FMCPToolBase
+{
+public:
+	FString GetCapabilityId() const override
+	{
+		return TEXT("content.texture.rhi.inspect");
+	}
+
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
+	{
+		if (!IsInGameThread())
+		{
+			return FMCPToolResult::Error(
+				TEXT("Texture RHI inspection must execute on the game thread."),
+				TEXT("game_thread_required"),
+				500);
+		}
+
+		FString Path;
+		Params->TryGetStringField(TEXT("asset"), Path);
+		IAssetRegistry& Registry =
+			FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+		FAssetData Asset;
+		if (!ResolveAsset(Registry, Path, Asset))
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(TEXT("Texture '%s' was not found."), *Path),
+				TEXT("asset_not_found"),
+				404);
+		}
+		UTexture2D* Texture = Cast<UTexture2D>(Asset.GetAsset());
+		if (!Texture)
+		{
+			return FMCPToolResult::Error(
+				FString::Printf(TEXT("Asset '%s' is not a Texture2D."), *Path),
+				TEXT("asset_type_mismatch"),
+				400);
+		}
+
+		TSharedRef<FJsonObject> Result = SerializeAsset(Asset, false);
+		Result->SetStringField(TEXT("schema"), TEXT("ue.texture-rhi-inspection.v1"));
+		const bool bUsingNullRHI = GUsingNullRHI;
+		Result->SetBoolField(TEXT("usingNullRHI"), bUsingNullRHI);
+		Result->SetBoolField(
+			TEXT("rhiAvailable"),
+			GDynamicRHI != nullptr && !bUsingNullRHI);
+		Result->SetStringField(
+			TEXT("rhi"),
+			GDynamicRHI ? GDynamicRHI->GetName() : TEXT(""));
+		Result->SetBoolField(TEXT("resourceAvailable"), false);
+		Result->SetStringField(TEXT("resourceState"), TEXT("unavailable"));
+
+		if (!GDynamicRHI || bUsingNullRHI)
+		{
+			Result->SetStringField(
+				TEXT("reason"),
+				!GDynamicRHI
+					? TEXT("No dynamic RHI is active; only authored asset metadata is available.")
+					: TEXT("NullRHI is active; live resource metadata is not hardware evidence."));
+			Result->SetStringField(
+				TEXT("evidenceBoundary"),
+				!GDynamicRHI
+					? TEXT("RHI resource metadata is unavailable without an initialized dynamic RHI.")
+					: TEXT("NullRHI descriptors cannot prove a hardware resource or GPU allocation."));
+			Result->SetStringField(TEXT("snapshotDigest"), DigestJson(Result));
+			return FMCPToolResult::Ok(Result);
+		}
+
+		struct FTextureRHIMetadataSnapshot
+		{
+			FRHITextureDesc Descriptor;
+			ERHIResourceType Type = RRT_None;
+			bool bAvailable = false;
+			bool bNamePresent = false;
+		};
+		FTextureRHIMetadataSnapshot Snapshot;
+		TStrongObjectPtr<UTexture2D> TextureLifetime(Texture);
+		// UTexture::GetResource selects the render-thread resource on this thread.
+		// Streaming may replace TextureRHI there, so no RHI pointer crosses back
+		// to the game thread; only the copied descriptor and scalar values do.
+		ENQUEUE_RENDER_COMMAND(UEAIInspectTextureRHIMetadata)(
+			[Texture, &Snapshot](FRHICommandListImmediate&)
+			{
+				const FTextureResource* TextureResource = Texture->GetResource();
+				FRHITexture* RHITexture =
+					TextureResource ? TextureResource->GetTexture2DRHI() : nullptr;
+				if (!RHITexture || !RHITexture->IsValid())
+				{
+					return;
+				}
+				Snapshot.Descriptor = RHITexture->GetDesc();
+				Snapshot.Type = RHITexture->GetType();
+				Snapshot.bNamePresent = !RHITexture->GetName().IsNone();
+				Snapshot.bAvailable = true;
+			});
+		FlushRenderingCommands();
+		if (!Snapshot.bAvailable)
+		{
+			Result->SetStringField(
+				TEXT("reason"),
+				TEXT("The Texture2D render resource has not been initialized for the active RHI."));
+			Result->SetStringField(
+				TEXT("evidenceBoundary"),
+				TEXT("Authored metadata is available, but no live RHI resource was read back."));
+			Result->SetStringField(TEXT("snapshotDigest"), DigestJson(Result));
+			return FMCPToolResult::Ok(Result);
+		}
+
+		const FRHITextureDesc& Desc = Snapshot.Descriptor;
+		Result->SetBoolField(TEXT("resourceAvailable"), true);
+		Result->SetStringField(TEXT("resourceState"), TEXT("initialized"));
+		Result->SetStringField(
+			TEXT("resourceType"),
+			StringFromRHIResourceType(Snapshot.Type));
+		Result->SetBoolField(
+			TEXT("resourceNamePresent"),
+			Snapshot.bNamePresent);
+		Result->SetNumberField(
+			TEXT("resourceMemoryEstimateBytes"),
+			Desc.NumMips > 0
+				? static_cast<double>(Desc.CalcMemorySizeEstimate())
+				: 0.0);
+
+		TSharedRef<FJsonObject> Descriptor = MakeShared<FJsonObject>();
+		Descriptor->SetStringField(
+			TEXT("dimension"),
+			TextureDimensionName(Desc.Dimension));
+		Descriptor->SetNumberField(TEXT("width"), Desc.Extent.X);
+		Descriptor->SetNumberField(TEXT("height"), Desc.Extent.Y);
+		Descriptor->SetNumberField(TEXT("depth"), Desc.Depth);
+		Descriptor->SetNumberField(TEXT("arraySize"), Desc.ArraySize);
+		Descriptor->SetNumberField(TEXT("mipCount"), Desc.NumMips);
+		Descriptor->SetNumberField(TEXT("sampleCount"), Desc.NumSamples);
+		Descriptor->SetStringField(
+			TEXT("format"),
+			Desc.Format >= 0 && Desc.Format < PF_MAX
+				? GPixelFormats[Desc.Format].Name
+				: TEXT("Unknown"));
+		Descriptor->SetStringField(
+			TEXT("uavFormat"),
+			Desc.UAVFormat >= 0 && Desc.UAVFormat < PF_MAX
+				? GPixelFormats[Desc.UAVFormat].Name
+				: TEXT("Unknown"));
+		Descriptor->SetNumberField(
+			TEXT("createFlags"),
+			static_cast<double>(static_cast<uint64>(Desc.Flags)));
+		Descriptor->SetNumberField(
+			TEXT("gpuMask"),
+			Desc.GPUMask.GetNative());
+		Result->SetObjectField(TEXT("descriptor"), Descriptor);
+		Result->SetStringField(
+			TEXT("evidenceBoundary"),
+			TEXT("Descriptor fields and memory estimate come from a render-thread snapshot of the live FRHITexture. The snapshot waits for queued render commands but does not expose private backend heap residency, resource state tracking, or root-cause evidence."));
+		Result->SetStringField(TEXT("snapshotDigest"), DigestJson(Result));
+		return FMCPToolResult::Ok(Result);
+	}
+};
 }
 
 namespace UEAIIntegrationTools
@@ -641,5 +819,6 @@ void RegisterContentAssetReadTools(FMCPToolRegistry& Registry)
 	Registry.Register(MakeShared<FTool_AssetAudit>());
 	Registry.Register(MakeShared<FTool_StaticMeshInspect>());
 	Registry.Register(MakeShared<FTool_TextureInspect>());
+	Registry.Register(MakeShared<FTool_TextureRHIInspect>());
 }
 }

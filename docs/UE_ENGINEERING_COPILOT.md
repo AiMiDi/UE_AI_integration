@@ -186,11 +186,17 @@ GeneratedClass 函数、签名与生成绑定。重复执行保持幂等。
 - `content.asset.search/get/dependencies/referencers/audit`
 - `content.static_mesh.inspect`
 - `content.texture.inspect`
+- `content.texture.rhi.inspect`
 - `content.asset.change.plan/execute/rollback`
 
 变更限制在 `/Game`，批量最多 100 项。所有写入都要求精确 plan digest、
 `confirmWrite=true` 和顶层 `requestId`；Delete 有 Referencer 门禁。无法可靠
 逆转的 Reimport 与 Fix Redirectors 会明确返回 `rollbackAvailable=false`。
+
+`content.texture.rhi.inspect` 只读当前 Editor 中已初始化的 `FRHITexture`，返回
+RHI 描述符和跨 RHI 的显存估算；NullRHI 或尚未初始化的资源会显式标记为
+`resourceAvailable=false`。它不导出原生句柄，也不声称获得后端堆驻留、资源状态
+或 GPU 故障根因。
 
 ## 7. World Partition、Data Layer、HLOD、PCG
 
@@ -217,6 +223,8 @@ HLOD 是长任务，不进入资产 Workflow；PCG 只在可用插件/模块满�
 有界的实时 RHI 资源分配快照。快照只包含后端报告的名称、Owner、类型、分配大小、
 驻留和用途标记，不暴露 D3D12 私有资源指针、堆地址、资源状态或内容；关闭
 `RHI_ENABLE_RESOURCE_INFO`、使用 NullRHI 或未启用资源跟踪时会明确返回不可用原因。
+名称与 Owner 的项目、引擎绝对目录前缀替换为 `<project>/`、`<engine>/`，
+并以 `pathRedacted` 标记；过滤按原始标签执行，`/Game/...` 逻辑资源名保持可识别。
 
 写入仅覆盖 allowlist 内的 Session CVar，带精确 digest 和读回；不会静默修改
 项目 DefaultEngine.ini 或平台配置。
