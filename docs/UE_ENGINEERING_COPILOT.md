@@ -221,8 +221,11 @@ HLOD 是长任务，不进入资产 Workflow；PCG 只在可用插件/模块满�
 `scene.render.memory.sample` 默认只读取聚合 RHI 显存统计；传入
 `includeResources=true` 时，可以按名称、Owner、资源类型和 transient 状态读取
 有界的实时 RHI 资源分配快照。快照只包含后端报告的名称、Owner、类型、分配大小、
-驻留和用途标记，不暴露 D3D12 私有资源指针、堆地址、资源状态或内容；关闭
-`RHI_ENABLE_RESOURCE_INFO`、使用 NullRHI 或未启用资源跟踪时会明确返回不可用原因。
+驻留和用途标记，不暴露 D3D12 私有资源指针、堆地址、资源状态或内容；
+`RHI_ENABLE_RESOURCE_INFO` 关闭或使用 NullRHI 时会明确返回不可用原因。
+`countScope=resourcesWithBackendInfo` 限定计数只覆盖后端返回的信息行；公开接口
+无法判断运行时是否开启跟踪，空快照不会被当成“没有存活的 RHI 资源”的证据。
+`ownerFieldSupported` 标记引擎是否提供 Owner 字段；没有该字段的分支返回空 Owner。
 名称与 Owner 的项目、引擎绝对目录前缀替换为 `<project>/`、`<engine>/`，
 并以 `pathRedacted` 标记；过滤按原始标签执行，`/Game/...` 逻辑资源名保持可识别。
 

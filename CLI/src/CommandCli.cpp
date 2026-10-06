@@ -7065,7 +7065,7 @@ int ExecuteOptions(
     const auto CapabilityFailure = [&](
         const std::string& code,
         const std::string& message,
-        const json& details = json::object(),
+        const json& details = nlohmann::json::object(),
         const bool handler_registered = false,
         const bool live_available = false,
         const bool executed = false)

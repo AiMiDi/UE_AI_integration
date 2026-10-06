@@ -58,6 +58,11 @@ FString RedactResourcePath(const FString& Input, bool& bRedacted)
 		{
 			NormalizedRoot.AppendChar(TEXT('/'));
 		}
+		if (Value.Equals(NormalizedRoot.LeftChop(1), ESearchCase::IgnoreCase))
+		{
+			bRedacted = true;
+			return Root.Value;
+		}
 		if (Value.StartsWith(NormalizedRoot, ESearchCase::IgnoreCase))
 		{
 			bRedacted = true;
@@ -66,6 +71,40 @@ FString RedactResourcePath(const FString& Input, bool& bRedacted)
 	}
 	return Value;
 }
+
+#if defined(RHI_ENABLE_RESOURCE_INFO) && RHI_ENABLE_RESOURCE_INFO
+template <typename T>
+FString ResourceLabel(const T& Label)
+{
+	if constexpr (requires { Label.ToString(); })
+	{
+		return Label.ToString();
+	}
+	else
+	{
+		return FString(Label);
+	}
+}
+
+template <typename T>
+constexpr bool HasResourceOwner()
+{
+	return requires (const T& Resource) { Resource.OwnerName; };
+}
+
+template <typename T>
+FString ResourceOwner(const T& Resource)
+{
+	if constexpr (HasResourceOwner<T>())
+	{
+		return ResourceLabel(Resource.OwnerName);
+	}
+	else
+	{
+		return FString();
+	}
+}
+#endif
 
 TArray<TSharedPtr<FJsonValue>> VectorJson(const FVector& Value)
 {
@@ -595,7 +634,7 @@ public:
 		Result->SetStringField(
 			TEXT("world"),
 			World ? World->GetPathName() : TEXT(""));
-		Result->SetBoolField(TEXT("rayTracingHardware"), GRHISupportsRayTracing);
+		Result->SetBoolField(TEXT("rayTracingHardware"), bDynamicRHI && !bUsingNullRHI && GRHISupportsRayTracing);
 		return FMCPToolResult::Ok(Result);
 	}
 };
@@ -724,8 +763,8 @@ public:
 			bUsingNullRHI
 				? TEXT("The active RHI is NullRHI and cannot provide hardware render evidence.")
 				: TEXT(""));
-		Result->SetBoolField(TEXT("hardwareStatsValid"), Stats.AreHardwareStatsValid());
-		Result->SetBoolField(TEXT("statsValid"), Stats.AreHardwareStatsValid());
+		Result->SetBoolField(TEXT("hardwareStatsValid"), !bUsingNullRHI && Stats.AreHardwareStatsValid());
+		Result->SetBoolField(TEXT("statsValid"), !bUsingNullRHI && Stats.AreHardwareStatsValid());
 		Result->SetNumberField(TEXT("dedicatedVideoMemoryBytes"), Stats.DedicatedVideoMemory);
 		Result->SetNumberField(TEXT("dedicatedSystemMemoryBytes"), Stats.DedicatedSystemMemory);
 		Result->SetNumberField(TEXT("sharedSystemMemoryBytes"), Stats.SharedSystemMemory);
@@ -762,6 +801,10 @@ public:
 		{
 			TArray<TSharedPtr<FRHIResourceStats>> ResourceStats;
 			RHIGetTrackedResourceStats(ResourceStats);
+			ResourceData->SetBoolField(TEXT("ownerFieldSupported"), HasResourceOwner<FRHIResourceStats>());
+			ResourceData->SetStringField(TEXT("countScope"), TEXT("resourcesWithBackendInfo"));
+			ResourceData->SetStringField(TEXT("coverage"), TEXT("backendProvided"));
+			ResourceData->SetStringField(TEXT("trackingState"), TEXT("notExposed"));
 			TArray<TSharedPtr<FJsonValue>> Resources;
 			int32 Matched = 0;
 			for (const TSharedPtr<FRHIResourceStats>& Resource : ResourceStats)
@@ -770,8 +813,8 @@ public:
 				{
 					continue;
 				}
-				const FString Name = Resource->Name.ToString();
-				const FString Owner = Resource->OwnerName.ToString();
+				const FString Name = ResourceLabel(Resource->Name);
+				const FString Owner = ResourceOwner(*Resource);
 				if (!NameContains.IsEmpty() && !Name.Contains(NameContains, ESearchCase::IgnoreCase))
 				{
 					continue;
@@ -824,12 +867,18 @@ public:
 			ResourceData->SetNumberField(TEXT("returned"), Resources.Num());
 			ResourceData->SetBoolField(TEXT("truncated"), Matched > Resources.Num());
 			ResourceData->SetArrayField(TEXT("resources"), Resources);
+			if (ResourceStats.IsEmpty())
+			{
+				ResourceData->SetStringField(
+					TEXT("reason"),
+					TEXT("The backend returned no resource-info rows. This does not prove that no RHI resources exist or that runtime tracking is enabled."));
+			}
 			ResourceData->SetStringField(
 				TEXT("labelPolicy"),
 				TEXT("Project and engine directory prefixes are redacted; logical resource names are preserved."));
 			ResourceData->SetStringField(
 				TEXT("evidenceBoundary"),
-				TEXT("Names, owners, allocation sizes and backend flags are instantaneous value snapshots; resource state, addresses, contents and root cause are not exposed."));
+				TEXT("Counts cover only backend-provided resource-info rows, not all live resources. Names, owners, allocation sizes and backend flags are instantaneous value snapshots; runtime tracking state, resource state, addresses, contents and root cause are not exposed."));
 		}
 #else
 		if (bIncludeResources)
