@@ -4209,15 +4209,47 @@
       "id": "scene.render.memory.sample",
       "domain": "scene",
       "kind": "query",
-      "description": "Take one instantaneous RHI texture and graphics-memory sample with availability flags.",
+      "description": "Take one instantaneous RHI texture and graphics-memory sample with availability flags, optionally including a bounded live RHI resource allocation snapshot.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "includeResources": {
+            "type": "boolean",
+            "default": false
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256,
+            "default": 64
+          },
+          "nameContains": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "ownerContains": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "resourceType": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "transient": {
+            "type": "string",
+            "enum": [
+              "all",
+              "yes",
+              "no"
+            ],
+            "default": "all"
+          }
+        },
         "additionalProperties": false
       },
       "traits": {
         "destructive": false,
-        "expensive": false
+        "expensive": true
       },
       "dsl": {
         "admission": "none",

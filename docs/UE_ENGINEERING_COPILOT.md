@@ -212,6 +212,12 @@ HLOD 是长任务，不进入资产 Workflow；PCG 只在可用插件/模块满�
 - `scene.render.settings.plan/execute/rollback`
 - `scene.viewport.visualization.list/capture/compare/analyze`
 
+`scene.render.memory.sample` 默认只读取聚合 RHI 显存统计；传入
+`includeResources=true` 时，可以按名称、Owner、资源类型和 transient 状态读取
+有界的实时 RHI 资源分配快照。快照只包含后端报告的名称、Owner、类型、分配大小、
+驻留和用途标记，不暴露 D3D12 私有资源指针、堆地址、资源状态或内容；关闭
+`RHI_ENABLE_RESOURCE_INFO`、使用 NullRHI 或未启用资源跟踪时会明确返回不可用原因。
+
 写入仅覆盖 allowlist 内的 Session CVar，带精确 digest 和读回；不会静默修改
 项目 DefaultEngine.ini 或平台配置。
 

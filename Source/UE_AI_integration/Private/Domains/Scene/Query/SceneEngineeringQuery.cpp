@@ -9,6 +9,7 @@
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 #include "Infrastructure/EngineeringContractUtils.h"
+#include "RHI.h"
 #include "RHIGlobals.h"
 #include "RHIStats.h"
 #include "RHIStrings.h"
@@ -538,7 +539,22 @@ public:
 	{
 		UWorld* World = GetEditorWorld();
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetBoolField(TEXT("available"), GDynamicRHI != nullptr);
+		const bool bDynamicRHI = GDynamicRHI != nullptr;
+		const bool bUsingNullRHI = GUsingNullRHI;
+		Result->SetBoolField(TEXT("available"), bDynamicRHI && !bUsingNullRHI);
+		Result->SetBoolField(TEXT("dynamicRHI"), bDynamicRHI);
+		Result->SetBoolField(TEXT("usingNullRHI"), bUsingNullRHI);
+		Result->SetStringField(
+			TEXT("availabilityReason"),
+			!bDynamicRHI
+				? TEXT("No dynamic RHI is active.")
+				: (bUsingNullRHI
+					? TEXT("The active RHI is NullRHI and cannot provide hardware render evidence.")
+					: TEXT("")));
+		Result->SetBoolField(TEXT("worldAvailable"), World != nullptr);
+		Result->SetStringField(
+			TEXT("evidenceBoundary"),
+			TEXT("RHI, adapter and feature-level fields describe the current process; they do not prove that a view rendered a feature or that a resource is currently bound."));
 		Result->SetStringField(
 			TEXT("rhi"),
 			GDynamicRHI ? GDynamicRHI->GetName() : TEXT(""));
@@ -562,11 +578,12 @@ public:
 	FString GetCapabilityId() const override { return TEXT("scene.render.feature.audit"); }
 	FMCPToolResult Execute(const TSharedPtr<FJsonObject>&) override
 	{
+		const bool bHardwareRHI = GDynamicRHI != nullptr && !GUsingNullRHI;
 		TArray<TSharedPtr<FJsonValue>> Features;
 		Features.Add(MakeShared<FJsonValueObject>(
-			CVarAudit(TEXT("lumen"), TEXT("r.Lumen.DiffuseIndirect.Allow"), true)));
+			CVarAudit(TEXT("lumen"), TEXT("r.Lumen.DiffuseIndirect.Allow"), bHardwareRHI)));
 		const bool bNaniteRuntimeSupported =
-			GDynamicRHI
+			bHardwareRHI
 			&& DoesRuntimeSupportNanite(
 				GMaxRHIShaderPlatform,
 				true,
@@ -591,21 +608,22 @@ public:
 			bNaniteRuntimeSupported);
 		Nanite->SetBoolField(
 			TEXT("enabled"),
-			GDynamicRHI
+			bHardwareRHI
 			&& UseNanite(GMaxRHIShaderPlatform));
 		Features.Add(MakeShared<FJsonValueObject>(Nanite));
 		Features.Add(MakeShared<FJsonValueObject>(
-			CVarAudit(TEXT("virtualShadowMaps"), TEXT("r.Shadow.Virtual.Enable"), GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5)));
+			CVarAudit(TEXT("virtualShadowMaps"), TEXT("r.Shadow.Virtual.Enable"), bHardwareRHI && GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5)));
 		Features.Add(MakeShared<FJsonValueObject>(
 			CVarAudit(
 				TEXT("hardwareRayTracing"),
 				TEXT("r.RayTracing"),
-				GRHISupportsRayTracing,
-				GRHISupportsRayTracing ? FString() : TEXT("The active RHI reports no ray tracing support."))));
+				bHardwareRHI && GRHISupportsRayTracing,
+				bHardwareRHI && GRHISupportsRayTracing ? FString() : TEXT("The active RHI reports no hardware ray tracing support."))));
 		Features.Add(MakeShared<FJsonValueObject>(
-			CVarAudit(TEXT("tsr"), TEXT("r.TemporalAA.Upsampling"), GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5)));
+			CVarAudit(TEXT("tsr"), TEXT("r.TemporalAA.Upsampling"), bHardwareRHI && GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5)));
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetBoolField(TEXT("available"), GDynamicRHI != nullptr);
+		Result->SetBoolField(TEXT("available"), bHardwareRHI);
+		Result->SetBoolField(TEXT("usingNullRHI"), GUsingNullRHI);
 		Result->SetArrayField(TEXT("features"), Features);
 		Result->SetStringField(
 			TEXT("evidenceBoundary"),
@@ -618,26 +636,174 @@ class FTool_RenderMemorySample final : public FMCPToolBase
 {
 public:
 	FString GetCapabilityId() const override { return TEXT("scene.render.memory.sample"); }
-	FMCPToolResult Execute(const TSharedPtr<FJsonObject>&) override
+	FMCPToolResult Execute(const TSharedPtr<FJsonObject>& Params) override
 	{
 		if (!GDynamicRHI)
 		{
 			return Unavailable(TEXT("renderMemory"), TEXT("No dynamic RHI is active."));
 		}
+
+		const TSharedPtr<FJsonObject> Request = Params.IsValid() ? Params : MakeShared<FJsonObject>();
+		bool bIncludeResources = false;
+		Request->TryGetBoolField(TEXT("includeResources"), bIncludeResources);
+		double LimitValue = 64.0;
+		Request->TryGetNumberField(TEXT("limit"), LimitValue);
+		if (!FMath::IsFinite(LimitValue)
+			|| LimitValue < 1.0
+			|| LimitValue > 256.0
+			|| LimitValue != FMath::FloorToDouble(LimitValue))
+		{
+			return FMCPToolResult::Error(
+				TEXT("limit must be an integer between 1 and 256."),
+				TEXT("invalid_params"),
+				400);
+		}
+		const int32 Limit = static_cast<int32>(LimitValue);
+		FString NameContains;
+		FString OwnerContains;
+		FString ResourceType;
+		Request->TryGetStringField(TEXT("nameContains"), NameContains);
+		Request->TryGetStringField(TEXT("ownerContains"), OwnerContains);
+		Request->TryGetStringField(TEXT("resourceType"), ResourceType);
+		if (NameContains.Len() > 256 || OwnerContains.Len() > 256 || ResourceType.Len() > 64)
+		{
+			return FMCPToolResult::Error(
+				TEXT("Resource filters exceed their length limits."),
+				TEXT("invalid_params"),
+				400);
+		}
+
+		FString TransientFilter = TEXT("all");
+		Request->TryGetStringField(TEXT("transient"), TransientFilter);
+		if (!TransientFilter.Equals(TEXT("all"), ESearchCase::IgnoreCase)
+			&& !TransientFilter.Equals(TEXT("yes"), ESearchCase::IgnoreCase)
+			&& !TransientFilter.Equals(TEXT("no"), ESearchCase::IgnoreCase))
+		{
+			return FMCPToolResult::Error(
+				TEXT("transient must be all, yes, or no."),
+				TEXT("invalid_params"),
+				400);
+		}
+
 		FTextureMemoryStats Stats;
 		RHIGetTextureMemoryStats(Stats);
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-		Result->SetBoolField(TEXT("available"), true);
+		const bool bUsingNullRHI = GUsingNullRHI;
+		Result->SetBoolField(TEXT("available"), !bUsingNullRHI);
+		Result->SetBoolField(TEXT("usingNullRHI"), bUsingNullRHI);
+		Result->SetStringField(
+			TEXT("availabilityReason"),
+			bUsingNullRHI
+				? TEXT("The active RHI is NullRHI and cannot provide hardware render evidence.")
+				: TEXT(""));
 		Result->SetBoolField(TEXT("hardwareStatsValid"), Stats.AreHardwareStatsValid());
+		Result->SetBoolField(TEXT("statsValid"), Stats.AreHardwareStatsValid());
 		Result->SetNumberField(TEXT("dedicatedVideoMemoryBytes"), Stats.DedicatedVideoMemory);
+		Result->SetNumberField(TEXT("dedicatedSystemMemoryBytes"), Stats.DedicatedSystemMemory);
+		Result->SetNumberField(TEXT("sharedSystemMemoryBytes"), Stats.SharedSystemMemory);
 		Result->SetNumberField(TEXT("totalGraphicsMemoryBytes"), Stats.TotalGraphicsMemory);
 		Result->SetNumberField(TEXT("streamingMemoryBytes"), static_cast<double>(Stats.StreamingMemorySize));
 		Result->SetNumberField(TEXT("nonStreamingMemoryBytes"), static_cast<double>(Stats.NonStreamingMemorySize));
+		Result->SetNumberField(TEXT("largestContiguousAllocationBytes"), Stats.LargestContiguousAllocation);
 		Result->SetNumberField(TEXT("texturePoolBytes"), Stats.TexturePoolSize);
 		Result->SetNumberField(TEXT("texturePoolAvailableBytes"), Stats.ComputeAvailableMemorySize());
 		Result->SetStringField(
 			TEXT("sampleKind"),
 			TEXT("instantaneous"));
+		Result->SetStringField(
+			TEXT("evidenceBoundary"),
+			TEXT("Aggregate memory values are instantaneous RHI statistics. Tracked resource sizes are backend-reported allocations and do not expose physical heap usage, resource state, addresses, contents or root cause."));
+
+		TSharedRef<FJsonObject> ResourceData = MakeShared<FJsonObject>();
+		ResourceData->SetBoolField(TEXT("requested"), bIncludeResources);
+		ResourceData->SetBoolField(TEXT("available"), false);
+		ResourceData->SetBoolField(TEXT("resourceInfoAvailable"), false);
+		ResourceData->SetNumberField(TEXT("returned"), 0);
+		ResourceData->SetNumberField(TEXT("matched"), 0);
+		ResourceData->SetBoolField(TEXT("truncated"), false);
+		if (!bIncludeResources)
+		{
+			ResourceData->SetStringField(TEXT("reason"), TEXT("Resource enumeration was not requested."));
+		}
+#if defined(RHI_ENABLE_RESOURCE_INFO) && RHI_ENABLE_RESOURCE_INFO
+		else if (bUsingNullRHI)
+		{
+			ResourceData->SetStringField(TEXT("reason"), TEXT("The active RHI is NullRHI."));
+		}
+		else
+		{
+			TArray<TSharedPtr<FRHIResourceStats>> ResourceStats;
+			RHIGetTrackedResourceStats(ResourceStats);
+			TArray<TSharedPtr<FJsonValue>> Resources;
+			int32 Matched = 0;
+			for (const TSharedPtr<FRHIResourceStats>& Resource : ResourceStats)
+			{
+				if (!Resource)
+				{
+					continue;
+				}
+				const FString Name = Resource->Name.ToString();
+				const FString Owner = Resource->OwnerName.ToString();
+				if (!NameContains.IsEmpty() && !Name.Contains(NameContains, ESearchCase::IgnoreCase))
+				{
+					continue;
+				}
+				if (!OwnerContains.IsEmpty() && !Owner.Contains(OwnerContains, ESearchCase::IgnoreCase))
+				{
+					continue;
+				}
+				if (!ResourceType.IsEmpty() && !Resource->Type.Equals(ResourceType, ESearchCase::IgnoreCase))
+				{
+					continue;
+				}
+				if (!TransientFilter.Equals(TEXT("all"), ESearchCase::IgnoreCase))
+				{
+					const bool bWantTransient = TransientFilter.Equals(TEXT("yes"), ESearchCase::IgnoreCase);
+					if (Resource->bTransient != bWantTransient)
+					{
+						continue;
+					}
+				}
+				++Matched;
+				if (Resources.Num() >= Limit)
+				{
+					continue;
+				}
+				TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
+				Item->SetStringField(TEXT("name"), Name);
+				Item->SetStringField(TEXT("owner"), Owner);
+				Item->SetStringField(TEXT("type"), Resource->Type);
+				Item->SetStringField(TEXT("flags"), Resource->Flags);
+				Item->SetNumberField(TEXT("reportedSizeBytes"), static_cast<double>(Resource->SizeInBytes));
+				Item->SetBoolField(TEXT("resident"), Resource->bResident);
+				Item->SetBoolField(TEXT("markedForDelete"), Resource->bMarkedForDelete);
+				Item->SetBoolField(TEXT("transient"), Resource->bTransient);
+				Item->SetBoolField(TEXT("streaming"), Resource->bStreaming);
+				Item->SetBoolField(TEXT("renderTarget"), Resource->bRenderTarget);
+				Item->SetBoolField(TEXT("depthStencil"), Resource->bDepthStencil);
+				Item->SetBoolField(TEXT("unorderedAccess"), Resource->bUnorderedAccessView);
+				Item->SetBoolField(TEXT("rayTracingAccelerationStructure"), Resource->bRayTracingAccelerationStructure);
+				Resources.Add(MakeShared<FJsonValueObject>(Item));
+			}
+			ResourceData->SetBoolField(TEXT("available"), true);
+			ResourceData->SetBoolField(TEXT("resourceInfoAvailable"), true);
+			ResourceData->SetNumberField(TEXT("resourceCount"), ResourceStats.Num());
+			ResourceData->SetNumberField(TEXT("withInfo"), ResourceStats.Num());
+			ResourceData->SetNumberField(TEXT("matched"), Matched);
+			ResourceData->SetNumberField(TEXT("returned"), Resources.Num());
+			ResourceData->SetBoolField(TEXT("truncated"), Matched > Resources.Num());
+			ResourceData->SetArrayField(TEXT("resources"), Resources);
+			ResourceData->SetStringField(
+				TEXT("evidenceBoundary"),
+				TEXT("Names, owners, allocation sizes and backend flags are instantaneous value snapshots; resource state, addresses, contents and root cause are not exposed."));
+		}
+#else
+		if (bIncludeResources)
+		{
+			ResourceData->SetStringField(TEXT("reason"), TEXT("The target was built without RHI resource-info tracking."));
+		}
+#endif
+		Result->SetObjectField(TEXT("trackedResources"), ResourceData);
 		return FMCPToolResult::Ok(Result);
 	}
 };

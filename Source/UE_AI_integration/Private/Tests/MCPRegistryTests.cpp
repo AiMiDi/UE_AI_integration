@@ -224,6 +224,31 @@ bool FMCPRegistryCatalogTest::RunTest(const FString& Parameters)
 			ImmediatePointer,
 			ParamErrors));
 
+	TSharedPtr<FJsonObject> RenderMemoryParams = MakeShared<FJsonObject>();
+	RenderMemoryParams->SetBoolField(TEXT("includeResources"), true);
+	RenderMemoryParams->SetNumberField(TEXT("limit"), 32.0);
+	RenderMemoryParams->SetStringField(TEXT("nameContains"), TEXT("Scene"));
+	RenderMemoryParams->SetStringField(TEXT("ownerContains"), TEXT("Renderer"));
+	RenderMemoryParams->SetStringField(TEXT("resourceType"), TEXT("Texture2D"));
+	RenderMemoryParams->SetStringField(TEXT("transient"), TEXT("no"));
+	ParamErrors.Reset();
+	TestTrue(
+		TEXT("Render memory resource filters accept bounded values"),
+		Registry.ValidateParams(
+			TEXT("scene.render.memory.sample"),
+			RenderMemoryParams,
+			ParamErrors));
+
+	TSharedPtr<FJsonObject> InvalidRenderMemoryParams = MakeShared<FJsonObject>();
+	InvalidRenderMemoryParams->SetNumberField(TEXT("limit"), 257.0);
+	ParamErrors.Reset();
+	TestFalse(
+		TEXT("Render memory resource limit is bounded by the manifest"),
+		Registry.ValidateParams(
+			TEXT("scene.render.memory.sample"),
+			InvalidRenderMemoryParams,
+			ParamErrors));
+
 	TSharedPtr<FJsonObject> PositionOnlyHitTest = MakeShared<FJsonObject>();
 	PositionOnlyHitTest->SetObjectField(TEXT("position"), ImmediatePosition);
 	ParamErrors.Reset();
