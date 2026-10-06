@@ -277,6 +277,12 @@ if(UE_WORKFLOW_BUILD_TESTS AND BUILD_TESTING)
     )
     if(Python3_Interpreter_FOUND)
         add_test(
+            NAME ue_python_full_script_worker
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/full_python_worker.py"
+                --python "${Python3_EXECUTABLE}"
+        )
+        add_test(
             NAME ue_cli_trace_routing
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/trace_cli_routing.py"

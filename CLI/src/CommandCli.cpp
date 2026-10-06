@@ -7287,12 +7287,13 @@ int ExecuteOptions(
                         && item.template get<std::string>() == "write";
                 });
         const std::string risk = DescriptorRisk(*descriptor);
+        const bool confirmation_provided = conversion.params.value("confirmWrite", false);
         const json preflight = {
             { "schema", "ue.cli-params-preflight.v1" },
             { "capability", capability },
             { "schemaSource", options.live_schema ? "editor" : "local-manifest" },
             { "valid", true },
-            { "safeToProceed", !writes || options.confirm_write },
+            { "safeToProceed", !writes || confirmation_provided },
             { "params", conversion.params },
             { "backend", BackendName(backend.backend) },
             { "request", {
@@ -7302,7 +7303,7 @@ int ExecuteOptions(
             } },
             { "approval", {
                 { "required", risk == "confirmWrite" },
-                { "confirmWriteProvided", options.confirm_write },
+                { "confirmWriteProvided", confirmation_provided },
                 { "guidance", risk == "confirmWrite"
                     ? "Review the plan and explicitly pass --confirm-write before execution."
                     : "No manifest-declared confirmWrite risk is present." },

@@ -10,6 +10,7 @@ import io
 import json
 import sys
 import traceback
+import types
 
 
 def main() -> None:
@@ -27,11 +28,18 @@ def main() -> None:
         # Expose both names so existing reflection scripts can be moved to the
         # full executor without changing their input contract.  A script may
         # assign `result`; its stdout/stderr are returned separately.
-        scope = {"data": data, "input": data}
+        script_module = types.ModuleType("__main__")
+        scope = script_module.__dict__
+        scope.update({"__file__": "<ue-ai-python>", "data": data, "input": data})
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            exec(compile(script, "<ue-ai-python>", "exec"), scope, scope)
+        worker_module = sys.modules["__main__"]
+        try:
+            sys.modules["__main__"] = script_module
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                exec(compile(script, "<ue-ai-python>", "exec"), scope, scope)
+        finally:
+            sys.modules["__main__"] = worker_module
 
         payload = {
             "ok": True,

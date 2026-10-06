@@ -75,6 +75,8 @@ stdio bridge，让 Codex CLI、Claude Code 等 MCP 客户端查询或修改 Blue
   独立 worker 中执行完整 Python 脚本的能力；调用方必须声明
   `readOnly`/`safeWrite`/`confirmWrite`/`destructive` 修改级别，宿主会记录
   脚本摘要、执行状态和审计回执。worker 不注入 UE `unreal` 模块。
+  脚本使用标准 `__main__` 模块，支持常规入口守卫和 dataclass；解释器按
+  Win64、Linux、Mac 的引擎内 Python 目录解析。
 - 0.8.1 增加 Editor/PIE 调试视图的实时可用性、指定 Viewport 无损 PNG、
   状态恢复、渲染指纹比较和有界语义分析；它不是任意 GBuffer/RDG Texture
   导出。详见 [渲染调试证据与离线 Insights](docs/UE_TRACE_INSIGHTS.md)。

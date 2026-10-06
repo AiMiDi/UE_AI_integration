@@ -17,6 +17,19 @@
 
 namespace UEAIIntegration::Infrastructure
 {
+FString EnginePythonExecutableRelativePath(const FString& Platform)
+{
+	if (Platform == TEXT("Win64"))
+	{
+		return TEXT("Binaries/ThirdParty/Python3/Win64/python.exe");
+	}
+	if (Platform == TEXT("Linux") || Platform == TEXT("Mac"))
+	{
+		return FString::Printf(TEXT("Binaries/ThirdParty/Python3/%s/bin/python3"), *Platform);
+	}
+	return FString();
+}
+
 namespace
 {
 FString RefString(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field)
@@ -445,6 +458,12 @@ FMCPToolResult FReflectionInspectService::InspectPython(const TSharedPtr<FJsonOb
 {
 	const FString Script = RefString(Params, TEXT("script"));
 	const FString ModificationLevel = RefString(Params, TEXT("modificationLevel"));
+	bool bConfirmWrite = false;
+	if (Params.IsValid() && Params->HasField(TEXT("confirmWrite"))
+		&& !Params->TryGetBoolField(TEXT("confirmWrite"), bConfirmWrite))
+	{
+		return FMCPToolResult::Error(TEXT("confirmWrite must be boolean."), TEXT("invalid_params"), 422);
+	}
 	if (Script.IsEmpty())
 	{
 		return FMCPToolResult::Error(TEXT("script is required."), TEXT("invalid_params"), 422);
@@ -480,8 +499,9 @@ FMCPToolResult FReflectionInspectService::InspectPython(const TSharedPtr<FJsonOb
 	}
 	const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("UE_AI_integration"));
 	const FString Worker = Plugin.IsValid() ? FPaths::Combine(Plugin->GetBaseDir(), TEXT("Resources/Python/full_execute.py")) : FString();
-	FString Python = FPaths::Combine(FPaths::EngineDir(), TEXT("Binaries/ThirdParty/Python3/Win64/python.exe"));
-	if (!IFileManager::Get().FileExists(*Python) || !IFileManager::Get().FileExists(*Worker))
+	const FString PythonRelativePath = EnginePythonExecutableRelativePath(FPlatformProcess::GetBinariesSubdirectory());
+	const FString Python = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::EngineDir(), PythonRelativePath));
+	if (PythonRelativePath.IsEmpty() || !IFileManager::Get().FileExists(*Python) || !IFileManager::Get().FileExists(*Worker))
 	{
 		return FMCPToolResult::Error(TEXT("The Engine Python worker is unavailable."), TEXT("job_runtime_unavailable"), 503);
 	}
@@ -502,6 +522,7 @@ FMCPToolResult FReflectionInspectService::InspectPython(const TSharedPtr<FJsonOb
 	Audit->SetStringField(TEXT("modificationLevel"), ModificationLevel);
 	Audit->SetStringField(TEXT("scriptModificationLevel"), ModificationLevel);
 	Audit->SetStringField(TEXT("modificationLevelSource"), TEXT("callerDeclared"));
+	Audit->SetBoolField(TEXT("confirmWriteProvided"), bConfirmWrite);
 	Audit->SetStringField(TEXT("executionMode"), TEXT("fullScript"));
 	Audit->SetBoolField(TEXT("auditRecorded"), true);
 	Audit->SetStringField(TEXT("scriptDigest"), ScriptDigest);
@@ -514,7 +535,7 @@ FMCPToolResult FReflectionInspectService::InspectPython(const TSharedPtr<FJsonOb
 	{
 		return FMCPToolResult::Error(TEXT("Python execution audit record could not be written."), TEXT("python_audit_failed"), 507);
 	}
-	const auto Complete = [&Audit, &ExecutionId, &AuditPath, &AuditRelativePath, &ModificationLevel, &ScriptDigest](FMCPToolResult Result, const TCHAR* Status, const FString& ErrorCode)
+	const auto Complete = [&Audit, &ExecutionId, &AuditPath, &AuditRelativePath, &ModificationLevel, &ScriptDigest, bConfirmWrite](FMCPToolResult Result, const TCHAR* Status, const FString& ErrorCode)
 	{
 		Audit->SetStringField(TEXT("status"), Status);
 		Audit->SetStringField(TEXT("completedAtUtc"), FDateTime::UtcNow().ToIso8601());
@@ -531,6 +552,7 @@ FMCPToolResult FReflectionInspectService::InspectPython(const TSharedPtr<FJsonOb
 		Receipt->SetStringField(TEXT("modificationLevel"), ModificationLevel);
 		Receipt->SetStringField(TEXT("scriptModificationLevel"), ModificationLevel);
 		Receipt->SetStringField(TEXT("modificationLevelSource"), TEXT("callerDeclared"));
+		Receipt->SetBoolField(TEXT("confirmWriteProvided"), bConfirmWrite);
 		Receipt->SetStringField(TEXT("executionMode"), TEXT("fullScript"));
 		Receipt->SetBoolField(TEXT("auditRecorded"), true);
 		Receipt->SetBoolField(TEXT("auditCompleted"), bAuditCompleted);

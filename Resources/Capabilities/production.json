@@ -2543,6 +2543,10 @@
             "type": "string",
             "enum": ["readOnly", "safeWrite", "confirmWrite", "destructive"]
           },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit acknowledgement for CLI script-execution preflight; recorded separately from the caller-declared modification level."
+          },
           "input": {
             "type": "object",
             "additionalProperties": true

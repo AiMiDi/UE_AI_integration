@@ -177,6 +177,9 @@ recipe 的 verify readback。完整设计见 [UE Agent Skills](UE_AGENT_SKILLS.m
   UE 业务约束由 Editor 最终验证。
 - schema 声明 `requestId` 时自动生成。`--request-id` 用于可控重试。
 - `--confirm-write` 只在 schema 声明 `confirmWrite` 时注入。
+  `production.python.inspect` 支持该可选确认字段，参数预检同时识别命令行 flag
+  和 JSON 参数中的 `confirmWrite=true`。确认与 `modificationLevel` 分别记录；
+  修改级别仍是调用方声明，不是对实际脚本副作用的认证。
 
 复杂 JSON 在 PowerShell 中应优先使用 `--params-file <path>`；需要管道时使用
 `--params-file -`。`--params <json>` 仅保留给简单对象和已经正确处理引号的

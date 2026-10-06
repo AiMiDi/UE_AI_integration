@@ -47,6 +47,8 @@ struct FRenderChangeRecord
 	TMap<FString, FString> BeforeValues;
 	TMap<FString, FString> AfterValues;
 	bool bRolledBack = false;
+	FMCPToolResult ExecutionResult;
+	TSharedPtr<FJsonObject> RollbackResult;
 };
 
 struct FPCGOperationRecord
@@ -299,6 +301,61 @@ TMap<FString, FString> AllowedRenderSettings()
 		{TEXT("hardwareRayTracing"), TEXT("r.RayTracing")},
 		{TEXT("tsrUpsampling"), TEXT("r.TemporalAA.Upsampling")}
 	};
+}
+
+FMCPToolResult RestoreRenderSettings(
+	const TMap<FString, FString>& BeforeValues,
+	const TMap<FString, FString>& Allowed)
+{
+	TArray<FString> Keys;
+	BeforeValues.GetKeys(Keys);
+	Keys.Sort();
+	for (const FString& Key : Keys)
+	{
+		const FString* Name = Allowed.Find(Key);
+		IConsoleVariable* CVar = Name ? IConsoleManager::Get().FindConsoleVariable(**Name) : nullptr;
+		if (CVar)
+		{
+			CVar->Set(*BeforeValues.FindChecked(Key), ECVF_SetByConsole);
+		}
+	}
+	// Check the whole restored set after every write: a CVar callback may also
+	// change a value that an earlier write appeared to restore successfully.
+	TSharedRef<FJsonObject> ReadBack = MakeShared<FJsonObject>();
+	TSharedRef<FJsonObject> Expected = MakeShared<FJsonObject>();
+	TArray<TSharedPtr<FJsonValue>> Failures;
+	for (const FString& Key : Keys)
+	{
+		const FString* Name = Allowed.Find(Key);
+		IConsoleVariable* CVar = Name ? IConsoleManager::Get().FindConsoleVariable(**Name) : nullptr;
+		const FString& Before = BeforeValues.FindChecked(Key);
+		Expected->SetStringField(Key, Before);
+		const FString Actual = CVar ? CVar->GetString() : FString();
+		if (CVar)
+		{
+			ReadBack->SetStringField(Key, Actual);
+		}
+		if (!CVar || Actual != Before)
+		{
+			TSharedRef<FJsonObject> Failure = MakeShared<FJsonObject>();
+			Failure->SetStringField(TEXT("setting"), Key);
+			Failure->SetStringField(TEXT("expected"), Before);
+			Failure->SetStringField(TEXT("reason"), CVar ? TEXT("readback_mismatch") : TEXT("setting_unavailable"));
+			if (CVar) Failure->SetStringField(TEXT("actual"), Actual);
+			Failures.Add(MakeShared<FJsonValueObject>(Failure));
+		}
+	}
+	TSharedRef<FJsonObject> Data = MakeShared<FJsonObject>();
+	Data->SetObjectField(TEXT("expected"), Expected);
+	Data->SetObjectField(TEXT("readBack"), ReadBack);
+	Data->SetArrayField(TEXT("failures"), Failures);
+	Data->SetBoolField(TEXT("rollbackVerified"), Failures.IsEmpty());
+	Data->SetBoolField(TEXT("manualReview"), !Failures.IsEmpty());
+	FMCPToolResult Result = Failures.IsEmpty()
+		? FMCPToolResult::Ok(Data)
+		: FMCPToolResult::Error(TEXT("Render settings restoration could not be verified."), TEXT("setting_rollback_failed"), 409);
+	Result.Data = Data;
+	return Result;
 }
 
 FMCPToolResult BuildRenderPlan(
@@ -658,13 +715,11 @@ public:
 						: TEXT("request_id_conflict"),
 					409);
 			}
-			TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
-			Result->SetStringField(TEXT("runId"), Existing->RunId);
-			Result->SetStringField(TEXT("status"), TEXT("succeeded"));
-			Result->SetStringField(TEXT("planDigest"), Existing->PlanDigest);
-			Result->SetBoolField(TEXT("idempotentReplay"), true);
-			Result->SetBoolField(TEXT("rolledBack"), Existing->bRolledBack);
-			return FMCPToolResult::Ok(Result);
+			FMCPToolResult Replay = Existing->ExecutionResult;
+			Replay.Data = MakeShared<FJsonObject>(*Existing->ExecutionResult.Data);
+			Replay.Data->SetBoolField(TEXT("idempotentReplay"), true);
+			Replay.Data->SetBoolField(TEXT("rolledBack"), Existing->bRolledBack);
+			return Replay;
 		}
 
 		TSharedPtr<FJsonObject> Plan;
@@ -706,31 +761,37 @@ public:
 				FString::FromInt(static_cast<int32>(After->GetNumberField(Key)));
 			Record.BeforeValues.Add(Key, BeforeValue);
 			Record.AfterValues.Add(Key, AfterValue);
-			CVar->Set(*AfterValue, ECVF_SetByConsole);
-			if (CVar->GetString() != AfterValue)
+			if (CVar) CVar->Set(*AfterValue, ECVF_SetByConsole);
+			if (!CVar || CVar->GetString() != AfterValue)
 			{
-				for (const TPair<FString, FString>& Applied : Record.BeforeValues)
-				{
-					IConsoleManager::Get()
-						.FindConsoleVariable(*Allowed.FindChecked(Applied.Key))
-						->Set(*Applied.Value, ECVF_SetByConsole);
-				}
-				return FMCPToolResult::Error(
+				const FMCPToolResult Recovery = RestoreRenderSettings(Record.BeforeValues, Allowed);
+				Record.bRolledBack = Recovery.bSuccess;
+				if (Recovery.bSuccess) Record.RollbackResult = Recovery.Data;
+				Record.ExecutionResult = FMCPToolResult::Error(
 					FString::Printf(
 						TEXT("Render setting '%s' rejected the requested value."),
 						*Key),
-					TEXT("setting_change_failed"),
+					Recovery.bSuccess ? TEXT("setting_change_failed") : TEXT("setting_rollback_failed"),
 					409);
+				Record.ExecutionResult.Data = MakeShared<FJsonObject>(*Recovery.Data);
+				Record.ExecutionResult.Data->SetStringField(TEXT("runId"), Record.RunId);
+				Record.ExecutionResult.Data->SetStringField(TEXT("planDigest"), Digest);
+				Record.ExecutionResult.Data->SetStringField(TEXT("status"), TEXT("failed"));
+				Record.ExecutionResult.Data->SetBoolField(TEXT("rolledBack"), Record.bRolledBack);
+				RenderRuns().Add(Record.RunId, Record);
+				RenderRequestRuns().Add(RequestId, Record.RunId);
+				return Record.ExecutionResult;
 			}
 		}
-		RenderRuns().Add(Record.RunId, Record);
-		RenderRequestRuns().Add(RequestId, Record.RunId);
 		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetStringField(TEXT("runId"), Record.RunId);
 		Result->SetStringField(TEXT("planDigest"), Digest);
 		Result->SetStringField(TEXT("status"), TEXT("succeeded"));
 		Result->SetObjectField(TEXT("readBack"), After);
-		return FMCPToolResult::Ok(Result);
+		Record.ExecutionResult = FMCPToolResult::Ok(Result);
+		RenderRuns().Add(Record.RunId, Record);
+		RenderRequestRuns().Add(RequestId, Record.RunId);
+		return Record.ExecutionResult;
 	}
 };
 
@@ -761,21 +822,20 @@ public:
 		}
 		if (!Record->bRolledBack)
 		{
-			const TMap<FString, FString> Allowed = AllowedRenderSettings();
-			for (const TPair<FString, FString>& Pair : Record->BeforeValues)
-			{
-				if (IConsoleVariable* CVar =
-					IConsoleManager::Get().FindConsoleVariable(
-						*Allowed.FindChecked(Pair.Key)))
-				{
-					CVar->Set(*Pair.Value, ECVF_SetByConsole);
-				}
-			}
+			FMCPToolResult Recovery = RestoreRenderSettings(Record->BeforeValues, AllowedRenderSettings());
+			Recovery.Data->SetStringField(TEXT("runId"), RunId);
+			Recovery.Data->SetStringField(TEXT("status"), Recovery.bSuccess ? TEXT("rolledBack") : TEXT("rollbackFailed"));
+			Recovery.Data->SetBoolField(TEXT("rolledBack"), Recovery.bSuccess);
+			if (!Recovery.bSuccess) return Recovery;
+			Record->RollbackResult = Recovery.Data;
 			Record->bRolledBack = true;
+			return Recovery;
 		}
-		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>();
+		TSharedRef<FJsonObject> Result = MakeShared<FJsonObject>(*Record->RollbackResult);
 		Result->SetStringField(TEXT("runId"), RunId);
 		Result->SetStringField(TEXT("status"), TEXT("rolledBack"));
+		Result->SetBoolField(TEXT("rolledBack"), true);
+		Result->SetBoolField(TEXT("idempotentReplay"), true);
 		return FMCPToolResult::Ok(Result);
 	}
 };

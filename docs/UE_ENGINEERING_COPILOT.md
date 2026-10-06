@@ -231,6 +231,10 @@ HLOD 是长任务，不进入资产 Workflow；PCG 只在可用插件/模块满�
 
 写入仅覆盖 allowlist 内的 Session CVar，带精确 digest 和读回；不会静默修改
 项目 DefaultEngine.ini 或平台配置。
+回滚在全部恢复写入后重新读回整个目标集合；缺失 CVar 或值不匹配返回
+`setting_rollback_failed`、`rollbackVerified=false` 和失败明细。执行失败的补偿也使用
+同一校验，失败 run 保留恢复记录；成功回滚的重复调用返回原验证回执并标记
+`idempotentReplay=true`，不代表重复调用时重新观测了当前会话值。
 
 Viewport Visualization 从真实 Engine/RHI/插件状态枚举 View Mode、Buffer、
 Ray Tracing Debug、Nanite、Lumen、Virtual Shadow Map、GPU Skin Cache、

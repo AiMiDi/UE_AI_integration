@@ -1033,6 +1033,38 @@ def main() -> int:
             assert file_preflight["request"]["generatedRequestId"] is False
             assert len(requests) == before_file_preflight_requests
 
+            # Use the real Python manifest so this cannot pass with a fake
+            # schema that accidentally exposes a different approval contract.
+            python_preflight_args = [
+                "production.python.inspect", "--preflight", "--json",
+                "--capability-root", str(source_root / "Resources/Capabilities"),
+                "--endpoint", endpoint,
+            ]
+            before_python_requests = len(requests)
+            for level in ("readOnly", "safeWrite", "confirmWrite", "destructive"):
+                arguments = [*python_preflight_args, "--script", "result = 1",
+                             "--modification-level", level]
+                pending = json.loads(run_bundle(arguments, check=True).stdout)["data"]
+                assert pending["valid"] is True
+                assert pending["safeToProceed"] is False
+                assert pending["approval"]["required"] is True
+                confirmed = json.loads(run_bundle(
+                    [*arguments, "--confirm-write"], check=True
+                ).stdout)["data"]
+                assert confirmed["safeToProceed"] is True
+                assert confirmed["approval"]["confirmWriteProvided"] is True
+                assert confirmed["params"]["confirmWrite"] is True
+                assert confirmed["params"]["modificationLevel"] == level
+            confirmed_json = json.loads(run_bundle([
+                *python_preflight_args, "--params", json.dumps({
+                    "script": "result = 1", "modificationLevel": "readOnly",
+                    "confirmWrite": True,
+                }),
+            ], check=True).stdout)["data"]
+            assert confirmed_json["safeToProceed"] is True
+            assert confirmed_json["approval"]["confirmWriteProvided"] is True
+            assert len(requests) == before_python_requests
+
             invalid_type_file = temporary_path / "invalid-type-params.json"
             invalid_type_file.write_text(
                 json.dumps(

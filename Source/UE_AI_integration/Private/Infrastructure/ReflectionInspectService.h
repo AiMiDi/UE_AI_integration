@@ -5,6 +5,8 @@
 
 namespace UEAIIntegration::Infrastructure
 {
+FString EnginePythonExecutableRelativePath(const FString& Platform);
+
 class FReflectionInspectService
 {
 public:

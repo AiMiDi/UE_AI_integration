@@ -133,7 +133,14 @@ bool FFullPythonExecutionTest::RunTest(const FString& Parameters)
 
 	const FMCPToolResult Good = Service.Execute(
 		TEXT("production.python.inspect"),
-		MakeInspectParams(TEXT("import math\nresult = len(data['types']) + int(math.sqrt(4))"), Snapshot));
+		MakeInspectParams(TEXT(
+			"from __future__ import annotations\n"
+			"import __main__\nfrom dataclasses import dataclass\n"
+			"@dataclass\nclass Entry:\n    count: int\n"
+			"def main():\n    global result\n"
+			"    assert __main__.Entry is Entry\n"
+			"    result = Entry(len(data['types']) + 2).count\n"
+			"if __name__ == '__main__':\n    main()\n"), Snapshot));
 	TestTrue(TEXT("Complete Python script succeeds"), Good.bSuccess);
 	if (Good.bSuccess && Good.Data.IsValid())
 	{
@@ -148,6 +155,7 @@ bool FFullPythonExecutionTest::RunTest(const FString& Parameters)
 		TestTrue(
 			TEXT("Execution returns an audit artifact"),
 			Good.Data->HasTypedField<EJson::String>(TEXT("auditPath")));
+		TestFalse(TEXT("Legacy callers need not supply the optional acknowledgement"), Good.Data->GetBoolField(TEXT("confirmWriteProvided")));
 		if (Good.Data->HasTypedField<EJson::String>(TEXT("auditPath")))
 		{
 			const FString AuditPath = Good.Data->GetStringField(TEXT("auditPath"));
@@ -159,6 +167,15 @@ bool FFullPythonExecutionTest::RunTest(const FString& Parameters)
 				TEXT("Audit artifact is written before completion"),
 				IFileManager::Get().FileExists(*AbsoluteAuditPath));
 		}
+	}
+
+	TSharedRef<FJsonObject> Confirmed = MakeInspectParams(TEXT("result = 7"), Snapshot);
+	Confirmed->SetBoolField(TEXT("confirmWrite"), true);
+	const FMCPToolResult ConfirmedResult = Service.Execute(TEXT("production.python.inspect"), Confirmed);
+	if (TestTrue(TEXT("CLI acknowledgement is accepted by the host"), ConfirmedResult.bSuccess && ConfirmedResult.Data.IsValid()))
+	{
+		TestTrue(TEXT("The host records explicit acknowledgement"), ConfirmedResult.Data->GetBoolField(TEXT("confirmWriteProvided")));
+		TestEqual(TEXT("Acknowledgement preserves the declared modification level"), ConfirmedResult.Data->GetStringField(TEXT("modificationLevel")), FString(TEXT("readOnly")));
 	}
 
 	for (const FString& Level : {
@@ -179,6 +196,21 @@ bool FFullPythonExecutionTest::RunTest(const FString& Parameters)
 			Rejected.ErrorCode,
 			FString(TEXT("invalid_modification_level")));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEnginePythonPlatformPathsTest,
+	"UE_AI_integration.Reflection.EnginePythonPlatformPaths",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FEnginePythonPlatformPathsTest::RunTest(const FString& Parameters)
+{
+	using UEAIIntegration::Infrastructure::EnginePythonExecutableRelativePath;
+	TestEqual(TEXT("Windows uses the Engine executable"), EnginePythonExecutableRelativePath(TEXT("Win64")), FString(TEXT("Binaries/ThirdParty/Python3/Win64/python.exe")));
+	TestEqual(TEXT("Linux uses the Engine bin directory"), EnginePythonExecutableRelativePath(TEXT("Linux")), FString(TEXT("Binaries/ThirdParty/Python3/Linux/bin/python3")));
+	TestEqual(TEXT("Mac uses the Engine bin directory"), EnginePythonExecutableRelativePath(TEXT("Mac")), FString(TEXT("Binaries/ThirdParty/Python3/Mac/bin/python3")));
+	TestTrue(TEXT("Unknown platforms never fall back to Windows Python"), EnginePythonExecutableRelativePath(TEXT("Unknown")).IsEmpty());
 	return true;
 }
 
