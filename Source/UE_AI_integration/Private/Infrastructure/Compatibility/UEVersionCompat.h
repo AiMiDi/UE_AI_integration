@@ -27,6 +27,8 @@
 	(!UE_VERSION_OLDER_THAN(MajorVersion, MinorVersion, PatchVersion))
 #endif
 
+#define WITH_UEAI_PCG_GRAPH (WITH_UEAI_PCG && UE_VERSION_AT_LEAST(5, 4, 0))
+
 namespace UEAIIntegration::Compatibility
 {
 	static_assert(ENGINE_MAJOR_VERSION == 5, "UE_AI_integration supports Unreal Engine 5 only.");

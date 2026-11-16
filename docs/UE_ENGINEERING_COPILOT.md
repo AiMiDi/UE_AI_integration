@@ -203,7 +203,7 @@ RHI 描述符和跨 RHI 的显存估算；NullRHI 或尚未初始化的资源会
 - World Partition 状态、Cell、Streaming Source 和审计。
 - Data Layer 列表与详情。
 - HLOD 审计与受约束构建任务。
-- PCG 检查，以及显式确认后的 Generate/Cleanup。
+- PCG 组件检查与 Generate/Cleanup，以及 [PCG Graph 基础读写](UE_PCG_GRAPH_EDITING.md)。图修改复用原生编辑动作，保存独立执行。
 - World Partition 设置变更采用 plan/execute/rollback。
 
 HLOD 是长任务，不进入资产 Workflow；PCG 只在可用插件/模块满足 manifest

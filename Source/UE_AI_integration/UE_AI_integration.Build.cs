@@ -132,11 +132,15 @@ public class UE_AI_integration : ModuleRules
 		{
 			PrivateDependencyModuleNames.Add("Water");
 		}
-		// PCG handlers use reflection so the production module never needs to
-		// link PCG. WITH_UEAI_PCG only enables the typed Automation coverage.
 		if (bWithPCG)
 		{
 			PrivateDependencyModuleNames.Add("PCG");
+			// Match the PCG Graph minimum in UEVersionCompat.h.
+			if (Target.Version.MajorVersion > 5
+				|| (Target.Version.MajorVersion == 5 && Target.Version.MinorVersion >= 4))
+			{
+				PrivateDependencyModuleNames.Add("PCGEditor");
+			}
 		}
 		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL");
 

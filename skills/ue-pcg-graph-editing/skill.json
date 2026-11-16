@@ -1,0 +1,91 @@
+{
+  "schema": "ue.agent-skill.v1",
+  "schemaVersion": 1,
+  "id": "ue-pcg-graph-editing",
+  "version": "1.0.0",
+  "title": "UE PCG Graph Editing",
+  "description": "Read, create and edit PCG Graph assets through native Editor actions and explicit save.",
+  "domains": [
+    "scene"
+  ],
+  "risk": "confirmWrite",
+  "triggers": [
+    "PCG Graph",
+    "PCG node creation",
+    "PCG connect pins",
+    "PCG 图",
+    "PCG 节点连线"
+  ],
+  "entrypoint": "SKILL.md",
+  "requirements": {
+    "engine": {
+      "min": "5.4"
+    },
+    "capabilities": [
+      "scene.pcg.graph.list",
+      "scene.pcg.graph.get",
+      "scene.pcg.graph.create",
+      "scene.pcg.graph.editor.prepare",
+      "scene.pcg.graph.edit.plan",
+      "scene.pcg.graph.edit.apply",
+      "scene.pcg.graph.edit.rollback",
+      "scene.pcg.graph.save"
+    ]
+  },
+  "recipes": [
+    {
+      "id": "edit-one-graph",
+      "title": "Edit one PCG Graph",
+      "description": "Inspect the graph, use its native action catalog, and apply one approved batch before optional save.",
+      "risk": "confirmWrite",
+      "inputs": [
+        {
+          "name": "graphPath",
+          "type": "string",
+          "required": true,
+          "description": "Exact PCG Graph object path."
+        }
+      ],
+      "steps": [
+        {
+          "id": "inspect",
+          "phase": "discover",
+          "purpose": "Read graph IDs and discover native factories.",
+          "operations": [
+            "scene.pcg.graph.get",
+            "scene.pcg.graph.editor.prepare"
+          ]
+        },
+        {
+          "id": "apply",
+          "phase": "execute",
+          "purpose": "Plan and apply one confirmed graph edit.",
+          "operations": [
+            "scene.pcg.graph.edit.plan",
+            "scene.pcg.graph.edit.apply"
+          ]
+        },
+        {
+          "id": "verify",
+          "phase": "verify",
+          "purpose": "Verify the resulting PCG nodes and edges.",
+          "operations": [
+            "scene.pcg.graph.get"
+          ]
+        }
+      ],
+      "result": {
+        "summary": "Verified in-memory PCG Graph edit.",
+        "evidence": [
+          "Graph hash, node identities and edges",
+          "Editor session receipt"
+        ],
+        "success": [
+          "Graph and editor view match",
+          "Changes were saved only if explicitly requested"
+        ]
+      }
+    }
+  ],
+  "resources": []
+}

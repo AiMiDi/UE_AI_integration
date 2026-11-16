@@ -3,6 +3,1002 @@
   "domain": "scene",
   "capabilities": [
     {
+      "id": "scene.pcg.graph.list",
+      "domain": "scene",
+      "kind": "query",
+      "description": "List PCG Graph assets recursively under an Unreal mount path.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Package directory prefix."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000,
+            "default": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 100
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "requires": {
+        "engine": {
+          "min": "5.4.0"
+        },
+        "features": [
+          "PCG"
+        ],
+        "plugins": [
+          "PCG"
+        ],
+        "modules": [
+          "PCG",
+          "PCGEditor"
+        ]
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "dsl": {
+        "admission": "none",
+        "deferCompile": false,
+        "risk": "readOnly",
+        "scopeKinds": [],
+        "transactionDomain": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "scene.pcg.graph.list"
+      }
+    },
+    {
+      "id": "scene.pcg.graph.get",
+      "domain": "scene",
+      "kind": "query",
+      "description": "Read PCG Graph nodes, pins, connections, Settings identity summary and dirty state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "graphPath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Exact PCG Graph object path, for example /Game/PCG/Graph.Graph."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000,
+            "default": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 100
+          },
+          "edgeOffset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16384,
+            "default": 0
+          },
+          "edgeLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 200
+          }
+        },
+        "required": [
+          "graphPath"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "requires": {
+        "engine": {
+          "min": "5.4.0"
+        },
+        "features": [
+          "PCG"
+        ],
+        "plugins": [
+          "PCG"
+        ],
+        "modules": [
+          "PCG",
+          "PCGEditor"
+        ]
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "dsl": {
+        "admission": "none",
+        "deferCompile": false,
+        "risk": "readOnly",
+        "scopeKinds": [],
+        "transactionDomain": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "scene.pcg.graph.get"
+      }
+    },
+    {
+      "id": "scene.pcg.graph.create",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Create an unsaved empty PCG Graph with the native asset factory.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "packagePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "New package path without object suffix."
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit confirmation for the requested write."
+          }
+        },
+        "required": [
+          "packagePath",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "requires": {
+        "engine": {
+          "min": "5.4.0"
+        },
+        "features": [
+          "PCG"
+        ],
+        "plugins": [
+          "PCG"
+        ],
+        "modules": [
+          "PCG",
+          "PCGEditor"
+        ]
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "none"
+      },
+      "dsl": {
+        "admission": "none",
+        "deferCompile": false,
+        "risk": "confirmWrite",
+        "scopeKinds": [],
+        "transactionDomain": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "scene.pcg.graph.create"
+      }
+    },
+    {
+      "id": "scene.pcg.graph.editor.prepare",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Open or reuse the native PCG Graph editor and list supported node creation actions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "graphPath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Exact PCG Graph object path, for example /Game/PCG/Graph.Graph."
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000,
+            "default": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 100
+          },
+          "contextId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Reuse this context to page the same action catalog."
+          },
+          "filter": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Filter native action title or category."
+          }
+        },
+        "required": [
+          "graphPath"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "requires": {
+        "engine": {
+          "min": "5.4.0"
+        },
+        "features": [
+          "PCG"
+        ],
+        "plugins": [
+          "PCG"
+        ],
+        "modules": [
+          "PCG",
+          "PCGEditor"
+        ]
+      },
+      "effects": {
+        "asset": "read",
+        "world": "none",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "dsl": {
+        "admission": "none",
+        "deferCompile": false,
+        "risk": "safeWrite",
+        "scopeKinds": [],
+        "transactionDomain": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "scene.pcg.graph.editor.prepare"
+      }
+    },
+    {
+      "id": "scene.pcg.graph.edit.plan",
+      "domain": "scene",
+      "kind": "validation",
+      "description": "Plan an ordered PCG Graph batch of node creation, reflected instance Settings changes, direct links, disconnections and node removal.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "graphPath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Exact PCG Graph object path, for example /Game/PCG/Graph.Graph."
+          },
+          "expectedGraphHash": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Graph hash returned by graph.get or editor.prepare."
+          },
+          "contextId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Current editor preparation context."
+          },
+          "operations": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 224,
+            "items": {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "addNode",
+                    "connect",
+                    "disconnect",
+                    "setSettings",
+                    "removeNode"
+                  ]
+                },
+                "ref": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "description": "Unique addNode ref, or an earlier addNode ref for setSettings."
+                },
+                "factoryId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "description": "Factory ID from editor.prepare."
+                },
+                "posX": {
+                  "type": "number",
+                  "minimum": -1000000,
+                  "maximum": 1000000,
+                  "default": 0
+                },
+                "posY": {
+                  "type": "number",
+                  "minimum": -1000000,
+                  "maximum": 1000000,
+                  "default": 0
+                },
+                "to": {
+                  "type": "object",
+                  "properties": {
+                    "nodeId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "description": "Existing node ID from graph.get."
+                    },
+                    "ref": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "description": "Earlier addNode ref in this batch."
+                    },
+                    "pin": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "description": "Exact pin label."
+                    }
+                  },
+                  "required": [
+                    "pin"
+                  ],
+                  "additionalProperties": false
+                },
+                "from": {
+                  "type": "object",
+                  "properties": {
+                    "nodeId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "description": "Existing node ID from graph.get."
+                    },
+                    "ref": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "description": "Earlier addNode ref in this batch."
+                    },
+                    "pin": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "description": "Exact pin label."
+                    }
+                  },
+                  "required": [
+                    "pin"
+                  ],
+                  "additionalProperties": false
+                },
+                "nodeId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "description": "Existing node for setSettings or removeNode."
+                },
+                "expectedSettingsClass": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024,
+                  "description": "Exact Settings class path for setSettings or removeNode."
+                },
+                "changes": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 16,
+                  "description": "Exact reflected Settings paths and typed values. Paths may enter nested structs or select an entire supported array.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "value": {
+                        "oneOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "maxLength": 1024
+                          },
+                          {
+                            "type": "array",
+                            "maxItems": 32,
+                            "items": {
+                              "oneOf": [
+                                {
+                                  "type": "string",
+                                  "maxLength": 256
+                                },
+                                {
+                                  "type": "object"
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "selection": {
+                                "type": "string",
+                                "enum": [
+                                  "attribute"
+                                ]
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256
+                              }
+                            },
+                            "required": [
+                              "selection",
+                              "name"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "value"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "op"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "graphPath",
+          "expectedGraphHash",
+          "contextId",
+          "operations"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "requires": {
+        "engine": {
+          "min": "5.4.0"
+        },
+        "features": [
+          "PCG"
+        ],
+        "plugins": [
+          "PCG"
+        ],
+        "modules": [
+          "PCG",
+          "PCGEditor"
+        ]
+      },
+      "effects": {
+        "asset": "read",
+        "world": "read",
+        "editorSession": "read",
+        "external": "none"
+      },
+      "dsl": {
+        "admission": "none",
+        "deferCompile": false,
+        "risk": "readOnly",
+        "scopeKinds": [],
+        "transactionDomain": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "scene.pcg.graph.edit.plan"
+      }
+    },
+    {
+      "id": "scene.pcg.graph.edit.apply",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Apply an approved PCG Graph batch of native node, Settings and link edits with readback and same-Editor recovery. Leaves the package dirty.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "graphPath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Exact PCG Graph object path, for example /Game/PCG/Graph.Graph."
+          },
+          "expectedGraphHash": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Graph hash returned by graph.get or editor.prepare."
+          },
+          "contextId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Current editor preparation context."
+          },
+          "operations": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 224,
+            "items": {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "addNode",
+                    "connect",
+                    "disconnect",
+                    "setSettings",
+                    "removeNode"
+                  ]
+                },
+                "ref": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "description": "Unique addNode ref, or an earlier addNode ref for setSettings."
+                },
+                "factoryId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "description": "Factory ID from editor.prepare."
+                },
+                "posX": {
+                  "type": "number",
+                  "minimum": -1000000,
+                  "maximum": 1000000,
+                  "default": 0
+                },
+                "posY": {
+                  "type": "number",
+                  "minimum": -1000000,
+                  "maximum": 1000000,
+                  "default": 0
+                },
+                "to": {
+                  "type": "object",
+                  "properties": {
+                    "nodeId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "description": "Existing node ID from graph.get."
+                    },
+                    "ref": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "description": "Earlier addNode ref in this batch."
+                    },
+                    "pin": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "description": "Exact pin label."
+                    }
+                  },
+                  "required": [
+                    "pin"
+                  ],
+                  "additionalProperties": false
+                },
+                "from": {
+                  "type": "object",
+                  "properties": {
+                    "nodeId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "description": "Existing node ID from graph.get."
+                    },
+                    "ref": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "description": "Earlier addNode ref in this batch."
+                    },
+                    "pin": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256,
+                      "description": "Exact pin label."
+                    }
+                  },
+                  "required": [
+                    "pin"
+                  ],
+                  "additionalProperties": false
+                },
+                "nodeId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "description": "Existing node for setSettings or removeNode."
+                },
+                "expectedSettingsClass": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024,
+                  "description": "Exact Settings class path for setSettings or removeNode."
+                },
+                "changes": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 16,
+                  "description": "Exact reflected Settings paths and typed values. Paths may enter nested structs or select an entire supported array.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128
+                      },
+                      "value": {
+                        "oneOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "maxLength": 1024
+                          },
+                          {
+                            "type": "array",
+                            "maxItems": 32,
+                            "items": {
+                              "oneOf": [
+                                {
+                                  "type": "string",
+                                  "maxLength": 256
+                                },
+                                {
+                                  "type": "object"
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "selection": {
+                                "type": "string",
+                                "enum": [
+                                  "attribute"
+                                ]
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256
+                              }
+                            },
+                            "required": [
+                              "selection",
+                              "name"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "value"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "op"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit confirmation for the requested write."
+          },
+          "approvePlanDigest": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Exact plan digest."
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Stable request identity."
+          }
+        },
+        "required": [
+          "graphPath",
+          "expectedGraphHash",
+          "contextId",
+          "operations",
+          "approvePlanDigest",
+          "confirmWrite",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "requires": {
+        "engine": {
+          "min": "5.4.0"
+        },
+        "features": [
+          "PCG"
+        ],
+        "plugins": [
+          "PCG"
+        ],
+        "modules": [
+          "PCG",
+          "PCGEditor"
+        ]
+      },
+      "effects": {
+        "asset": "write",
+        "world": "write",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "dsl": {
+        "admission": "none",
+        "deferCompile": false,
+        "risk": "confirmWrite",
+        "scopeKinds": [],
+        "transactionDomain": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "scene.pcg.graph.edit.apply"
+      }
+    },
+    {
+      "id": "scene.pcg.graph.edit.rollback",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Restore a verified PCG Graph edit receipt in this Editor session. Leaves the package dirty.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "receiptId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Receipt ID."
+          },
+          "editRequestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Original apply request ID."
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit confirmation for the requested write."
+          }
+        },
+        "required": [
+          "receiptId",
+          "editRequestId",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "requires": {
+        "engine": {
+          "min": "5.4.0"
+        },
+        "features": [
+          "PCG"
+        ],
+        "plugins": [
+          "PCG"
+        ],
+        "modules": [
+          "PCG",
+          "PCGEditor"
+        ]
+      },
+      "effects": {
+        "asset": "write",
+        "world": "write",
+        "editorSession": "write",
+        "external": "none"
+      },
+      "dsl": {
+        "admission": "none",
+        "deferCompile": false,
+        "risk": "confirmWrite",
+        "scopeKinds": [],
+        "transactionDomain": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "scene.pcg.graph.edit.rollback"
+      }
+    },
+    {
+      "id": "scene.pcg.graph.save",
+      "domain": "scene",
+      "kind": "command",
+      "description": "Explicitly persist one PCG Graph after checking its structure and project source-control state.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "graphPath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Exact PCG Graph object path, for example /Game/PCG/Graph.Graph."
+          },
+          "expectedGraphHash": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Graph hash returned by graph.get or editor.prepare."
+          },
+          "confirmWrite": {
+            "type": "boolean",
+            "description": "Explicit confirmation for the requested write."
+          }
+        },
+        "required": [
+          "graphPath",
+          "expectedGraphHash",
+          "confirmWrite"
+        ],
+        "additionalProperties": false
+      },
+      "traits": {
+        "destructive": false,
+        "expensive": false
+      },
+      "output": {
+        "kind": "json"
+      },
+      "requires": {
+        "engine": {
+          "min": "5.4.0"
+        },
+        "features": [
+          "PCG"
+        ],
+        "plugins": [
+          "PCG"
+        ],
+        "modules": [
+          "PCG",
+          "PCGEditor"
+        ]
+      },
+      "effects": {
+        "asset": "write",
+        "world": "none",
+        "editorSession": "none",
+        "external": "write"
+      },
+      "dsl": {
+        "admission": "none",
+        "deferCompile": false,
+        "risk": "confirmWrite",
+        "scopeKinds": [],
+        "transactionDomain": "none"
+      },
+      "lifecycle": {
+        "status": "active",
+        "since": "1.0.0",
+        "canonicalId": "scene.pcg.graph.save"
+      }
+    },
+    {
       "id": "scene.actor.blueprint.spawn",
       "domain": "scene",
       "kind": "command",
