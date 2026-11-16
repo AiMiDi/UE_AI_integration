@@ -1,0 +1,4 @@
+interface:
+  display_name: "PCG Graph Editing"
+  short_description: "Create and connect native PCG Graph nodes."
+  default_prompt: "Use $ue-pcg-graph-editing to inspect and edit the requested PCG Graph."

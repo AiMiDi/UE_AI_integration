@@ -12,6 +12,7 @@
 | Edit material/function nodes, Custom HLSL, instance overrides, or query large material graphs | `ue-material-editing` | explicit asset/preview identity, one batch/final update, current shader and readback evidence |
 | Inspect authored Niagara Systems or edit renderer materials and typed inline User parameter defaults | `ue-niagara-authoring` | exact System/emitter/renderer identity, typed readback, dirty-only compile and same-Editor rollback evidence |
 | Move, rename, import, reimport, or safely delete assets | `ue-asset-migration` | dependencies, referencers, approved change receipt, rollback state |
+| Read or edit PCG Graph nodes and connections | `ue-pcg-graph-editing` | native factories, verified node and edge readback, explicit save |
 | Audit World Partition, cells, streaming, Data Layers, HLOD, or PCG | `ue-world-partition-validate` | applicability, bounded cells/sources, subsystem findings |
 | Inspect or change Landscape/Water deterministically | `ue-landscape-authoring` | snapshot/export hash, plan digest, semantic diff, rollback evidence |
 | Capture Nanite, Lumen, ray tracing, or buffer visualization | `ue-render-debug-capture` | exact viewport identity, restored view state, compatible image evidence |
